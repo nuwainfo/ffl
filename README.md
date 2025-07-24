@@ -18,17 +18,17 @@ It supports:
 
 ### 🔁 1. Peer-to-peer sharing (default, fully free)
 
-[code]
+```
 ffl myfile.zip
-[end code]
+```
 
 → Outputs a shareable link like:
 
-[code]
-http://ffl.link/#abcd1234ef
-[end code]
+```
+https://4567.81.fastfilelink.com/abcd1234
+```
 
-- Recipient can download from any browser
+- Recipient can download from any browser or CLI tools
 - Transfer uses WebRTC if possible
 - If P2P fails, auto-relays through our free unlimited tunnel
 
@@ -36,9 +36,9 @@ http://ffl.link/#abcd1234ef
 
 ### ☁️ 2. Upload and share via server (requires Standard version or higher)
 
-[code]
+```
 ffl myfile.zip --upload "1 day"
-[end code]
+```
 
 → File is temporarily uploaded to our server and the download link is valid for 1 day.
 
@@ -49,11 +49,11 @@ See pricing & plans at: [https://fastfilelink.com](https://fastfilelink.com)
 
 ### 🔑 3. Login manually (optional, only needed for uploads)
 
-[code]
+```
 ffl login
 # or specify email
 ffl login --email user@example.com
-[end code]
+```
 
 You’ll receive a one-time code via email.  
 Once logged in, your device is authorized permanently unless removed.
