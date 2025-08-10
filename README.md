@@ -82,6 +82,116 @@ Once logged in, your device is authorized permanently unless removed.
 
 ---
 
+## 🚀 Using Tunnels
+
+ffl supports various tunnels to help you transfer files efficiently through different network environments. By default, ffl comes with a built-in tunnel called default.
+
+- **🌐 Supported Tunnels**
+  
+  We currently support the following tunnel types:
+  - Cloudflare
+  - Ngrok
+  - Localtunnel
+  - Loophole
+  - Devtunnel
+  - Bore
+
+   If you want to use any of these tunnels, make sure the tunnel program is already installed on your system. Once installed, no additional configuration is needed — simply set your preferred tunnel once using:
+  ```
+  --preferred-tunnel <tunnel_name>
+  ```
+  After setting it, you won’t need to modify the configuration file or add --preferred-tunnel in future commands — it will be remembered until you change it again.
+
+- **➕ Adding or Modifying Tunnels**
+
+  If you want to add a new tunnel or modify an existing one, edit the configuration file located in your home directory:
+  ```
+  ~/.fastfilelink/tunnels.json
+  ```
+  A full example configuration file:
+  ```json
+  {
+    "tunnels": {
+        "cloudflare": {
+            "name": "Cloudflare Tunnel",
+            "binary": "cloudflared",
+            "args": ["tunnel", "--url", "http://127.0.0.1:{port}"],
+            "url_pattern": "https://[^\\s]+\\.trycloudflare\\.com",
+            "timeout": 30,
+            "enabled": true
+        },
+        "cloudflare-fixed": {
+            "name": "Cloudflare Fixed Domain",
+            "url": "https://my-tunnel.example.com",
+            "enabled": false,
+            "_comment": "Example of fixed URL tunnel, just specify the URL. Enable and set your own domain."
+        },
+        "ngrok": {
+            "name": "ngrok",
+            "binary": "ngrok",
+            "args": ["http", "{port}", "--log", "stdout"],
+            "url_pattern": "https://[^\\s]+\\.ngrok[^\\s]*",
+            "timeout": 30,
+            "enabled": true
+        },
+        "localtunnel": {
+            "name": "LocalTunnel",
+            "binary": "lt",
+            "args": ["--port", "{port}"],
+            "url_pattern": "https://[^\\s]+\\.loca\\.lt",
+            "timeout": 30,
+            "enabled": true
+        },
+        "loophole": {
+            "name": "loophole",
+            "binary": "loophole",
+            "args": ["http", "{port}"],
+            "url_pattern": "https://[^\\s]+\\.loophole\\.site",
+            "timeout": 30,
+            "enabled": true
+        },
+        "devtunnel": {
+            "name": "Dev Tunnel",
+            "binary": "devtunnel",
+            "args": ["host", "-p", "{port}"],
+            "url_pattern": "https://[^\\s]+\\.asse\\.devtunnels\\.ms",
+            "timeout": 30,
+            "enabled": true
+        },
+        "bore": {
+            "name": "bore",
+            "binary": "bore",
+            "args": ["local", "{port}", "--to", "bore.pub"],
+            "url_pattern": "bore\\.pub:\\d+",
+            "timeout": 30,
+            "enabled": true
+        }
+    },
+    "settings": {
+        "preferred_tunnel": "cloudflare",
+        "fallback_order": ["cloudflare", "ngrok", "localtunnel", "loophole", "devtunnel", "bore", "default"]
+    }
+  }
+  ```
+
+  About Fixed Tunnels:
+  
+  A fixed tunnel always uses the same URL instead of generating a new one each time.
+  If you own a custom domain or a permanent Cloudflare tunnel address, you can add it to the config (as in cloudflare-fixed above), set
+  ```
+  "enabled": true,
+  ```
+  and replace the URL with your own. Once enabled, ffl will always use that fixed address.
+
+  
+- **⚠️ Performance Note**
+
+  ffl’s default tunnel is maintained to be as fast, stable, and unrestricted as possible. However, during heavy usage by multiple users, you may still experience lag or slowdowns.
+  
+  If this happens, we recommend switching to Cloudflare tunnel for better performance — in fact, we suggest using Cloudflare from the start, especially in fixed mode, for the most stable and fastest experience.
+
+---
+
 ## 🔓 Open Source (CLI Core Only)
 
 This repository provides the **open-source FastFileLink CLI**, licensed under **AGPL v3**.
