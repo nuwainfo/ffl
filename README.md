@@ -89,12 +89,12 @@ ffl supports various tunnels to help you transfer files efficiently through diff
 - **🌐 Supported Tunnels**
   
   We currently support the following tunnel types:
-  - Cloudflare
-  - Ngrok
-  - Localtunnel
-  - Loophole
-  - Devtunnel
-  - Bore
+  - [Cloudflare](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+  - [Ngrok](https://ngrok.com/)
+  - [Localtunnel](https://theboroer.github.io/localtunnel-www/)
+  - [Loophole](https://loophole.cloud/)
+  - [Dev-tunnel](https://learn.microsoft.com/zh-tw/azure/developer/dev-tunnels/overview)
+  - [Bore](https://github.com/ekzhang/bore)
 
    If you want to use any of these tunnels, make sure the tunnel program is already installed on your system. Once installed, no additional configuration is needed — simply set your preferred tunnel once using:
   ```
