@@ -182,6 +182,11 @@ ffl supports various tunnels to help you transfer files efficiently through diff
   "enabled": true,
   ```
   and replace the URL with your own. Once enabled, ffl will always use that fixed address.
+  Note: When using a fixed tunnel, you must also specify the listening port with
+  ```
+  --port PORT
+  ```
+  to ensure it works correctly.
 
   
 - **⚠️ Performance Note**
