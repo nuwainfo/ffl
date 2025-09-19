@@ -1,0 +1,16 @@
+# WebRTC
+selenium
+undetected_chromedriver
+get-gecko-driver
+
+# GUI
+pyautogui
+opencv-python
+
+# CorePatched
+requests_mock
+
+# TestServer
+flask
+pyseto
+

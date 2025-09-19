@@ -1,0 +1,1344 @@
+<!DOCTYPE html>
+<!--
+FastFileLink at https://fastfilelink.com/,
+Copyright (c) 2025 Nuwa Information Co., Ltd, All Rights Reserved.
+-->
+<html lang="en">
+<head>
+    <!--Workaround for fixing Django CMS issues-->
+    <meta name="comment" content="The template was modified by Nuwainfo.com"/>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"/>
+    <meta name="description" content="None"/>
+    <meta name="author" content=""/>
+    <link rel="preconnect" href="https://fonts.googleapis.com"/>
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin=""/>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@100;300;400;500;700;900&amp;display=swap"
+          rel="stylesheet"/>
+    <title>FastFileLink</title>
+    <!-- Bootstrap core CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet"
+          integrity="sha384-1BmE4kWBq78iYhFldvKuhfTAU6auU8tT94WrHftjDbrCEXSU1oBoqyl2QvZ6jIW3" crossorigin="anonymous">
+
+    <!-- Additional CSS Files -->
+    <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.8.1/css/all.css"
+          integrity="sha384-50oBUHEmvpQ+1lW4y57PTFmhCaXp0ML5d60M1M7uH2+nqUivzIebhndOJK28anvf" crossorigin="anonymous"/>
+
+    <!-- Custom CSS Files -->
+    <link rel="stylesheet" href="{{ STATIC_SERVER }}/static/client/theme.css">
+
+    <!-- To avoid favicon.ico not found error -->
+    <link rel="icon" href="{{ STATIC_SERVER }}/static/client/Logo.png" type="image/x-icon">
+        
+    <!-- InApp Browser Detection Warning Styles -->
+    <link rel="stylesheet" href="{{ STATIC_SERVER }}/static/css/InAppGuard.css">
+    
+    <!-- DownloadManager Styles -->
+     <link rel="stylesheet" href="{{ STATIC_SERVER }}/static/css/DownloadUI.css">
+     
+    <!-- i18next internationalization scripts -->
+    <script src="https://unpkg.com/i18next@25.5.2/dist/umd/i18next.js"></script>
+    <script src="https://unpkg.com/i18next-http-backend@3.0.2/i18nextHttpBackend.js"></script>
+    <script src="https://unpkg.com/i18next-browser-languagedetector@8.2.0/dist/umd/i18nextBrowserLanguageDetector.min.js"></script>
+    <script src="https://unpkg.com/jquery-i18next@1.2.1/dist/umd/jquery-i18next.min.js"></script>
+    <script src="{{ STATIC_SERVER }}/static/js/FFLI18n.js"></script>
+</head>
+    <body>
+        <div id="pricing" class="main-banner wow fadeIn pricing-tables">
+            <div class="container">
+                <div class="right-image wow fadeInRight row">
+                    <div class="col-lg-8 offset-lg-2">
+                        <div class="section-heading">
+                            <h4>
+                                <span data-i18n="download.title">Downloading</span>
+                                <em><span data-i18n="download.file">File</span></em>
+                                <i id="file-info-icon" class="fas fa-info-circle" 
+                                   style="margin-left: 8px; margin-right: 8px; color: #007bff; cursor: help; font-size: 0.8em;"
+                                   title="" 
+                                   data-bs-toggle="tooltip" 
+                                   data-bs-placement="bottom"></i>
+                                <span data-i18n="download.ellipsis">...</span>
+                            </h4>
+                        </div>
+                    </div>
+                    <div class="col-lg-4 offset-lg-4">
+                        <!-- InApp Browser Warning -->
+                        <div id="inapp-warning" class="inapp-warning">
+                            <i class="fas fa-exclamation-triangle warning-icon"></i>
+                            <div class="warning-title" data-i18n="download.warning.title">Download may not work in this browser</div>
+                            <div id="warning-text" class="warning-text" data-i18n="download.warning.text">
+                                To download this file, please open this link in your browser.
+                            </div>
+                            <a id="open-browser-btn" href="#" class="open-browser-btn">
+                                <i class="fas fa-download"></i> <span data-i18n="download.warning.button">Download in Browser</span>
+                            </a>
+                        </div>
+                        
+                        <div class="pricing-item-pro" style="background-color: rgba(255, 255, 255, 0.5);">
+                            <!-- Status Display -->
+                            <div id="statusText" style="text-align: center; font-weight: bold; margin-bottom: 15px;" data-i18n="client.status.establishing">Establishing connection...</div>
+                            
+                            <!-- Progress Bar -->
+                            <div class="progress" style="margin-bottom: 20px;">
+                                <progress id="downloadProgress" value="0" max="100" style="width: 100%;"></progress>
+                            </div>
+                            
+                            <!-- Connection Type Display -->
+                            <div id="connectionType" style="text-align: center; color: #007bff; font-size: 14px; margin-bottom: 10px;"></div>
+
+                            <div class="border-button">
+                                <h6 id="download-message" data-i18n="client.download.startShortly">Your download will start shortly.</h6>
+                                <div id="status-details" style="font-size: 14px; color: #666; margin-top: 5px;"></div>
+                            </div>
+                                                        
+                            <!-- Retry functionality (hidden by default) -->
+                            <div class="delayed-show" style="display: none;">
+                                <a id="retry-link" href="#" class="btn btn-primary" data-i18n="client.retry.button">Retry Download</a>
+                                <div id="retry-confirmation" class="retry-confirmation" style="display: none;">
+                                    <div class="retry-confirmation-title" data-i18n="client.retry.confirmationTitle">Open download in new tab?</div>
+                                    <a id="confirm-retry" href="#" target="_blank" class="confirm-retry-btn" data-i18n="download.retry.confirmButton">Yes, Open New Tab</a>
+                                    <button id="cancel-retry" class="cancel-retry-btn" data-i18n="download.retry.cancelButton">Cancel</button>
+                                </div>
+                            </div>
+                            
+                            <!-- Close tab option (shown after opening new tab) -->
+                            <div id="close-tab-wrap" class="close-tab-wrap" style="display: none; text-align: center; margin-top: 10px;">
+                                <a id="close-this-tab" href="#" class="btn btn-secondary" style="padding: 8px 16px; border-radius: 20px;" data-i18n="download.closeTab">Close this tab</a>
+                            </div>                          
+                              
+                            <!-- Fallback Download Button - Hidden -->                            
+                            <div id="fallback-container" style="display: none;">
+                                <!-- Visible button for manual user clicks - remains functional -->
+                                <div class="border-button">
+                                    <a id="manual-download-link" href="/uid=****/download" data-i18n="client.manualDownload">Download</a>
+                                </div>                               
+                            </div>
+
+                            <!-- Hidden file metadata -->
+                            <p id="fileName" style="display:none;">{{ fileName }}</p>
+                            <p id="fileSize" style="display:none;">{{ fileSize }}</p>
+                            
+                            <!-- Always visible footer message -->
+                            <div class="border-button">
+                                <p style="font-size: 14px; margin-top: 10px; line-height: 1.2;">
+                                    <span data-i18n="footer.message">PS: Wishing you a great day! Download your free file sharing app at</span>
+                                    <a href="https://fastfilelink.com" target="_blank" data-i18n="footer.linkText">FastFileLink</a><span data-i18n="footer.period">.</span>
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- No-JavaScript Fallback -->
+        <noscript>
+            <style>
+                #fallback-container {
+                    display: block !important;
+                }
+            </style>
+        </noscript>
+        <footer id="newsletter">
+            <div class="container">
+                <div class="row">
+                    <div class="col-lg-12">
+                        <div class="copyright-text">
+                            <p>
+                                <span data-i18n="footer.copyright">Copyright (c) 2025 Nuwa Information Co., Ltd, All Rights Reserved.</span>
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </footer>
+        <!-- Scripts -->
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"
+                integrity="sha384-ka7Sk0Gln4gmtz2MlQnikT1wXgYsOg+OMhuP+IlRH9sENBO0LRn5q+8nbTov4+1p"
+                crossorigin="anonymous"></script>
+        <script src="https://code.jquery.com/jquery-3.7.1.min.js"
+                integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
+        <script src="https://cdn.jsdelivr.net/npm/streamsaver@2.0.6/StreamSaver.min.js"></script>
+
+        <!-- Shared Logging -->
+        <script>
+            // Debug configuration and logging setup (must be first)
+            const DEBUG = false; // Set to true to enable detailed logging
+            const SERVER_DEBUG = false; // Server-injected: enables mobile debugging via JS_LOG_TO_SERVER_DEBUG + ?debug=server
+
+            // Generate unique session ID for this client session (for multi-user debug logging)
+            const generateSessionId = () => {
+                if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+                    return crypto.randomUUID();
+                } else {
+                    // Fallback for older browsers
+                    return 'session-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+                }
+            };
+            const DEBUG_SESSION_ID = SERVER_DEBUG ? generateSessionId() : null;
+
+            // Function to send logs to server for mobile debugging
+            const sendLogToServer = (category, message, timestamp) => {
+                try {
+                    fetch('/debug/log', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            category: category,
+                            message: message,
+                            timestamp: timestamp,
+                            sessionId: DEBUG_SESSION_ID
+                        })
+                    }).catch(err => {
+                        // Silently ignore server logging errors to avoid infinite loops
+                        if (DEBUG) console.warn('Failed to send log to server:', err);
+                    });
+                } catch (err) {
+                    // Silently ignore errors
+                    if (DEBUG) console.warn('Error in sendLogToServer:', err);
+                }
+            };
+
+            // Global logger function (available to all scripts)
+            const log = (category, message, ...args) => {
+                // First determine whether to output to console/server (preserve original switch semantics)
+                let printToConsole = !!DEBUG;
+                let sendToServer = !!SERVER_DEBUG;
+
+                // Check if the last parameter is an "options" object
+                if (args.length > 0) {
+                    const last = args[args.length - 1];
+
+                    if (typeof last === 'boolean') {
+                        // Last param is boolean: controls whether to send to server
+                        sendToServer = sendToServer && last;   // false => disable sending; true => maintain original gating
+                        args.pop(); // Remove flag from args to avoid it being included in the message
+                    } else if (
+                        last &&
+                        typeof last === 'object' &&
+                        !Array.isArray(last) &&
+                        (Object.prototype.hasOwnProperty.call(last, 'server') ||
+                         Object.prototype.hasOwnProperty.call(last, 'console'))
+                    ) {
+                        // Last param is options object: { server?: boolean, console?: boolean }
+                        if ('server' in last)  sendToServer   = sendToServer   && !!last.server;
+                        if ('console' in last) printToConsole = printToConsole && !!last.console;
+                        args.pop(); // Remove options object from args
+                    }
+                }
+
+                // Early return if nothing should be logged
+                if (!printToConsole && !sendToServer) {
+                    return;
+                }
+                
+                const timestamp = new Date().toISOString(); 
+                const prefix = `[${timestamp}] [${category}]`;
+                const fullMessage = args.length > 0 ? `${message} ${JSON.stringify(args)}` : message;
+
+                // Output to console if enabled
+                if (printToConsole) {
+                    if (args.length > 0) {
+                        console.log(`${prefix} ${message}`, ...args);
+                    } else {
+                        console.log(`${prefix} ${message}`);
+                    }
+                }
+
+                // Send to server if enabled
+                if (sendToServer) {
+                    sendLogToServer(category, fullMessage, timestamp);
+                }
+            };
+        </script>
+        
+        <!-- Initialize i18n using common initialization -->
+        <script>
+            // Initialize i18n system with log function
+            initializeI18n({
+                log: log,
+                localesPath: '{{ STATIC_SERVER }}/static/locales'
+            });
+        </script>
+                
+        <!-- Include InApp Guard -->
+        <script src="{{ STATIC_SERVER }}/static/js/InAppGuard.js"></script>
+        <script>
+            // Initialize file info tooltip with filename and file size
+            function initializeFileInfoTooltip() {
+                // Get filename and file size from hidden metadata
+                const fileName = document.getElementById('fileName')?.textContent || 'download.bin';
+                const fileSizeElement = document.getElementById('fileSize');
+                let fileSize = 0;
+                
+                if (fileSizeElement) {
+                    const sizeText = fileSizeElement.textContent || fileSizeElement.innerText || '0';
+                    fileSize = parseInt(sizeText.trim(), 10);
+                    if (isNaN(fileSize)) fileSize = 0;
+                }
+                
+                // Format file size
+                function formatBytes(bytes) {
+                    if (bytes === 0) return '0 Bytes';
+                    const k = 1024;
+                    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+                    const i = Math.floor(Math.log(bytes) / Math.log(k));
+                    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+                }
+                
+                const formattedSize = formatBytes(fileSize);
+                
+                // Create tooltip content with translations
+                const tooltipContent = `${fileName}\n${formattedSize}`;
+                
+                // Set tooltip title and initialize Bootstrap tooltip
+                const tooltipElement = document.getElementById('file-info-icon');
+                if (tooltipElement) {
+                    tooltipElement.setAttribute('title', tooltipContent);
+                    
+                    // Initialize Bootstrap tooltip if available
+                    if (typeof bootstrap !== 'undefined' && bootstrap.Tooltip) {
+                        new bootstrap.Tooltip(tooltipElement, {
+                            placement: 'bottom',
+                            title: tooltipContent
+                        });
+                    }
+                }
+                
+                log('FileInfoTooltip', `Initialized tooltip: ${fileName} (${formattedSize})`);
+            }
+            
+            // Initialize file info tooltip
+            initializeFileInfoTooltip();
+           
+           // Global variable to track if we should skip WebRTC
+            let SKIP_WEBRTC_DUE_TO_RESTRICTION = false;
+
+            // Initialize InApp Guard using centralized function
+            SKIP_WEBRTC_DUE_TO_RESTRICTION = InAppGuard.initInAppGuardUI({
+                log: log,
+                skipVariableName: 'SKIP_WEBRTC_DUE_TO_RESTRICTION'
+            });            
+        </script>
+        
+        <!-- DownloadManager integration -->
+        <script src="{{ STATIC_SERVER }}/static/js/DownloadManager.js"></script>        
+
+        <!-- WebRTC and Download Script -->
+        <script>
+        
+            // Flag to prevent multiple initializations
+            let downloadInitialized = false;
+            // Timer reference for fallback mechanism
+            let startWebRTCTimer = null;        
+        
+            // Wait for i18n to be ready before starting
+            function startWebRTCDownload() {
+            
+                // Prevent duplicate execution
+                if (downloadInitialized) 
+                    return;
+                    
+                downloadInitialized = true;
+
+                // Cancel fallback timer if it's still pending
+                if (startWebRTCTimer) {
+                    clearTimeout(startWebRTCTimer);
+                    startWebRTCTimer = null;
+                }            
+                
+                (async () => {
+                // Debug configuration
+                const DISABLE_WEBRTC = false; // Set to true if only use Relayed P2P
+                let fallbackTriggered = false; // Flag to track if fallback has been triggered
+                let downloadCompleted = false; // Flag to track if download completed
+                let restartAttempted = false;   // Allow one automatic ICE restart
+                const FALLBACK_MS = 30000;      // 30 seconds timeout before fallback
+                                                
+                let countdownSeconds = Math.floor(FALLBACK_MS / 1000);
+                let countdownInterval;          // For updating "Waiting for peer" countdown
+                let stopCandidatePolling = false; // trickle ICE polling
+                
+                // Connection state tracking
+                let dataChannelEstablished = false;
+                let bytesReceived = 0;
+                let connectionFailureHandled = false;
+                let disconnectedTime = null;
+                
+                // Browser and connection detection
+                const getBrowserInfo = () => {
+                    const ua = navigator.userAgent;
+                    const vendor = navigator.vendor || '';
+                    
+                    // Check Edge first (before Chrome, since Edge contains "Chrome" in UA)
+                    if (ua.includes('Edg/') || ua.includes('Edge/')) {
+                        return 'edge';
+                    } else if (ua.includes('Chrome') && vendor.includes('Google')) {
+                        return 'chrome';
+                    } else if (ua.includes('Firefox')) {
+                        return 'firefox';
+                    } else if (ua.includes('Safari') && !ua.includes('Chrome')) {
+                        return 'safari';
+                    }
+                    return 'unknown';
+                };
+
+                const getConnectionInfo = async () => {
+                    const baseInfo = {
+                        browser: getBrowserInfo(),
+                        domain: window.location.hostname,
+                        protocol: window.location.protocol,
+                        userAgent: navigator.userAgent.substring(0, 100),
+                        inAppBrowser: InAppGuard.isInAppBrowser(),
+                        downloadRestricted: InAppGuard.isDownloadRestricted()
+                    };
+                    
+                    // Try to detect if this is actually a local connection via WebRTC
+                    try {
+                        const rtcInfo = await detectRTCConnectionType();
+                        return { ...baseInfo, ...rtcInfo };
+                    } catch (e) {
+                        log("Connection", "Failed to detect RTC connection type:", e);
+                        return baseInfo;
+                    }
+                };
+                
+                const detectRTCConnectionType = async () => {
+                    return new Promise((resolve, reject) => {
+                        const timeout = setTimeout(() => {
+                            tempPc.close();
+                            resolve({ isLocalConnection: false, detectedIp: null });
+                        }, 5000);
+                        
+                        const tempPc = new RTCPeerConnection({
+                            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                        });
+                        
+                        let hostIps = new Set();
+                        let srflxIps = new Set();
+                        let hasLocalCandidate = false;
+                        let candidateCount = 0;
+                        
+                        tempPc.onicecandidate = (event) => {
+                            if (event.candidate) {
+                                const candidate = event.candidate.candidate;
+                                candidateCount++;
+                                log("ICE-Detect", `Candidate ${candidateCount}: ${candidate.substring(0, 80)}...`);
+                                
+                                // Parse candidate string
+                                const parts = candidate.split(' ');
+                                let ip = null;
+                                let candidateType = null;
+                                
+                                // Find type first
+                                for (let i = 0; i < parts.length; i++) {
+                                    if (parts[i] === 'typ' && i + 1 < parts.length) {
+                                        candidateType = parts[i + 1];
+                                        break;
+                                    }
+                                }
+                                
+                                // Find IP based on candidate type and format
+                                if (candidateType === 'host') {
+                                    // For host candidates, IP could be at index 4 or could be .local format
+                                    for (let i = 0; i < parts.length; i++) {
+                                        const part = parts[i];
+                                        // Check for IPv4 address
+                                        if (/^\d+\.\d+\.\d+\.\d+$/.test(part)) {
+                                            ip = part;
+                                            break;
+                                        }
+                                        // Check for .local mDNS format (indicates local network)
+                                        else if (part.endsWith('.local')) {
+                                            ip = part;
+                                            hasLocalCandidate = true;
+                                            break;
+                                        }
+                                        // Check for IPv6 link-local or ULA
+                                        else if (part.startsWith('fe80:') || part.startsWith('fc') || part.startsWith('fd')) {
+                                            ip = part;
+                                            hasLocalCandidate = true;
+                                            break;
+                                        }
+                                    }
+                                } else if (candidateType === 'srflx') {
+                                    // For srflx candidates, IP is usually at index 4
+                                    if (parts[4] && /^\d+\.\d+\.\d+\.\d+$/.test(parts[4])) {
+                                        ip = parts[4];
+                                    }
+                                }
+                                
+                                if (ip && candidateType) {
+                                    log("ICE-Detect", `Parsed - IP: ${ip}, Type: ${candidateType}`);
+                                    
+                                    if (candidateType === 'host') {
+                                        hostIps.add(ip);
+                                        
+                                        // Check if this is a local IP
+                                        if (ip.endsWith('.local') || 
+                                            ip.startsWith('127.') || 
+                                            ip.startsWith('192.168.') || 
+                                            ip.startsWith('10.') || 
+                                            ip.startsWith('172.16.') ||
+                                            ip.startsWith('172.17.') ||
+                                            ip.startsWith('172.18.') ||
+                                            ip.startsWith('172.19.') ||
+                                            ip.startsWith('172.2') ||
+                                            ip.startsWith('172.30.') ||
+                                            ip.startsWith('172.31.') ||
+                                            ip.startsWith('fe80:') ||
+                                            ip.startsWith('fc') ||
+                                            ip.startsWith('fd')) {
+                                            hasLocalCandidate = true;
+                                        }
+                                    } else if (candidateType === 'srflx') {
+                                        srflxIps.add(ip);
+                                    }
+                                    
+                                    // Check if we have enough information
+                                    if (candidateCount >= 2) {
+                                        clearTimeout(timeout);
+                                        tempPc.close();
+                                        
+                                        const hostIpArray = Array.from(hostIps);
+                                        const srflxIpArray = Array.from(srflxIps);
+                                        
+                                        // Determine if this is a local connection
+                                        // If we have .local candidates or private IPs, it's local
+                                        const isLocalConnection = hasLocalCandidate || 
+                                            hostIpArray.some(ip => 
+                                                ip.startsWith('127.') || 
+                                                ip.startsWith('192.168.') || 
+                                                ip.startsWith('10.') || 
+                                                ip.startsWith('172.')
+                                            );
+                                        
+                                        const result = {
+                                            isLocalConnection: isLocalConnection,
+                                            detectedIp: `host:[${hostIpArray.join(',')}] srflx:[${srflxIpArray.join(',')}]`
+                                        };
+                                        
+                                        log("Connection", `Detection result - Local: ${result.isLocalConnection}, IPs: ${result.detectedIp}`);
+                                        resolve(result);
+                                        return;
+                                    }
+                                }
+                            } else {
+                                // End of candidates
+                                clearTimeout(timeout);
+                                tempPc.close();
+                                
+                                const hostIpArray = Array.from(hostIps);
+                                const srflxIpArray = Array.from(srflxIps);
+                                
+                                const isLocalConnection = hasLocalCandidate || 
+                                    hostIpArray.some(ip => 
+                                        ip.startsWith('127.') || 
+                                        ip.startsWith('192.168.') || 
+                                        ip.startsWith('10.') || 
+                                        ip.startsWith('172.')
+                                    );
+                                
+                                const result = {
+                                    isLocalConnection: isLocalConnection,
+                                    detectedIp: `host:[${hostIpArray.join(',')}] srflx:[${srflxIpArray.join(',')}]`
+                                };
+                                
+                                log("Connection", `Final detection - Local: ${result.isLocalConnection}, IPs: ${result.detectedIp}`);
+                                resolve(result);
+                            }
+                        };
+                        
+
+                        tempPc.onicegatheringstatechange = () => {
+                            log("ICE-Detect", `ICE gathering state: ${tempPc.iceGatheringState}`);
+                        };
+                        
+                        // Create data channel to trigger ICE gathering
+                        tempPc.createDataChannel('detect');
+                        
+                        tempPc.createOffer()
+                            .then(offer => tempPc.setLocalDescription(offer))
+                            .catch(reject);
+                    });
+                };
+
+                const connectionInfo = await getConnectionInfo();
+                log("Client", `Browser: ${connectionInfo.browser}, Domain: ${connectionInfo.domain}`);
+                log("Client", `Local: ${connectionInfo.isLocalConnection}, InApp: ${connectionInfo.inAppBrowser}, DownloadRestricted: ${connectionInfo.downloadRestricted}`);
+                
+                log("Init", "Starting WebRTC download process");
+                
+                const CHUNK_SIZE = 256 * 1024;  // 256 KB chunk size for blob storage
+                log("Config", `Fallback timeout: ${FALLBACK_MS}ms, Chunk size: ${CHUNK_SIZE} bytes`);
+
+                // Get DOM elements
+                const progressBar = document.getElementById('downloadProgress');
+                const statusText = document.getElementById('statusText');
+                const connectionType = document.getElementById('connectionType');
+                const downloadMessage = document.getElementById('download-message');
+                log("DOM", "Elements found:", {
+                    progressBar: !!progressBar,
+                    statusText: !!statusText,
+                    connectionType: !!connectionType,
+                    downloadMessage: !!downloadMessage
+                });
+                
+                // Initialize DownloadManager for fallback
+                let downloadManager = null;
+                
+                // Get file metadata
+                const fileName = document.getElementById('fileName')?.textContent || 'download.bin';
+                const fileSize = parseInt(document.getElementById('fileSize')?.textContent || '0', 10);
+                log("File", `Name: ${fileName}, Size: ${fileSize} bytes`);
+                
+                // Set progress bar max if we know the file size
+                if (fileSize > 0 && progressBar) {
+                    progressBar.max = fileSize;
+                    log("UI", `Progress bar max set to ${fileSize}`);
+                }
+                
+                const removeProgressBar = function() {
+                    const els = document.getElementsByClassName('progress');
+                    Array.from(els).forEach(el => el.remove());
+                };
+                
+                // Status update helper with loading animation option
+                const setStatus = (text, showLoading = false) => {
+                    //log("Status", text);
+                    if (statusText) {
+                        // Clear previous content
+                        statusText.innerHTML = '';
+                    
+                        // Add loading icon if requested
+                        if (showLoading) {
+                            const loadingIcon = document.createElement('span');
+                            loadingIcon.className = 'loading-icon';
+                            loadingIcon.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> '; 
+                            statusText.appendChild(loadingIcon);
+                        }
+                     
+                        // Add the text
+                        statusText.appendChild(document.createTextNode(text));
+                        
+                        // Update title.
+                        document.title = "FastFileLink - " + text;
+                    }
+                };
+                
+                // Connection type display
+                const setConnectionType = (text) => {
+                    log("Connection", text);
+                    if (connectionType) 
+                        connectionType.textContent = text;
+                };
+                
+                // Check if transfer has actually started
+                const hasTransferStarted = () => {
+                    return dataChannelEstablished && bytesReceived > 0;
+                };
+                
+                // Fallback to DownloadManager - ensuring it only triggers once
+                const fallbackToHTTP = (reason) => {
+                    if (fallbackTriggered || downloadCompleted) {
+                        log("Fallback", "Already triggered or download completed, ignoring");
+                        return;
+                    }
+                    
+                    fallbackTriggered = true;
+                    connectionFailureHandled = true;
+                    log("Fallback", `Switching to HTTP download: ${reason}`);
+                    setStatus(t('client.status.switchingRelay', `Switching to relay mode: ${reason}`, { reason }));
+                    setConnectionType(t('client.connection.serverRelay', 'Using Server Relay Download'));
+                    
+                    // Clear countdown immediately when fallback is triggered
+                    if (countdownInterval) {
+                        clearInterval(countdownInterval);
+                        countdownInterval = null;
+                    }
+                    
+                    // Update download message to the full version
+                    if (downloadMessage) {
+                        downloadMessage.textContent = t('client.download.startShortly', 'Your download will start shortly.');
+                        log("UI", "Updated download message to include fallback instructions");
+                    }                    
+                    
+                    try {
+                        // Create DownloadManager instance with custom UI elements
+                        downloadManager = new DownloadManager({
+                            debug: DEBUG,
+                            uid: 'uid=****',
+                            progressBar: progressBar, // Use WebRTC progress bar
+                            statusHeading: '#download-message', // Use download message as status heading
+                            statusDetails: '#status-details', // Use newly added status details
+                            progressInfo: '#connectionType', // Use connectionType for file size info
+                            retryLink: '#retry-link' // Use retry link element
+                        });
+                        
+                        // Setup retry handlers
+                        downloadManager.setupRetryHandlers();
+                        
+                        log("Fallback", "Starting DownloadManager download");
+                        downloadManager.startDownload();
+                        
+                    } catch (error) {
+                        log("Fallback", "DownloadManager failed, redirecting to download URL:", error);
+                        // Simple fallback if DownloadManager fails
+                        window.location.href = '/uid=****/download';
+                    }
+                    setStatus(t('client.status.relayStarted', 'Relayed P2P Download Started.'));
+                };
+                
+                // Check if we should skip WebRTC due to download restrictions
+                if (DISABLE_WEBRTC || SKIP_WEBRTC_DUE_TO_RESTRICTION) {
+                    if (SKIP_WEBRTC_DUE_TO_RESTRICTION) {
+                        fallbackToHTTP(t('client.fallback.browserNotSupported', 'Downloads not supported in this browser - using Relay'));
+                    } else {
+                        fallbackToHTTP(t('client.fallback.p2pDisabled', 'Device-to-Device P2P disabled. Use Relayed P2P.'));
+                    }
+                    return;
+                }
+                
+                // Initialize status & countdown
+                setStatus(t('client.status.establishingP2p', 'Establishing P2P connection...'), true);
+                setConnectionType(t('client.connection.waitingPeer', 'Waiting for peer ({{seconds}}s)', { seconds: countdownSeconds }));
+                countdownInterval = setInterval(() => {
+                    // Check if fallback has been triggered - if so, stop countdown
+                    if (fallbackTriggered || connectionFailureHandled) {
+                        clearInterval(countdownInterval);
+                        return;
+                    }                
+                
+                    countdownSeconds--;
+                    if (countdownSeconds >= 0) {
+                        setConnectionType(t('client.connection.waitingPeer', 'Waiting for peer ({{seconds}}s)', { seconds: countdownSeconds }));
+                    } else {
+                        clearInterval(countdownInterval);
+                    }
+                }, 1000);
+                
+                // Try to initialize StreamSaver if available (service worker-based)
+                let streamSaverReady = false;
+                const canUseSW = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+                log("StreamSaver", `Can use ServiceWorker: ${canUseSW}, protocol: ${location.protocol}, hostname: ${location.hostname}`);
+                
+                if (canUseSW && 'serviceWorker' in navigator) {
+                    log("StreamSaver", "ServiceWorker is available, attempting to load StreamSaver");
+                    try {
+                        // https://cdn.jsdelivr.net/npm/streamsaver@2.0.6/mitm.html seems not working because unable to load sw.js from jsdelivr.
+                        streamSaver.mitm = '/static/assets/mitm.html';
+                        streamSaverReady = true;
+                        log('StreamSaver', 'Successfully initialized');
+                    } catch (e) {
+                        log('StreamSaver', 'Load failed, falling back to Blob', e);
+                    }
+                } else {
+                    log("StreamSaver", "ServiceWorker not available, will use Blob instead");
+                }
+                
+                // Request offer from server
+                log("WebRTC", "Requesting offer from server");
+                let offerResponse;
+                try {
+                    offerResponse = await fetch('/uid=****/offer');
+                    log("WebRTC", `Got response: ${offerResponse.status} ${offerResponse.statusText}`);
+                } catch (err) {
+                    log("WebRTC", "Failed to fetch offer:", err);
+                    fallbackToHTTP("Failed to get offer from server");
+                    return;
+                }
+                    
+                if (!offerResponse.ok) {
+                    log("WebRTC", `Server returned ${offerResponse.status}: ${offerResponse.statusText}`);
+                    fallbackToHTTP(`Server returned ${offerResponse.status}`);
+                    return;
+                }
+                    
+                // Parse offer data
+                let offerData;
+                let peerId; // Store the peer ID for all future communications
+                try {
+                    offerData = await offerResponse.json();
+                    log("WebRTC", `Parsed offer data: type=${offerData.type}, sdp length=${offerData.sdp.length}`);
+                    log("WebRTC", `SDP excerpt: ${offerData.sdp.substring(0, 50)}...`);
+                        
+                    // Store the peerId for future use
+                    peerId = offerData.peerId;
+                    log("WebRTC", `Got peerId: ${peerId}`);
+                } catch (err) {
+                    log("WebRTC", "Failed to parse offer data:", err);
+                    fallbackToHTTP("Invalid offer data from server");
+                    return;
+                }              
+              
+                try {
+                    log("WebRTC", "Creating peer connection");
+                    // Create WebRTC peer connection
+                    const pc = new RTCPeerConnection({
+                        iceServers: [
+                            { urls: 'stun:stun.l.google.com:19302' },
+                            { urls: 'stun:stun.cloudflare.com:3478' },
+                            { urls: 'stun:stun.nextcloud.com:443' },
+                            { urls: 'stun:openrelayproject.org:80' },
+                            { urls: 'stun:openrelayproject.org:443' }
+                        ],
+                    });
+                    log("WebRTC", "Peer connection created:", pc);
+                    
+                    // Fallback timer
+                    log("Fallback", `Setting up timeout for ${FALLBACK_MS}ms`);
+                    const fallbackTimer = setTimeout(() => {
+                        if (!downloadCompleted) {
+                            log("Fallback", `Timeout reached after ${FALLBACK_MS}ms`);
+                            fallbackToHTTP("Connection timeout");
+                        }
+                    }, FALLBACK_MS);
+                    
+                    // ICE connection state monitoring with improved logic
+                    pc.oniceconnectionstatechange = () => {
+                        log("ICE", `Connection state changed to: ${pc.iceConnectionState}`);
+                        
+                        // If already handled failure or download completed, ignore
+                        if (connectionFailureHandled || downloadCompleted) {
+                            return;
+                        }                        
+                        
+                        switch (pc.iceConnectionState) {
+                            case 'checking':
+                                setStatus(t('client.status.p2pChecking', 'P2P connection...[Checking]'), true);
+                                break;
+                            case 'connected':
+                               // Clear countdown when connection established
+                                if (countdownInterval) {
+                                    clearInterval(countdownInterval);
+                                    countdownInterval = null;
+                                    log("UI", "Countdown cleared on connection established");
+                                }
+                                disconnectedTime = null;
+                                stopCandidatePolling = true;  
+                                log("ICE", "Connection established successfully");
+                                break;
+                            case 'completed':
+                                disconnectedTime = null;
+                                log("ICE", "All ICE candidates have been found");
+                                break;
+                            case 'disconnected':
+                                log("ICE", "Connection lost temporarily");
+                                
+                                // Only trigger fallback if transfer hasn't started
+                                if (!hasTransferStarted()) {
+                                    disconnectedTime = Date.now();
+                                    setStatus(t('client.status.reconnecting', 'Connection lost, attempting to reconnect...'), true);
+                                    
+                                    // Increased timeout for pre-transfer disconnections
+                                    setTimeout(() => {
+                                        if (pc.iceConnectionState === 'disconnected' && 
+                                            disconnectedTime && 
+                                            Date.now() - disconnectedTime > 15000 && // Increased to 15 seconds
+                                            !connectionFailureHandled && 
+                                            !downloadCompleted &&
+                                            !hasTransferStarted()) {
+                                            
+                                            fallbackToHTTP("Connection lost before transfer started");
+                                        }
+                                    }, 16000);
+                                } else {
+                                    // During transfer, just log but don't trigger fallback
+                                    log("ICE", "Network fluctuation during transfer - continuing");
+                                    setStatus(t('client.status.networkFluctuation', 'Network fluctuation detected, continuing transfer...'), true);
+                                }
+                                break;
+                            case 'failed':
+                                // Only handle failure if transfer hasn't started
+                                if (!hasTransferStarted()) {
+                                    if (!restartAttempted) {
+                                        restartAttempted = true;
+                                        log("ICE", "ICE failed – trying restartIce() once");
+                                        pc.restartIce();
+                                        setStatus(t('client.status.retryingP2p', 'Retrying P2P connection…'), true);
+                                        setConnectionType(t('client.connection.retrying', 'Retrying P2P connection'));
+                                        
+                                        setTimeout(() => {
+                                            if ((pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') && 
+                                                !connectionFailureHandled && 
+                                                !downloadCompleted &&
+                                                !hasTransferStarted()) {
+                                                
+                                                fallbackToHTTP("Connection restart failed");
+                                            }
+                                        }, 20000); // Increased to 20 seconds
+                                    } else {
+                                        fallbackToHTTP("Connection failed after restart");
+                                    }
+                                } else {
+                                    log("ICE", "ICE failed during transfer - but data channel still active");
+                                }
+                                break;
+                            case 'closed':
+                                log("ICE", "Connection closed");
+                                break;
+                        }
+                    };
+                    
+                    // Simplified connection state monitoring to avoid conflicts
+                    pc.onconnectionstatechange = () => {
+                        if (connectionFailureHandled || downloadCompleted) {
+                            return;
+                        }
+                        
+                        // Only handle clear failures before transfer starts
+                        if (pc.connectionState === 'failed' && 
+                            !connectionFailureHandled && 
+                            !downloadCompleted &&
+                            !hasTransferStarted()) {
+                            
+                            fallbackToHTTP("WebRTC connection failed");
+                        }
+                    };
+
+                    // Process and send ICE candidates
+                    pc.onicecandidate = e => {
+                        if (e.candidate) {
+                            const candidateData = {
+                                peerId: peerId,
+                                candidate: e.candidate.candidate,
+                                sdpMid: e.candidate.sdpMid,
+                                sdpMLineIndex: e.candidate.sdpMLineIndex
+                            };
+                            
+                            const candidateJson = JSON.stringify(candidateData);
+                            log("ICE", `New candidate: ${e.candidate.candidate?.substring(0, 50)}...`);
+                            
+                            log("ICE", `Sending candidate to server: ${candidateJson.substring(0, 50)}...`);
+                            fetch('/uid=****/candidate', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: candidateJson,
+                            }).then(() => {
+                                log("ICE", `Successfully sent candidate to server`);
+                                if (!downloadCompleted) {
+                                    setStatus(t('client.status.p2pConnecting', 'P2P connection...[Connecting]'), true);
+                                }
+                            }).catch(err => {
+                                log("ICE", `Failed to send candidate:`, err);
+                                // Continue despite error - this might not be fatal
+                            });
+                        } else {
+                            // Send end-of-candidates message to server
+                            const endCandidatesData = {
+                                peerId: peerId,
+                                candidate: 'end-of-candidates'
+                            };
+                            
+                            fetch('/uid=****/candidate', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(endCandidatesData),
+                            }).catch(err => {
+                                log("ICE", `Failed to send end-of-candidates:`, err);
+                            });
+                            
+                            log("ICE", "All candidates gathered");
+                        }
+                    };
+
+                    // Handle data channel with improved state tracking
+                    log("WebRTC", "Setting up data channel handler");
+                    pc.ondatachannel = ({ channel: dc }) => {
+                        log("DataChannel", `Received data channel: ${dc.label}, ID: ${dc.id}`);
+                        dataChannelEstablished = true;
+                        
+                        setStatus(t('client.status.p2pSuccess', 'P2P connection successful! Downloading...'));
+                        setConnectionType(t('client.connection.directP2p', 'Direct P2P transfer'));
+                        if (downloadMessage) {
+                            downloadMessage.textContent = t('client.download.deviceStarted', 'Device-to-Device download started.');
+                        }                                                    
+                        clearTimeout(fallbackTimer);
+                        clearInterval(countdownInterval);
+                        log("Fallback", "Cleared timeout - connection successful");
+                        
+                        dc.binaryType = 'arraybuffer';
+                        log("DataChannel", `Binary type set to: ${dc.binaryType}`);
+                        
+                        // Enhanced data channel state monitoring
+                        dc.onopen = () => {
+                            log("DataChannel", "Channel opened");
+                            dataChannelEstablished = true;
+                        };
+                        
+                        dc.onclose = () => {
+                            log("DataChannel", "Channel closed");
+                            // Only trigger fallback if download incomplete and not already handled
+                            if (!downloadCompleted && bytesReceived < fileSize && !connectionFailureHandled) {
+                                log("DataChannel", "Channel closed before completion");
+                                fallbackToHTTP("Data channel closed unexpectedly");
+                            }
+                        };
+                        
+                        dc.onerror = (err) => {
+                            log("DataChannel", "Error:", err);
+                            if (!downloadCompleted && !connectionFailureHandled) {
+                                fallbackToHTTP("Data channel error");
+                            }
+                        };
+                        
+                        // Choose streaming strategy - use Blob for files under 10MB to avoid memory issues
+                        const USE_BLOB_THRESHOLD = 10 * 1024 * 1024; // 10MB - Reduced to prevent memory issues
+                        
+                        if (fileSize > USE_BLOB_THRESHOLD && !streamSaverReady) {
+                            // Large file but no StreamSaver support - fallback to HTTP download
+                            log("Strategy", `File too large (${Math.round(fileSize/1024/1024)}MB) for memory-safe download without ServiceWorker support`);
+                            fallbackToHTTP(t('client.fallback.fileTooBig', 'File too large for direct download - using server relay'));
+                            return;
+                        }
+                        
+                        if (streamSaverReady && fileSize > USE_BLOB_THRESHOLD) {
+                            log("Strategy", "Using StreamSaver for large file download");
+                            // Use StreamSaver for very large files only
+                            const writer = streamSaver
+                                .createWriteStream(fileName, { size: fileSize || undefined })
+                                .getWriter();
+                            log("StreamSaver", `Created writer for file: ${fileName}`);
+
+                            let received = 0;
+                            let chunks = 0;
+                            let lastProgressUpdate = 0;
+                            const PROGRESS_THROTTLE_MS = 50; // Faster progress updates (50ms)
+                            let writeQueue = [];
+                            let isWriting = false;
+                            
+                            // Non-blocking write queue to prevent backpressure
+                            const processWriteQueue = async () => {
+                                if (isWriting || writeQueue.length === 0) return;
+                                isWriting = true;
+                                
+                                while (writeQueue.length > 0) {
+                                    const data = writeQueue.shift();
+                                    try {
+                                        await writer.write(data);
+                                    } catch (e) {
+                                        log("StreamSaver", `Write error: ${e}`);
+                                        break;
+                                    }
+                                }
+                                isWriting = false;
+                            };
+                            
+                            dc.onmessage = async ({ data }) => {
+                                // Check message type (control or data)
+                                if (typeof data === 'string') {
+                                    log("DataChannel", `Received string message: ${data}`);
+                                    if (data === 'EOF') {
+                                        log("DataChannel", `End of file received after ${chunks} chunks, ${received} bytes`);
+                                        setStatus(t('client.status.savingFile', 'Saving file...'));
+                                        
+                                        // Wait for write queue to finish
+                                        while (writeQueue.length > 0 || isWriting) {
+                                            await new Promise(resolve => setTimeout(resolve, 10));
+                                        }
+                                        
+                                        await writer.close();
+                                        log("StreamSaver", "Writer closed");
+                                        downloadComplete();
+                                    } else if (data === 'ERROR') {
+                                        log("DataChannel", "Server reported error");
+                                        if (!connectionFailureHandled) {
+                                            fallbackToHTTP("Server reported error");
+                                        }
+                                    } else {
+                                        log("DataChannel", `Unknown string message: ${data}`);
+                                    }
+                                } else {
+                                    // Binary data - update progress immediately (not tied to writing)
+                                    chunks++;
+                                    received += data.byteLength;
+                                    bytesReceived = received; // Update global tracker
+                                    
+                                    // Queue data for writing (non-blocking)
+                                    writeQueue.push(new Uint8Array(data));
+                                    processWriteQueue(); // Start processing if not already running
+                                    
+                                    // Immediate progress updates (not tied to write completion)
+                                    const now = Date.now();
+                                    if (now - lastProgressUpdate >= PROGRESS_THROTTLE_MS || received === fileSize) {
+                                        lastProgressUpdate = now;
+                                        
+                                        // Log progress periodically
+                                        if (chunks % 50 === 0 || received === fileSize) {
+                                            log("Progress", `Received ${chunks} chunks, ${received} bytes total`);
+                                        }
+                                        
+                                        if (progressBar) 
+                                            progressBar.value = received;
+                                        
+                                        // Update percentage display if file size is known
+                                        if (fileSize) {
+                                            const percent = Math.round(received * 100 / fileSize);
+                                            setStatus(t('client.status.downloadingPercent', 'Downloading via P2P: {{percent}}%', { percent }));
+                                        }
+                                    }
+                                }
+                            };
+                        } else {
+                            log("Strategy", "Using optimized Blob for file download");
+                            // Use Blob for smaller files (≤ 10MB) - accumulates chunks in memory before creating download
+                            const chunks = [];
+                            let received = 0;
+                            let chunkCount = 0;
+                            let lastProgressUpdate = 0;
+                            const PROGRESS_THROTTLE_MS = 50; // Faster progress updates (50ms)
+
+                            dc.onmessage = ({ data }) => {
+                                // Check if the message is a control message
+                                if (typeof data === 'string') {
+                                    log("DataChannel", `Received string message: ${data}`);
+                                    if (data === 'EOF') {
+                                        log("DataChannel", `End of file received after ${chunkCount} chunks, ${received} bytes`);
+                                        setStatus(t('client.status.creatingDownload', 'Creating download...'));
+                                        
+                                        // Fast blob creation and download
+                                        const blob = new Blob(chunks, { type: 'application/octet-stream' });
+                                        log("Blob", `Created blob of size: ${blob.size} bytes`);
+                                        triggerBlobDownload(blob);
+                                        downloadComplete();
+                                    } else if (data === 'ERROR') {
+                                        log("DataChannel", "Server reported error");
+                                        if (!connectionFailureHandled) {
+                                            fallbackToHTTP("Server reported error");
+                                        }
+                                    } else {
+                                        log("DataChannel", `Unknown string message: ${data}`);
+                                    }
+                                } else {
+                                    // Binary data - immediate progress updates
+                                    chunkCount++;
+                                    received += data.byteLength;
+                                    bytesReceived = received; // Update global tracker
+                                    chunks.push(data); // Store chunk for later blob creation
+                                    
+                                    // Fast progress updates (not throttled as heavily)
+                                    const now = Date.now();
+                                    if (now - lastProgressUpdate >= PROGRESS_THROTTLE_MS || received === fileSize) {
+                                        lastProgressUpdate = now;
+                                        
+                                        // Log progress periodically
+                                        if (chunkCount % 20 === 0 || received === fileSize) {
+                                            log("Progress", `Received ${chunkCount} chunks, ${received} bytes total`);
+                                        }
+                                        
+                                        if (progressBar) 
+                                            progressBar.value = received;
+                                        
+                                        // Update percentage display if file size is known
+                                        if (fileSize) {
+                                            const percent = Math.round(received * 100 / fileSize);
+                                            setStatus(t('client.status.downloadingPercent', 'Downloading via P2P: {{percent}}%', { percent }));
+                                        }
+                                    }
+                                }
+                            };
+                        }
+                        
+                        // Trigger download for blob-based transfer
+                        function triggerBlobDownload(blob) {
+                            log("Download", "Creating object URL for blob");
+                            const url = URL.createObjectURL(blob);
+                            log("Download", `Created URL: ${url}`);
+                            
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = fileName;
+                            a.style.display = 'none';
+                            document.body.appendChild(a);
+                            
+                            log("Download", `Clicking download link for ${fileName}`);
+                            a.click();
+                            
+                            setTimeout(() => {
+                                log("Download", "Cleaning up object URL");
+                                URL.revokeObjectURL(url);
+                                a.remove();
+                            }, 60000);
+                        }
+                        
+                        // Handle download completion
+                        function downloadComplete() {
+                            log("Download", "Complete!");
+                            
+                            downloadCompleted = true;  
+                            fallbackTriggered = true;  
+                            setStatus(t('download.complete.title', '✅ Download complete!'));
+                            
+                            // Notify server that download is complete
+                            if (peerId) {
+                                log("Signal", `Notifying server of download completion for peer ${peerId}`);
+                                fetch('/uid=****/complete', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ peerId: peerId }),
+                                }).then(() => {
+                                    log("Signal", "Successfully notified server of completion");
+                                }).catch(err => {
+                                    log("Signal", `Failed to notify server of completion: ${err}`);
+                                    // Don't fail the download if notification fails
+                                });
+                            }
+                            
+                            if (progressBar) 
+                                progressBar.value = fileSize || 100;
+                                
+                            if (downloadMessage) {
+                                //downloadMessage.textContent = `Transfer complete: ${fileSize.toLocaleString()} bytes transferred. Check your download folder.`;
+                                downloadMessage.textContent = t('client.download.fileSaved', 'File saved. Please check your download folder.');
+                            }                      
+                    
+                            // Hide progress bar 1 second after completion
+                            if (progressBar) {
+                                setTimeout(() => {
+                                    removeProgressBar();
+                                }, 1000);
+                            }
+                    
+                            // P2P download completed successfully
+                            
+                            if (typeof fallbackTimer !== 'undefined') {
+                                clearTimeout(fallbackTimer);
+                            }
+                            
+                            if (typeof countdownInterval !== 'undefined') {
+                                clearInterval(countdownInterval);
+                            }
+                            
+                            setTimeout(() => {
+                                log("WebRTC", "Closing peer connection");
+                                
+                                try {
+                                    dc.close();
+                                    log("DataChannel", "Closed");
+                                } catch (e) {
+                                    log("DataChannel", "Error closing:", e);
+                                }
+                                
+                                try {
+                                    pc.close();
+                                    log("WebRTC", "Peer connection closed");
+                                } catch (e) {
+                                    log("WebRTC", "Error closing peer connection:", e);
+                                }
+                            }, 500);
+                        }
+                    };
+                    
+                    // Set remote description (server's offer)
+                    log("WebRTC", "Setting remote description");
+                    try {
+                        await pc.setRemoteDescription({ type: offerData.type, sdp: offerData.sdp });
+                        log("WebRTC", "Remote description set successfully");
+                    } catch (err) {
+                        log("WebRTC", "Failed to set remote description:", err);
+                        fallbackToHTTP("Failed to set remote description");
+                        return;
+                    }
+                    
+                    // Create answer
+                    log("WebRTC", "Creating answer");
+                    let answer;
+                    try {
+                        answer = await pc.createAnswer();
+                        log("WebRTC", `Answer created: type=${answer.type}, sdp length=${answer.sdp.length}`);
+                        log("WebRTC", `Answer SDP excerpt: ${answer.sdp.substring(0, 50)}...`);
+                    } catch (err) {
+                        log("WebRTC", "Failed to create answer:", err);
+                        fallbackToHTTP("Failed to create answer");
+                        return;
+                    }
+                    
+                    // ---------- ① Server → Browser: Retrieve remote candidate ----------
+                    async function startPollingRemoteCandidates(pcRef) {
+                        while (!stopCandidatePolling) {
+                            try {
+                                // GET /uid=****/candidate  (204 = Temporarily unavailable)
+                                const resp = await fetch(`/uid=****/candidate?peer=${peerId}`);
+                                if (resp.status === 204) {
+                                    await new Promise(r => setTimeout(r, 200)); // Ask again in 200 ms
+                                    continue;
+                                }
+                                if (resp.status === 404) {      
+                                    log("ICE", "Server reports peer closed, stop polling");
+                                    break;
+                                }                                
+                                if (!resp.ok) {                               // Exit on other errors
+                                    log("ICE", `Fetch remote cand failed: ${resp.status}`);
+                                    break;
+                                }
+
+                                const cand = await resp.json();
+                                if (cand.candidate === "end-of-candidates") { // All candidates received
+                                    log("ICE", "End-of-candidates from server");
+                                    break;
+                                }
+
+                                log("ICE", `Remote candidate: ${cand.candidate?.substring(0,50)}...`);
+                                await pcRef.addIceCandidate(cand);            // Add to ICE agent
+                            } catch (err) {
+                                log("ICE", `Polling error: ${err}`);
+                                break;
+                            }
+                        }
+                    }                    
+                    
+                    // Set local description
+                    log("WebRTC", "Setting local description");
+                    try {
+                        await pc.setLocalDescription(answer);
+                        log("WebRTC", "Local description set successfully");
+                    } catch (err) {
+                        log("WebRTC", "Failed to set local description:", err);
+                        fallbackToHTTP("Failed to set local description");
+                        return;
+                    }
+                    
+                    // Send answer to server
+                    log("WebRTC", "Sending answer to server");
+                    try {
+                        const answerResponse = await fetch('/uid=****/answer', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                peerId: peerId,
+                                sdp: pc.localDescription.sdp,
+                                type: pc.localDescription.type,
+                                clientInfo: connectionInfo
+                            }),
+                        });
+                        log("WebRTC", `Answer sent, response: ${answerResponse.status} ${answerResponse.statusText}`);
+                        
+                        startPollingRemoteCandidates(pc);
+                        
+                    } catch (err) {
+                        log("WebRTC", "Failed to send answer:", err);
+                        fallbackToHTTP("Failed to send answer to server");
+                        return;
+                    }
+                    
+                    log("WebRTC", "Waiting for data channel...");
+                } catch (err) {
+                    log("WebRTC", "General error:", err);
+                    fallbackToHTTP(`Error: ${err.message}`);
+                }
+                })(); // End of async function
+            } // End of startWebRTCDownload function
+            
+            // Listen for i18n ready event
+            window.addEventListener('i18nReady', startWebRTCDownload);        
+            
+            // Fallback: if i18nReady doesn't fire within 2 seconds, proceed anyway
+            startWebRTCTimer = setTimeout(() => {
+                startWebRTCDownload();
+            }, 2000);              
+            
+        </script>
+    </body>
+</html>

@@ -1,0 +1,17 @@
+Gooey==1.0.8.1
+requests
+pyperclip>=1.8, <1.9
+bitmath
+sentry_sdk>=1.41, <2.0
+psutil
+chardet
+aiortc
+tqdm
+signalslot
+
+lief>=0.16.3; sys_platform != "win32"
+
+uvloop; sys_platform != "win32"
+winloop; sys_platform == "win32"
+
+pyinstaller
