@@ -199,7 +199,7 @@ ffl supports various tunnels to help you transfer files efficiently through diff
 
 ## 🔓 Open Source (CLI Core Only)
 
-This repository provides the **open-source FastFileLink CLI**, licensed under **AGPL v3**.
+This repository provides the **open-source FastFileLink CLI**, licensed under **Apache License 2.0**.
 
 The following are **not open source** at this time:
 - GUI version
