@@ -218,6 +218,18 @@ Visit the official site for the latest CLI builds for:
 
 👉 [https://fastfilelink.com/download](https://fastfilelink.com/download)
 
+🔎 Linux versions
+
+In the Linux version, we provide two options:
+
+glibc 2.39+ version
+Smaller file size and faster performance. Successfully tested on Ubuntu 24, but supports fewer Linux distributions.
+
+manylinux (glibc 2.28+) version
+Larger file size due to additional internal linking processes. Can even run successfully on Ubuntu 20, and supports a wider range of Linux distributions.
+
+Choose the version that best fits your environment and needs.
+
 ---
 
 ## 🧪 Coming Soon
