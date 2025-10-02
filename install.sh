@@ -83,16 +83,13 @@ choose_asset() {
         if [[ "$os" == "linux" ]]; then
           [[ "$name" =~ linux ]] || continue
           [[ "$name" =~ $ARCH_RE ]] || continue
-          # 你的 Linux 資產名是 .tar.gz；但為防誤標，後續會自動偵測格式
-          [[ "$name" =~ \.(tar\.gz|tgz|tar|zip)$ ]] || continue
-          # native：不強制 glibc/manylinux；若指定才過濾
+          [[ "$name" =~ \.(tar\.gz|tgz|tar|zip|xz|zst)$ ]] || continue
           if [[ "$variant" == "glibc"     ]] && ! [[ "$name" =~ glibc ]];     then continue; fi
           if [[ "$variant" == "manylinux" ]] && ! [[ "$name" =~ manylinux ]]; then continue; fi
           pick="$name"; break
         elif [[ "$os" == "darwin" ]]; then
-          # 你的 mac 資產是 .zip（名稱含 mac）；也容忍 tar.gz
-          if   [[ "$name" =~ mac ]] && [[ "$name" =~ $ARCH_RE ]] && [[ "$name" =~ \.(zip|tar\.gz)$ ]]; then pick="$name"; break
-          elif [[ "$name" =~ (darwin|macos) ]] && [[ "$name" =~ $ARCH_RE ]] && [[ "$name" =~ \.(zip|tar\.gz)$ ]]; then pick="$name"; break
+          if   [[ "$name" =~ mac ]] && [[ "$name" =~ $ARCH_RE ]] && [[ "$name" =~ \.(zip|tar\.gz|tgz)$ ]]; then pick="$name"; break
+          elif [[ "$name" =~ (darwin|macos) ]] && [[ "$name" =~ $ARCH_RE ]] && [[ "$name" =~ \.(zip|tar\.gz|tgz)$ ]]; then pick="$name"; break
           fi
         fi
         ;;
@@ -115,7 +112,7 @@ fi
 DL_URL="$(asset_url_by_name "$ASSET_NAME")"
 [ -z "$DL_URL" ] && { echo "Download URL not found for $ASSET_NAME"; exit 1; }
 
-# 3) 下載與安裝
+# 3) 下載
 TMPDIR="$(mktemp -d)"; trap 'rm -rf "$TMPDIR"' EXIT
 FILE="$TMPDIR/$ASSET_NAME"
 
@@ -139,42 +136,30 @@ install_bin() {
   "$dst" --version || true
 }
 
+# --- 檔頭偵測：ELF/Mach-O/PE ---
+is_elf()  { [ "$(head -c 4 "$1" | LC_ALL=C tr -d '\0')" = $'\x7f''ELF' ]; }
+is_pe()   { head -c 2 "$1" | grep -q "^MZ$"; }
+is_macho(){
+  local m; m="$(xxd -l 4 -p "$1" 2>/dev/null || true)"
+  case "$m" in cffaedfe|feedface|feeface|cafebabe) return 0;; esac
+  return 1
+}
+
 extract_into() {
-  # 嘗試多種格式：bsdtar(自動偵測) -> tar.gz -> tar.xz -> tar.zstd -> tar -> zip
-  # 全部失敗時，若檔案是可執行檔，直接視為單檔安裝（最後保險）
+  # 嘗試多種格式：bsdtar(自動偵測) -> tar.gz -> tar.xz -> tar.zstd -> tar -> zip -> (單檔二進位)
   local archive="$1" outdir="$2"
   mkdir -p "$outdir"
 
-  if have bsdtar; then
-    if bsdtar -tf "$archive" >/dev/null 2>&1; then
-      bsdtar -xf "$archive" -C "$outdir" && return 0
-    fi
-  fi
+  if have bsdtar && bsdtar -tf "$archive" >/dev/null 2>&1; then bsdtar -xf "$archive" -C "$outdir" && return 0; fi
+  if tar -tzf "$archive" >/dev/null 2>&1; then tar -xzf "$archive" -C "$outdir" && return 0; fi
+  if tar -tJf "$archive" >/dev/null 2>&1; then tar -xJf "$archive" -C "$outdir" && return 0; fi
+  if tar --help 2>/dev/null | grep -q -- '--zstd' && tar --zstd -tf "$archive" >/dev/null 2>&1; then tar --zstd -xf "$archive" -C "$outdir" && return 0; fi
+  if tar -tf "$archive" >/dev/null 2>&1; then tar -xf "$archive" -C "$outdir" && return 0; fi
+  if have unzip && unzip -tq "$archive" >/dev/null 2>&1; then unzip -q "$archive" -d "$outdir" && return 0; fi
+  if have bsdtar; then bsdtar -xf "$archive" -C "$outdir" && return 0; fi
 
-  if tar -tzf "$archive" >/dev/null 2>&1; then
-    tar -xzf "$archive" -C "$outdir" && return 0
-  fi
-  if tar -tJf "$archive" >/dev/null 2>&1; then
-    tar -xJf "$archive" -C "$outdir" && return 0
-  fi
-  if tar --help 2>/dev/null | grep -q -- '--zstd'; then
-    if tar --zstd -tf "$archive" >/dev/null 2>&1; then
-      tar --zstd -xf "$archive" -C "$outdir" && return 0
-    fi
-  fi
-  if tar -tf "$archive" >/dev/null 2>&1; then
-    tar -xf "$archive" -C "$outdir" && return 0
-  fi
-  if have unzip; then
-    if unzip -tq "$archive" >/dev/null 2>&1; then
-      unzip -q "$archive" -d "$outdir" && return 0
-    fi
-  fi
-  if have bsdtar; then
-    bsdtar -xf "$archive" -C "$outdir" && return 0
-  fi
-
-  if [ -x "$archive" ]; then
+  # 單檔二進位（誤用壓縮副檔名的情況）
+  if is_elf "$archive" || is_macho "$archive" || is_pe "$archive"; then
     cp "$archive" "$outdir/" && return 0
   fi
 
@@ -182,19 +167,33 @@ extract_into() {
   return 1
 }
 
+# 4) 安裝
 if [[ "$VARIANT" == "com" ]]; then
   if [[ "$ASSET_NAME" =~ \.com$ ]]; then
     install_bin "$FILE" "$INSTALL_DIR/$APP.com"
   else
     UNPACK="$TMPDIR/unpack"; extract_into "$FILE" "$UNPACK"
-    BIN="$(find "$UNPACK" -type f -name "$APP.com" | head -n1)"
+    BIN="$(find "$UNPACK" -type f -name "$APP.com" -o -name "$APP" -o -name "$APP.exe" | head -n1)"
     [ -z "$BIN" ] && { echo "ffl.com not found in archive"; exit 1; }
-    install_bin "$BIN" "$INSTALL_DIR/$APP.com"
+    # 若拿到的是單檔也行
+    case "$BIN" in
+      *.com) install_bin "$BIN" "$INSTALL_DIR/$APP.com"; ln -sf "$APP.com" "$INSTALL_DIR/$APP" ;;
+      *.exe) install_bin "$BIN" "$INSTALL_DIR/$APP" ;;
+      *)     install_bin "$BIN" "$INSTALL_DIR/$APP" ;;
+    esac
   fi
-  ln -sf "$APP.com" "$INSTALL_DIR/$APP"
+  ln -sf "$APP.com" "$INSTALL_DIR/$APP" 2>/dev/null || true
 else
   UNPACK="$TMPDIR/unpack"; extract_into "$FILE" "$UNPACK"
-  BIN="$(find "$UNPACK" -maxdepth 5 -type f -name "$APP" | head -n1)"
+  # 找到可執行檔：先精準名，其次任何可執行檔
+  BIN="$(find "$UNPACK" -maxdepth 6 -type f \( -name "$APP" -o -name "$APP.exe" \) | head -n1)"
+  if [ -z "$BIN" ]; then
+    # 如果根本就是單檔下載（誤標 .tar.gz），直接把 FILE 當成可執行
+    if is_elf "$FILE" || is_macho "$FILE" || is_pe "$FILE"; then
+      BIN="$FILE"
+    fi
+  fi
   [ -z "$BIN" ] && { echo "Executable '$APP' not found in archive"; exit 1; }
+  chmod +x "$BIN" || true
   install_bin "$BIN" "$INSTALL_DIR/$APP"
 fi

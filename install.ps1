@@ -22,6 +22,17 @@ function Get-Json($url) {
   Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri $url
 }
 
+# --- 讀取檔頭（辨識是否其實是 .exe 單檔） ---
+function Test-IsPE($path) {
+  try {
+    $fs = [System.IO.File]::OpenRead($path)
+    $bytes = New-Object byte[] 2
+    $null = $fs.Read($bytes, 0, 2)
+    $fs.Close()
+    return ($bytes[0] -eq 0x4D -and $bytes[1] -eq 0x5A) # 'M' 'Z'
+  } catch { return $false }
+}
+
 # --- 解壓小工具（支援 Expand-Archive 失敗時的 fallback） ---
 function Expand-Zip($zipPath, $dest) {
   try {
@@ -56,7 +67,7 @@ function Pick-Native {
   # 接受 amd64 / x86_64 / x64
   $archRe = '(amd64|x86_64|x64)'
   $assets | Where-Object {
-    $_.name -match 'windows' -and $_.name -match $archRe -and $_.name -match '\.zip$'
+    $_.name -match 'windows' -and $_.name -match $archRe -and ($_.name -match '\.zip$' -or $_.name -match '\.exe$')
   } | Select-Object -First 1
 }
 
@@ -70,6 +81,23 @@ Write-Host ("Picked asset: " + $asset.name)
 # 2) 下載
 $pkg = Join-Path $env:TEMP $asset.name
 Invoke-WebRequest -UseBasicParsing -Uri $asset.browser_download_url -OutFile $pkg
+
+# 如果其實是單一 EXE（但誤標為 .zip），直接安裝：
+if ($variant -ne "com" -and (Test-IsPE $pkg)) {
+  $dest = if ($env:FFL_PREFIX) { Join-Path $env:FFL_PREFIX 'bin' } else { Join-Path $env:LOCALAPPDATA "Programs\$app" }
+  New-Item -ItemType Directory -Force -Path $dest | Out-Null
+  $exePath = Join-Path $dest "$app.exe"
+  Copy-Item $pkg $exePath -Force
+  Write-Host "Installed (native single exe) to $dest"
+  try { & $exePath --version | Out-Host } catch { Write-Warning $_.Exception.Message }
+  # PATH（使用者層級）
+  $userPath = [Environment]::GetEnvironmentVariable("Path","User")
+  if (-not (($userPath -split ";") -contains $dest)) {
+    [Environment]::SetEnvironmentVariable("Path", ($userPath + ";" + $dest).Trim(";"), "User")
+    Write-Host "PATH updated (user scope). Open a new terminal to use 'ffl'."
+  }
+  exit 0
+}
 
 # 3) 安裝目錄
 $dest = if ($env:FFL_PREFIX) { Join-Path $env:FFL_PREFIX 'bin' } else { Join-Path $env:LOCALAPPDATA "Programs\$app" }
@@ -95,6 +123,7 @@ if ($variant -eq "com") {
 
   Write-Host "Installed (com) to $dest"
 } else {
+  # 預期 zip（若不是 zip，前面已用 Test-IsPE 當 .exe 安裝）
   Expand-Zip $pkg $dest
   $bin = Get-ChildItem -Path $dest -Filter "$app.exe" -Recurse | Select-Object -First 1
   if (-not $bin) { Get-ChildItem -Recurse $dest | Write-Host; throw "$app.exe not found under $dest" }
