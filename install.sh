@@ -30,9 +30,9 @@ fi
 TAG="$(printf '%s' "$REL_JSON" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
 [ -z "$TAG" ] && { echo "Cannot determine release tag"; exit 1; }
 
-# 2) 取全部資產名稱與 URL（不假設命名，靠關鍵字/正則挑）
-mapfile -t NAMES < <(printf '%s' "$REL_JSON" | sed -n 's/.*"name":[[:space:]]*"\([^"]*\)".*/\1/p')
-mapfile -t URLS  < <(printf '%s' "$REL_JSON" | sed -n 's/.*"browser_download_url":[[:space:]]*"\([^"]*\)".*/\1/p')
+NAMES_LIST="$(printf '%s\n' "$REL_JSON" | sed -n 's/.*"name":[[:space:]]*"\([^"]*\)".*/\1/p')"
+# asset_url_by_name 仍從 REL_JSON 對應，不需 URLS 陣列
+
 
 asset_url_by_name() {
   local want="$1"
@@ -45,37 +45,57 @@ asset_url_by_name() {
 }
 
 choose_asset() {
-  # 規則：
-  # - com：名稱含 "ffl.com"（可為裸檔或打包 .zip/.tar.gz）
-  # - native:
-  #   - linux: 名稱含 linux、ARCH；若 VARIANT=glibc/manylinux 則再含該字；副檔 .tar.gz
-  #   - darwin: 名稱含 (darwin|mac|macos)、ARCH、.tar.gz
-  #   - （Windows 交由 install.ps1）
+  # 參數：OS、ARCH、VARIANT
   local os="$1" arch="$2" variant="$3"
   shopt -s nocasematch
+
+  # 架構別名正則
+  local ARCH_RE=""
+  case "$arch" in
+    amd64)  ARCH_RE='(amd64|x86_64|x64)';;
+    arm64)  ARCH_RE='(arm64|aarch64)';;
+    *)      ARCH_RE="$arch";;
+  esac
+
+  # 逐行掃描 NAMES_LIST（相容 bash 3.2，避免 mapfile）
   local pick=""
-  for name in "${NAMES[@]}"; do
-    if [[ "$variant" == "com" ]]; then
-      if [[ "$name" =~ ffl\.com($|\.zip$|\.tar\.gz$) ]]; then pick="$name"; break; fi
-    else
-      if [[ "$os" == "linux" ]]; then
-        [[ "$name" =~ linux ]] || continue
-        [[ "$name" =~ $arch ]] || continue
-        [[ "$name" =~ \.tar\.gz$ ]] || continue
-        if [[ "$variant" == "glibc" ]]; then [[ "$name" =~ glibc ]] || continue; fi
-        if [[ "$variant" == "manylinux" ]]; then [[ "$name" =~ manylinux ]] || continue; fi
-        pick="$name"; break
-      elif [[ "$os" == "darwin" ]]; then
-        if [[ "$name" =~ (darwin|mac|macos) ]] && [[ "$name" =~ $arch ]] && [[ "$name" =~ \.tar\.gz$ ]]; then
+  while IFS= read -r name; do
+    # 跳過像 "Release v3.6.2" 的 release title
+    [ -z "$name" ] && continue
+    case "$variant" in
+      com)
+        if [[ "$name" =~ ffl\.com($|\.zip$|\.tar\.gz$) ]]; then
           pick="$name"; break
         fi
-      fi
-    fi
-  done
+        ;;
+      glibc|manylinux|native)
+        if [[ "$os" == "linux" ]]; then
+          [[ "$name" =~ linux ]] || continue
+          [[ "$name" =~ $ARCH_RE ]] || continue
+          [[ "$name" =~ \.tar\.gz$ ]] || continue
+          if [[ "$variant" == "glibc"     ]] && ! [[ "$name" =~ glibc ]];     then continue; fi
+          if [[ "$variant" == "manylinux" ]] && ! [[ "$name" =~ manylinux ]]; then continue; fi
+          pick="$name"; break
+        elif [[ "$os" == "darwin" ]]; then
+          # 你的命名用 mac；優先 mac，其次 darwin/macos
+          if   [[ "$name" =~ mac    ]] && [[ "$name" =~ $ARCH_RE ]] && [[ "$name" =~ \.tar\.gz$ ]]; then pick="$name"; break
+          elif [[ "$name" =~ (darwin|macos) ]] && [[ "$name" =~ $ARCH_RE ]] && [[ "$name" =~ \.tar\.gz$ ]]; then pick="$name"; break
+          fi
+        fi
+        ;;
+      *)
+        : # 其他 variant 不處理
+        ;;
+    esac
+  done <<< "$NAMES_LIST"
+
   echo "$pick"
 }
 
+
 ASSET_NAME="$(choose_asset "$OS" "$ARCH" "$VARIANT")"
+echo "Picked asset: $ASSET_NAME"
+
 if [ -z "$ASSET_NAME" ]; then
   echo "No matching asset for OS=$OS ARCH=$ARCH VARIANT=$VARIANT in tag $TAG."
   echo "Available assets:"; printf '  - %s\n' "${NAMES[@]}"; exit 1

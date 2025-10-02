@@ -32,13 +32,16 @@ function Pick-Com {
 }
 function Pick-Native {
   param($arch)
-  # Windows：含 windows + arch + .zip
+  # 接受 amd64 / x86_64 / x64
+  $archRe = '(amd64|x86_64|x64)'
   $assets | Where-Object {
-    $_.name -match 'windows' -and $_.name -match $arch -and $_.name -match '\.zip$'
+    $_.name -match 'windows' -and $_.name -match $archRe -and $_.name -match '\.zip$'
   } | Select-Object -First 1
 }
 
 $asset = if ($variant -eq "com") { Pick-Com } else { Pick-Native -arch $arch }
+Write-Host ("Picked asset: " + $asset.name)
+
 if (-not $asset) {
   $names = ($assets | ForEach-Object { $_.name }) -join ", "
   throw "No matching asset for variant=$variant arch=$arch in tag $tag. Available: $names"
