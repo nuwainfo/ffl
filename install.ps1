@@ -22,6 +22,22 @@ function Get-Json($url) {
   Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri $url
 }
 
+# --- 解壓小工具（支援 Expand-Archive 失敗時的 fallback） ---
+function Expand-Zip($zipPath, $dest) {
+  try {
+    Expand-Archive -Path $zipPath -DestinationPath $dest -Force -ErrorAction Stop
+  } catch {
+    Write-Warning ("Expand-Archive failed: " + $_.Exception.Message)
+    try {
+      Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+      [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $dest, $true)
+    } catch {
+      Get-ChildItem -Path (Split-Path $zipPath) | Write-Host
+      throw "Zip extract failed: $($zipPath) -> $dest. Error: $($_.Exception.Message)"
+    }
+  }
+}
+
 # 1) 取 release JSON
 if ([string]::IsNullOrWhiteSpace($tag)) {
   $rel = Get-Json "https://api.github.com/repos/$RepoOwner/$RepoName/releases/latest"
@@ -64,12 +80,12 @@ if ($variant -eq "com") {
   if ($asset.name -match '\.com$') {
     Copy-Item $pkg (Join-Path $dest "$app.com") -Force
   } elseif ($asset.name -match '\.zip$') {
-    Expand-Archive -Path $pkg -DestinationPath $dest -Force
+    Expand-Zip $pkg $dest
   } else {
     throw "ffl.com packaged as tar.gz is not supported on Windows installer; please publish .com or .zip"
   }
   $bin = Get-ChildItem -Path $dest -Filter "$app.com" -Recurse | Select-Object -First 1
-  if (-not $bin) { Get-ChildItem -Recurse $dest | Write-Host; throw "ffl.com not found under $dest" }
+  if (-not $bin) { Get-ChildItem -Recurse $dest | Write-Host; throw "$app.com not found under $dest" }
   # shim：ffl.cmd 轉呼叫 ffl.com
   $shim = Join-Path $dest "ffl.cmd"
 @"
@@ -79,7 +95,7 @@ if ($variant -eq "com") {
 
   Write-Host "Installed (com) to $dest"
 } else {
-  Expand-Archive -Path $pkg -DestinationPath $dest -Force
+  Expand-Zip $pkg $dest
   $bin = Get-ChildItem -Path $dest -Filter "$app.exe" -Recurse | Select-Object -First 1
   if (-not $bin) { Get-ChildItem -Recurse $dest | Write-Host; throw "$app.exe not found under $dest" }
   Write-Host "Installed (native) to $dest"
@@ -92,7 +108,7 @@ if (-not (($userPath -split ";") -contains $dest)) {
   Write-Host "PATH updated (user scope). Open a new terminal to use 'ffl'."
 }
 
-# 6) 驗證（不讓非零版號退出碼導致整體 fail；只檢查可執行檔存在）
+# 6) 驗證（若 --version 非 0，不讓整體失敗；只要檔存在即可）
 try {
   & $bin.FullName --version | Out-Host
 } catch {

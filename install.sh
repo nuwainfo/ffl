@@ -47,7 +47,7 @@ fi
 TAG="$(printf '%s' "$REL_JSON" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
 [ -z "$TAG" ] && { echo "Cannot determine release tag"; exit 1; }
 
-# 2) 取資產清單（相容 bash 3.2，勿用 mapfile）
+# 2) 取資產清單（相容 bash 3.2）
 NAMES_LIST="$(printf '%s\n' "$REL_JSON" | sed -n 's/.*"name":[[:space:]]*"\([^"]*\)".*/\1/p')"
 
 asset_url_by_name() {
@@ -83,13 +83,14 @@ choose_asset() {
         if [[ "$os" == "linux" ]]; then
           [[ "$name" =~ linux ]] || continue
           [[ "$name" =~ $ARCH_RE ]] || continue
-          # 你的 Linux 資產是 .tar.gz；但為防誤標，後面解壓會自動 fallback
+          # 你的 Linux 資產名是 .tar.gz；但為防誤標，後續會自動偵測格式
           [[ "$name" =~ \.(tar\.gz|tgz|tar|zip)$ ]] || continue
+          # native：不強制 glibc/manylinux；若指定才過濾
           if [[ "$variant" == "glibc"     ]] && ! [[ "$name" =~ glibc ]];     then continue; fi
           if [[ "$variant" == "manylinux" ]] && ! [[ "$name" =~ manylinux ]]; then continue; fi
           pick="$name"; break
         elif [[ "$os" == "darwin" ]]; then
-          # 你的 mac 資產是 .zip
+          # 你的 mac 資產是 .zip（名稱含 mac）；也容忍 tar.gz
           if   [[ "$name" =~ mac ]] && [[ "$name" =~ $ARCH_RE ]] && [[ "$name" =~ \.(zip|tar\.gz)$ ]]; then pick="$name"; break
           elif [[ "$name" =~ (darwin|macos) ]] && [[ "$name" =~ $ARCH_RE ]] && [[ "$name" =~ \.(zip|tar\.gz)$ ]]; then pick="$name"; break
           fi
@@ -107,7 +108,7 @@ echo "Picked asset: ${ASSET_NAME:-<none>}"
 if [ -z "$ASSET_NAME" ]; then
   echo "No matching asset for OS=$OS ARCH=$ARCH VARIANT=$VARIANT in tag $TAG."
   echo "Available assets:"
-  printf '  - %s\n' $NAMES_LIST
+  IFS=$'\n'; for x in $NAMES_LIST; do [ -n "$x" ] && printf '  - %s\n' "$x"; done
   exit 1
 fi
 
@@ -139,26 +140,46 @@ install_bin() {
 }
 
 extract_into() {
-  # 盡量自動判斷並 fallback：tar.gz -> tar -> unzip -> bsdtar
+  # 嘗試多種格式：bsdtar(自動偵測) -> tar.gz -> tar.xz -> tar.zstd -> tar -> zip
+  # 全部失敗時，若檔案是可執行檔，直接視為單檔安裝（最後保險）
   local archive="$1" outdir="$2"
   mkdir -p "$outdir"
+
+  if have bsdtar; then
+    if bsdtar -tf "$archive" >/dev/null 2>&1; then
+      bsdtar -xf "$archive" -C "$outdir" && return 0
+    fi
+  fi
+
   if tar -tzf "$archive" >/dev/null 2>&1; then
-    tar -xzf "$archive" -C "$outdir"
-    return 0
+    tar -xzf "$archive" -C "$outdir" && return 0
+  fi
+  if tar -tJf "$archive" >/dev/null 2>&1; then
+    tar -xJf "$archive" -C "$outdir" && return 0
+  fi
+  if tar --help 2>/dev/null | grep -q -- '--zstd'; then
+    if tar --zstd -tf "$archive" >/dev/null 2>&1; then
+      tar --zstd -xf "$archive" -C "$outdir" && return 0
+    fi
   fi
   if tar -tf "$archive" >/dev/null 2>&1; then
-    tar -xf "$archive" -C "$outdir"
-    return 0
+    tar -xf "$archive" -C "$outdir" && return 0
   fi
   if have unzip; then
-    unzip -q "$archive" -d "$outdir"
-    return 0
+    if unzip -tq "$archive" >/dev/null 2>&1; then
+      unzip -q "$archive" -d "$outdir" && return 0
+    fi
   fi
   if have bsdtar; then
-    bsdtar -xf "$archive" -C "$outdir"
-    return 0
+    bsdtar -xf "$archive" -C "$outdir" && return 0
   fi
-  echo "Cannot extract archive: $archive"; return 1
+
+  if [ -x "$archive" ]; then
+    cp "$archive" "$outdir/" && return 0
+  fi
+
+  echo "Cannot extract archive: $archive"
+  return 1
 }
 
 if [[ "$VARIANT" == "com" ]]; then
@@ -173,8 +194,7 @@ if [[ "$VARIANT" == "com" ]]; then
   ln -sf "$APP.com" "$INSTALL_DIR/$APP"
 else
   UNPACK="$TMPDIR/unpack"; extract_into "$FILE" "$UNPACK"
-  # mac zip 可能有子資料夾；linux tar.gz 也可能
-  BIN="$(find "$UNPACK" -maxdepth 3 -type f -name "$APP" | head -n1)"
+  BIN="$(find "$UNPACK" -maxdepth 5 -type f -name "$APP" | head -n1)"
   [ -z "$BIN" ] && { echo "Executable '$APP' not found in archive"; exit 1; }
   install_bin "$BIN" "$INSTALL_DIR/$APP"
 fi
