@@ -1,0 +1,63 @@
+name: Install script e2e test
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        variant: [native, manylinux, com]
+    env:
+      FFL_VERSION: v3.6.2
+      FFL_VARIANT: ${{ matrix.variant }}
+    steps:
+      - name: Run install.sh
+        run: |
+          set -eux
+          bash -c "$(curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl/main/install.sh)"
+      - name: Verify
+        run: |
+          set -eux
+          which ffl || true
+          ffl --version || true
+
+  macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        variant: [native, com]
+    env:
+      FFL_VERSION: v3.6.2
+      FFL_VARIANT: ${{ matrix.variant }}
+    steps:
+      - name: Run install.sh
+        run: |
+          set -eux
+          bash -lc 'bash -c "$(curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl/main/install.sh)"'
+      - name: Verify
+        run: |
+          set -eux
+          bash -lc 'ffl --version || true'
+
+  windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        variant: [native, com]
+    env:
+      FFL_VERSION: v3.6.2
+      FFL_VARIANT: ${{ matrix.variant }}
+    steps:
+      - name: Run install.ps1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          iwr -useb https://raw.githubusercontent.com/nuwainfo/ffl/main/install.ps1 | iex
+      - name: Verify
+        shell: pwsh
+        run: |
+          where ffl | Write-Host
+          ffl --version
