@@ -21,7 +21,6 @@ esac
 have() { command -v "$1" >/dev/null 2>&1; }
 
 gh_api() {
-  # 支援可選 GITHUB_TOKEN，避免 CI rate limit
   local url="$1"
   if have curl; then
     if [ -n "${GITHUB_TOKEN:-}" ]; then
@@ -60,18 +59,14 @@ asset_url_by_name() {
 }
 
 choose_asset() {
-  # 參數：OS、ARCH、VARIANT
   local os="$1" arch="$2" variant="$3"
   shopt -s nocasematch
-
-  # 架構別名正則
   local ARCH_RE=""
   case "$arch" in
     amd64)  ARCH_RE='(amd64|x86_64|x64)';;
     arm64)  ARCH_RE='(arm64|aarch64)';;
     *)      ARCH_RE="$arch";;
   esac
-
   local pick=""
   while IFS= read -r name; do
     [ -z "$name" ] && continue
@@ -95,17 +90,14 @@ choose_asset() {
         ;;
     esac
   done <<< "$NAMES_LIST"
-
   echo "$pick"
 }
 
 ASSET_NAME="$(choose_asset "$OS" "$ARCH" "$VARIANT")"
 echo "Picked asset: ${ASSET_NAME:-<none>}"
-
 if [ -z "$ASSET_NAME" ]; then
   echo "No matching asset for OS=$OS ARCH=$ARCH VARIANT=$VARIANT in tag $TAG."
-  echo "Available assets:"
-  IFS=$'\n'; for x in $NAMES_LIST; do [ -n "$x" ] && printf '  - %s\n' "$x"; done
+  echo "Available assets:"; IFS=$'\n'; for x in $NAMES_LIST; do [ -n "$x" ] && printf '  - %s\n' "$x"; done
   exit 1
 fi
 
@@ -115,10 +107,10 @@ DL_URL="$(asset_url_by_name "$ASSET_NAME")"
 # 3) 下載
 TMPDIR="$(mktemp -d)"; trap 'rm -rf "$TMPDIR"' EXIT
 FILE="$TMPDIR/$ASSET_NAME"
-
 echo "Downloading $ASSET_NAME"
 if have curl; then curl -fL --retry 3 -o "$FILE" "$DL_URL"; else wget -O "$FILE" "$DL_URL"; fi
 
+# 4) 安裝位置
 if [ -n "$PREFIX" ]; then
   INSTALL_DIR="$PREFIX/bin"
 elif [ -w /usr/local/bin ]; then
@@ -140,17 +132,14 @@ install_bin() {
 is_elf()  { [ "$(head -c 4 "$1" | LC_ALL=C tr -d '\0')" = $'\x7f''ELF' ]; }
 is_pe()   { head -c 2 "$1" | grep -q "^MZ$"; }
 is_macho(){
-  # 使用 hexdump（macOS 預設可用）
   local m; m="$(dd if="$1" bs=4 count=1 2>/dev/null | hexdump -v -e '1/1 "%02x"')"
   case "$m" in cffaedfe|feedface|feeface|cafebabe) return 0;; esac
   return 1
 }
 
 extract_into() {
-  # 嘗試多種格式：bsdtar(自動偵測) -> tar.gz -> tar.xz -> tar.zstd -> tar -> zip -> (單檔二進位)
   local archive="$1" outdir="$2"
   mkdir -p "$outdir"
-
   if have bsdtar && bsdtar -tf "$archive" >/dev/null 2>&1; then bsdtar -xf "$archive" -C "$outdir" && return 0; fi
   if tar -tzf "$archive" >/dev/null 2>&1; then tar -xzf "$archive" -C "$outdir" && return 0; fi
   if tar -tJf "$archive" >/dev/null 2>&1; then tar -xJf "$archive" -C "$outdir" && return 0; fi
@@ -158,17 +147,11 @@ extract_into() {
   if tar -tf "$archive" >/dev/null 2>&1; then tar -xf "$archive" -C "$outdir" && return 0; fi
   if have unzip && unzip -tq "$archive" >/dev/null 2>&1; then unzip -q "$archive" -d "$outdir" && return 0; fi
   if have bsdtar; then bsdtar -xf "$archive" -C "$outdir" && return 0; fi
-
-  # 單檔二進位（誤用壓縮副檔名的情況）
-  if is_elf "$archive" || is_macho "$archive" || is_pe "$archive"; then
-    cp "$archive" "$outdir/" && return 0
-  fi
-
-  echo "Cannot extract archive: $archive"
-  return 1
+  if is_elf "$archive" || is_macho "$archive" || is_pe "$archive"; then cp "$archive" "$outdir/" && return 0; fi
+  echo "Cannot extract archive: $archive"; return 1
 }
 
-# 4) 安裝
+# 5) 安裝
 if [[ "$VARIANT" == "com" ]]; then
   if [[ "$ASSET_NAME" =~ \.com$ ]]; then
     install_bin "$FILE" "$INSTALL_DIR/$APP.com"
@@ -185,8 +168,6 @@ if [[ "$VARIANT" == "com" ]]; then
   ln -sf "$APP.com" "$INSTALL_DIR/$APP" 2>/dev/null || true
 else
   UNPACK="$TMPDIR/unpack"; extract_into "$FILE" "$UNPACK"
-
-  # 先找精確名，再找 ffl_*，最後找任何可執行且名含 ffl 的檔案；若整包其實是單檔也支援
   BIN="$(find "$UNPACK" -maxdepth 6 -type f -name "$APP" | head -n1)"
   if [ -z "$BIN" ]; then
     BIN="$(find "$UNPACK" -maxdepth 6 -type f -regex ".*/${APP}[_-].*" | head -n1)"
@@ -195,12 +176,9 @@ else
     BIN="$(find "$UNPACK" -maxdepth 6 -type f -perm -111 -iname "*$APP*" | head -n1)"
   fi
   if [ -z "$BIN" ]; then
-    if is_elf "$FILE" || is_macho "$FILE" || is_pe "$FILE"; then
-      BIN="$FILE"
-    fi
+    if is_elf "$FILE" || is_macho "$FILE" || is_pe "$FILE"; then BIN="$FILE"; fi
   fi
   [ -z "$BIN" ] && { echo "Executable '$APP' not found in archive"; exit 1; }
   chmod +x "$BIN" || true
-  # 安裝時統一命名為 ffl
   install_bin "$BIN" "$INSTALL_DIR/$APP"
 fi

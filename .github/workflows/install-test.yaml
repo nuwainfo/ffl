@@ -1,8 +1,11 @@
 name: Install script e2e test
-
 on:
   push:
   workflow_dispatch:
+
+env:
+  FFL_VERSION: v3.6.2
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
   linux:
@@ -10,14 +13,18 @@ jobs:
     strategy:
       matrix:
         variant: [native, manylinux, com]
-    env:
-      FFL_VERSION: v3.6.2
-      FFL_VARIANT: ${{ matrix.variant }}
     steps:
-      - name: Run install.sh
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates unzip libarchive-tools
+      - name: Run installer (local)
+        env:
+          FFL_VARIANT: ${{ matrix.variant }}
         run: |
           set -eux
-          bash -c "$(curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl/main/install.sh)"
+          bash ./install.sh
       - name: Verify
         run: |
           set -eux
@@ -29,35 +36,48 @@ jobs:
     strategy:
       matrix:
         variant: [native, com]
-    env:
-      FFL_VERSION: v3.6.2
-      FFL_VARIANT: ${{ matrix.variant }}
     steps:
-      - name: Run install.sh
+      - uses: actions/checkout@v4
+      - name: Run installer (local)
+        env:
+          FFL_VARIANT: ${{ matrix.variant }}
         run: |
           set -eux
-          bash -lc 'bash -c "$(curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl/main/install.sh)"'
+          bash ./install.sh
       - name: Verify
         run: |
           set -eux
-          bash -lc 'ffl --version || true'
+          ffl --version || true
 
   windows:
     runs-on: windows-latest
     strategy:
       matrix:
         variant: [native, com]
-    env:
-      FFL_VERSION: v3.6.2
-      FFL_VARIANT: ${{ matrix.variant }}
     steps:
-      - name: Run install.ps1
+      - uses: actions/checkout@v4
+      - name: Run installer (local)
         shell: pwsh
+        env:
+          FFL_VARIANT: ${{ matrix.variant }}
         run: |
           $ErrorActionPreference = "Stop"
-          iwr -useb https://raw.githubusercontent.com/nuwainfo/ffl/main/install.ps1 | iex
+          pwsh -File ./install.ps1
       - name: Verify
         shell: pwsh
         run: |
-          where ffl | Write-Host
-          ffl --version
+          $dest = Join-Path $env:LOCALAPPDATA "Programs\ffl"
+          Write-Host "Dest: $dest"
+          if ("${{ matrix.variant }}" -eq "com") {
+            if (Test-Path (Join-Path $dest "ffl.com")) {
+              & (Join-Path $dest "ffl.com") --version
+            } else {
+              throw "ffl.com not found under $dest"
+            }
+          } else {
+            if (Test-Path (Join-Path $dest "ffl.exe")) {
+              & (Join-Path $dest "ffl.exe") --version
+            } else {
+              throw "ffl.exe not found under $dest"
+            }
+          }
