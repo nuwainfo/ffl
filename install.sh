@@ -140,7 +140,8 @@ install_bin() {
 is_elf()  { [ "$(head -c 4 "$1" | LC_ALL=C tr -d '\0')" = $'\x7f''ELF' ]; }
 is_pe()   { head -c 2 "$1" | grep -q "^MZ$"; }
 is_macho(){
-  local m; m="$(xxd -l 4 -p "$1" 2>/dev/null || true)"
+  # 使用 hexdump（macOS 預設可用）
+  local m; m="$(dd if="$1" bs=4 count=1 2>/dev/null | hexdump -v -e '1/1 "%02x"')"
   case "$m" in cffaedfe|feedface|feeface|cafebabe) return 0;; esac
   return 1
 }
@@ -175,7 +176,6 @@ if [[ "$VARIANT" == "com" ]]; then
     UNPACK="$TMPDIR/unpack"; extract_into "$FILE" "$UNPACK"
     BIN="$(find "$UNPACK" -type f -name "$APP.com" -o -name "$APP" -o -name "$APP.exe" | head -n1)"
     [ -z "$BIN" ] && { echo "ffl.com not found in archive"; exit 1; }
-    # 若拿到的是單檔也行
     case "$BIN" in
       *.com) install_bin "$BIN" "$INSTALL_DIR/$APP.com"; ln -sf "$APP.com" "$INSTALL_DIR/$APP" ;;
       *.exe) install_bin "$BIN" "$INSTALL_DIR/$APP" ;;
@@ -185,15 +185,22 @@ if [[ "$VARIANT" == "com" ]]; then
   ln -sf "$APP.com" "$INSTALL_DIR/$APP" 2>/dev/null || true
 else
   UNPACK="$TMPDIR/unpack"; extract_into "$FILE" "$UNPACK"
-  # 找到可執行檔：先精準名，其次任何可執行檔
-  BIN="$(find "$UNPACK" -maxdepth 6 -type f \( -name "$APP" -o -name "$APP.exe" \) | head -n1)"
+
+  # 先找精確名，再找 ffl_*，最後找任何可執行且名含 ffl 的檔案；若整包其實是單檔也支援
+  BIN="$(find "$UNPACK" -maxdepth 6 -type f -name "$APP" | head -n1)"
   if [ -z "$BIN" ]; then
-    # 如果根本就是單檔下載（誤標 .tar.gz），直接把 FILE 當成可執行
+    BIN="$(find "$UNPACK" -maxdepth 6 -type f -regex ".*/${APP}[_-].*" | head -n1)"
+  fi
+  if [ -z "$BIN" ]; then
+    BIN="$(find "$UNPACK" -maxdepth 6 -type f -perm -111 -iname "*$APP*" | head -n1)"
+  fi
+  if [ -z "$BIN" ]; then
     if is_elf "$FILE" || is_macho "$FILE" || is_pe "$FILE"; then
       BIN="$FILE"
     fi
   fi
   [ -z "$BIN" ] && { echo "Executable '$APP' not found in archive"; exit 1; }
   chmod +x "$BIN" || true
+  # 安裝時統一命名為 ffl
   install_bin "$BIN" "$INSTALL_DIR/$APP"
 fi
