@@ -1,5 +1,9 @@
 # FastFileLink CLI
 
+[![License](https://img.shields.io/github/license/nuwainfo/ffl?style=flat-square)](./LICENSE)
+[![Release](https://img.shields.io/github/v/release/nuwainfo/ffl?style=flat-square)](https://github.com/nuwainfo/ffl/releases/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/nuwainfo/ffl?style=flat-square)](https://github.com/nuwainfo/ffl/actions)
+
 **FastFileLink CLI** is a fast, no-fuss command-line tool for sending files to anyone—instantly. No installation. No login required. No cloud uploads unless you want to.
 
 It supports:
