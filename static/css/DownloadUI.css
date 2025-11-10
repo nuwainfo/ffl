@@ -1,0 +1,192 @@
+/*!
+ * Download UI Components - Shared CSS for FastFileLink
+ * Common styles for download progress, retry functionality, and confirmations
+ */
+
+/* Progress Bar Animation */
+.progress-bar-striped {
+    background-image: linear-gradient(45deg,rgba(255,255,255,.15) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.15) 50%,rgba(255,255,255,.15) 75%,transparent 75%,transparent);
+    background-size: 1rem 1rem;
+}
+
+.progress-bar-animated {
+    animation: progress-bar-stripes 1s linear infinite;
+}
+
+@keyframes progress-bar-stripes {
+    0% {
+        background-position-x: 1rem;
+    }
+    100% {
+        background-position-x: 0;
+    }
+}
+
+/* Ensure progress bar has proper base styling */
+.progress-bar {
+    transition: width 0.6s ease;
+    background-color: #007bff;
+}
+
+/* Retry UI Components */
+.retry-confirmation {
+    display: none;
+    background: #ffc107;
+    border: 1px solid #ffc107;
+    border-radius: 8px;
+    padding: 12px;
+    margin-top: 10px;
+    text-align: center;
+}
+
+.retry-confirmation-title {
+    font-size: 14px;
+    color: #212529;
+    margin-bottom: 8px;
+}
+
+.retry-confirmation-subtitle {
+    font-size: 12px;
+    color: #856404;
+    margin-bottom: 12px;
+}
+
+.confirm-retry-btn {
+    background: #28a745;
+    color: white;
+    text-decoration: none;
+    padding: 6px 12px;
+    border-radius: 4px;
+    margin-right: 8px;
+    cursor: pointer;
+    display: inline-block;
+}
+
+.cancel-retry-btn {
+    background: #6c757d;
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.close-tab-wrap {
+    display: none;
+}
+
+.close-tab-link {
+    color: #666;
+    font-size: 14px;
+    text-decoration: none;
+}
+
+.close-tab-link:hover {
+    color: #007bff;
+    text-decoration: underline;
+}
+
+.hidden-compat {
+    display: none;
+}
+
+.footer-section {
+    margin-top: 15px;
+}
+
+.footer-text {
+    font-size: 14px;
+    line-height: 1.2;
+    color: #777;
+}
+
+.footer-text a {
+    color: #007bff;
+    text-decoration: none;
+}
+
+.footer-text a:hover {
+    text-decoration: underline;
+}
+
+.delayed-show {
+    display: none;
+    text-align: center;
+    margin-top: 15px;
+}
+
+/* Retry button styles */
+.retry-link-subtle {
+    background: none !important;
+    border: none !important;
+    color: #007bff !important;
+    padding: 4px 8px !important;
+    font-size: 13px !important;
+    font-weight: normal !important;
+    text-decoration: underline !important;
+    cursor: pointer !important;
+    display: inline-block !important;
+}
+
+.retry-link-prominent {
+    background-color: #ffc107 !important;
+    border-color: #ffc107 !important;
+    color: #212529 !important;
+    padding: 8px 16px !important;
+    border-radius: 20px !important;
+    font-size: 14px !important;
+    font-weight: 500 !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+    text-decoration: none !important;
+}
+
+/* Status and message styling */
+.download-status {
+    text-align: center;
+    margin-bottom: 15px;
+}
+
+.download-status h6 {
+    margin-bottom: 5px;
+    font-weight: 600;
+}
+
+.download-status p {
+    font-size: 13px;
+    color: #666;
+    margin-bottom: 0;
+}
+
+/* Progress info styling */
+.progress-details {
+    margin-bottom: 15px;
+}
+
+.progress-info {
+    font-size: 14px;
+    color: #666;
+    text-align: center;
+    margin-bottom: 10px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .retry-confirmation {
+        margin: 10px;
+        padding: 10px;
+    }
+    
+    .retry-confirmation-title {
+        font-size: 13px;
+    }
+    
+    .retry-confirmation-subtitle {
+        font-size: 11px;
+    }
+    
+    .confirm-retry-btn,
+    .cancel-retry-btn {
+        padding: 5px 10px;
+        font-size: 13px;
+    }
+}

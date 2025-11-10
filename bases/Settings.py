@@ -27,11 +27,27 @@ from enum import Enum
 from bases.Kernel import PUBLIC_VERSION, Singleton, AddonsManager, getLogger
 
 DEFAULT_STATIC_ROOT = 'static'
-STATIC_SERVER = os.getenv('STATIC_SERVER', 'https://fastfilelink.com')
+# Default static server for open source users - serves from local directory
+STATIC_SERVER = os.getenv('STATIC_SERVER', '.')
 DEFAULT_SERVER = STATIC_SERVER
 
+# Transfer chunk size (256 KiB) - used for both WebRTC and HTTP downloads
+TRANSFER_CHUNK_SIZE = int(os.getenv('TRANSFER_CHUNK_SIZE', 256 * 1024))
+
 EMAIL = 'support@fastfilelink.com'
-SUPPORT_URL = 'https://fastfilelink.com/support/'
+
+# Default support URL for open source users
+SUPPORT_URL = 'https://github.com/nuwainfo/ffl/discussions'
+
+# Default copyright for open source users
+COPYRIGHT = 'Copyright (c) 2025 FastFileLink Contributors. Licensed under Apache-2.0.'
+
+# Default footer message HTML for open source users (entire HTML block)
+FOOTER_MESSAGE_HTML = """<span data-i18n="footer.message">
+PS: Wishing you a great day! Download your free file sharing app at</span> 
+<a href="https://github.com/nuwainfo/ffl" target="_blank">GitHub</a>
+<span data-i18n="footer.period">.</span>
+"""
 
 LANGUAGES = []
 # LANGUAGES = ['zh_TW', 'zh_CN']
@@ -305,3 +321,31 @@ class SettingsGetter(Singleton):
         This integrates with the centralized addon management system.
         """
         return self._addonsManager.isAddonLoaded(addonName)
+
+    def getSupportURL(self):
+        """
+        Get support URL. Returns the current SUPPORT_URL value.
+        Features addon may overwrite SUPPORT_URL based on user level or GUI support.
+        """
+        return SUPPORT_URL
+
+    def getCopyright(self):
+        """
+        Get copyright text. Returns the current COPYRIGHT value.
+        Features addon may overwrite COPYRIGHT based on user level or GUI support.
+        """
+        return COPYRIGHT
+
+    def getFooterMessageHTML(self):
+        """
+        Get footer message HTML. Returns the current FOOTER_MESSAGE_HTML value.
+        Features addon may overwrite FOOTER_MESSAGE_HTML based on user level or GUI support.
+        """
+        return FOOTER_MESSAGE_HTML
+
+    def getStaticServer(self):
+        """
+        Get static server URL. Returns the current STATIC_SERVER value.
+        Features addon may overwrite STATIC_SERVER based on user level or GUI support.
+        """
+        return STATIC_SERVER

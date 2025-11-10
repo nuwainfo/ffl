@@ -67,19 +67,35 @@ class BitmathTqdm(tqdm):
         rate = d.get('rate', 0) or 0
         d['rate_fmt'] = self._formatSpeed(rate)
         d['n_fmt'] = self._formatSizeStable(d.get('n', 0), isTotal=False)
-        d['total_fmt'] = self._formatSizeStable(d.get('total', 0), isTotal=True)
+
+        # Handle total being None for unknown sizes
+        total = d.get('total')
+        if total is not None:
+            d['total_fmt'] = self._formatSizeStable(total, isTotal=True)
+        else:
+            d['total_fmt'] = '?'
 
         return d
+
+    def __bool__(self):
+        """Override __bool__ to handle total=None case without raising exception"""
+        # Always return True if the progress bar has been created
+        # This avoids the TypeError when total=None and iterable is not provided
+        return hasattr(self, 'n')
 
 
 class Progress:
 
-    def __init__(self, totalSize, sizeFormatter=None, loggerCallback=print, logInterval=2.0, useBar=False):
+    def __init__(
+        self, totalSize, sizeFormatter=None, loggerCallback=print,
+        logInterval=2.0, useBar=False, barFormat=None
+    ):
         self.totalSize = totalSize
         self.sizeFormatter = sizeFormatter or formatSize
         self.loggerCallback = loggerCallback
         self.logInterval = logInterval
         self.useBar = useBar
+        self.barFormat = barFormat
 
         # Progress tracking
         self.transferred = 0
@@ -95,20 +111,32 @@ class Progress:
     def _initProgressBar(self):
         """Initialize the tqdm progress bar."""
         try:
+            # For unknown file sizes (totalSize=0), use None to show bytes downloaded without percentage
+            total = None if self.totalSize == 0 else self.totalSize
+
+            # Different bar format for unknown sizes
+            if self.totalSize == 0:
+                defaultBarFormat = (
+                    '{desc}: {n_fmt} [{elapsed}, {rate_fmt}]{postfix}'
+                )
+            else:
+                defaultBarFormat = (
+                    'Progress: {percentage:3.0f}%|{bar}| '
+                    '{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]{postfix}'
+                )
+
             self.pbar = BitmathTqdm(
-                total=self.totalSize,
+                total=total,
                 desc='Progress',
                 sizeFormatter=self.sizeFormatter,
                 leave=True,
                 ncols=100, # Increased width to accommodate extraText
                 ascii=False,
-                bar_format=(
-                    'Progress: {percentage:3.0f}%|{bar}| '
-                    '{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]{postfix}'
-                )
+                bar_format=self.barFormat or defaultBarFormat
             )
         except Exception:
-            self.pbar = tqdm(total=self.totalSize, desc='Progress', unit='B', unit_scale=True, leave=True)
+            total = None if self.totalSize == 0 else self.totalSize
+            self.pbar = tqdm(total=total, desc='Progress', unit='B', unit_scale=True, leave=True)
 
     def update(self, bytesTransferred, forceLog=False, extraText=""):
         """Update progress with new bytes transferred."""
@@ -230,15 +258,25 @@ class Progress:
         speed = self.getSpeed()
         return f"{self.sizeFormatter(int(speed))}/sec" if speed > 0 else "0/sec"
 
-    def finishBar(self):
-        """Finish the progress bar if it's being used."""
+    def finishBar(self, complete=True):
+        """Finish the progress bar if it's being used.
+
+        Args:
+            complete: If True, update to 100% before closing; if False, close at current position
+        """
         if self.useBar and self.pbar:
             try:
-                if hasattr(self.pbar, 'total') and self.pbar.total:
+                if complete and hasattr(self.pbar, 'total') and self.pbar.total:
                     remaining = self.pbar.total - self.pbar.n
                     if remaining > 0:
                         self.pbar.update(remaining)
 
+                # Always refresh to show final state before closing
+                if hasattr(self.pbar, 'refresh'):
+                    self.pbar.refresh()
+
+                # Close the progress bar
+                # Note: For cancelled downloads (complete=False), the bar will show at current position
                 self.pbar.close()
             except (ValueError, AttributeError) as e:
                 logger = logging.getLogger(__name__)

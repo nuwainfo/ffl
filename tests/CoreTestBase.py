@@ -77,7 +77,7 @@ class FastFileLinkTestBase(unittest.TestCase):
         self.fileSizeBytes = fileSizeBytes # Store the file size
         self.procLogPath = os.path.join(self.tempDir, "ffl_proc.log")
         self._procLogFile = None
-        
+
         # Test config management - always enabled
         self.testConfigVars = testConfigVars or {}
         self._testConfigDir = None
@@ -129,11 +129,11 @@ class FastFileLinkTestBase(unittest.TestCase):
         """Update captured output with latest process output"""
         if captureOutputIn is None:
             return
-            
+
         outputText = ""
         logPath = captureOutputIn.get('_logPath')
         logFile = captureOutputIn.get('_logFile')
-        
+
         if logPath and os.path.exists(logPath):
             try:
                 # Ensure log file is flushed before reading
@@ -143,7 +143,7 @@ class FastFileLinkTestBase(unittest.TestCase):
                     outputText = lf.read()
             except Exception as e:
                 print(f"[Test] Failed to update captured output: {e}")
-                
+
         captureOutputIn['output'] = outputText
         return outputText
 
@@ -216,6 +216,173 @@ class FastFileLinkTestBase(unittest.TestCase):
             time.sleep(2)
 
         raise AssertionError("Failed to download file through share link")
+
+    def _downloadWithCore(self, shareLink, outputPath=None, extraArgs=None, extraEnvVars=None, captureOutputIn=None):
+        """
+        Download file using Core.py directly
+
+        Args:
+            shareLink (str): The share link to download from
+            outputPath (str, optional): Output path for downloaded file
+            extraArgs (list, optional): Additional command line arguments
+            extraEnvVars (dict, optional): Additional environment variables
+            captureOutputIn (dict, optional): Dictionary to capture process output
+
+        Returns:
+            str: Path to the downloaded file
+        """
+        print(f"[Test] Downloading file using Core.py from: {shareLink}")
+
+        # Prepare download command
+        downloadArgs = [sys.executable, "Core.py", "--cli"]
+
+        # Separate global args (like --log-level) from download-specific args (like --resume)
+        globalArgs = []
+        downloadSpecificArgs = []
+        if extraArgs:
+            for arg in extraArgs:
+                # Global arguments that must come before URL
+                if arg in ["--log-level", "--version"] or (arg.startswith("tests/") or arg.startswith("../")):
+                    globalArgs.append(arg)
+                else:
+                    # Download-specific arguments that must come after URL
+                    downloadSpecificArgs.append(arg)
+
+        # Add global arguments before URL
+        if globalArgs:
+            downloadArgs.extend(globalArgs)
+
+        # Add the share link
+        downloadArgs.append(shareLink)
+
+        # Add download-specific arguments after URL (like --resume)
+        if downloadSpecificArgs:
+            downloadArgs.extend(downloadSpecificArgs)
+
+        # Add output path if specified
+        if outputPath:
+            downloadArgs.extend(["-o", outputPath])
+
+        # Prepare environment variables
+        downloadEnv = os.environ.copy()
+        if extraEnvVars:
+            downloadEnv.update(extraEnvVars)
+
+        # Prepare output capture
+        logPath = None
+        logFile = None
+        if captureOutputIn is not None:
+            logPath = os.path.join(self.tempDir, "download_log.txt")
+            logFile = open(logPath, "w")
+            captureOutputIn["logPath"] = logPath
+            captureOutputIn["logFile"] = logFile
+
+        try:
+            # Run download process
+            print(f"[Test] Running download command: {' '.join(downloadArgs)}")
+
+            if logFile:
+                downloadProcess = subprocess.Popen(
+                    downloadArgs,
+                    cwd=os.path.dirname(os.path.abspath(__file__ + "/..")),
+                    env=downloadEnv,
+                    stdout=logFile,
+                    stderr=subprocess.STDOUT,
+                    text=True
+                )
+            else:
+                downloadProcess = subprocess.Popen(
+                    downloadArgs,
+                    cwd=os.path.dirname(os.path.abspath(__file__ + "/..")),
+                    env=downloadEnv,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True
+                )
+
+            # Wait for download to complete
+            stdout, stderr = downloadProcess.communicate(timeout=120)
+
+            if downloadProcess.returncode != 0:
+                error_msg = f"Download process failed with exit code {downloadProcess.returncode}"
+                if stdout:
+                    error_msg += f"\nOutput: {stdout}"
+                if stderr:
+                    error_msg += f"\nError: {stderr}"
+                raise AssertionError(error_msg)
+
+            print("[Test] Download completed successfully")
+
+            # Determine the downloaded file path
+            # Always parse output to get actual path (handles directory case)
+            if logFile:
+                logFile.close()
+                with open(logPath, 'r') as f:
+                    output = f.read()
+            else:
+                output = stdout or ""
+
+            # Look for "Downloaded: <path>" pattern
+            downloadedPath = None
+            for line in output.split('\n'):
+                if "Downloaded:" in line:
+                    downloadedPath = line.split(":", 1)[1].strip()
+                    break
+
+            # Fallback to outputPath if provided and not a directory
+            if not downloadedPath:
+                if outputPath and not os.path.isdir(outputPath):
+                    downloadedPath = outputPath
+                else:
+                    # Last resort fallback
+                    downloadedPath = os.path.join(os.getcwd(), "downloaded_file")
+
+            if not os.path.exists(downloadedPath):
+                raise AssertionError(f"Downloaded file not found at expected path: {downloadedPath}")
+
+            print(f"[Test] Downloaded file saved to: {downloadedPath}")
+            return downloadedPath
+
+        except subprocess.TimeoutExpired:
+            downloadProcess.kill()
+            raise AssertionError("Download process timed out")
+        finally:
+            if logFile and not logFile.closed:
+                logFile.close()
+
+    def _updateCapturedOutput(self, captureDict):
+        """
+        Update captured output dictionary with latest process output
+
+        Args:
+            captureDict (dict): Dictionary containing capture information
+
+        Returns:
+            str: Current output text
+        """
+        if not captureDict:
+            return ""
+
+        # Support both logPath (download) and _logPath (upload) naming conventions
+        logPath = captureDict.get("logPath") or captureDict.get("_logPath")
+        if not logPath:
+            return ""
+
+        logFile = captureDict.get("logFile") or captureDict.get("_logFile")
+
+        if os.path.exists(logPath):
+            # Flush log file before reading if available
+            if logFile:
+                try:
+                    logFile.flush()
+                except Exception:
+                    pass
+
+            with open(logPath, "r", encoding="utf-8", errors="replace") as f:
+                outputText = f.read()
+            captureDict['output'] = outputText
+            return outputText
+        return ""
 
     def _startTestServer(self):
         """Start the test server for upload testing"""
@@ -353,7 +520,8 @@ class FastFileLinkTestBase(unittest.TestCase):
         useTestServer=False,
         extraEnvVars=None,
         extraArgs=None,
-        captureOutputIn=None
+        captureOutputIn=None,
+        waitForCompletion=True
     ):
         """
         Start the FastFileLink process and wait for the share link to be ready
@@ -397,7 +565,9 @@ class FastFileLinkTestBase(unittest.TestCase):
             print(f"[Test] Mode: {'P2P' if p2p else 'Server'}")
 
             # Prepare the command - use 'share' subcommand for file sharing
-            command = [sys.executable, coreScriptPath, "--cli", "share", self.testFilePath, "--json", self.jsonOutputPath]
+            command = [
+                sys.executable, coreScriptPath, "--cli", "share", self.testFilePath, "--json", self.jsonOutputPath
+            ]
 
             # Add network instability parameters if needed
             if useNetworkSimulation:
@@ -406,25 +576,28 @@ class FastFileLinkTestBase(unittest.TestCase):
                     str(networkFailureRate),
                     "--max-consecutive-failures",
                     str(maxConsecutiveFailures),
-                    "--log-level",
-                    os.path.join(os.path.dirname(__file__), "preset", "TestCaseDebugLogging.json")
                 ])
-            else:
-                # Still use debug logging for non-simulation tests to help diagnose issues
+
+            # Use debug logging tests to help diagnose issues
+            if os.getenv("TEST_CASE_DEBUG") == "True":
                 command.extend([
                     "--log-level",
-                    os.path.join(os.path.dirname(__file__), "preset", "TestCaseDebugLogging.json")
+                    os.path.join(os.path.dirname(__file__), "presets", "TestCaseDebugLogging.json")
                 ])
 
             # Add mode-specific parameters
             if not p2p:
                 command.extend(["--upload", "3 hours"])
-            
+
             # Add extra arguments if provided
             if extraArgs:
                 command.extend(extraArgs)
 
-            print(f"[Test] Command: {' '.join(command)}")
+            # Print command with encoding handling for Windows console
+            try:
+                print(f"[Test] Command: {' '.join(command)}")
+            except UnicodeEncodeError:
+                print(f"[Test] Command: <contains unicode characters>")
             if showOutput:
                 print(f"[Test] Real-time output enabled - you will see live progress...")
 
@@ -453,7 +626,7 @@ class FastFileLinkTestBase(unittest.TestCase):
                     command,
                     text=True,
                     env=env,
-                    bufsize=1,  # Line buffered
+                    bufsize=1, # Line buffered
                     universal_newlines=True
                 )
             else:
@@ -462,10 +635,10 @@ class FastFileLinkTestBase(unittest.TestCase):
                 self.coreProcess = subprocess.Popen(
                     command,
                     stdout=self._procLogFile,
-                    stderr=subprocess.STDOUT,  # Merge stderr into stdout
+                    stderr=subprocess.STDOUT, # Merge stderr into stdout
                     text=True,
                     env=env,
-                    bufsize=1  # Line buffered
+                    bufsize=1 # Line buffered
                 )
 
             # Determine appropriate timeout
@@ -485,8 +658,14 @@ class FastFileLinkTestBase(unittest.TestCase):
 
                     timeout = int(baseTimeout)
 
-            print(f"[Test] Waiting up to {timeout} seconds for completion...")
             print(f"[Test] Process PID: {self.coreProcess.pid}")
+
+            # Early return if not waiting for completion
+            if not waitForCompletion:
+                print("[Test] Process started, not waiting for completion")
+                return testServerProcess if useTestServer else None
+
+            print(f"[Test] Waiting up to {timeout} seconds for completion...")
 
             # Wait for the JSON file to be created
             jsonFileCreated = False
@@ -511,8 +690,11 @@ class FastFileLinkTestBase(unittest.TestCase):
                 if currentTime - lastStatusTime >= 10:
                     elapsed = currentTime - startTime
                     if self.coreProcess:
-                        processStatus = "running" if self.coreProcess.poll() is None else f"terminated ({self.coreProcess.returncode})"
-                        print(f"[Test] Status after {elapsed:.0f}s: Process {processStatus}, JSON file exists: {os.path.exists(self.jsonOutputPath)}")
+                        processStatus = "running" if self.coreProcess.poll(
+                        ) is None else f"terminated ({self.coreProcess.returncode})"
+                        print(
+                            f"[Test] Status after {elapsed:.0f}s: Process {processStatus}, JSON file exists: {os.path.exists(self.jsonOutputPath)}"
+                        )
                     lastStatusTime = currentTime
 
                 time.sleep(1)
@@ -572,9 +754,9 @@ class FastFileLinkTestBase(unittest.TestCase):
                             # Look for debug file in the working directory where Core.py runs
                             appDebugFile = "fastfilelink_test_debug.log"
                             appDebugPaths = [
-                                appDebugFile,  # Current working directory
-                                os.path.join(os.getcwd(), appDebugFile),  # Explicit current dir
-                                os.path.join(os.path.dirname(__file__), "..", appDebugFile),  # Core.py directory
+                                appDebugFile, # Current working directory
+                                os.path.join(os.getcwd(), appDebugFile), # Explicit current dir
+                                os.path.join(os.path.dirname(__file__), "..", appDebugFile), # Core.py directory
                             ]
 
                             debugFound = False
@@ -582,7 +764,9 @@ class FastFileLinkTestBase(unittest.TestCase):
                                 if os.path.exists(debugPath):
                                     with open(debugPath, "r", encoding="utf-8") as f:
                                         appDebugContent = f.read()
-                                        print(f"[Test] FastFileLink application debug log (from {debugPath}):\n{appDebugContent}")
+                                        print(
+                                            f"[Test] FastFileLink application debug log (from {debugPath}):\n{appDebugContent}"
+                                        )
                                     # Clean up debug file
                                     os.remove(debugPath)
                                     debugFound = True
@@ -602,7 +786,11 @@ class FastFileLinkTestBase(unittest.TestCase):
                 shareInfo = json.load(f)
 
             print(f"[Test] Operation completed successfully!")
-            print(f"[Test] Share info loaded from JSON: {shareInfo}")
+            # Print share info with encoding handling for Windows console
+            try:
+                print(f"[Test] Share info loaded from JSON: {shareInfo}")
+            except UnicodeEncodeError:
+                print(f"[Test] Share info loaded from JSON (filename contains unicode characters)")
 
             # Verify the JSON contains the expected data
             requiredFields = ["link", "file", "file_size", "user"]
@@ -610,9 +798,11 @@ class FastFileLinkTestBase(unittest.TestCase):
                 if field not in shareInfo:
                     raise AssertionError(f"JSON missing '{field}' field")
 
-            # Verify file size is correct
-            if shareInfo["file_size"] != self.originalFileSize:
-                raise AssertionError("File size in JSON doesn't match original file")
+            # Verify file size is correct (skip if originalFileSize is -1, used for folders)
+            if self.originalFileSize != -1 and shareInfo["file_size"] != self.originalFileSize:
+                raise AssertionError(
+                    f"File size in JSON ({shareInfo['file_size']}) doesn't match original file ({self.originalFileSize})"
+                )
 
             shareLink = shareInfo["link"]
             print(f"[Test] Share link: {shareLink}")
@@ -697,10 +887,10 @@ class FastFileLinkTestBase(unittest.TestCase):
         # Create a test config directory within the temp directory
         self._testConfigDir = os.path.join(self.tempDir, "test_config")
         self.prepareTestConfigDir(self._testConfigDir)
-        
+
         # Setup environment variables
         self._originalEnvVars = self.setupTestEnvironmentVars(self._testConfigDir, self.testConfigVars)
-    
+
     def _teardownTestConfig(self):
         """Internal method to teardown test configuration during tearDown"""
         if self._originalEnvVars is not None:
@@ -735,13 +925,13 @@ class FastFileLinkTestBase(unittest.TestCase):
             try:
                 # Find original .credential file with clean environment
                 storageLocator = StorageLocator.getInstance()
-                storageLocator.initialize('fastfilelink')  # Reinitialize to clear any cached env paths
+                storageLocator.initialize('fastfilelink') # Reinitialize to clear any cached env paths
                 originalCredentialPath = storageLocator.findStorage(".credential")
             finally:
                 # Restore original FFL_STORAGE_LOCATION
                 if originalFflStorageLocation:
                     os.environ['FFL_STORAGE_LOCATION'] = originalFflStorageLocation
-            
+
             if os.path.exists(originalCredentialPath):
                 # Copy .credential file to test config directory
                 testCredentialPath = os.path.join(tempConfigDir, ".credential")
@@ -749,7 +939,7 @@ class FastFileLinkTestBase(unittest.TestCase):
                 print(f"[Test] Copied credential file from {originalCredentialPath} to {testCredentialPath}")
             else:
                 print(f"[Test] No existing credential file found at {originalCredentialPath}")
-                
+
         except ImportError as e:
             print(f"[Test] Warning: Could not import StorageLocator: {e}")
         except Exception as e:
@@ -758,7 +948,7 @@ class FastFileLinkTestBase(unittest.TestCase):
             # Remove the path we added
             if sys.path[0] == os.path.join(os.path.dirname(__file__), ".."):
                 sys.path.pop(0)
-        
+
         return tempConfigDir
 
     def setupTestEnvironmentVars(self, tempConfigDir, extraVars=None):
@@ -773,19 +963,19 @@ class FastFileLinkTestBase(unittest.TestCase):
             dict: Dictionary of original environment variable values for restoration
         """
         originalVars = {}
-        
+
         # Set FFL_STORAGE_LOCATION to use test config directory
         originalVars['FFL_STORAGE_LOCATION'] = os.environ.get('FFL_STORAGE_LOCATION')
         os.environ['FFL_STORAGE_LOCATION'] = tempConfigDir
         print(f"[Test] Set FFL_STORAGE_LOCATION={tempConfigDir}")
-        
+
         # Set additional environment variables if provided
         if extraVars:
             for key, value in extraVars.items():
                 originalVars[key] = os.environ.get(key)
                 os.environ[key] = str(value)
                 print(f"[Test] Set {key}={value}")
-        
+
         return originalVars
 
     def restoreEnvironmentVars(self, originalVars):

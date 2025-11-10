@@ -28,7 +28,6 @@ import subprocess
 import threading
 import time
 
-from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
 from bases.Kernel import getLogger, FFLEvent, StorageLocator
@@ -460,7 +459,8 @@ class TunnelRunnerProvider:
                     return availableTunnels[0]
                 else:
                     logger.debug(
-                        f"No external tunnels available, falling back to builtin (preferred '{preferred}' not available)"
+                        f"No external tunnels available, falling back to builtin "
+                        f"(preferred '{preferred}' not available)"
                     )
                     return None
 

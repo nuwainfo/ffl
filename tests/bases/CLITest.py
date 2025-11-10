@@ -25,7 +25,7 @@ import json
 import tempfile
 import sys
 
-from .CoreTestBase import FastFileLinkTestBase
+from ..CoreTestBase import FastFileLinkTestBase
 
 
 class CLITest(FastFileLinkTestBase):
@@ -142,7 +142,7 @@ class CLITest(FastFileLinkTestBase):
         outputCapture = {}
         command = [
             "python",
-            os.path.join(os.path.dirname(__file__), "..", "Core.py"), "--cli", "share", self.testFilePath
+            os.path.join(os.path.dirname(__file__), "..", "..", "Core.py"), "--cli", "share", self.testFilePath
         ]
         command.extend(extraArgs)
         
@@ -162,20 +162,38 @@ class CLITest(FastFileLinkTestBase):
             env=env
         )
         
-        # Setup output capture context
-        outputCapture['_process'] = self.coreProcess
-        outputCapture['_logPath'] = self.procLogPath
-        outputCapture['_logFile'] = self._procLogFile
+        # Setup output capture context (use keys expected by CoreTestBase._updateCapturedOutput)
+        outputCapture['logPath'] = self.procLogPath
+        outputCapture['logFile'] = self._procLogFile
         
         # Give the process a moment to start and check what happens
+        print("[Test] Waiting for process to start...")
         time.sleep(2)  # Let the process start and handle arguments
-        
+
         # Check if process has already terminated (e.g., due to argument validation error)
-        if self.coreProcess.poll() is not None:
-            print(f"[Test] Process already terminated with exit code: {self.coreProcess.returncode}")
+        pollResult = self.coreProcess.poll()
+        if pollResult is not None:
+            print(f"[Test] Process already terminated with exit code: {pollResult}")
+            # Ensure file is flushed before reading
+            if self._procLogFile:
+                self._procLogFile.flush()
+                print(f"[Test] Log file flushed, file size: {os.path.getsize(self.procLogPath)} bytes")
+            # Wait a moment for OS to finish writing
+            time.sleep(0.5)
             # Get output immediately for early termination
-            return self._updateCapturedOutput(outputCapture)
-        
+            output = self._updateCapturedOutput(outputCapture)
+            print(f"[Test] Captured output length: {len(output)} chars")
+            if not output:
+                print(f"[Test] WARNING: No output captured, checking log file directly...")
+                if os.path.exists(self.procLogPath):
+                    with open(self.procLogPath, 'r', encoding='utf-8', errors='replace') as f:
+                        directOutput = f.read()
+                        print(f"[Test] Direct file read: {len(directOutput)} chars")
+                        if directOutput:
+                            return directOutput
+            return output
+
+        print("[Test] Process still running, waiting for completion...")
         # For auth tests, the process should terminate quickly due to timeout or error
         # Wait for process to complete, but force terminate if needed
         try:
@@ -193,9 +211,16 @@ class CLITest(FastFileLinkTestBase):
                     print("[Test] Process didn't respond to terminate, using kill")
                     self.coreProcess.kill()
                     self.coreProcess.wait()
-        
+
+        # Ensure file is flushed before reading
+        if self._procLogFile:
+            self._procLogFile.flush()
+            print(f"[Test] Log file flushed after termination, file size: {os.path.getsize(self.procLogPath)} bytes")
+
         # Get final output
-        return self._updateCapturedOutput(outputCapture)
+        output = self._updateCapturedOutput(outputCapture)
+        print(f"[Test] Final output length: {len(output)} chars")
+        return output
 
     def testCLIAuthPasswordOnly(self):
         """Test --auth-password enables auth with default username 'ffl'."""
@@ -424,7 +449,7 @@ class CLIArgumentParsingTest(unittest.TestCase):
 
     def _runCoreWithArgs(self, args):
         """Helper to run Core.py with specific arguments and capture output"""
-        command = [sys.executable, os.path.join(os.path.dirname(__file__), "..", "Core.py")]
+        command = [sys.executable, os.path.join(os.path.dirname(__file__), "..", "..", "Core.py")]
         command.extend(args)
         
         # Set up environment to disable GUI addon for CLI testing
@@ -551,7 +576,7 @@ class CLIArgumentParsingTest(unittest.TestCase):
             for args, expectedBehavior, description in validCases:
                 with self.subTest(args=args, description=description):
                     # For valid cases, we expect the process to start but we'll terminate it quickly
-                    command = [sys.executable, os.path.join(os.path.dirname(__file__), "..", "Core.py")]
+                    command = [sys.executable, os.path.join(os.path.dirname(__file__), "..", "..", "Core.py")]
                     command.extend(args)
                     
                     # Set up environment to disable GUI addon for CLI testing

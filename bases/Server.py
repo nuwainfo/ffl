@@ -33,13 +33,14 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from time import time
 from urllib.parse import parse_qs, quote, urlparse
 
-from bases.Kernel import getLogger
-from bases.Utils import flushPrint, sendException, utf8, formatSize
-from bases.Settings import SettingsGetter, STATIC_SERVER
+from bases.Kernel import getLogger, PUBLIC_VERSION
+from bases.Utils import flushPrint, utf8, formatSize
+from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
 from bases.WebRTC import WebRTCManager
 from bases.Progress import Progress
+from bases.E2EE import E2EEManager
+from bases.Reader import SourceReader, FolderChangedException
 
-DOWNLOAD_CHUNK = 65535
 LOG_OUTPUT_DURATION = 1 # Seconds
 
 logger = getLogger(__name__)
@@ -53,7 +54,16 @@ try:
     else:
         import asyncio
         import uvloop
-        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+        import platform
+
+        # Check if running in WSL (Windows Subsystem for Linux)
+        # uvloop has known issues with WSL2's epoll implementation
+        isWSL = 'microsoft' in platform.uname().release.lower() or 'wsl' in platform.uname().release.lower()
+
+        if not isWSL:
+            asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+        else:
+            logger.info("WSL detected - using default asyncio event loop instead of uvloop for compatibility")
 except ImportError:
     logger.warn("Unable to optimize event loop in platform")
 
@@ -119,6 +129,8 @@ class AuthMixin:
 
 
 class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
+    # Transfer chunk size - shared across WebRTC and HTTP downloads
+    CHUNK_SIZE = TRANSFER_CHUNK_SIZE
 
     range = None
 
@@ -132,6 +144,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         self.headPathMap = {
             '/download': self._handleDownloadHead,
             '/static/index.html': self._handleDefaultHead,
+            '/': self._handleHeadRedirect,
+            '': self._handleHeadRedirect,
 
             # WebRTC must startswith uid.
             '/offer': self._handleForbiddenHead,
@@ -144,8 +158,12 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             '/download': self._handleDownload,
             '/static/index.html': self._handleStaticIndex,
             '/static/js/ProgressServiceWorker.js': self._handleProgressServiceWorker,
+            '/static/js/E2EE.js': self._handleE2EEScript,
             '/offer': self._handleWebRTCOffer,
             '/candidate': self._handleWebRTCCandidatePolling,
+            '/e2ee/manifest': self._handleE2EEManifest,
+            '/e2ee/tags': self._handleE2EETags,
+            '/status': self._handleStatus,
             '/': self._handleRedirect,
             '': self._handleRedirect
         }
@@ -154,6 +172,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             '/answer': self._handleWebRTCAnswer,
             '/candidate': self._handleWebRTCCandidate,
             '/complete': self._handleWebRTCComplete,
+            '/e2ee/init': self._handleE2EEInit,
         }
 
         if os.getenv('JS_LOG_TO_SERVER_DEBUG') == 'True':
@@ -204,16 +223,49 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         if 'Range' in self.headers:
             self.range = self._parseByteRange(self.headers['Range'])
 
+    def parseURLBooleanParam(self, value):
+        """
+        Parse URL boolean parameters with support for multiple formats.
+
+        True values: true, 1, on, yes (case-insensitive)
+        False values: false, 0, off, no (case-insensitive)
+
+        Args:
+            value: String value from URL parameter
+
+        Returns:
+            bool: True/False, or None if value is not a recognized boolean
+        """
+        if not value:
+            return False
+
+        lowerValue = value.lower()
+
+        # True values
+        if lowerValue in ('true', '1', 'on', 'yes'):
+            return True
+
+        # False values
+        if lowerValue in ('false', '0', 'off', 'no'):
+            return False
+
+        # Unrecognized value
+        return None
+
     def _getFileInfo(self, quoteName=True):
         path = os.path.join(self.server.directory, self.server.file)
-        if quoteName:
-            name = quote(self.server.file)
-        else:
-            name = self.server.file
-        size = os.path.getsize(path)
-        ctype = self.guess_type(path)
 
-        return path, name, size, ctype
+        reader = SourceReader.build(path)
+
+        if quoteName:
+            name = quote(reader.contentName)
+        else:
+            name = reader.contentName
+
+        size = reader.size if reader.size is not None else 0
+        ctype = reader.contentType
+
+        return path, name, size, ctype, reader
 
     # HEAD handlers
     def _handleForbiddenHead(self):
@@ -223,8 +275,32 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
     def _handleDefaultHead(self):
         super().do_HEAD()
 
+    def _determineRedirectPath(self):
+        """Determine redirect path based on User-Agent"""
+        if 'User-Agent' not in self.headers:
+            return '/download'
+        elif 'Mozilla' not in self.headers['User-Agent']:
+            return '/download'
+        elif 'WindowsPowerShell' in self.headers['User-Agent']:
+            return '/download'
+        else:
+            return '/static/index.html'
+
+    def _handleHeadRedirect(self):
+        """Handle redirect by determining path and calling appropriate handler"""
+        redirectPath = self._determineRedirectPath()
+        self.path = redirectPath
+
+        # Get handler from getPathMap
+        handler = self.headPathMap.get(redirectPath)
+        if handler:
+            handler()
+        else:
+            logger.error(f"No handler found for redirect path: {redirectPath}")
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Redirect handler not found")
+
     def _handleDownloadHead(self):
-        path, name, size, ctype = self._getFileInfo()
+        path, name, size, ctype, reader = self._getFileInfo()
 
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Length", str(size))
@@ -238,32 +314,41 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         if not self.handleAuthentication():
             return
 
-        path, query, forbidden = self._normalizeRequestPath()
+        self.path, query, forbidden = self._normalizeRequestPath()
+        args = parse_qs(query)
 
         if forbidden:
             self.send_response(HTTPStatus.FORBIDDEN)
             self.end_headers()
             return
 
-        handler = self.headPathMap.get(path)
-        if handler:
-            handler()
+        headHandler = self.headPathMap.get(self.path)
+        if not headHandler:
+            headHandler = self.getPathMap.get(self.path)
+
+        logger.debug(f"[ROUTE] HEAD {self.path} -> handler={'found' if headHandler else 'NOT FOUND (using default)'}")
+
+        if headHandler:
+            headHandler()
         else:
+            # Default handling for other paths
             super().do_HEAD()
 
         self.connection.close()
 
     # GET handlers
     def _handleRedirect(self, args):
-        if 'User-Agent' not in self.headers:
-            self._handleDownload(args)
-        elif 'Mozilla' not in self.headers['User-Agent']:
-            self._handleDownload(args)
-        elif 'WindowsPowerShell' in self.headers['User-Agent']:
-            self._handleDownload(args)
+        """Handle redirect by determining path and calling appropriate handler"""
+        redirectPath = self._determineRedirectPath()
+        self.path = redirectPath
+
+        # Get handler from getPathMap
+        handler = self.getPathMap.get(redirectPath)
+        if handler:
+            handler(args)
         else:
-            self.path = '/static/index.html'
-            self._handleStaticIndex(args)
+            logger.error(f"No handler found for redirect path: {redirectPath}")
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Redirect handler not found")
 
     def _handleStartDownloadActions(self, size):
         flushPrint(f'[{self.date_time_string()}] Downloading by user')
@@ -276,17 +361,144 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         self.server.doAfterDownload()
 
     def _handleDownloadExceptionActions(self, exception):
-        if isinstance(exception, (ConnectionResetError, ConnectionAbortedError, ConnectionError, BrokenPipeError)):
+        if isinstance(exception, FolderChangedException):
+            # Folder content changed during transfer
+            errorMsg = str(exception)
+            filePath = getattr(exception, 'filePath', None)
+
+            # Notify sharer
+            flushPrint(f'\n⚠️  TRANSFER ABORTED: {errorMsg}')
+            flushPrint('The shared folder contents changed during the transfer.')
+            flushPrint('Please ensure the folder contents remain stable and try sharing again.\n')
+
+            # Set error state for status polling with error type for i18n
+            self.server.lastError = {
+                'type': 'folder_changed',
+                'detail': errorMsg,
+                'filePath': filePath,
+                'exceptionClass': exception.__class__.__name__
+            }
+        elif isinstance(exception, (ConnectionResetError, ConnectionAbortedError, ConnectionError, BrokenPipeError)):
             flushPrint('\nConnection disconnected, wait retrying.\n')
         elif isinstance(exception, OSError):
             flushPrint('\nUser closes the connection, please try again.\n')
+        else:
+            logger.debug(f'_handleDownloadExceptionActions: {exception}')
+
+    def _handleE2EEManifest(self, args):
+        """Handle /e2ee/manifest endpoint - returns E2E encryption metadata"""
+        logger.debug(f"[E2EE] Manifest request - e2eeEnabled={self.server.e2eeEnabled}")
+        if not self.server.e2eeEnabled:
+            # Return silent 404 if E2EE not enabled
+            self._handle404(f"[E2EE] E2EE not enabled, returning silent 404 for /e2ee/manifest")
+            return
+
+        path, name, size, ctype, reader = self._getFileInfo(quoteName=False)
+        filename = name
+
+        manifest = {
+            'e2eeEnabled': True,
+            'filename': filename,
+            'filesize': size,
+            'chunkSize': self.server.e2eeManager.chunkSize
+        }
+
+        response = json.dumps(manifest).encode('utf-8')
+
+        self.send_response(HTTPStatus.OK)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(response)))
+        self.end_headers()
+        self.wfile.write(response)
+
+    def _handle404(self, message=None):
+        if message:
+            logger.debug(message)
+
+        content = str(HTTPStatus.NOT_FOUND)
+        self.send_response(HTTPStatus.NOT_FOUND)
+        self.send_header("Content-Type", "text/html")
+        self.send_header('Content-Length', str(len(content)))
+        self.end_headers()
+        self.wfile.write(content.encode())
+
+    def _handleE2EETags(self, args):
+        """Handle /e2ee/tags endpoint - returns tags for chunk range"""
+        if not self.server.e2eeEnabled:
+            # Return silent 404 if E2EE not enabled
+            self._handle404(f"[E2EE] E2EE not enabled, returning silent 404 for /e2ee/tags")
+            return
+
+        try:
+            # Parse query parameters from args (already parsed by do_GET)
+            startChunk = int(args.get('start', ['0'])[0])
+            count = int(args.get('count', ['0'])[0])
+
+            logger.debug(f"[E2EE] Tags request: start={startChunk}, count={count}")
+
+            if count <= 0:
+                logger.warning(f"[E2EE] Invalid count parameter: {count}")
+                self.send_error(HTTPStatus.BAD_REQUEST, f"Invalid count parameter: {count}")
+                return
+
+            # Load all tags from E2EEManager
+            allTags = self.server.e2eeManager.getTags("global")
+            logger.debug(f"[E2EE] Total tags available: {len(allTags)}")
+
+            # Filter tags by range
+            endChunk = startChunk + count
+            requestedTags = [tag for tag in allTags if startChunk <= tag['chunkIndex'] < endChunk]
+
+            logger.debug(f"[E2EE] Returning {len(requestedTags)} tags for range [{startChunk}, {endChunk})")
+
+            response = json.dumps({'tags': requestedTags}).encode('utf-8')
+
+            self.send_response(HTTPStatus.OK)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+
+        except Exception as e:
+            logger.error(f"[E2EE] Tags endpoint error: {e}")
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
+
+    def _handleE2EEInit(self, data):
+        """Handle /e2ee/init endpoint - RSA key exchange for E2E encryption"""
+        if not self.server.e2eeEnabled:
+            # Return silent 404 if E2EE not enabled
+            self._handle404(f"[E2EE] E2EE not enabled, returning silent 404 for /e2ee/init")
+            return
+
+        try:
+            publicKeyPem = data.get('publicKey')
+            if not publicKeyPem:
+                self.send_error(HTTPStatus.BAD_REQUEST, "Missing publicKey")
+                return
+
+            # Get file metadata
+            path, name, size, ctype, reader = self._getFileInfo(quoteName=False)
+            filename = name
+
+            # Delegate to E2EEManager
+            responseData = self.server.e2eeManager.handleInit(publicKeyPem, filename, size)
+            response = json.dumps(responseData).encode('utf-8')
+
+            self.send_response(HTTPStatus.OK)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+
+        except Exception as e:
+            logger.error(f"E2EE init error: {e}")
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
 
     def _handleDownload(self, args):
-        path = os.path.join(self.server.directory, self.server.file)
-        size = os.path.getsize(path)
-        ctype = self.guess_type(path)
+        # Get file info using existing helper method
+        path, name, size, ctype, reader = self._getFileInfo(quoteName=False)
 
-        # Start to download.
+        # Start to download
         try:
             self._handleStartDownloadActions(size)
         except PermissionError as e:
@@ -307,59 +519,83 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         )
 
         try:
-            with open(path, 'rb') as f:
-                # Handle range requests
-                if self.range:
-                    start, end = self.range
-                else:
-                    start, end = 0, size - 1
-                end = end if end else size - 1
-
-                # Send appropriate response headers
-                if 'Range' in self.headers:
-                    if self.range:
-                        self.send_response(HTTPStatus.PARTIAL_CONTENT)
-                    else:
-                        self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
-                        self.end_headers()
-                        return
-                else:
-                    self.send_response(HTTPStatus.OK)
-
-                self.send_header("Content-Length", str(end - start + 1))
-                self.send_header("Content-Range", f'bytes {start}-{end}/{size}')
-                self.send_header("Content-type", ctype)
-                self.send_header("Content-Disposition", f"attachment; filename={quote(self.server.file)}")
+            # Handle range requests (only for files that support it)
+            if self.range and not reader.supportsRange:
+                # Directory streams don't support Range
+                self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                self.send_header("Content-Range", f'bytes */{size}')
                 self.end_headers()
+                return
 
-                f.seek(start)
-                written += start
+            if self.range:
+                start, end = self.range
+            else:
+                start, end = 0, size - 1
+            end = end if end else size - 1
 
-                # Send file data in chunks
-                while True:
-                    data = f.read(DOWNLOAD_CHUNK)
-                    if not data:
-                        break
+            # Send appropriate response headers
+            if 'Range' in self.headers:
+                if self.range and reader.supportsRange:
+                    self.send_response(HTTPStatus.PARTIAL_CONTENT)
+                    self.send_header("Content-Length", str(end - start + 1))
+                    self.send_header("Content-Range", f'bytes {start}-{end}/{size}')
+                else:
+                    self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                    self.send_header("Content-Range", f'bytes */{size}')
+                    self.end_headers()
+                    return
+            else:
+                self.send_response(HTTPStatus.OK)
+                if size > 0:
+                    self.send_header("Content-Length", str(size))
 
-                    # Ensure we don't send beyond the requested range
-                    if f.tell() - 1 > end and size > end:
-                        data = data[:end - f.tell() + 1]
+            self.send_header("Content-type", ctype)
+            self.send_header("Content-Disposition", f"attachment; filename={quote(name)}")
+            self.end_headers()
 
-                    self.wfile.write(data)
-                    written += len(data)
+            written += start
 
-                    # Update progress periodically
-                    progress.update(written)
+            # Initialize E2E encryptor if enabled
+            encryptor = None
+            if self.server.e2eeEnabled:
+                # Calculate starting chunk index for Range support
+                startChunkIndex = start // self.server.e2eeManager.chunkSize
+                # Only save tags if this is an aligned Range request (or full download)
+                saveTags = (start % self.server.e2eeManager.chunkSize == 0)
 
-                    if f.tell() > end:
-                        break
+                encryptor = self.server.e2eeManager.createEncryptor(
+                    filename=name, filesize=size, startChunkIndex=startChunkIndex, saveTags=saveTags
+                )
 
-                # Final progress update
-                progress.update(written, forceLog=True)
+            # Send file/directory data in chunks
+            chunkSize = self.server.e2eeManager.chunkSize if self.server.e2eeEnabled else self.CHUNK_SIZE
+
+            for data in reader.iterChunks(chunkSize, start=start):
+                # Ensure we don't send beyond the requested range
+                if written + len(data) > end + 1:
+                    data = data[:end + 1 - written]
+
+                # Encrypt if E2EE enabled
+                if encryptor:
+                    data = encryptor.encryptChunk(data)
+
+                self.wfile.write(data)
+                written += len(data)
+
+                # Update progress periodically
+                progress.update(written)
+
+                if written > end:
+                    break
+
+            # Final progress update
+            progress.update(written, forceLog=True)
 
             # Handle post-download actions
             self._handlePostDownloadActions(size)
 
+        except FolderChangedException as e:
+            self._handleDownloadExceptionActions(e)
         except (ConnectionResetError, ConnectionAbortedError, ConnectionError, BrokenPipeError) as ce:
             self._handleDownloadExceptionActions(ce)
         except OSError as e:
@@ -371,16 +607,26 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 content = f.read()
 
                 # Replace STATIC_SERVER
-                staticServer = STATIC_SERVER
+                settingsGetter = SettingsGetter.getInstance()
+                staticServer = settingsGetter.getStaticServer()
                 content = content.replace(b'{{ STATIC_SERVER }}', staticServer.encode())
 
                 # Replace UID placeholder
                 content = content.replace(b'uid=****', self.server.uid.encode())
 
                 # Replace file_name, file_size placeholder
-                path, name, size, ctype = self._getFileInfo(quoteName=False)
+                path, name, size, ctype, reader = self._getFileInfo(quoteName=False)
                 content = content.replace(b'{{ fileName }}', name.encode())
                 content = content.replace(b'{{ fileSize }}', str(size).encode())
+
+                # Replace COPYRIGHT placeholder
+                settingsGetter = SettingsGetter.getInstance()
+                copyright = settingsGetter.getCopyright()
+                content = content.replace(b'{{ COPYRIGHT }}', copyright.encode())
+
+                # Replace FOOTER_MESSAGE_HTML placeholder
+                footerMessageHTML = settingsGetter.getFooterMessageHTML()
+                content = content.replace(b'{{ FOOTER_MESSAGE_HTML }}', footerMessageHTML.encode())
 
                 # Check for debug mode from environment variable or URL parameter
                 # WebRTC priority system (highest to lowest priority), and other settings the same priority design:
@@ -390,6 +636,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 debugEnabled = os.getenv('JS_DEBUG', None) == 'True'
                 serverDebugEnabled = os.getenv('JS_LOG_TO_SERVER_DEBUG', None) == 'True'
                 webrtcDisabled = os.getenv('DISABLE_WEBRTC', None) == 'True'
+                streamSaverBlob = os.getenv('STREAMSAVER_BLOB', None) == 'True'
 
                 webrtcDisabledDetermined = False
 
@@ -400,24 +647,23 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                     debugParam = args.get('debug', [None])[0]
                     if debugParam:
                         debugValue = debugParam.lower()
-                        if debugValue in ('yes', '1', 'true', 'on'):
-                            debugEnabled = True
-                        elif debugValue == 'server':
+                        if debugValue == 'server':
                             # Enable server-side logging only if both URL param and env var are set
                             serverDebugEnabled = True
                         else:
-                            pass
+                            if self.parseURLBooleanParam(debugParam):
+                                debugEnabled = True
 
                     # Check webrtc parameter: ?webrtc=no/0/false/off/yes/1/true/on
                     webrtcParam = args.get('webrtc', [None])[0]
                     if webrtcParam:
-                        webrtcValue = webrtcParam.lower()
-                        if webrtcValue in ('no', '0', 'false', 'off'):
+                        webrtcValue = self.parseURLBooleanParam(webrtcParam)
+                        if webrtcValue is False:
                             webrtcDisabled = True
-                        elif webrtcValue in ('yes', '1', 'true', 'on'):
+                        elif webrtcValue is True:
                             webrtcDisabled = False
                         else:
-                            pass
+                            pass # If webrtcResult is None (unrecognized value), keep current state
 
                         webrtcDisabledDetermined = True
 
@@ -437,22 +683,28 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                     content = content.replace(b'const DISABLE_WEBRTC = false;', b'const DISABLE_WEBRTC = true;')
                 if serverDebugEnabled:
                     content = content.replace(b'const SERVER_DEBUG = false;', b'const SERVER_DEBUG = true;')
-
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-type", "text/html")
-            self.send_header("Content-Length", str(len(content)))
+                if streamSaverBlob:
+                    content = content.replace(b'{{ STREAMSAVER_BLOB }}', b'1')
+                else:
+                    content = content.replace(b'{{ STREAMSAVER_BLOB }}', b'0')
 
             f = io.BytesIO(content)
             try:
                 if self.range:
                     start, end = self.range
-                    content = f.read()
-                    end = end if end else len(content)
-                    # Must end_headers after all send_header calls.
-                    self.send_header('Content-Range', f'bytes {start}-{end}/{len(content)}')
+                    fullContent = f.read() # This is ok because static index.html is small.
+                    end = end if end else len(fullContent) - 1
+
+                    self.send_response(HTTPStatus.PARTIAL_CONTENT)
+                    self.send_header("Content-Length", str(end - start + 1))
+                    self.send_header('Content-Range', f'bytes {start}-{end}/{len(fullContent)}')
+                    self.send_header("Content-type", "text/html")
                     self.end_headers()
-                    self.wfile.write(content[start:end + 1])
+                    self.wfile.write(fullContent[start:end + 1])
                 else:
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Length", str(len(content)))
+                    self.send_header("Content-type", "text/html")
                     self.end_headers()
                     self.copyfile(f, self.wfile)
             finally:
@@ -461,19 +713,25 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             logger.exception(e)
             self.send_error(500, str(e))
 
-    def _handleProgressServiceWorker(self, args):
-        """Handle ProgressServiceWorker.js with Service-Worker-Allowed header by proxying from STATIC_SERVER"""
-        try:
-            # Fetch the ProgressServiceWorker.js from remote STATIC_SERVER with browser headers
-            remoteUrl = f"{STATIC_SERVER}/static/js/ProgressServiceWorker.js"
+    def _proxyStaticScript(self, scriptPath, requestHeaders=None):
+        """Generic method to proxy JavaScript files from static server
 
-            # Simulate browser request headers for service worker
-            headers = {'Service-Worker': 'script', 'Cache-Control': 'no-cache'}
+        Args:
+            scriptPath: Relative path to script (e.g., "/static/js/E2EE.js")
+            requestHeaders: Optional dict of additional headers to send with request
+        """
+        try:
+            settingsGetter = SettingsGetter.getInstance()
+            staticServer = settingsGetter.getStaticServer()
+            remoteUrl = f"{staticServer}{scriptPath}"
+
+            # Merge request headers if provided
+            headers = requestHeaders or {}
 
             response = requests.get(remoteUrl, headers=headers, timeout=10)
             response.raise_for_status()
 
-            # Send response with Service-Worker-Allowed header
+            # Send response
             self.send_response(HTTPStatus.OK)
 
             # Copy headers from the remote response
@@ -484,11 +742,56 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             self.wfile.write(response.content)
 
         except requests.RequestException as e:
-            logger.error(f"Failed to fetch ProgressServiceWorker.js from {remoteUrl}: {e}")
+            logger.error(f"Failed to fetch {scriptPath} from {remoteUrl}: {e}")
             self.send_error(HTTPStatus.BAD_GATEWAY, f"Failed to fetch from remote server: {str(e)}")
         except Exception as e:
             logger.exception(e)
             self.send_error(500, str(e))
+
+    def _handleStaticScript(self, scriptPath, requestHeaders=None):
+        """Handle static script - proxy from remote or serve locally"""
+        settingsGetter = SettingsGetter.getInstance()
+        staticServer = settingsGetter.getStaticServer()
+
+        # If static server is remote (starts with http), proxy the file
+        if staticServer.startswith('http'):
+            self._proxyStaticScript(scriptPath, requestHeaders)
+        else:
+            # Static server is local - use default handler to serve from local filesystem
+            super().do_GET()
+
+    def _handleProgressServiceWorker(self, args):
+        """Handle ProgressServiceWorker.js - proxy from remote or serve locally"""
+        # Service worker requires special headers
+        requestHeaders = {'Service-Worker': 'script', 'Cache-Control': 'no-cache'}
+        self._handleStaticScript("/static/js/ProgressServiceWorker.js", requestHeaders)
+
+    def _handleE2EEScript(self, args):
+        """Handle E2EE.js - proxy from remote or serve locally"""
+        self._handleStaticScript("/static/js/E2EE.js")
+
+    def _handleStatus(self, args):
+        """Handle status polling endpoint for error notifications"""
+        try:
+            # Check if there's a server error
+            status = {'error': self.server.lastError if self.server.lastError else None}
+
+            # Encode response
+            responseBody = json.dumps(status).encode('utf-8')
+
+            # Send headers with Content-Length
+            self.send_response(HTTPStatus.OK)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(responseBody)))
+            self.send_header('Cache-Control', 'no-cache')
+            self.end_headers()
+
+            # Send body
+            self.wfile.write(responseBody)
+
+        except Exception as e:
+            logger.exception(f"Status endpoint error: {e}")
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Status endpoint error")
 
     def _detectBrowser(self):
         """Detect browser type from User-Agent header for DTLS strategy selection"""
@@ -507,7 +810,28 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
     def _handleWebRTCOffer(self, args):
         try:
-            path, name, size, ctype = self._getFileInfo()
+            # Check for debug simulation parameters
+            simulateIceFailure = args and self.parseURLBooleanParam(args.get('simulate-ice-failure', [None])[0])
+            if simulateIceFailure:
+                logger.warning("Debug: Simulating ICE failure - returning 500 error")
+                self.send_error(500, "Simulated ICE connection failure for testing")
+                return
+
+            simulateStall = args and self.parseURLBooleanParam(args.get('simulate-stall', [None])[0])
+            if simulateStall:
+                stallAfter = args.get('stall-after', ['50000'])[0]
+                logger.warning(f"Debug: Simulating stall after {stallAfter} bytes - WebRTC will work initially")
+
+            # Handle resume offset parameter
+            offset = 0
+            if args and 'offset' in args:
+                try:
+                    offset = int(args['offset'][0])
+                    logger.info(f"Resume requested from offset: {offset}")
+                except (ValueError, IndexError):
+                    offset = 0
+
+            path, name, size, ctype, reader = self._getFileInfo()
 
             # Detect browser for DTLS strategy selection
             browserHint = self._detectBrowser()
@@ -515,8 +839,13 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 f"Detected browser: {browserHint} from User-Agent: {self.headers.get('User-Agent', 'N/A')[:100]}..."
             )
 
+            # Pass E2EEManager if E2EE is enabled
+            e2eeManager = self.server.e2eeManager if self.server.e2eeEnabled else None
+
             offer = self.server.webRTC.runAsync(
-                self.server.webRTC.createOffer(path, size, formatSize, browserHint=browserHint)
+                self.server.webRTC.createOffer(
+                    path, size, formatSize, browserHint=browserHint, offset=offset, e2eeManager=e2eeManager
+                )
             )
             self._sendBytes(json.dumps(offer).encode(), "application/json; charset=utf-8")
         except Exception as e:
@@ -529,14 +858,14 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             peerId = args.get("peer", [""])[0] if "peer" in args else ""
 
             if not peerId:
-                self.send_error(HTTPStatus.NOT_FOUND, "Missing peer parameter")
+                self._handle404("Missing peer parameter")
                 return
 
             # Get candidate from WebRTC manager
             try:
                 candidate = self.server.webRTC.getCandidates(peerId)
             except ValueError:
-                self.send_error(HTTPStatus.NOT_FOUND, "Unknown peer")
+                self._handle404("Unknown peer")
                 return
 
             if candidate:
@@ -568,6 +897,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
         # Get the appropriate handler for this path
         handler = self.getPathMap.get(self.path)
+        logger.debug(f"[ROUTE] GET {self.path} -> handler={'found' if handler else 'NOT FOUND (using default)'}")
         if handler:
             handler(args)
         else:
@@ -664,7 +994,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             if handler:
                 handler(data)
             else:
-                self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+                self._handle404("Not Found")
         except Exception as e:
             logger.exception(e)
             self.send_error(500, str(e))
@@ -690,9 +1020,27 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def end_headers(self) -> None:
+        self.send_header("Server", f"FFL Server/{PUBLIC_VERSION}")
         self.send_header("Last-Modified", self.date_time_string())
         self.send_header("Accept-Ranges", 'bytes')
         self.send_header("ETag", str(self.etag)) # To let browser can resume downloads
+
+        # Add FFL-specific headers for share information
+        path, name, size, ctype, reader = self._getFileInfo(quoteName=False)
+        self.send_header("FFL-Server", PUBLIC_VERSION)
+
+        # Encode filename for HTTP header (use percent-encoding)
+        # HTTP headers must be latin-1, so we URL-encode the filename
+        # quote() handles both ASCII and non-ASCII filenames correctly
+        self.send_header("FFL-FileName", quote(name))
+        self.send_header("FFL-FileSize", str(size))
+
+        # Indicate mode - P2P if WebRTC is enabled, otherwise HTTP, with E2EE if encrypted
+        mode = "P2P" if self.server.enableWebRTC else "HTTP"
+        if self.server.e2eeEnabled:
+            mode += "+E2EE"
+        self.send_header("FFL-Mode", mode)
+
         super().end_headers()
 
     def handle_one_request(self) -> None:
@@ -728,7 +1076,8 @@ class Server(ThreadingHTTPServer):
         timeout=0,
         authUser=None,
         authPassword=None,
-        enableWebRTC=True
+        enableWebRTC=True,
+        e2eeEnabled=False
     ):
         self.directory = os.path.abspath(directory)
         self.file = file
@@ -739,9 +1088,22 @@ class Server(ThreadingHTTPServer):
         self.authUser = authUser
         self.authPassword = authPassword
         self.enableWebRTC = enableWebRTC
+        self.e2eeEnabled = e2eeEnabled
 
         self.downloadCount = 0
         self.startTime = time()
+
+        # Initialize error tracking for status polling
+        self.lastError = None
+
+        # Initialize E2E encryption if enabled
+        if self.e2eeEnabled:
+            # Get singleton instance (will auto-initialize keys on first call)
+            self.e2eeManager = E2EEManager(WebRTCManager.CHUNK_SIZE)
+            logger.info(f"[E2EE] E2E encryption ENABLED - using singleton manager (e2eeEnabled={self.e2eeEnabled})")
+        else:
+            self.e2eeManager = None
+            logger.debug(f"[E2EE] E2E encryption DISABLED (e2eeEnabled={self.e2eeEnabled})")
 
         if requestHandlerClass is None:
             requestHandlerClass = DownloadHandler
@@ -749,7 +1111,20 @@ class Server(ThreadingHTTPServer):
         if webRTCManagerClass is None:
             webRTCManagerClass = WebRTCManager
 
-        self.webRTC = webRTCManagerClass(loggerCallback=flushPrint, downloadCallback=self.doAfterDownload)
+        # Create exception handler that will be called by WebRTC on errors
+        def handleWebRTCException(exception):
+            # Use a dummy handler object to call _handleDownloadExceptionActions
+            class ExceptionHandler(requestHandlerClass):
+
+                def __init__(self, server):
+                    self.server = server
+
+            handler = ExceptionHandler(self)
+            handler._handleDownloadExceptionActions(exception)
+
+        self.webRTC = webRTCManagerClass(
+            loggerCallback=flushPrint, downloadCallback=self.doAfterDownload, exceptionCallback=handleWebRTCException
+        )
 
         super().__init__(serverAddress, requestHandlerClass)
 
@@ -815,7 +1190,8 @@ def createServer(
     timeout=0,
     authUser=None,
     authPassword=None,
-    enableWebRTC=True
+    enableWebRTC=True,
+    e2eeEnabled=False
 ):
     # Factory function to create a Server instance with specified handler and WebRTC manager
     if handlerClass is None:
@@ -824,5 +1200,5 @@ def createServer(
     serverAddress = ('127.0.0.1', port)
     return Server(
         directory, file, uid, domain, serverAddress, handlerClass, webRTCManagerClass, maxDownloads, timeout, authUser,
-        authPassword, enableWebRTC
+        authPassword, enableWebRTC, e2eeEnabled
     )

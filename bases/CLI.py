@@ -1,12 +1,19 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: Apache-2.0
 #
-# Copyright (c) 2025 Nuwa Information Co., Ltd, All Rights Reserved.
+# FastFileLink CLI - Fast, no-fuss file sharing
+# Copyright (C) 2024-2025 FastFileLink contributors
 #
-# Licensed under the Proprietary License,
+# Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at our web site.
+# You may obtain a copy of the License at
 #
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
@@ -17,11 +24,67 @@ import logging
 import logging.config
 import platform
 
-from bases.Kernel import PUBLIC_VERSION, getLogger, FFLEvent, configureGlobalLogLevel, AddonsManager
-from bases.Settings import DEFAULT_AUTH_USER_NAME, SUPPORT_URL, SettingsGetter
+from bases.Kernel import PUBLIC_VERSION, getLogger, FFLEvent, configureGlobalLogLevel, AddonsManager, StorageLocator
+from bases.Settings import DEFAULT_AUTH_USER_NAME, SettingsGetter
 from bases.Utils import flushPrint, checkVersionCompatibility
 
 logger = getLogger(__name__)
+
+
+def loadEnvFile():
+    """
+    Load environment variables from .env file using StorageLocator.
+    Searches for .env file in standard locations and sets variables in os.environ.
+    Only sets variables that are not already defined in os.environ.
+    """
+    storageLocator = StorageLocator.getInstance()
+    envFilePath = storageLocator.findConfig('.env')
+
+    if not os.path.exists(envFilePath):
+        return
+
+    try:
+        flushPrint(f'Loading .env file from: {envFilePath}')
+        loadedCount = 0
+
+        with open(envFilePath, 'r', encoding='utf-8') as f:
+            for lineNum, line in enumerate(f, 1):
+                line = line.strip()
+
+                # Skip empty lines and comments
+                if not line or line.startswith('#'):
+                    continue
+
+                # Parse KEY=VALUE format
+                if '=' not in line:
+                    flushPrint(f'Warning: .env line {lineNum}: Invalid format (missing =): {line}')
+                    continue
+
+                key, _, value = line.partition('=')
+                key = key.strip()
+                value = value.strip()
+
+                if not key:
+                    flushPrint(f'Warning: .env line {lineNum}: Empty key')
+                    continue
+
+                # Remove quotes if present (both single and double)
+                if (value.startswith('"') and value.endswith('"')) or \
+                   (value.startswith("'") and value.endswith("'")):
+                    value = value[1:-1]
+
+                # Only set if not already in environment (environment takes precedence)
+                if key not in os.environ:
+                    os.environ[key] = value
+                    loadedCount += 1
+                else:
+                    logger.debug(f'.env: Skipped {key} (already set in environment)')
+
+        flushPrint(f'Loaded {loadedCount} environment variables from .env')
+
+    except Exception as e:
+        flushPrint(f'Error: Unexpected error loading .env file: {e}')
+        logger.error(f'Unexpected error loading .env file: {e}', exc_info=True)
 
 
 def configureLogging(logLevel):
@@ -104,7 +167,11 @@ def showVersion():
     flushPrint("")
     uname = platform.uname()
     flushPrint(f"Architecture: {uname.system} {uname.release} {uname.machine} - {uname.version} ({uname.processor})")
-    flushPrint(f"Support: {SUPPORT_URL}")
+
+    # Get dynamic support URL based on GUI support and user level
+    settingsGetter = SettingsGetter.getInstance()
+    supportURL = settingsGetter.getSupportURL()
+    flushPrint(f"Support: {supportURL}")
 
 
 def configureCLIParser():
@@ -149,7 +216,9 @@ def configureCLIParser():
             """Validate max downloads value for argparse"""
             return validatePositive(maxDownloadsStr, "Max downloads")
 
-        parser.add_argument("file", metavar="File", help="Choose a file you want to share", nargs='?')
+        parser.add_argument(
+            "file", metavar="FILE_OR_FOLDER", help="Choose a file or folder you want to share", nargs='?'
+        )
 
         # Upload mode - optional parameter (always available, but requires Upload addon)
         # Use FeatureManager to filter retention times or fallback to default
@@ -162,6 +231,18 @@ def configureCLIParser():
             nargs='?',
             const='6 hours' if times else 'unavailable',
             default=None,
+        )
+        parser.add_argument(
+            "--resume",
+            action="store_true",
+            default=False,
+            help="Resume a previously interrupted upload (requires previous upload session to exist)"
+        )
+        parser.add_argument(
+            "--pause",
+            type=int,
+            metavar="PERCENTAGE",
+            help="Pause upload at specified percentage (1-99, requires --upload)"
         )
         parser.add_argument(
             "--max-downloads",
@@ -205,6 +286,13 @@ def configureCLIParser():
             help=
             "Force relayed P2P mode, disable direct WebRTC connections (can be overridden by ?webrtc=on URL parameter)",
             dest="forceRelay"
+        )
+        parser.add_argument(
+            "--e2ee",
+            action="store_true",
+            default=False,
+            help="Enable end-to-end encryption for file sharing (both HTTP and WebRTC)",
+            dest="e2ee"
         )
 
         # Allow addons to register additional arguments for share command
@@ -256,13 +344,37 @@ def configureCLIParser():
     )
     _configureShareParser(shareSubparser)
 
+    # Download command for receiving files
+    downloadSubparser = subparsers.add_parser(
+        'download', help='Download a file from FastFileLink URL', parents=[globalsParent], exit_on_error=False
+    )
+    downloadSubparser.add_argument("url", metavar="URL", help="FastFileLink URL to download from")
+    downloadSubparser.add_argument(
+        "--output", "-o", metavar="PATH", help="Output file path (default: use filename from server)"
+    )
+    downloadSubparser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume incomplete download (like curl -C), otherwise overwrite existing file"
+    )
+    downloadSubparser.add_argument(
+        "--auth-user",
+        help=f"Username for HTTP Basic Authentication (default: '{DEFAULT_AUTH_USER_NAME}')",
+        metavar="USERNAME",
+        default=DEFAULT_AUTH_USER_NAME,
+        dest="authUser"
+    )
+    downloadSubparser.add_argument(
+        "--auth-password", help="Password for HTTP Basic Authentication", metavar="PASSWORD", dest="authPassword"
+    )
+
     # Let addons create their command parsers (same pattern - inherit globalsParent)
     for cmdName, cmdConfig in commandRegistry.items():
         cmdParser = subparsers.add_parser(cmdName, help=cmdConfig['help'], parents=[globalsParent], exit_on_error=False)
         cmdConfig['setupFunction'](cmdParser)
 
-    # Collect all valid subcommand names (including 'share')
-    commandNames = {'share', *commandRegistry.keys()}
+    # Collect all valid subcommand names (including 'share' and 'download')
+    commandNames = {'share', 'download', *commandRegistry.keys()}
     return parser, globalsParent, commandNames, shareSubparser
 
 
@@ -271,7 +383,7 @@ def processArgumentsAndCommands(args):
     Process parsed arguments and handle command execution through addons.
     This handles all commands except 'share' (which is handled by processFileSharing).
     Used primarily in CLI mode.
-    
+
     Returns:
         int or None: Exit code if command was handled, None if should continue to processFileSharing
     """
@@ -282,7 +394,14 @@ def processArgumentsAndCommands(args):
     if argPolicy['exitCode'] is not None:
         return argPolicy['exitCode']
 
-    return validateShareArguments(args)
+    # Validate share arguments for:
+    # - CLI mode: when command is 'share'
+    # - GUI mode: when command attribute doesn't exist (GUI doesn't use subcommands)
+    command = getattr(args, 'command', None)
+    if command == 'share' or command is None:
+        return validateShareArguments(args)
+
+    return None
 
 
 def validateShareArguments(args):
@@ -297,20 +416,46 @@ def validateShareArguments(args):
     settingsGetter = SettingsGetter.getInstance()
 
     # Check if --upload was used without Upload addon
-    if hasattr(args, 'upload') and args.upload and not settingsGetter.hasUploadSupport():
+    if args.upload and not settingsGetter.hasUploadSupport():
         flushPrint("Error: --upload option requires Upload addon (addons/Upload.py)")
         flushPrint("Please install the Upload addon (use Standard/Plus version) or use P2P mode without --upload")
         return 1
 
-    # Validate auth arguments - password is required to enable auth
-    if hasattr(args, 'authPassword'):
-        # Check if user provided --auth-user but no --auth-password
-        # We check if authUser is not the default value 'ffl' AND authPassword is None
-        if args.authUser != DEFAULT_AUTH_USER_NAME and args.authPassword is None:
-            flushPrint("Error: --auth-user requires --auth-password")
-            flushPrint(
-                f"Use --auth-password to enable authentication (username defaults to '{DEFAULT_AUTH_USER_NAME}' if not specified)"
-            )
+    # Validate --pause argument
+    if args.pause is not None:
+        # --pause requires --upload
+        if not args.upload:
+            flushPrint("Error: --pause requires --upload")
+            flushPrint("Use: --upload <duration> --pause <percentage>")
             return 1
+
+        # Validate percentage range
+        if not (1 <= args.pause <= 99):
+            flushPrint("Error: --pause percentage must be between 1 and 99")
+            return 1
+
+    # Validate --resume argument
+    if args.resume:
+        # --resume requires --upload
+        if not args.upload:
+            flushPrint("Error: --resume flag can only be used with --upload")
+            return 1
+
+    # Validate conflicting --pause and --resume flags
+    if args.pause is not None and args.resume:
+        flushPrint("Error: --pause and --resume cannot be used together")
+        flushPrint("Use --pause to pause a new upload, or --resume to continue a paused upload")
+        return 1
+
+    # Validate auth arguments - password is required to enable auth
+    # Check if user provided --auth-user but no --auth-password
+    # We check if authUser is not the default value 'ffl' AND authPassword is None
+    if args.authUser != DEFAULT_AUTH_USER_NAME and args.authPassword is None:
+        flushPrint("Error: --auth-user requires --auth-password")
+        flushPrint(
+            f"Use --auth-password to enable authentication "
+            f"(username defaults to '{DEFAULT_AUTH_USER_NAME}' if not specified)"
+        )
+        return 1
 
     return None # Validation passed

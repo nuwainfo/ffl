@@ -122,6 +122,7 @@ if exist "%currentDir%\pyapp\target\release\pyapp.exe" (
     exit /b 1
 )
 
+if exist "%currentDir%\dist\CLI\windows\ffl.exe" del /f /q "%currentDir%\dist\CLI\windows\ffl.exe"
 ren "%currentDir%\dist\CLI\windows\ffl_tmp.exe" "ffl.exe"
 
 echo "Delete pyapp folder"

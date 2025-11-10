@@ -1,0 +1,54 @@
+/*!
+ * InAppGuard UI Styles for FastFileLink
+ * https://github.com/nuwainfo/ffl
+ */
+ 
+.inapp-warning {
+    background: linear-gradient(135deg, #ff6b6b, #ff8e8e);
+    color: white;
+    padding: 15px;
+    margin-bottom: 20px;
+    border-radius: 8px;
+    text-align: center;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    display: none; /* Hidden by default */
+}
+.inapp-warning .warning-icon {
+    font-size: 32px; /* Increased from 24px */
+    margin-bottom: 12px;
+    display: block;
+    color: #ffd700; /* Yellow color for the triangle */
+    text-shadow: 0 0 8px rgba(255, 215, 0, 0.5); /* Add glow effect */
+}
+.inapp-warning .warning-title {
+    font-weight: bold;
+    font-size: 18px;
+    margin-bottom: 8px;
+}
+.inapp-warning .warning-text {
+    font-size: 14px;
+    line-height: 1.4;
+    margin-bottom: 15px; /* Slightly increased spacing */
+}
+.inapp-warning .open-browser-btn {
+    background: #fff; /* Solid white background */
+    border: 3px solid #fff; /* Thicker white border */
+    color: #ff4444; /* Bright red text */
+    padding: 12px 24px; /* Increased padding */
+    border-radius: 25px; /* More rounded */
+    text-decoration: none;
+    font-weight: bold;
+    font-size: 16px; /* Larger font */
+    display: inline-block;
+    transition: all 0.3s ease;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2); /* Add shadow */
+    text-transform: uppercase; /* Make text uppercase */
+    letter-spacing: 0.5px; /* Add letter spacing */
+}
+.inapp-warning .open-browser-btn:hover {
+    background: #f0f0f0;
+    color: #ff3333;
+    text-decoration: none;
+    transform: translateY(-1px); /* Slight lift on hover */
+    box-shadow: 0 5px 12px rgba(0, 0, 0, 0.3);
+}

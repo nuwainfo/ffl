@@ -1,0 +1,133 @@
+/*!
+ * E2EE (End-to-End Encryption) UI Styles for FastFileLink
+ * https://github.com/nuwainfo/ffl
+ */
+
+/* E2EE Key Input Styles */
+#e2eeKeyBlock h6 {
+    margin-bottom: 15px;
+}
+
+#e2eeKeyBlock p {
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 15px;
+}
+
+#encryption-key {
+    width: 100%;
+    padding: 10px;
+    font-size: 14px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    margin-bottom: 10px;
+}
+
+#decrypt-btn {
+    width: 100%;
+    padding: 10px 20px;
+    font-size: 14px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-bottom: 10px;
+}
+
+#decrypt-btn:hover {
+    background-color: #0056b3;
+}
+
+#decrypt-btn:disabled {
+    background-color: #6c757d;
+    cursor: not-allowed;
+}
+
+#e2ee-error-message {
+    color: red;
+    font-size: 14px;
+    display: none;
+}
+
+/* E2EE Retry Blocked Warning Styles */
+#e2ee-retry-blocked {
+    display: none;
+    background: linear-gradient(135deg, #fff9e6 0%, #fff3cd 100%);
+    border: 2px solid #ffc107;
+    border-radius: 8px;
+    padding: 20px;
+    margin: 20px 0;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.e2ee-retry-blocked-icon {
+    font-size: 48px;
+    text-align: center;
+    margin-bottom: 15px;
+}
+
+.e2ee-retry-blocked-title {
+    font-size: 18px;
+    font-weight: bold;
+    color: #856404;
+    text-align: center;
+    margin-bottom: 15px;
+}
+
+.e2ee-retry-blocked-message {
+    font-size: 14px;
+    color: #856404;
+    text-align: center;
+    margin-bottom: 20px;
+    line-height: 1.6;
+}
+
+.e2ee-retry-blocked-solutions {
+    background: rgba(255, 255, 255, 0.7);
+    border-radius: 6px;
+    padding: 15px;
+}
+
+.e2ee-retry-blocked-subtitle {
+    font-size: 16px;
+    font-weight: bold;
+    color: #856404;
+    margin-bottom: 10px;
+}
+
+.e2ee-retry-blocked-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.e2ee-retry-blocked-list li {
+    font-size: 14px;
+    color: #856404;
+    margin-bottom: 12px;
+    padding-left: 20px;
+    position: relative;
+    line-height: 1.6;
+}
+
+.e2ee-retry-blocked-list li:before {
+    content: "→";
+    position: absolute;
+    left: 0;
+    font-weight: bold;
+}
+
+.e2ee-retry-blocked-list li strong {
+    color: #664d03;
+}
+
+.e2ee-cli-link {
+    color: #0056b3;
+    text-decoration: underline;
+    font-weight: 500;
+}
+
+.e2ee-cli-link:hover {
+    color: #003d82;
+}

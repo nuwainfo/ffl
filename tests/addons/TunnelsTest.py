@@ -28,8 +28,11 @@ import time
 import unittest
 import requests
 
+
 from addons.Tunnels import TunnelRunnerProvider, StaticURLTunnelClient # isort:skip
 from bases.Tunnel import TunnelRunner # isort:skip
+
+from tests.BrowserTestBase import BrowserTestBase # isort:skip
 
 
 def createTestConfig(preferredTunnel='default', enableCloudflare=False, enableNgrok=False, enableStaticUrl=False):
@@ -99,59 +102,79 @@ class SimpleHTTPHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(404)
 
 
-class TestTunnelIntegration(unittest.TestCase):
-    """Integration test for tunnel functionality with real HTTP server"""
+class TestTunnelIntegration(BrowserTestBase):
+    """Integration test for tunnel functionality with FastFileLink and browser-based E2EE"""
+
+    def __init__(self, methodName='runTest'):
+        # Initialize parent with small test file (50 KB for E2EE test)
+        super().__init__(methodName, fileSizeBytes=1024 * 50)
+        self.configPath = None
+        self.httpServer = None
+        self.httpThread = None
+        self.httpPort = None
+        self.oldPath = None
 
     def setUp(self):
         """Set up test environment"""
-        self.tempDir = tempfile.mkdtemp()
-        self.configPath = os.path.join(self.tempDir, 'tunnels.json')
-        self.testFile = os.path.join(self.tempDir, 'test_file.txt')
-        self.httpServer = None
-        self.httpThread = None
+        # Call parent setUp to create tempDir and test file
+        super().setUp()
 
-        # Create test file
-        with open(self.testFile, 'w') as f:
+        # Create tunnel config path
+        self.configPath = os.path.join(self.tempDir, 'tunnels.json')
+
+        # Create separate text file for HTTP server test (testTunnelWithRealHttpServer)
+        # The parent's testFilePath is a binary file for E2EE testing
+        self.httpTestFile = os.path.join(self.tempDir, 'http_test_file.txt')
+        with open(self.httpTestFile, 'w') as f:
             f.write('This is a test file for tunnel serving!')
 
-        # Find available port for HTTP server
+        # Find available port for HTTP server (for testTunnelWithRealHttpServer)
         import socket
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(('', 0))
             self.httpPort = s.getsockname()[1]
-        
-        # Include current directory in PATH to find tunnels executable.
-        self.oldPath = os.environ['PATH']
-        os.environ['PATH'] = f'{os.environ['PATH']}:{os.getcwd()}'
+
+        # Include current directory in PATH to find tunnels executable
+        self.oldPath = os.environ.get('PATH', '')
+        os.environ['PATH'] = f'{os.environ["PATH"]}:{os.getcwd()}'
 
     def tearDown(self):
         """Clean up test environment"""
+        # Stop HTTP server if running
         if self.httpServer:
             self.httpServer.shutdown()
         if self.httpThread:
             self.httpThread.join(timeout=2)
-        if os.path.exists(self.tempDir):
-            shutil.rmtree(self.tempDir)
-        
-        # Restore PATH for preventing side-effect.
-        os.environ['PATH'] = self.oldPath
+
+        # Restore PATH
+        if self.oldPath is not None:
+            os.environ['PATH'] = self.oldPath
+
+        # Call parent tearDown to clean up tempDir and process
+        super().tearDown()
 
     def startHttpServer(self):
         """Start simple HTTP server for testing"""
-        handler = lambda *args, **kwargs: SimpleHTTPHandler(*args, testFile=self.testFile, **kwargs)
+        handler = lambda *args, **kwargs: SimpleHTTPHandler(*args, testFile=self.httpTestFile, **kwargs)
         self.httpServer = socketserver.TCPServer(('127.0.0.1', self.httpPort), handler)
         self.httpThread = threading.Thread(target=self.httpServer.serve_forever)
         self.httpThread.daemon = True
         self.httpThread.start()
         time.sleep(0.1) # Give server time to start
 
-    def _waitForTunnelAvailable(self, tunnelLink, maxRetries=12, initialDelay=2):
-        """Wait for tunnel to become available with exponential backoff"""
+    def _waitForTunnelAvailable(self, testUrl, maxRetries=12, initialDelay=2):
+        """Wait for tunnel to become available with exponential backoff
+
+        Args:
+            testUrl: Full URL to test (e.g., https://example.trycloudflare.com/test)
+            maxRetries: Maximum number of retry attempts
+            initialDelay: Initial delay in seconds (will increase with exponential backoff)
+        """
         delay = initialDelay
         for attempt in range(maxRetries):
             try:
-                print(f"Attempt {attempt + 1}: Testing tunnel availability...")
-                response = requests.get(f'{tunnelLink}test', timeout=5)
+                print(f"Attempt {attempt + 1}: Testing tunnel availability...{testUrl}")
+                response = requests.get(testUrl, timeout=5)
                 if response.status_code == 200:
                     print(f"✅ Tunnel available after {attempt + 1} attempts")
                     return
@@ -169,7 +192,7 @@ class TestTunnelIntegration(unittest.TestCase):
                 time.sleep(delay)
                 delay = min(delay * 1.5, 10) # Exponential backoff, max 10s
 
-        self.fail(f"Tunnel {tunnelLink} did not become available after {maxRetries} attempts")
+        self.fail(f"Tunnel {testUrl} did not become available after {maxRetries} attempts")
 
     def testDefaultTunnelBehavior(self):
         """Test that default tunnel preference works (basic functionality)"""
@@ -230,7 +253,7 @@ class TestTunnelIntegration(unittest.TestCase):
             print(f"Tunnel created: {tunnelLink}")
 
             # Wait for tunnel to become available with retries
-            self._waitForTunnelAvailable(tunnelLink)
+            self._waitForTunnelAvailable(f'{tunnelLink}test')
 
             # Test basic endpoint through tunnel
             response = requests.get(f'{tunnelLink}test', timeout=10)
@@ -339,6 +362,73 @@ class TestTunnelIntegration(unittest.TestCase):
         # Test that provider reflects the change
         settings = provider._getSettings()
         self.assertEqual(settings['preferred_tunnel'], 'cloudflare')
+
+    @unittest.skipUnless(shutil.which('cloudflared'), "cloudflared binary not found in PATH")
+    @unittest.skipIf(os.getenv('SKIP_INTEGRATION_TESTS'), "Integration tests disabled")
+    def testTunnelWithE2EE(self):
+        """Integration test: Verify E2EE works with external tunnels using browser"""
+        # Create config with cloudflare enabled
+        config = createTestConfig(preferredTunnel='cloudflare', enableCloudflare=True)
+        with open(self.configPath, 'w') as f:
+            json.dump(config, f)
+
+        # Start FastFileLink with E2EE and tunnel (inherits from BrowserTestBase)
+        shareLink = self._startFastFileLink(
+            p2p=True,
+            extraEnvVars={'FFL_STORAGE_LOCATION': self.tempDir},
+            extraArgs=['--e2ee', '--preferred-tunnel', 'cloudflare']
+        )
+
+        # Verify tunnel is used (cloudflare domain)
+        self.assertIn('trycloudflare.com', shareLink,
+                     "Share link should use cloudflare tunnel")
+
+        print(f"✅ E2EE + Tunnel share link generated: {shareLink}")
+
+        # Wait for tunnel DNS to become available (test the actual share link)
+        print("Waiting for Cloudflare tunnel DNS to propagate...")
+        self._waitForTunnelAvailable(shareLink)
+
+        # Test 1: Download with browser (WebRTC P2P + E2EE decryption in browser)
+        print("[Test] Test 1: Browser-based E2EE download (WebRTC P2P)...")
+        driver = self._setupChromeDriver(self.chromeDownloadDir)
+
+        try:
+            # Extract filename from original test file
+            expectedFilename = os.path.basename(self.testFilePath)
+
+            # Download using browser (handles WebRTC P2P + E2EE decryption in browser)
+            browserDownloadedPath = self._downloadWithBrowser(
+                driver,
+                shareLink,
+                self.chromeDownloadDir,
+                expectedFilename,
+                disableFallback=True
+            )
+
+            # Verify downloaded file matches original
+            self._verifyDownloadedFile(browserDownloadedPath)
+
+            print("✅ Test 1 passed - Browser WebRTC + E2EE download verified")
+
+        finally:
+            driver.quit()
+
+        # Test 2: Download with Core.py (HTTP + E2EE decryption, WebRTC disabled)
+        print("[Test] Test 2: Core.py E2EE download (HTTP fallback with DISABLE_WEBRTC)...")
+        coreDownloadPath = os.path.join(self.tempDir, "core_downloaded_" + expectedFilename)
+
+        coreDownloadedPath = self._downloadWithCore(
+            shareLink,
+            coreDownloadPath,
+            extraEnvVars={'DISABLE_WEBRTC': 'True'}
+        )
+
+        # Verify Core.py downloaded file matches original
+        self._verifyDownloadedFile(coreDownloadedPath)
+
+        print("✅ Test 2 passed - Core.py HTTP + E2EE download verified")
+        print("✅ E2EE tunnel test passed - both browser and Core.py downloads verified")
 
 
 if __name__ == '__main__':

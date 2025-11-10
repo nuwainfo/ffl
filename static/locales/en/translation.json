@@ -1,0 +1,168 @@
+{
+  "nav": {
+    "home": "Home",
+    "introduction": "Introduction", 
+    "features": "Features",
+    "tutorial": "Tutorial",
+    "free": "Free",
+    "pricing": "Pricing",
+    "support": "Support",
+    "language": "Language",
+    "menu": "Menu"
+  },
+  "download": {
+    "title": "Downloading",
+    "file": "File",
+    "ellipsis": "...",
+    "warning": {
+      "title": "Download may not work in this browser",
+      "text": "To download this file, please open this link in your browser.",
+      "button": "Download in Browser"
+    },
+    "progress": {
+      "preparing": "Preparing download...",
+      "statusHeading": "Preparing your download...",
+      "statusDetails": "Large files may take a moment to begin",
+      "trouble": "🔄 Having trouble? Try again in new tab",
+      "troubleSubtle": "Having trouble? Try again in new tab",
+      "troubleProminent": "🔄 Having trouble? Try again in new tab",
+      "backgroundHeading": "Download is processing in background",
+      "backgroundDetails": "Check your browser download bar (usually at bottom/top) for progress",
+      "backgroundDetailsByPass": "Check your browser download bar (usually at bottom/top) for progress — or confirmation that the download has already finished.",
+      "inProgressHeading": "Download in progress...",
+      "inProgressDetails": "Please wait while your file downloads",
+      "starting": "Starting download...",
+      "downloading": "Downloading file...",
+      "downloadingMightDone": "Downloading file...It may already be done.",
+      "downloadingWithSize": "Downloading {{size}} file...",
+      "newTabOpened": "Download opened in new tab",
+      "canCloseTab": "You can close this tab if desired",
+      "unableToClose": "Unable to auto-close, you can manually close this tab",
+      "pleaseWait": "Please wait while your file downloads",
+      "checkDownloads": "You can check progress in the Downloads panel (Ctrl+J)",
+      "preparingLarge": "Preparing {{size}} file for direct download...",
+      "started": "✓ Download started in your browser (Firefox)",
+      "havingTrouble": "Having trouble? Try again or check your Downloads folder",
+      "stoppedForNewTab": "Download stopped in this tab - continuing in new tab"
+    },
+    "retry": {
+      "confirmationTitle": "A download may already be in progress. Check your browser's download bar first.",
+      "confirmationSubtitle": "Opening a new tab will start a fresh download.", 
+      "confirmButton": "Yes, open new tab",
+      "cancelButton": "Cancel"
+    },
+    "complete": {
+      "title": "✅ Download complete!"
+    },
+    "closeTab": "Close this tab",
+    "e2ee": {
+      "title": "🔒 This file is encrypted",
+      "description": "Please enter the encryption key to decrypt and download:",
+      "placeholder": "Enter encryption key (base64)",
+      "button": "Decrypt and Download",
+      "firefoxBlocked": {
+        "title": "🔒 Encrypted Download Not Available",
+        "details": "Encrypted downloads larger than {{limit}} require a Chromium-based browser for streaming decryption.",
+        "why": "Why?",
+        "explanation": "Large encrypted files cannot be streaming decrypted reliably in Firefox.",
+        "solution": "Solution:",
+        "browsers": "Chrome, Edge, or Brave",
+        "useBrowser": "Use {{browsers}}",
+        "useCLI": "Or use the <a href=\"https://github.com/nuwainfo/ffl\" target=\"_blank\" style=\"display: inline !important; padding: 0 !important; margin: 0 !important; border: none !important; background: none !important; color: #007bff !important; text-decoration: underline !important; font-size: inherit !important;\">FastFileLink CLI</a>",
+        "smallFiles": "Small encrypted files (<{{limit}}) work on Firefox",
+        "fileSize": "File size: {{size}}"
+      },
+      "retryBlocked": {
+        "title": "Encrypted Download Requires This Page",
+        "message": "Direct browser downloads cannot decrypt this file. The decryption must happen in this page with your encryption key.",
+        "solutionsTitle": "Try these solutions:",
+        "solution1": "<strong>Different Browser:</strong> Try Chrome, Edge, or Brave for better compatibility",
+        "solution2Title": "Command Line Tool:",
+        "solution2Text": "Use the",
+        "solution2Stable": "for stable downloads of large encrypted files",
+        "solution3": "<strong>Wait:</strong> The download may still be progressing in the background"
+      }
+    }
+  },
+  "footer": {
+    "message": "PS: Wishing you a great day! Download your free file sharing app at",
+    "linkText": "FastFileLink",
+    "period": ".",
+    "contactTitle": "Contact Us",
+    "aboutTitle": "About Us", 
+    "legalTitle": "Legal",
+    "releasesTitle": "Releases",
+    "companyTitle": "About Our Company",
+    "companyDescription": "Nuwa Information started with patented web tracking systems, giving us deep expertise in handling massive data transfers efficiently and securely. This experience naturally led us to develop FastFileLink – bringing enterprise-grade file transfer capabilities to everyone.",
+    "copyright": "Copyright (c) 2025 Nuwa Information Co., Ltd, All Rights Reserved.",
+    "privacy": "Privacy Policy",
+    "terms": "Terms of Use",
+    "paymentTitle": "Secure Payment Methods",
+    "paymentDescription": "All transactions are securely processed through Pixiu, our secure payment platform, with PayPal payment processing."
+  },
+  "modal": {
+    "notSupportedTitle": "Not supported",
+    "notSupportedMessage": "Unfortunately, your OS is not yet compatible.\nSupport for your OS will be added in the future.",
+    "availableVersion": "Available Version"
+  },
+  "inappguard": {
+    "browsers": {
+      "safari": "Safari",
+      "chrome": "Chrome",
+      "yourBrowser": "your browser"
+    },
+    "actions": {
+      "download": "download"
+    },
+    "messages": {
+      "iosRestricted": "To {{action}} this file, please open this link in {{browser}}. Tap the share button and select \"Open in {{browser}}\".",
+      "androidRestricted": "To {{action}} this file, please open this link in {{browser}}. Tap the menu button and select \"Open in browser\".",
+      "generalRestricted": "To {{action}} this file, please open this link in {{browser}}."
+    }
+  },
+  "client": {
+    "status": {
+      "establishing": "Establishing connection...",
+      "establishingP2p": "Establishing P2P connection...",
+      "switchingRelay": "Switching to relay mode: {{reason}}",
+      "relayStarted": "Relayed P2P Download Started.",
+      "p2pChecking": "P2P connection...[Checking]",
+      "p2pConnecting": "P2P connection...[Connecting]",
+      "p2pSuccess": "P2P connection successful! Downloading...",
+      "reconnecting": "Connection lost, attempting to reconnect...",
+      "networkFluctuation": "Network fluctuation detected, continuing transfer...",
+      "retryingP2p": "Retrying P2P connection…",
+      "savingFile": "Saving file...",
+      "creatingDownload": "Creating download...",
+      "downloadingPercent": "Downloading via P2P: {{percent}}%"
+    },
+    "connection": {
+      "serverRelay": "Using Server Relay Download",
+      "waitingPeer": "Waiting for peer ({{seconds}}s)",
+      "retrying": "Retrying P2P connection",
+      "directP2p": "Direct P2P transfer"
+    },
+    "download": {
+      "startShortly": "Your download will start shortly.",
+      "deviceStarted": "Device-to-Device download started.",
+      "fileSaved": "File saved. Please check your download folder."
+    },
+    "fallback": {
+      "browserNotSupported": "Downloads not supported in this browser",
+      "p2pDisabled": "Device-to-Device P2P disabled. Use Relayed P2P.",
+      "fileTooBig": "Large files need modern browser support. Consider switching browsers or using server relay."
+    },
+    "retry": {
+      "button": "Retry Download",
+      "confirmationTitle": "Open download in new tab?"
+    },
+    "manualDownload": "Download",
+    "footer": {
+      "design": "Design:"
+    }
+  },
+  "errors": {
+    "folder_changed": "The shared folder contents changed during transfer. The file owner needs to reshare the folder.",
+    "unknown": "An error occurred during transfer."
+  }
+}

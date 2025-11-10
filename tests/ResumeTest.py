@@ -21,8 +21,218 @@ import subprocess
 import sys
 import time
 import unittest
+import os
 
+from .ResumeTestBase import ResumeTestBase, ResumeBrowserTestBase
 from .CoreTestBase import FastFileLinkTestBase
+
+
+# ---------------------------
+# Upload Resume Test Class
+# ---------------------------
+class UploadResumeTest(ResumeTestBase):
+    """Test class specifically for testing upload resume functionality (--resume flag)"""
+
+    def __init__(self, methodName='runTest'):
+        # Use larger file size for resume testing to ensure multiple chunks
+        super().__init__(methodName, fileSizeBytes=50 * 1024 * 1024)  # 50MB to ensure ~4 chunks
+
+    def _testUploadResume(self, pausePercentage=40):
+        """
+        Test upload resume functionality by pausing an upload and then resuming it
+
+        Args:
+            pausePercentage (int): Percentage at which to pause the upload
+        """
+        try:
+            print(f"[Test] Starting upload resume test with {self.fileSizeBytes / (1024*1024):.1f}MB file")
+
+            # Phase 1: Pause at specified percentage
+            success = self._performPauseOperation(pausePercentage, expectSuccess=True)
+            if not success:
+                raise AssertionError(f"Pause at {pausePercentage}% failed")
+
+            # Phase 2: Resume to completion
+            shareLink = self._performResumeOperation()
+
+            # Phase 3: Verify the resumed upload worked correctly
+            print("[Test] Phase 3: Verifying resumed upload...")
+
+            # Check that resume output contained expected additional messages
+            resumeOutputCapture = {}
+            self._updateCapturedOutput(resumeOutputCapture)  # Get any remaining output
+
+            # Verify we can download the completed file
+            downloadedFilePath = self._getDownloadedFilePath()
+            time.sleep(2)  # Wait for server to finalize the file
+            self.downloadFileWithRequests(shareLink, downloadedFilePath)
+            self._verifyDownloadedFile(downloadedFilePath)
+
+            print("[Test] Upload resume test completed successfully!")
+
+        except Exception as e:
+            print(f"[Test] Upload resume test failed: {str(e)}")
+            raise
+
+    def _performPauseOperation(self, pausePercentage, expectSuccess=True):
+        """
+        Perform a single pause operation and return whether it succeeded
+
+        Args:
+            pausePercentage (int): Percentage at which to pause
+            expectSuccess (bool): Whether to expect the operation to succeed
+
+        Returns:
+            bool: True if operation succeeded as expected, False otherwise
+        """
+        try:
+            print(f"[Test] Attempting pause at {pausePercentage}%...")
+            capture = {}
+            self._pauseUpload(pausePercentage=pausePercentage, outputCapture=capture)
+            print(f"[Test] Successfully paused at {pausePercentage}%")
+            return True
+
+        except AssertionError as err:
+            if expectSuccess:
+                print(f"[Test] Unexpected pause failure: {err}")
+                return False
+            print(f"[Test] Expected error occurred for --pause {pausePercentage}: {err}")
+            return True
+
+    def _performResumeOperation(self):
+        """
+        Perform a resume operation and verify it completes successfully
+
+        Returns:
+            str: Share link if successful, None if failed
+        """
+        try:
+            print("[Test] Attempting resume...")
+
+            capture = {}
+            resumeShareLink, _ = self._resumeUpload(outputCapture=capture)
+            print(f"[Test] Resume completed successfully: {resumeShareLink}")
+            return resumeShareLink
+
+        finally:
+            self._terminateProcess()
+
+    # Public test methods
+    def testUploadResume(self):
+        """Test upload resume functionality"""
+        self._testUploadResume(pausePercentage=40)
+
+    def testRepeatedPauseAtSamePercentage(self):
+        """Test that pausing at the same percentage multiple times works correctly"""
+        try:
+            print("[Test] Testing repeated pause at same percentage (10%)")
+
+            # First pause at 10%
+            success1 = self._performPauseOperation(10, expectSuccess=True)
+            if not success1:
+                raise AssertionError("First pause at 10% failed")
+
+            # Second pause at 10% should also work (resume from where we left off)
+            success2 = self._performPauseOperation(10, expectSuccess=True)
+            if not success2:
+                raise AssertionError("Second pause at 10% failed")
+
+            # Finally resume to completion
+            shareLink = self._performResumeOperation()
+
+            # Verify the completed upload
+            downloadedFilePath = self._getDownloadedFilePath()
+            time.sleep(2)
+            self.downloadFileWithRequests(shareLink, downloadedFilePath)
+            self._verifyDownloadedFile(downloadedFilePath)
+
+            print("[Test] Repeated pause test completed successfully!")
+
+        except Exception as e:
+            print(f"[Test] Repeated pause test failed: {e}")
+            raise
+
+    def testIncrementalPauseProgression(self):
+        """Test pausing at incremental percentages: 10%, 20%, 30%, 50%, then complete"""
+        try:
+            print("[Test] Testing incremental pause progression")
+
+            pausePercentages = [10, 20, 30, 50]
+
+            for percentage in pausePercentages:
+                success = self._performPauseOperation(percentage, expectSuccess=True)
+                if not success:
+                    raise AssertionError(f"Pause at {percentage}% failed")
+
+            # Finally complete without pause
+            shareLink = self._performResumeOperation()
+
+            # Verify the completed upload
+            downloadedFilePath = self._getDownloadedFilePath()
+            time.sleep(2)
+            self.downloadFileWithRequests(shareLink, downloadedFilePath)
+            self._verifyDownloadedFile(downloadedFilePath)
+
+            print("[Test] Incremental pause progression test completed successfully!")
+
+        except Exception as e:
+            print(f"[Test] Incremental pause progression test failed: {e}")
+            raise
+
+    def testPause99ThenResume(self):
+        """Test pausing at 99% then resuming to completion"""
+        try:
+            print("[Test] Testing pause at 99% then resume")
+
+            # Pause at 99%
+            success = self._performPauseOperation(99, expectSuccess=True)
+            if not success:
+                raise AssertionError("Pause at 99% failed")
+
+            # Resume to completion
+            shareLink = self._performResumeOperation()
+
+            # Verify the completed upload
+            downloadedFilePath = self._getDownloadedFilePath()
+            time.sleep(2)
+            self.downloadFileWithRequests(shareLink, downloadedFilePath)
+            self._verifyDownloadedFile(downloadedFilePath)
+
+            print("[Test] Pause at 99% test completed successfully!")
+
+        except Exception as e:
+            print(f"[Test] Pause at 99% test failed: {e}")
+            raise
+
+    def testPause100Validation(self):
+        """Test that --pause 100 is properly rejected, then resume works"""
+        try:
+            print("[Test] Testing --pause 100 validation")
+
+            # First make a valid pause to create resume state
+            success = self._performPauseOperation(30, expectSuccess=True)
+            if not success:
+                raise AssertionError("Initial pause at 30% failed")
+
+            # Now try --pause 100 which should be rejected
+            success = self._performPauseOperation(100, expectSuccess=False)
+            if not success:
+                raise AssertionError("--pause 100 should have been rejected but wasn't")
+
+            # Resume should still work from the previous valid pause
+            shareLink = self._performResumeOperation()
+
+            # Verify the completed upload
+            downloadedFilePath = self._getDownloadedFilePath()
+            time.sleep(2)
+            self.downloadFileWithRequests(shareLink, downloadedFilePath)
+            self._verifyDownloadedFile(downloadedFilePath)
+
+            print("[Test] Pause 100 validation test completed successfully!")
+
+        except Exception as e:
+            print(f"[Test] Pause 100 validation test failed: {e}")
+            raise
 
 
 # ---------------------------
@@ -270,6 +480,21 @@ class UploadInstabilityTest(FastFileLinkTestBase):
             timeout=customTimeout,
             expectFailure=customExpectFailure
         )
+
+
+# ---------------------------
+# Browser-Based HTTP Resume with Fallback Test Class
+# ---------------------------
+class BrowserResumeTest(ResumeBrowserTestBase):
+    """Test HTTP resume when WebRTC stalls and falls back to HTTP (browser-based)"""
+
+    def testHttpResumeWithFallbackByChrome(self):
+        """Test HTTP resume when WebRTC connection stalls and falls back to HTTP using Chrome"""
+        self._testHttpResumeWithFallback('chrome')
+
+    def testHttpResumeWithFallbackByFirefox(self):
+        """Test HTTP resume when WebRTC connection stalls and falls back to HTTP using Firefox"""
+        self._testHttpResumeWithFallback('firefox')
 
 
 if __name__ == '__main__':

@@ -1,7 +1,10 @@
 #!/bin/bash
 OS=$1
+TARGET=$2
 set -e
 set -x
+
+export PATH="$HOME/.cargo/bin:$PATH"
 
 currentDir="$(pwd)"
 parentDir="$(dirname "$currentDir")"
@@ -16,6 +19,10 @@ tar -xzf pyapp-source.tar.gz --strip-components=1 -C pyapp_$OS
 echo "Delete pyapp-source.tar.gz"
 rm -f pyapp-source.tar.gz
 
+if [ "$OS" = "linux" ]; then
+    source "$HOME/miniconda3/etc/profile.d/conda.sh"
+fi
+
 eval "$(conda shell.bash hook)"
 envName="ffl_python_temp"
 
@@ -28,10 +35,8 @@ export PYTHONIOENCODING=utf-8
 
 python3 -m pip install -r REQUIREMENTS.txt 
 # Used only for DistUtil.py not bundled in final executable.
-python3 -m pip install pefile 
+python3 -m pip install pefile conda-pack setuptools wheel pip
 
-
-conda install -c conda-forge conda-pack -y
 
 currentDir="$(pwd)"
 parentDir="$(dirname "$currentDir")"
@@ -42,7 +47,6 @@ cp "$currentDir/dist/CLI/Setup.py" "$parentDir/"
 cd "$parentDir"
 
 echo "Build wheel"
-conda install -y setuptools wheel pip
 python3 Setup.py bdist_wheel
 
 cd dist
@@ -93,8 +97,14 @@ cd ffl_python_temp
 
 if [ "$OS" = "darwin" ]; then
     python3 -m compileall --invalidation-mode=unchecked-hash -b -q lib  || true
-else
+elif [ "$TARGET" = "manyLinux" ]; then
+	cd ..
+	cp "$currentDir/dist/CLI/linux/RemoveSym.py" "$currentDir/"
+	python RemoveSym.py ffl_python_temp
+	cd ffl_python_temp
     python3 -m compileall --invalidation-mode=unchecked-hash -b -q lib
+else
+	python3 -m compileall --invalidation-mode=unchecked-hash -b -q lib
 fi
 
 find . -type f -name "*.py" -exec rm -f {} +
@@ -115,7 +125,6 @@ export PYAPP_DISTRIBUTION_PYTHON_PATH='./bin/ffl'
 export PYAPP_DISTRIBUTION_EMBED='1'
 export PYAPP_FULL_ISOLATION='1'
 export PYAPP_PROJECT_NAME='ffl'
-export PYAPP_PROJECT_VERSION='3.6.0'
 export PYAPP_DISTRIBUTION_PATH='./ffl_python.tar.gz'
 export PYAPP_EXEC_SPEC='FileShare.Core:main'
 
@@ -133,8 +142,8 @@ if [ "$OS" = "darwin" ]; then
     rustup target add aarch64-apple-darwin
     cargo build --target=aarch64-apple-darwin --release
     cp "target/aarch64-apple-darwin/release/pyapp" \
-       "../dist/CLI/$OS/ffl_arm64"
-    chmod +x ../dist/CLI/$OS/ffl_arm64
+       "../dist/CLI/$OS/ffl_aarch64"
+    chmod +x ../dist/CLI/$OS/ffl_aarch64
 
     # # Merge into a universal binary
     # lipo -create -output target/ffl_universal \
@@ -148,6 +157,7 @@ if [ "$OS" = "darwin" ]; then
     cd ..
 
 else
+
     rustup target add x86_64-unknown-linux-musl
 
     cargo build --target=x86_64-unknown-linux-musl --release

@@ -61,8 +61,7 @@ def getSecret(key: str, jsonFile: str = '.secret'):
     return data.get(key)
 
 
-# TODO: Best to control by GrowthBook
-PUBLIC_VERSION = '3.6.1'
+PUBLIC_VERSION = '3.7.2'
 
 SENTRY_DSN = getSecret('SENTRY_DSN')
 
@@ -480,8 +479,10 @@ class AddonsManager(Singleton):
         Returns empty list if addons list doesn't exist or can't be imported.
 
         Disabling Priority (highest to lowest):
-        1. addons.json config file: JSON object with "disabled" array containing addon names to disable
-        2. DISABLE_ADDONS environment variable: Comma-separated list of addon names to disable (fallback when no config file)
+        1. addons.json config file: JSON object with "disabled" array containing
+           addon names to disable
+        2. DISABLE_ADDONS environment variable: Comma-separated list of addon names
+           to disable (fallback when no config file)
 
         Note: If addons.json exists and has a valid "disabled" field, the environment variable is ignored.
         This ensures user config files are authoritative and predictable.
@@ -534,12 +535,16 @@ class AddonsManager(Singleton):
                     if 'disabled' in addonsConfig:
                         configDisabled = addonsConfig['disabled']
                         if isinstance(configDisabled, (list, tuple)):
-                            validDisabled = [addon.strip() for addon in configDisabled if isinstance(addon, str) and addon.strip()]
+                            validDisabled = [
+                                addon.strip() for addon in configDisabled if isinstance(addon, str) and addon.strip()
+                            ]
                             disabledAddons.update(validDisabled)
                             if validDisabled:
                                 self.logger.debug(f"Disabled addons from addons.json: {', '.join(validDisabled)}")
                         else:
-                            self.logger.warning(f"addons.json 'disabled' field should be an array, got: {type(configDisabled)}")
+                            self.logger.warning(
+                                f"addons.json 'disabled' field should be an array, got: {type(configDisabled)}"
+                            )
 
         except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
             self.logger.debug(f"Could not read addons.json config: {e}")
@@ -593,7 +598,11 @@ class AddonsManager(Singleton):
             requiredAddons = getattr(addonModule, '__ADDONS_REQUIRED__', None)
             if requiredAddons:
                 if not isinstance(requiredAddons, (tuple, list)):
-                    self.logger.warning(f"Addon {addonName} has invalid __ADDONS_REQUIRED__ format (should be tuple/list): {type(requiredAddons)}")
+                    reqType = type(requiredAddons)
+                    self.logger.warning(
+                        f"Addon {addonName} has invalid __ADDONS_REQUIRED__ format "
+                        f"(should be tuple/list): {reqType}"
+                    )
                 else:
                     # Check if all required addons are enabled and can be loaded
                     enabledAddons = self.getEnabledAddons()
@@ -610,7 +619,12 @@ class AddonsManager(Singleton):
                                 missingDependencies.append(dep)
 
                     if missingDependencies:
-                        errorMsg = f"Addon {addonName} requires unavailable addons: {', '.join(missingDependencies)}. Required: {', '.join(requiredAddons)}"
+                        missing = ', '.join(missingDependencies)
+                        required = ', '.join(requiredAddons)
+                        errorMsg = (
+                            f"Addon {addonName} requires unavailable addons: {missing}. "
+                            f"Required: {required}"
+                        )
                         self.logger.warning(errorMsg)
                         self.failedAddons.append((addonName, errorMsg))
                         return False

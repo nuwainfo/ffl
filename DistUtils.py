@@ -25,22 +25,33 @@ import platform
 import re
 import shutil
 import struct
+import subprocess
 import sys
 import zlib
 
 from pathlib import Path
 from typing import Optional, Tuple
 
+from bases.Kernel import PUBLIC_VERSION
+
 # Create logger for this module
 logger = logging.getLogger(__name__)
-
-from bases.Kernel import PUBLIC_VERSION
 
 excludedPackages = ['numpy.libs', "av", "av.lib", 'mbedtls']
 if sys.platform == 'win32':
     excludedPackages.append('lief')
 
-hiddenImports = ['addons.auth.Cryptography']
+hiddenImports = ['bases.crypto.Cryptography']
+
+packageData = [
+    ('static/Logo.ico', 'static'),
+    ('static/Logo.png', 'static'),
+    ('static/program_icon.png', 'static'), # gooey program icon
+    ('static/index.html', 'static'),
+    ('static/assets/mitm.html', 'static/assets'),
+    ('static/assets/sw.js', 'static/assets'),
+    ('.secret', '.'),
+]
 
 featuresSupported = True
 
@@ -57,7 +68,7 @@ if featuresSupported:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-    class PayloadWriter(PayloadProcessor):
+    class PayloadWriter(PayloadProcessor): # pylint: disable=function-redefined
         """Handles embedding payloads into binary files"""
 
         def detectBinaryFormat(self, filePath: str) -> str:
@@ -284,13 +295,14 @@ if featuresSupported:
             self.log(f"Output written: {outputPath} (+{outputSize - inputSize} bytes)")
 
 
-def getVersionInfo():
+def getVersionInfo(full=True, useSVNRevision=True):
     """
     Format version from Settings.PUBLIC_VERSION for both Windows and Linux builds.
+    Reads build number from svn revision as the 4th version component.
 
     Returns:
         tuple: (formattedVersion, serialNumber)
-            - formattedVersion: Version in 4-digit format (e.g., "3.1.0.0")
+            - formattedVersion: Version in 4-digit format (e.g., "3.1.0.17712")
             - serialNumber: FREE_SERIAL_NUMBER
     """
     # Get the version directly from Settings
@@ -298,9 +310,40 @@ def getVersionInfo():
 
     # Format version to 4-digit format (e.g., "3.1" to "3.1.0.0")
     versionParts = publicVersion.split('.')
-    while len(versionParts) < 4:
+    while len(versionParts) < 3:
         versionParts.append('0')
-    formattedVersion = '.'.join(versionParts)
+
+    if full:
+        revision = 0
+
+        if useSVNRevision:
+            try:
+                # Note: Even you create a new commit, also need to svn update to update revision number.
+                revision = int(subprocess.getoutput("svn info --show-item revision"))
+            except Exception as e:
+                raise RuntimeError("Can't execute 'svn info --show-item revision'")
+
+        buildNumber = '0'
+        if not revision:
+            # Read build number from dist/Release.txt as the 4th component
+            releaseFilePath = os.path.join(os.path.dirname(__file__), 'dist', 'RELEASE.txt')
+
+            if os.path.exists(releaseFilePath):
+                try:
+                    with open(releaseFilePath, 'r', encoding='utf-8') as f:
+                        buildNumber = f.read().strip()
+                except Exception as e:
+                    logger.warning(f"Failed to read build number from {releaseFilePath}: {e}")
+        else:
+            buildNumber = str(revision)
+
+        # Ensure we have exactly 4 version components
+        if len(versionParts) < 4:
+            versionParts.append(buildNumber)
+        else:
+            versionParts[3] = buildNumber
+
+    formattedVersion = '.'.join(versionParts[:4])
 
     return formattedVersion, FREE_SERIAL_NUMBER
 
@@ -438,6 +481,20 @@ def compressPyappEnv(targetDir):
     shutil.rmtree(targetPath)
 
 
+def handleInfoVersionCommand(output=None, short=False):
+    formattedVersion, serialNumber = getVersionInfo()
+
+    if short:
+        print(PUBLIC_VERSION)
+        return
+
+    print(f"Version: {formattedVersion}")
+
+    if output:
+        with open(output, 'w', encoding="utf-8") as f:
+            f.write(f"version='{PUBLIC_VERSION}'")
+
+
 class CLIHandler:
     """Command line interface handler"""
 
@@ -480,12 +537,20 @@ class CLIHandler:
             cleanPyappEnv(targetDir=args.target_dir)
         elif args.pyappCommand == "compress":
             compressPyappEnv(targetDir=args.targetDir)
+        else:
+            raise ValueError("Unsupported command")
+
+    def handleInfoCommand(self, args: argparse.Namespace) -> None:
+        if args.infoCommand == "version":
+            handleInfoVersionCommand(output=args.output, short=args.short)
+        else:
+            raise ValueError("Unsupported command")
 
 
 def createArgumentParser() -> argparse.ArgumentParser:
     """Create and configure argument parser"""
 
-    formattedVersion, serialNumber = getVersionInfo()
+    formattedVersion, serialNumber = getVersionInfo(full=False) # Use only 3 digits as secret.
     secret = f'{serialNumber}:{formattedVersion}'
 
     parser = argparse.ArgumentParser(
@@ -517,7 +582,7 @@ def createArgumentParser() -> argparse.ArgumentParser:
     readParser.add_argument("--secret", default=secret, help=f"Decryption secret (default: {secret})")
     readParser.add_argument("-o", "--output", help="Output file (default: stdout)")
 
-    # === 新增的命令 ===
+    # Pyapp command
     pyappParser = subparsers.add_parser("pyapp", help="PyApp environment operations")
     pyappSubparsers = pyappParser.add_subparsers(dest="pyappCommand", required=True)
 
@@ -528,6 +593,15 @@ def createArgumentParser() -> argparse.ArgumentParser:
     # pyapp compress
     pyappSubparsers.add_parser("compress", help="Compress python env folder") \
         .add_argument("targetDir", help="Folder to compress")
+
+    # Info command
+    infoParser = subparsers.add_parser("info", help="Information get/set related operations")
+    infoSubparsers = infoParser.add_subparsers(dest="infoCommand", required=True)
+
+    # info version
+    versionParser = infoSubparsers.add_parser("version", help="Get current client version")
+    versionParser.add_argument("--output", help="Output server required version.txt")
+    versionParser.add_argument("--short", action="store_true", help="Output only version number")
 
     return parser
 
@@ -544,6 +618,8 @@ def main() -> None:
         cliHandler.handleReadCommand(args)
     elif args.command == "pyapp":
         cliHandler.handlePyappCommand(args)
+    elif args.command == "info":
+        cliHandler.handleInfoCommand(args)
     else:
         parser.print_help()
         sys.exit(1)

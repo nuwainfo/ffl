@@ -44,14 +44,26 @@ function registerWorker() {
 
     scope = swReg.scope
 
-    return (sw = swReg.active) || new Promise(resolve => {
-      swRegTmp.addEventListener('statechange', fn = () => {
+    if (swReg.active) {
+      sw = swReg.active
+      return
+    }
+
+    if (!swRegTmp) {
+      return navigator.serviceWorker.ready.then(readyReg => {
+        sw = readyReg.active
+      })
+    }
+
+    return new Promise(resolve => {
+      const onStateChange = () => {
         if (swRegTmp.state === 'activated') {
-          swRegTmp.removeEventListener('statechange', fn)
+          swRegTmp.removeEventListener('statechange', onStateChange)
           sw = swReg.active
           resolve()
         }
-      })
+      }
+      swRegTmp.addEventListener('statechange', onStateChange)
     })
   })
 }

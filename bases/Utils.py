@@ -30,7 +30,7 @@ import chardet
 from itertools import zip_longest
 
 from bases.Kernel import getLogger, PUBLIC_VERSION
-from bases.Settings import LANGUAGES, SUPPORT_URL, SettingsGetter
+from bases.Settings import LANGUAGES, SettingsGetter
 
 ONE_KB = bitmath.KiB(1).bytes
 ONE_MB = bitmath.MiB(1).bytes
@@ -109,6 +109,7 @@ def _unicode(s, strict=False, encodings=None, throw=True, confidence=0.8):
         if throw and error:
             raise error
 
+    return None
 
 def copy2Clipboard(text):
     if not text:
@@ -146,7 +147,13 @@ def copy2Clipboard(text):
 # https://github.com/chriskiehl/Gooey/issues/701
 # flush is required if this is in .exe file.
 def flushPrint(text):
-    print(text, flush=True)
+    try:
+        print(text, flush=True)
+    except UnicodeEncodeError as e:
+        # Fallback for terminals that don't support certain characters (e.g., emojis on Windows cp950)
+        # Replace unsupported characters with '?' instead of crashing
+        logger.debug(f"UnicodeEncodeError during print, using fallback encoding: {e}")
+        print(text.encode(sys.stdout.encoding, errors='replace').decode(sys.stdout.encoding), flush=True)
 
 
 def formatSize(size, decimal=None, plural=None):
@@ -217,22 +224,31 @@ def getAvailablePort(port=None):
 
 
 def sendException(logger, e, action=None, errorPrefix="Oops, something went wrong"):
-    flushPrint(f'{errorPrefix}: {e}')
+    if e and errorPrefix:
+        flushPrint(f'{errorPrefix}: {e}')
+    elif e:
+        flushPrint(f'{e}')
+    else: # only errorPrefix without e?
+        logger.error(f'Incorrect argument: {errorPrefix=} {e=}')
+
     if action:
         flushPrint(action)
     else:
         flushPrint('Please try again or try later.')
 
-    flushPrint(f'\nIf you still get the same problem, please contact us at {SUPPORT_URL}.')
+    # Get dynamic support URL based on GUI support and user level
+    settingsGetter = SettingsGetter.getInstance()
+    supportURL = settingsGetter.getSupportURL()
+    flushPrint(f'\nIf you still get the same problem, please contact us at {supportURL}.')
     flushPrint('We will fix the problem as soon as possible.\n')
 
     logger.exception(e)
 
-    if os.getenv('RAISE_EXCEPTION', 'False') == 'True':
+    if os.getenv('RAISE_EXCEPTION', 'False') == 'True' and isinstance(e, BaseException):
         raise e
 
 
-def getJSONWriter(args, fileSize, link, tunnelType=None):
+def getJSONWriter(args, fileSize, link, tunnelType=None, e2ee=False):
     settingsGetter = SettingsGetter.getInstance()
     featureManager = settingsGetter.getFeatureManager()
     user = featureManager.user
@@ -244,6 +260,7 @@ def getJSONWriter(args, fileSize, link, tunnelType=None):
             "upload_mode": "server" if args.upload else "p2p",
             "tunnel_type": tunnelType or "default",
             "link": link,
+            "e2ee": e2ee,
             "user": {
                 "user": user.name,
                 "email": user.email,

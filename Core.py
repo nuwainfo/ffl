@@ -21,6 +21,7 @@ import platform
 import sys
 import os
 import argparse
+import signal
 
 if 'Cosmopolitan' in platform.version():
     if sys.prefix not in sys.path:
@@ -40,17 +41,39 @@ import certifi
 from bases.Kernel import UIDGenerator, getLogger, PUBLIC_VERSION
 from bases.Server import createServer, DownloadHandler
 from bases.Tunnel import TunnelRunner
-from bases.WebRTC import WebRTCManager
+from bases.WebRTC import WebRTCManager, WebRTCDownloader
 from bases.Settings import (DEFAULT_STATIC_ROOT, ExecutionMode, SettingsGetter)
-from bases.CLI import configureCLIParser, configureLogging, processArgumentsAndCommands, showVersion
+from bases.CLI import configureCLIParser, configureLogging, processArgumentsAndCommands, showVersion, loadEnvFile
 from bases.Utils import (
     copy2Clipboard, flushPrint, getLogger, getAvailablePort, sendException, getJSONWriter, validateCompatibleWithServer
 )
+from bases.Reader import SourceReader
 
 logger = getLogger(__name__)
 
 
+def setupGracefulShutdown():
+    """Setup signal handlers for graceful shutdown on multiple Ctrl+C"""
+    context = {'shutdownInProgress': False}
+
+    def signalHandler(signum, frame):
+        if context['shutdownInProgress']:
+            # Second Ctrl+C - force immediate exit without cleanup messages
+            os._exit(0)
+        else:
+            # First Ctrl+C - set flag and raise KeyboardInterrupt normally
+            context['shutdownInProgress'] = True
+            raise KeyboardInterrupt()
+
+    # Register signal handler for SIGINT (Ctrl+C)
+    signal.signal(signal.SIGINT, signalHandler)
+
+
 def setupSettings(logger):
+
+    # Load .env file early (before any configuration or addon loading)
+    loadEnvFile()
+
     exeMode = ExecutionMode.PURE_PYTHON
     baseDir = os.path.dirname(__file__)
     staticRoot = DEFAULT_STATIC_ROOT
@@ -69,7 +92,7 @@ def setupSettings(logger):
             baseDir = '/zip'
     else:
         exeMode = ExecutionMode.PURE_PYTHON
-    
+
     if platform.system().lower() != 'windows':
         os.environ["SSL_CERT_FILE"] = certifi.where()
 
@@ -86,6 +109,9 @@ def setupSettings(logger):
 # Initialize SettingsGetter
 settingsGetter = setupSettings(logger)
 featureManager = settingsGetter.getFeatureManager()
+
+# Setup graceful shutdown handling
+setupGracefulShutdown()
 
 
 def isCLIMode():
@@ -106,11 +132,8 @@ def processFileSharing(args):
         flushPrint(f'"{args.file}" does not exist!')
         return 1
 
-    if os.path.isdir(args.file):
-        flushPrint(f'"{args.file}" is a folder, please choose a file.')
-        return 1
-
     try:
+
         if args.upload:
             if not settingsGetter.hasUploadSupport():
                 flushPrint('Error: Upload functionality requires Upload addon (addons/Upload.py)')
@@ -127,8 +150,14 @@ def processFileSharing(args):
             if not isCLIMode():
                 flushPrint('If a firewall notification appears, please allow the application to connect.\n')
 
-            size = os.path.getsize(args.file)
+            # Get size using Reader abstraction (supports both files and folders)
+            reader = SourceReader.build(args.file)
+            size = reader.size if reader.size is not None else 0
             directory, file = os.path.split(args.file)
+
+            # Hint user about folder content change detection for strict mode
+            if os.path.isdir(args.file):
+                flushPrint('📁 Sharing folder as ZIP - please keep folder contents unchanged during transfer\n')
 
             # Get UIDGenerator from FeatureManager
             uidGeneratorClass = UIDGenerator
@@ -139,27 +168,111 @@ def processFileSharing(args):
             generateUid = lambda: uidGenerator.generate()
             uid = generateUid()
 
-            def doUpload(uploadMethod, uid, link=None):
-                uploadResult = None
-                try:
-                    response = uploadMethod.tell(uid, args.file, args.upload, link=link)
-                    if response['success']:
-                        uploadResult = uploadMethod.execute(response, args.file)
-                    else:
-                        message = response['message']
-                        sendException(logger, message, errorPrefix="Server temporarily cannot process this file")
-                except Exception as e:
-                    sendException(logger, e, errorPrefix="Server temporarily cannot process this file")
-                    raise e
-                return uploadResult
+            # Show E2EE status if enabled (first line, before establishing tunnel)
+            e2eeEnabled = args.e2ee if hasattr(args, 'e2ee') else False
+            if e2eeEnabled:
+                flushPrint('🔐 End-to-end encryption enabled\n')
 
             uploadMethod = None
             if args.upload:
-                from addons.Upload import createUploadStrategy, UploadPredicate
+                from addons.Upload import (
+                    createUploadStrategy, UploadPredicate, UploadResult, PauseUploadError, ResumeNotSupportedError,
+                    PauseNotSupportedError, E2EENotSupportedError, UploadParameterMismatchError, ResumeValidationError
+                )
+
+                # Inform GUI users about upload resumability
+                if not isCLIMode():
+                    flushPrint('You can stop the upload at any time and resume it later.\n')
+
+                class UploadAbortResult(UploadResult):
+
+                    def __init__(self, exitCode=0, *args, **kws):
+                        super().__init__(*args, **kws)
+                        self.exitCode = exitCode
+
+                def doUpload(uploadMethod, uid, link=None, resume=False):
+                    uploadResult = None
+                    try:
+                        if resume:
+                            # Resume mode: use resume() instead of tell()
+                            response = uploadMethod.resume(args.file, args.upload, reader=reader)
+                        else:
+                            # Normal mode: pass reader to tell() to avoid rebuilding
+                            response = uploadMethod.tell(uid, args.file, args.upload, link=link, reader=reader)
+
+                        if response['success']:
+                            # Pass pause percentage if specified
+                            pausePercentage = args.pause
+                            uploadResult = uploadMethod.execute(response, args.file, pausePercentage=pausePercentage)
+                        else:
+                            message = response['message']
+                            sendException(logger, message, errorPrefix="Server temporarily cannot process this file")
+                    except PauseUploadError as e:
+                        # Handle pause like Ctrl+C - print message and re-raise for elegant exit
+                        flushPrint(
+                            f"Upload paused at {e.percentage:.1f}% ({e.completedChunks}/{e.totalChunks} "
+                            f"chunks completed)"
+                        )
+                        flushPrint('Use --resume to continue upload')
+                        return UploadAbortResult(exitCode=0)
+                    except ResumeNotSupportedError as e:
+                        # Handle resume not supported by upload strategy (e.g., PullUpload)
+                        sendException(
+                            logger, (
+                                'Resume is only available for direct upload mode (without external tunnels).\n'
+                                'Please restart the upload without --resume to upload the file normally.'
+                            ),
+                            errorPrefix=None
+                        )
+                        return UploadAbortResult(exitCode=1)
+                    except PauseNotSupportedError as e:
+                        # Handle pause not supported by upload strategy (e.g., PullUpload)
+                        sendException(
+                            logger, (
+                                'Pause functionality is only available for direct upload mode '
+                                '(without external tunnels).\n'
+                                'Please restart the upload without --pause to upload the file normally.'
+                            ),
+                            errorPrefix=None
+                        )
+                        return UploadAbortResult(exitCode=1)
+                    except E2EENotSupportedError as e:
+                        # Handle E2EE not supported by upload strategy (e.g., PullUpload)
+                        sendException(
+                            logger, (
+                                'End-to-end encryption is only available for direct upload mode '
+                                '(without external tunnels).\n'
+                                'Please restart the upload without --e2ee to upload the file normally.'
+                            ),
+                            errorPrefix=None
+                        )
+                        return UploadAbortResult(exitCode=1)
+                    except UploadParameterMismatchError as e:
+                        # Handle parameter mismatch during resume
+                        sendException(
+                            logger, (
+                                f'Cannot resume: {e.parameter} mismatch.\n'
+                                f'Original upload used "{e.originalValue}" but "{e.requestedValue}" was requested.\n'
+                                'Please use the same parameters as the original upload.'
+                            ),
+                            errorPrefix=None
+                        )
+                        return UploadAbortResult(exitCode=1)
+                    except ResumeValidationError as e:
+                        # Handle resume validation failures (file changed, expired, corrupted)
+                        sendException(logger, e, action=e.action, errorPrefix=None)
+                        return UploadAbortResult(exitCode=1)
+                    except KeyboardInterrupt:
+                        raise
+                    except Exception as e:
+                        sendException(logger, e, errorPrefix="Server temporarily cannot process this file")
+                        return UploadAbortResult(exitCode=1)
+
+                    return uploadResult
 
                 # Create upload strategy (only if Upload addon is available)
                 user = featureManager.user
-                uploadMethod = createUploadStrategy(user.serialNumber)
+                uploadMethod = createUploadStrategy(user.serialNumber, e2eeEnabled=e2eeEnabled)
 
                 # Check upload predicate
                 predicateResult = uploadMethod.predicate(file, size, user.points, args.upload)
@@ -179,12 +292,15 @@ def processFileSharing(args):
                     break
 
                 # Try upload with current strategy
-                uploadResult = doUpload(uploadMethod, uid)
+                uploadResult = doUpload(uploadMethod, uid, resume=args.resume)
+
+                if uploadResult and isinstance(uploadResult, UploadAbortResult):
+                    return uploadResult.exitCode
 
                 if uploadResult and uploadResult.success:
                     uploadMethod.publish(uploadResult)
 
-                    writeJSON = getJSONWriter(args, size, uploadResult.link)
+                    writeJSON = getJSONWriter(args, size, uploadResult.link, e2ee=e2eeEnabled)
                     if writeJSON:
                         writeJSON()
                     return 0
@@ -193,7 +309,9 @@ def processFileSharing(args):
                     uploadMethod = uploadMethod.createFallbackStrategy()
                     noRetry = os.environ.get('UPLOAD_NO_RETRY') == 'True'
 
-                    if uploadMethod and not noRetry:
+                    # Resume can't retry, it only can be done with original upload method.
+                    # TODO: We can design a ResumeUploadMismatchError to make sure using right method to resume.
+                    if uploadMethod and not noRetry and not args.resume:
                         # Regenerate UID to retry.
                         uid = generateUid()
 
@@ -203,7 +321,7 @@ def processFileSharing(args):
                         return 1
 
             # If we reach here, we need to start local server (either P2P or Pull upload)
-            userPort = getattr(args, 'port', None)
+            userPort = args.port
             port = getAvailablePort(userPort)
 
             # Get enhanced TunnelRunner from FeatureManager if Features or Tunnels addon is available
@@ -230,7 +348,11 @@ def processFileSharing(args):
 
                 # Determine handler class and setup link
                 if uploadMethod:
-                    uploadResult = doUpload(uploadMethod, uid, link)
+                    uploadResult = doUpload(uploadMethod, uid, link, resume=args.resume)
+
+                    if uploadResult and isinstance(uploadResult, UploadAbortResult):
+                        return uploadResult.exitCode
+
                     if uploadResult and uploadResult.success:
                         handlerClass = uploadResult.requestHandler
                     else:
@@ -246,7 +368,7 @@ def processFileSharing(args):
                     copy2Clipboard(f'{link}')
 
                     # Show auth info if enabled (password enables auth)
-                    authPassword = getattr(args, 'authPassword', None)
+                    authPassword = args.authPassword
                     if authPassword:
                         authUser = args.authUser
                         flushPrint(f'Authentication enabled - Username: {authUser}\n')
@@ -257,14 +379,14 @@ def processFileSharing(args):
                     else:
                         flushPrint('')
 
-                    writeJSON = getJSONWriter(args, size, link, tunnelType)
+                    writeJSON = getJSONWriter(args, size, link, tunnelType, e2ee=e2eeEnabled)
                     if writeJSON:
                         writeJSON() # P2P mode, write before start server.
 
                 try:
-                    # Set defaults for maxDownloads and timeout if not present (GUI mode)
-                    maxDownloads = getattr(args, 'maxDownloads', 0)
-                    timeout = getattr(args, 'timeout', 0)
+                    # Get maxDownloads and timeout values
+                    maxDownloads = args.maxDownloads
+                    timeout = args.timeout
 
                     # Get enhanced handlers from FeatureManager if Features addon is available
                     webRTCManagerClass = WebRTCManager
@@ -273,11 +395,11 @@ def processFileSharing(args):
                         webRTCManagerClass = featureManager.getWebRTCManagerClass(webRTCManagerClass)
 
                     # Get auth credentials from args - password enables auth
-                    authPassword = getattr(args, 'authPassword', None)
+                    authPassword = args.authPassword
                     authUser = args.authUser if authPassword else None
 
                     # Get force-relay setting from args
-                    enableWebRTC = not getattr(args, 'forceRelay', False)
+                    enableWebRTC = not args.forceRelay
 
                     # Check --force-relay feature restriction for free users with default tunnel
                     if not enableWebRTC:
@@ -296,7 +418,7 @@ def processFileSharing(args):
                     # Create server with enhanced handler and WebRTC manager
                     server = createServer(
                         port, directory, file, uid, domain, handlerClass, webRTCManagerClass, maxDownloads, timeout,
-                        authUser, authPassword, enableWebRTC
+                        authUser, authPassword, enableWebRTC, e2eeEnabled
                     )
                     server.start()
                 except KeyboardInterrupt:
@@ -310,7 +432,7 @@ def processFileSharing(args):
                 if uploadMethod and uploadResult and uploadResult.success:
                     uploadMethod.publish(uploadResult)
 
-                    writeJSON = getJSONWriter(args, size, uploadResult.link, tunnelType)
+                    writeJSON = getJSONWriter(args, size, uploadResult.link, tunnelType, e2ee=e2eeEnabled)
                     if writeJSON:
                         writeJSON()
                     return 0
@@ -325,6 +447,52 @@ def processFileSharing(args):
 
     # Default success return for normal P2P completion
     return 0
+
+
+def processDownload(args):
+    """
+    Process download command using WebRTCDownloader
+
+    Returns:
+        int: Exit code (0 for success, 1 for error)
+    """
+    downloader = None
+    try:
+        # Setup credentials if provided
+        credentials = None
+        if args.authPassword:
+            credentials = (args.authUser, args.authPassword)
+
+        # Create downloader and download file
+        downloader = WebRTCDownloader(loggerCallback=flushPrint)
+        resume = args.resume if hasattr(args, 'resume') else False
+        outputPath = downloader.downloadFile(args.url, args.output, credentials, resume=resume)
+
+        # Don't print success message - progress bar already shows completion
+        logger.debug(f"File downloaded successfully: {outputPath}")
+        # Print file path for test framework to parse
+        flushPrint(f"Downloaded: {outputPath}")
+        return 0
+
+    except Exception as e:
+        # Check if this is a FolderChangedException
+        from bases.Reader import FolderChangedException
+        if isinstance(e, FolderChangedException):
+            # Add user-facing guidance to server error message
+            serverMsg = str(e)
+            clientMsg = (
+                f"{serverMsg}\n\nThe shared folder contents changed during the transfer.\n"
+                f"Please contact the person who shared the file and ask them to share it again."
+            )
+            sendException(logger, clientMsg)
+            return 1
+        else:
+            sendException(logger, f"Download failed: {e}")
+            return 1
+    finally:
+        # Clean up downloader resources
+        if downloader:
+            downloader.close()
 
 
 # CLI mode implementation
@@ -361,10 +529,17 @@ def runCLIMain():
         parser.print_help()
         return 0
 
-    # Phase 2: Auto-insert 'share' if first non-global token isn't a registered subcommand
+    # Phase 2: Auto-insert 'share' or 'download' based on first argument
     if rest[0] not in commandNames:
         prefixLen = len(argv) - len(rest) # Length of global arguments prefix
-        argv = argv[:prefixLen] + ['share'] + rest
+
+        # Check if first argument is a URL (FastFileLink or generic HTTP URL)
+        if rest[0].startswith('https://') or rest[0].startswith('http://'):
+            # Auto-insert 'download' command for any HTTP(S) URL
+            argv = argv[:prefixLen] + ['download'] + rest
+        else:
+            # Auto-insert 'share' command for file paths (existing behavior)
+            argv = argv[:prefixLen] + ['share'] + rest
 
     # Phase 3: Final parsing with subcommand determined
     try:
@@ -377,8 +552,12 @@ def runCLIMain():
         parser.print_help()
         return 0
 
+    # Handle download command
+    if args.command == 'download':
+        return processDownload(args)
+
     # Special validation for share command - must have file argument
-    if args.command == 'share' and (not hasattr(args, 'file') or args.file is None):
+    if args.command == 'share' and args.file is None:
         parser.print_help()
         return 0
 
