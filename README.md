@@ -1,42 +1,65 @@
 # FastFileLink CLI (ffl)
 
+[![License](https://img.shields.io/github/license/nuwainfo/ffl?style=flat-square)](./LICENSE)
+[![Release](https://img.shields.io/github/v/release/nuwainfo/ffl?style=flat-square)](https://github.com/nuwainfo/ffl/releases/latest)
+
 **FastFileLink CLI (ffl)** is an [*Actually Portable*](https://justine.lol/ape.html) command-line tool that turns any file or folder into a secure HTTPS link, allowing two computers to simply and securely transfer files using real peer-to-peer (WebRTC) connections.
 
-AFAIK, ffl is the only CLI file-transfer tool that does all of the following:
+AFAIK, `ffl` is the only CLI file-transfer tool that does all of the following:
 
 - 📡 **Instant P2P file sharing using WebRTC**
 - 🔁 **Automatic fallback to secure relay tunnels** when NAT traversal fails — guarantees delivery
-- 🧑‍💻 **Recipient doesn’t need to install anything** — they can download via browser, `curl`, etc. (P2P if using browser or `ffl` on both sides)
+- 🧑‍💻 **Recipient doesn’t need to install anything** — they can download via browser, `curl`, `ffl`, etc.
 - 🔐 **End-to-end encryption (AES-256-GCM)** — relay/storage is zero-knowledge
 - 📁 **Folder & multi-file support** — streaming, no need to zip/encrypt first, works even for TB-scale data
 - ⏯️ **Resume interrupted transfers**
 - 🧱 **Actually Portable Executable (APE)** + native builds for **Windows, Linux, macOS**
-- 🧰 **Built-in & pluggable tunnels** (Cloudflare, ngrok, localtunnel, ... etc.) — can also go through a proxy like Tor
-- ☁️ **Optional temporary upload to server** (licensed feature) when both sides can’t be online at the same time
+- 🧰 **Built-in & pluggable tunnels** (Cloudflare, ngrok, localtunnel, etc.) — supports proxies like Tor
+- ☁️ **Optional temporary upload to server** (licensed feature) when both sides can’t be online simultaneously
 
-👉 Official site: <https://fastfilelink.com>  
-👉 Technical details: [*Technical FAQ*](https://fastfilelink.com/static/blog/technical_faqs.html)
+👉 **Official site:** <https://fastfilelink.com>  
+👉 **Technical details:** [*Technical FAQ*](https://fastfilelink.com/static/blog/technical_faqs.html)
+
+This simple demo shows how I sent `ffl.com` from Windows to my phone and then transferred photos back.
+
+[Demo GIF will be placed here]
+
+Workflows like this also pair naturally with tools such as [llamafile](https://github.com/mozilla-ai/llamafile).
+
+---
+
+## Table of Contents
+
+- [Installation](#installation)
+- [Why APE and Native?](#why-ape-and-native-executables-both-exist)
+- [Quickstart](#quickstart)
+- [CLI Reference](#cli-reference-short-version)
+- [Features & Advanced Usage](#features--advanced-usage)
+  - [1. E2EE & Authentication](#1-end-to-end-encryption--authentication)
+  - [2. Automation Tips](#2-automation-tips)
+  - [3. Using Tunnels](#3-using-tunnels)
+  - [4. Downloading with ffl](#4-downloading-with-ffl-wget-replacement)
+  - [5. Server Upload (Licensed)](#5-upload-and-share-via-server-licensed-feature)
+- [How it Works & Motivation](#how-it-works--motivation)
+- [Open Source & Contributing](#open-source--contributing)
+- [Acknowledgements](#acknowledgements)
 
 ---
 
 ## Installation
 
-### Native installs
+### Option 1: Native Installs
 
-#### Linux / macOS
-
+**Linux / macOS**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl/refs/heads/main/install.sh | bash
 ```
-
-Install for current user only:
-
+*Install for current user only:*
 ```bash
 FFL_PREFIX=$HOME/.local curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl/refs/heads/main/install.sh | bash
 ```
 
-#### Windows (PowerShell)
-
+**Windows (PowerShell)**
 ```powershell
 iwr -useb https://raw.githubusercontent.com/nuwainfo/ffl/refs/heads/main/install.ps1 | iex
 ```
@@ -47,26 +70,24 @@ After installation, you should have `ffl` on your `$PATH`:
 ffl --version
 ```
 
-### Get the APE (Actually Portable Executable)
+### Option 2: The APE (Actually Portable Executable)
 
-If you prefer a single-file binary that runs almost anywhere, use the APE build:
+If you prefer a single-file binary that runs almost anywhere with zero dependencies:
 
-#### Linux / macOS
-
+**Linux / macOS**
 ```bash
 curl -fL https://github.com/nuwainfo/ffl/releases/latest/download/ffl.com -o ffl.com 
 chmod +x ffl.com
+# You can now run it directly: ./ffl.com
 ```
 
-#### Windows (PowerShell)
-
+**Windows (CMD / PowerShell)**
 ```powershell
-curl "https://github.com/nuwainfo/ffl/releases/latest/download/ffl.com" -o "ffl.com"
+curl.exe "https://github.com/nuwainfo/ffl/releases/latest/download/ffl.com" -o "ffl.com"
+# Run as: .\ffl.com
 ```
 
----
-
-### Build from source
+### Option 3: Build from source
 
 If you prefer to build from source (requires **conda** and **cargo**):
 
@@ -97,10 +118,11 @@ So ffl also ships **native builds**:
 
 If you just want “runs everywhere with zero setup”, use **APE**.  
 If you care about maximum performance and smaller size on a specific platform, use **native**.
+Don't worry too much about speed, in most cases, APE and native builds run almost equally fast. The main difference is binary size and platform-specific polish.
 
 ## Quickstart
 
-### 🔁 Share a file or folder (P2P first, tunnel as fallback)
+### 🔁 Share a file or folder
 
 ```bash
 ffl myfile.zip
@@ -109,18 +131,12 @@ ffl /path/to/folder
 ```
 
 You’ll get a shareable link like:
+`https://4567.81.fastfilelink.com/abcd1234`
 
-```text
-https://4567.81.fastfilelink.com/abcd1234
-```
+* **Recipient:** Can download via browser or CLI (e.g., `curl -o file.zip <URL>`).
+* **Method:** Prefers **WebRTC P2P**. If P2P fails, it automatically falls back to HTTPS relay via a tunnel (third‑party or our free unlimited tunnel).
 
-- Recipient can download via browser or CLI, e.g.: ```curl -o file.zip https://4567.81.fastfilelink.com/abcd1234```
-- Transfer prefers **WebRTC P2P** when possible  
-- If P2P fails, it automatically falls back to HTTPS relay via a tunnel (third-party or our free unlimited tunnel)
-
-> Note: CLI tools like `curl` / `wget` use HTTPS only. If you also want P2P on the receiving side using CLI, use `ffl` to download.
-
----
+> **Note:** Standard CLI tools like `curl` or `wget` use HTTPS only (Relay mode). If you want P2P speed on the receiving CLI, use `ffl` to download.
 
 ### 🔁 Receive using `ffl`
 
@@ -128,19 +144,14 @@ https://4567.81.fastfilelink.com/abcd1234
 ffl https://4567.81.fastfilelink.com/abcd1234
 ```
 
-- Tries **WebRTC P2P** first  
-- If NAT traversal fails, automatically resumes via HTTPS relay  
+* Tries **WebRTC P2P** first.
+* If NAT traversal fails, automatically resumes via HTTPS relay.
 
 ---
 
 ## CLI Reference (short version)
 
-For full help:
-
-```bash
-ffl --help
-ffl download --help
-```
+For full help: `ffl --help` or `ffl download --help`
 
 The core options for sharing:
 
@@ -149,12 +160,10 @@ ffl [options] [FILE_OR_FOLDER]
 
 Options (most useful ones):
 
-  --upload {3 hours,6 hours,12 hours,24 hours,72 hours}
-      Upload to FastFileLink server and share via temporary storage
-  --resume
-      Resume a previously interrupted upload
-  --pause PERCENTAGE
-      Pause upload at specific percentage (1–99, requires --upload)
+  --log-level LEVEL_OR_FILE
+                        Set logging level (DEBUG, INFO, WARNING, ERROR) or path to logging config
+                        JSON file (default: WARNING)
+  --enable-reporting    Enable error reporting to FastFileLink server for exception diagnostics
   --max-downloads N
       Auto-shutdown after N downloads (P2P mode). 0 = unlimited
   --timeout SECONDS
@@ -168,23 +177,41 @@ Options (most useful ones):
       Force relayed P2P mode, disable direct WebRTC
   --e2ee
       Enable end-to-end encryption
-  --alias ALIAS
-      Use a custom alias as UID in the link
   --preferred-tunnel {cloudflare,default,...}
       Set preferred tunnel for future runs
+  --upload {3 hours,6 hours,12 hours,24 hours,72 hours, ...}
+      Upload to FastFileLink server and share via temporary storage
+  --resume
+      Resume a previously interrupted upload
+  --pause PERCENTAGE
+      Pause upload at specific percentage (1–99, requires --upload)            
   --json FILE
       Output link and settings to a JSON file
 ```
 
-Download subcommand (when explicitly using `download`):
+Download subcommand: (invoked explicitly with `download`, or implicitly when the argument is a URL)
 
-```bash
-ffl download --help
+```text
+  --log-level LEVEL_OR_FILE
+                        Set logging level (DEBUG, INFO, WARNING, ERROR) or path to logging config
+                        JSON file (default: WARNING)
+  --enable-reporting    Enable error reporting to FastFileLink server for exception diagnostics
+  --output PATH, -o PATH
+                        Output file path (default: use filename from server)
+  --resume              Resume incomplete download (like curl -C), otherwise overwrite existing file
+  --auth-user USERNAME  Username for HTTP Basic Authentication (default: 'ffl')
+  --auth-password PASSWORD
+                        Password for HTTP Basic Authentication
 ```
 
-## 1. End-to-end encryption & Authentication
+## Features & Advanced Usage
 
-Enable end-to-end encryption:
+### 1. 🔒 End-to-end Encryption & Authentication
+
+Think of the tunnel as a “dumb pipe”: it just forwards traffic without keeping logs or peeking inside.  
+Enable E2EE if you want an extra layer of assurance — especially useful when falling back to relay mode  (i.e. using a relay tunnel) or when using the optional server upload feature.
+
+Enable E2EE so even the relay server cannot see your data:
 
 ```bash
 ffl myfile.bin --e2ee
@@ -205,7 +232,7 @@ Press Ctrl+C to terminate the program when done.
 ```
 
 In this mode, every chunk is encrypted with a unique IV, tag and AAD.  
-Even though WebRTC already uses DTLS, if ffl falls back to HTTPS relay, the tunnel server **still cannot decrypt** the data, because:
+Even though WebRTC already uses DTLS, if `ffl` falls back to HTTPS relay, the tunnel server **still cannot decrypt** the data, because:
 
 - Key exchange happens between peers  
 - Relay only sees encrypted chunks (zero-knowledge)
@@ -220,10 +247,10 @@ This prevents anonymous downloads even if the link leaks.
 
 ---
 
-## 2. Automation tips
+### 2. 🤖 Automation Tips
 
 ffl is designed for many downloaders; you can always stop sharing with `Ctrl+C`.  
-But for automation / scripting, these flags help:
+But for automation / CI/CD or scripts, these flags help:
 
 ```bash
 ffl myfile.bin --max-downloads 1
@@ -234,14 +261,15 @@ Generate JSON for scripts:
 
 ```bash
 ffl myfile.bin --json ffl.json --max-downloads 1 &
-jq -r .link ffl.json
+LINK=$(jq -r .link ffl.json)
+echo "Download link: $LINK"
 ```
 
 This is useful in CI/CD, server-to-server workflows, and custom tooling.
 
-## 3. 🚀 Using Tunnels
+### 3. 🚀 Using Tunnels
 
-ffl supports various tunnels to help you transfer files efficiently through different network environments. By default, ffl comes with a built-in tunnel called default.
+`ffl` supports various tunnels for NAT traversal. By default, `ffl` comes with a built-in tunnel called default.
 
 - **🌐 Supported Tunnels**
   
@@ -348,11 +376,11 @@ ffl supports various tunnels to help you transfer files efficiently through diff
   
 - **⚠️ Performance Note**
 
-  ffl’s default tunnel is maintained to be as fast, stable, and unrestricted as possible. However, during heavy usage by multiple users, you may still experience lag or slowdowns.
+  `ffl`'s default tunnel is maintained to be as fast, stable, and unrestricted as possible. However, during heavy usage by multiple users, you may still experience lag or slowdowns.
   
-  If this happens, we recommend switching to Cloudflare tunnel for better performance — in fact, we suggest using Cloudflare from the start, especially in fixed mode, for the most stable and fastest experience.
+  If this happens, we recommend switching to Cloudflare tunnel for better performance - in fact, we suggest using Cloudflare from the start, especially in fixed mode, for the most stable and fastest experience.
 
-## 4. Downloading with ffl (wget replacement)
+### 4. 📥 Downloading with ffl (wget replacement)
 
 ffl can also act like an HTTP download tool:
 
@@ -361,10 +389,14 @@ ffl https://zh.wikipedia.org/static/images/icons/wikipedia.png
 # Saved as wikipedia.png
 ```
 
-If the URL is a **FastFileLink** link, ffl:
+For any URL, you can use `--resume` to continue an interrupted download:
+```ffl https://zh.wikipedia.org/static/images/icons/wikipedia.png -o wikipedia.png --resume```
 
-- Uses WebRTC when possible  
-- Supports resume via `--resume`:
+If the URL is a **FastFileLink** link, `ffl` adds extra benefits:
+- Uses WebRTC when possible
+- Falls back to HTTPS relay if needed
+- Supports resume via --resume just like normal downloads
+
 
   ```bash
   ffl https://53969.852.fastfilelink.com/MZoWzhPl -o myfile.bin
@@ -373,11 +405,10 @@ If the URL is a **FastFileLink** link, ffl:
   ffl https://53969.852.fastfilelink.com/MZoWzhPl -o myfile.bin --resume
   ```
 
----
 
-## 5. ☁️ Upload and share via server (licensed feature)
+### 5. ☁️ Upload and share via server (licensed feature)
 
-If both sides cannot be online at the same time, you can upload once and share a server-hosted link.
+If you can't keep your device online or both sides cannot be online at the same time, you can upload once and share a server-hosted link.
 
 ```bash
 ffl myfile.zip --upload "1 day"
@@ -389,11 +420,9 @@ ffl myfile.zip --upload "1 day"
 This requires:
 
 - A registered account  
-- A licensed plan (Standard or higher)
+- A licensed plan (Standard or higher) See [Pricing](https://fastfilelink.com/#pricing)
 
-See pricing: <https://fastfilelink.com/#pricing>
-
-Login:
+Login (once you've got an account):
 
 ```bash
 ffl login     # enter email and OTP
@@ -416,10 +445,6 @@ Authentication Status:
 
 In short, `ffl` starts a small HTTP server on your machine, which also acts as a WebRTC signaling server.  
 Then it exposes that local server through a tunnel so that the outside world can reach it.  
-From there, the sender and receiver can:
-
-- Talk directly via WebRTC P2P when possible, or  
-- Fall back to a relay tunnel when direct connectivity is not available.
 
 ### Why build this?
 
@@ -427,7 +452,7 @@ Every time I needed to move files in and out of a container, it was painful:
 
 - The container usually has almost nothing installed.
 - It sits behind the host’s NAT and other layers of isolation.
-- I don’t always have convenient shared volumes or SFTP handy.
+- I don't always have convenient shared volumes, and SFTP is typically only available on the server side, not inside the container.
 
 The most practical trick I kept using (without extra infrastructure) was:
 
@@ -435,8 +460,9 @@ The most practical trick I kept using (without extra infrastructure) was:
 2. Run a simple HTTP file server like `python -m http.server`.
 3. Use the tunnel URL from outside to pull the files out.
 
-It’s not the only solution, and definitely not the “most elegant”, but it works extremely well in my environment.  
-The reverse direction (sending files *into* the container) is similarly clumsy.
+It's not the only solution, and definitely not the "most elegant", but it works extremely well in my environment.  
+The reverse direction (sending files *into* the container) is similarly clumsy, because my development machines are usually desktops or laptops sitting behind various layers of NAT.
+This makes pushing files into the container just as inconvenient as pulling them out. In practice you often need to rely on shared volumes or indirect tunnels instead of a simple, direct transfer.
 
 I wanted a one-command solution that bundles these pieces together. That’s how `ffl` was born.
 
@@ -444,16 +470,17 @@ I wanted a one-command solution that bundles these pieces together. That’s how
 
 ### Why WebRTC, and why not just tunnel everything?
 
-Sending large files and folders purely through tunnels isn’t ideal:
+Sending large files purely through tunnels isn't ideal. For example, a database dump or log archive can easily reach multiple gigabytes. If the relay server is in the US, transferring from Taiwan to Japan would inefficiently detour through the US, slowing things down. In addition:
 
-- Server storage is expensive.
-- Zipping/tarring first is slow, and requires extra disk space.
-- Pushing everything through a relay path is often unnecessary and inefficient.
+- Server storage is expensive.  
+- Zipping/tarring first is slow, and requires extra disk space.  
+- Pushing everything through a relay path is often unnecessary and inefficient.  
 
-If we can use **WebRTC** to stream files directly between peers, that’s much better — especially because browsers can talk WebRTC natively.
+If we can use **WebRTC** to stream files directly between peers, that's much better, especially because browsers can talk WebRTC natively.
 
-Another motivation: this tool is genuinely useful day-to-day, especially when you need to send tens or hundreds of gigabytes (see blog: *How FastFileLink Was Born*).  
-But real life is messy: sometimes the other side cannot be online at the same time as you. In that case, the **temporary upload to server** feature becomes necessary (see blog: *How Do You Send a 50GB Holiday Photo Album?*).
+Another motivation: this tool is genuinely useful day-to-day, especially when you need to send tens or hundreds of gigabytes (see blog: [*How FastFileLink Was Born*](https://fastfilelink.com/static/blog/how_fastfilelink_was_born.html#how_fastfilelink_was_born)).  
+But real life is messy: sometimes the other side cannot be online at the same time as you. In that case, the **temporary upload to server** feature becomes necessary (see blog: [*How Do You Send a 50GB Holiday Photo Album?*](https://fastfilelink.com/static/blog/how-to-send-50gb-holiday-photos.html#how-to-send-50gb-holiday-photos)).
+Traditional cloud drives like Google Drive aren't ideal here, since they require long-term storage plans for what is often just a one-time transfer.
 
 ---
 
@@ -466,9 +493,12 @@ To get `ffl` running as an APE:
 
 - I removed all C-extension dependencies on `libffi` / `ctypes` and compiled them directly into the Python core.
 - I added abstraction layers around all crypto logic so that I can switch between `cryptography` and `python-mbedtls` cleanly.
-- The `cryptography` package relies on Rust and isn’t straightforward to integrate into Cosmopolitan Libc, so I switched to an mbedTLS-based approach instead.
+- The `cryptography` package depends on Rust, which is fundamentally incompatible with Cosmopolitan Libc, so I switched to an mbedTLS-based approach instead.
+- I replaced aiortc's DTLS implementation (originally based on `cryptography`) with `python-mbedtls` to ensure compatibility.
 - On Android, I ran the APE-flavored Python inside Termux and fixed a few strange networking behaviors.
 - After that, I could finally bundle the entire Python project into a single APE executable.
+
+PS: Building a CLI with Python on Linux turned out to be surprisingly difficult. Glibc issues made it nearly impossible to package a truly small and reliable binary. Cosmopolitan Libc (APE) solved this perfectly: fast, portable, and lightweight.
 
 ---
 
@@ -481,11 +511,11 @@ The following components are **not open source** (at least for now):
 - GUI and Upload addons  
 - Upload server and APIs
 
-You may notice that even though these parts are not present in this open-source repo, the executable you download might still show that certain addons are “loaded”. That’s because:
+You may notice that even though these parts are not present in this open-source repo, the executable you download might still show that certain addons are "loaded". That's because:
 
 - I want you to be able to **turn on upload features at any time**.
 - If you already have an account, you can use them immediately.
-- And honestly, if you like the tool, I hope you’ll consider supporting the project 🙂
+- And honestly, if you like the tool, I hope you'll consider supporting the project 🙂
 
 If you prefer an executable that behaves **strictly identical** to what is in this open-source repo, you have a few options:
 
@@ -499,7 +529,7 @@ Without the API addon, other addons that depend on it cannot load either.
 This gives you an executable whose behavior matches the open-source version exactly.
 
 If you are not interested in anything beyond the free version, but still want to support the project, you can also sponsor it on GitHub.  
-Either way, I’ll keep maintaining and improving `ffl`. 💙
+Either way, I'll keep maintaining and improving `ffl`. 💙
 
 ---
 
@@ -510,6 +540,7 @@ FastFileLink has gone through many iterations and stands on the shoulders of a l
 - [aiortc](https://github.com/aiortc/aiortc)  
 - [Cosmopolitan Libc](https://github.com/jart/cosmopolitan)  
 - [superconfigure](https://github.com/jart/superconfigure)  
-- [mbedtls](https://github.com/Mbed-TLS/mbedtls)  
+- [python-mbedtls](https://github.com/Synss/python-mbedtls)  
 
-…and everyone who has tested the tool, reported bugs, suggested improvements, or simply used it in creative ways. 🙏
+...and everyone who has tested the tool, reported bugs, suggested improvements, or simply used it in creative ways. 🙏  
+I also relied on many other excellent libraries along the way. They’re all very cool and deserve credit here too.
