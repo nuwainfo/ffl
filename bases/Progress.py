@@ -170,7 +170,7 @@ class Progress:
             # else:
             #     self.pbar.set_description("Progress")
 
-            if self.transferred >= self.totalSize:
+            if self.totalSize > 0 and self.transferred >= self.totalSize:
                 self.finishBar()
         except (ValueError, AttributeError) as e:
             self.loggerCallback(f"Progress bar error: {e}")

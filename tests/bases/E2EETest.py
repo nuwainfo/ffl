@@ -598,6 +598,14 @@ class E2EEBrowserTest(ResumeBrowserTestBase):
             # Use JSON output to verify E2E status
             jsonOutputPath = os.path.join(self.tempDir, "share_info.json")
 
+            if 'JENKINS_HOME' in os.environ and browserName == 'chrome':
+                # Jenkins + Chrome, streamsaver got 
+                # {'method': 'Network.loadingFailed', 'params': {'canceled': True, 'errorText': 'net::ERR_ABORTED'... }, 
+                # unknown why...:(
+                if not extraEnvVars:
+                    extraEnvVars = {}
+                extraEnvVars.update({'STREAMSAVER_BLOB': 'True'}) 
+
             # Start FastFileLink with E2E encryption enabled
             outputCapture = {}
             shareLink = self._startFastFileLink(

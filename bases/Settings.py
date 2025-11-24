@@ -206,7 +206,9 @@ class SettingsGetter(Singleton):
         """Initialize the SettingsGetter with execution mode and static root."""
         self._exeMode = exeMode
         self._baseDir = baseDir
-        self._staticRoot = staticRoot
+        
+        staticRoot = os.path.join(baseDir, staticRoot) if baseDir else staticRoot        
+        self._staticRoot = os.path.abspath(staticRoot)
         self._platform = platform
         self._featureManager = None # Cache for singleton FeatureManager
 

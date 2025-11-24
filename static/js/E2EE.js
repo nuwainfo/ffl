@@ -701,7 +701,9 @@ class HTTPDecryptor {
      * @returns {Uint8Array} - Concatenated result
      */
     _concatenateChunks(chunks) {
-        if (chunks.length === 0) return new Uint8Array(0);
+        if (chunks.length === 0) 
+            return new Uint8Array(0);
+        
         const totalLength = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
         const result = new Uint8Array(totalLength);
         let offset = 0;

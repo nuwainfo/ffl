@@ -1,14 +1,22 @@
 {
   "nav": {
     "home": "Home",
-    "introduction": "Introduction", 
+    "introduction": "Introduction",
     "features": "Features",
     "tutorial": "Tutorial",
     "free": "Free",
     "pricing": "Pricing",
     "support": "Support",
     "language": "Language",
-    "menu": "Menu"
+    "menu": "Menu",
+    "howItWorks": "How it works",
+    "payAsYouGo": "Pay as you go",
+    "invite": "Invite",
+    "cli": "Open Source CLI",
+    "faq": "FAQ",
+    "technicalFaq": "Technical FAQ",
+    "account": "Account",
+    "clientArea": "Client Area"
   },
   "download": {
     "title": "Downloading",
@@ -47,7 +55,7 @@
     },
     "retry": {
       "confirmationTitle": "A download may already be in progress. Check your browser's download bar first.",
-      "confirmationSubtitle": "Opening a new tab will start a fresh download.", 
+      "confirmationSubtitle": "Opening a new tab will start a fresh download.",
       "confirmButton": "Yes, open new tab",
       "cancelButton": "Cancel"
     },
@@ -89,7 +97,9 @@
     "linkText": "FastFileLink",
     "period": ".",
     "contactTitle": "Contact Us",
-    "aboutTitle": "About Us", 
+    "aboutTitle": "About Us",
+    "quickLinksTitle": "Quick Links",
+    "points": "How Points Work",
     "legalTitle": "Legal",
     "releasesTitle": "Releases",
     "companyTitle": "About Our Company",

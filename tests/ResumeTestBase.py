@@ -144,6 +144,13 @@ class ResumeBrowserTestBase(BrowserTestBase, ResumeTestBase):
     def tearDown(self):
         BrowserTestBase.tearDown(self)
 
+    @staticmethod
+    def _resumeRelatedLogFilter(message, level):
+        """Filter for resume-related logs: errors (except 404) and resume keywords"""
+        if "SEVERE" in level or "ERROR" in level or level == 'error':
+            return "404" not in message
+        return any(keyword in message for keyword in ["resume", "Fallback", "Resume calculation", "Writer closed successfully"])
+
     def _analyzeBrowserLogsForResume(self, driver):
         """Analyze browser logs for resume evidence and return summary
 
@@ -259,13 +266,17 @@ class ResumeBrowserTestBase(BrowserTestBase, ResumeTestBase):
             stallAfterBytes: Number of bytes to transfer before simulating stall
             extraEnvVars: Optional dict of extra environment variables (e.g., {'JS_DEBUG': 'True'})
             extraArgs: Optional list of extra arguments to pass to _startFastFileLink (e.g., ['--e2ee'])
-        """
+        """        
+        # Wait for download to complete with reasonable timeout
+        # Reduced for debugging: 60s base + 1s per MB
+        # Usually every 1-2 seconds should have progress
+        downloadTimeoutSeconds = 60 + int(largeFileSize / (1024 * 1024))
+        print(f"[Test] Download timeout: {downloadTimeoutSeconds} seconds")        
+        
         # Set up hard timeout for entire test (to prevent infinite hangs)
-        # Reduced timeout for debugging: 30s base + 1s per MB + 30s buffer
-        # Usually every 1-2 seconds should have progress, so 10s without progress is enough to detect hang
-        maxTestTimeout = 30 + int(largeFileSize / (1024 * 1024)) + 30
-        print(f"[Test] Setting hard timeout for entire test: {maxTestTimeout} seconds (reduced for debugging)")
-
+        maxTestTimeout = downloadTimeoutSeconds + 30 # 30s buffer
+        print(f"[Test] Setting hard timeout for entire test: {maxTestTimeout} seconds")
+        
         timerTriggered = threading.Event()
 
         def hardTimeout():
@@ -354,12 +365,6 @@ class ResumeBrowserTestBase(BrowserTestBase, ResumeTestBase):
 
                 print("[Test] Waiting for WebRTC to start, stall, fallback to HTTP, and complete download...")
 
-                # Wait for download to complete with reasonable timeout
-                # Reduced for debugging: 120s base + 1s per MB
-                # Usually every 1-2 seconds should have progress
-                downloadTimeoutSeconds = 120 + int(largeFileSize / (1024 * 1024))
-                print(f"[Test] Download timeout: {downloadTimeoutSeconds} seconds")
-
                 downloadedFile = None
                 try:
                     # Check for hard timeout before waiting
@@ -382,11 +387,8 @@ class ResumeBrowserTestBase(BrowserTestBase, ResumeTestBase):
                     # Analyze logs using common method
                     analysis = self._analyzeBrowserLogsForResume(driver)
 
-                    # Print ALL browser logs on failure (no filtering)
-                    print("[Test] Browser logs at time of failure (all logs):")
-                    for logEntry in analysis['logs']:
-                        message, level = self._normalizeLogEntry(logEntry)
-                        print(f"  [{level}] {message}")
+                    # Print ALL browser logs on failure (no filtering) - use cached logs from analysis
+                    self._printBrowserLogs(logs=analysis['logs'], title="Browser logs at time of failure (all logs)")
 
                     # Print diagnostic summary
                     self._printDiagnosticSummary(analysis)
@@ -401,15 +403,12 @@ class ResumeBrowserTestBase(BrowserTestBase, ResumeTestBase):
                 # Analyze logs using common method
                 analysis = self._analyzeBrowserLogsForResume(driver)
 
+                # Print ALL browser logs on success - use cached logs from analysis
+                self._printBrowserLogs(logs=analysis['logs'], title="Browser logs (all logs)")
+
                 # Print filtered browser logs (errors and resume-related messages only)
-                print("[Test] Browser logs (filtered: errors except 404, and resume-related messages):")
-                for logEntry in analysis['logs']:
-                    message, level = self._normalizeLogEntry(logEntry)
-                    if "SEVERE" in level or "ERROR" in level or level == 'error':
-                        if "404" not in message:
-                            print(f"  [Browser ERROR] {message}")
-                    elif any(keyword in message for keyword in ["resume", "Fallback", "Resume calculation", "Writer closed successfully"]):
-                        print(f"  [Browser] {message}")
+                # self._printBrowserLogs(logs=analysis['logs'], logFilter=self._resumeRelatedLogFilter,
+                #                      title="Browser logs (filtered: errors except 404, and resume-related messages)")
 
                 # Print diagnostic summary (same as failure path, but for success verification)
                 self._printDiagnosticSummary(analysis)

@@ -1,14 +1,22 @@
 {
   "nav": {
     "home": "首頁",
-    "introduction": "介紹", 
+    "introduction": "介紹",
     "features": "功能",
     "tutorial": "教學",
     "free": "免費",
     "pricing": "價格",
     "support": "支援",
     "language": "語言",
-    "menu": "選單"
+    "menu": "選單",
+    "howItWorks": "運作方式",
+    "payAsYouGo": "點數機制",
+    "invite": "邀請",
+    "cli": "開源 CLI",
+    "faq": "常見問題",
+    "technicalFaq": "技術常見問題",
+    "account": "帳號管理",
+    "clientArea": "用戶專區"
   },
   "download": {
     "title": "下載中",
@@ -47,7 +55,7 @@
     },
     "retry": {
       "confirmationTitle": "可能已有下載正在進行中。請先檢查您的瀏覽器下載列。",
-      "confirmationSubtitle": "開啟新分頁將會開始新的下載。", 
+      "confirmationSubtitle": "開啟新分頁將會開始新的下載。",
       "confirmButton": "是的，開啟新分頁",
       "cancelButton": "取消"
     },
@@ -89,7 +97,9 @@
     "linkText": "FastFileLink",
     "period": "。",
     "contactTitle": "聯絡我們",
-    "aboutTitle": "關於我們", 
+    "aboutTitle": "關於我們",
+    "quickLinksTitle": "常用連結",
+    "points": "點數機制",
     "legalTitle": "法律條款",
     "releasesTitle": "版本發佈",
     "companyTitle": "關於我們公司",

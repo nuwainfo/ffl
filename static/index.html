@@ -367,12 +367,12 @@ Licensed under Apache-2.0 license.
         <script>
             /**
              * WritePump: Write queue manager with single state machine
-             * Manages StreamSaver WritableStream with guaranteed write ordering and proper completion.
+             * Manages writer (StreamSaver or BlobWriter) with guaranteed write ordering and proper completion.
              */
             class WritePump {
-            
-                constructor(writableStream, expectedSize = null, callbacks = {}) {
-                    this.writer = writableStream.getWriter();
+
+                constructor(writer, expectedSize = null, callbacks = {}) {
+                    this.writer = writer;
                     this.expected = Number.isFinite(expectedSize) ? expectedSize : null;
                     this.bytesWritten = 0;
 
@@ -442,8 +442,11 @@ Licensed under Apache-2.0 license.
                             return;
                         }
 
-                        // Success!
-                        this.onComplete({ bytesWritten: this.bytesWritten });
+                        // Success! Pass writer reference for blob downloads
+                        this.onComplete({
+                            bytesWritten: this.bytesWritten,
+                            writer: this.writer
+                        });
 
                     } catch (err) {
                         this.log('WritePump', `EOF error: ${err?.message || err}`);
@@ -533,6 +536,164 @@ Licensed under Apache-2.0 license.
                     });
                 }
             }
+
+        /**
+         * BlobWriter: Writer implementation that accumulates chunks in memory
+         * Mimics WritableStream writer interface for compatibility with WritePump
+         * Automatically triggers download when closed
+         */
+        class BlobWriter {
+            constructor(fileName, expectedSize = null) {
+                this.fileName = fileName;
+                this.chunks = [];
+                this.bytesWritten = 0;
+                this.expectedSize = expectedSize;
+                this.closed = false;
+            }
+
+            async write(chunk) {
+                if (this.closed) {
+                    throw new Error('Writer is closed');
+                }
+
+                // Store a copy to prevent external modifications
+                const chunkView = chunk instanceof ArrayBuffer
+                    ? new Uint8Array(chunk.slice(0))
+                    : new Uint8Array(chunk);
+
+                this.chunks.push(chunkView);
+                this.bytesWritten += chunkView.byteLength;
+            }
+
+            async close() {
+                if (this.closed) {
+                    return;
+                }
+                this.closed = true;
+
+                // Size verification
+                if (this.expectedSize !== null && this.bytesWritten !== this.expectedSize) {
+                    throw new Error(`Size mismatch: written=${this.bytesWritten}, expected=${this.expectedSize}`);
+                }
+
+                // Automatically trigger blob download on close
+                this.triggerDownload();
+            }
+
+            triggerDownload() {
+                if (!this.closed) {
+                    throw new Error('Writer must be closed before triggering download');
+                }
+
+                log("BlobWriter", `Creating blob download for ${this.fileName} (${this.bytesWritten} bytes)`);
+
+                const blob = new Blob(this.chunks, { type: 'application/octet-stream' });
+                const url = URL.createObjectURL(blob);
+
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = this.fileName;
+                a.style.display = 'none';
+                document.body.appendChild(a);
+
+                log("BlobWriter", `Triggering download for ${this.fileName}`);
+                a.click();
+
+                setTimeout(() => {
+                    log("BlobWriter", "Cleaning up object URL");
+                    URL.revokeObjectURL(url);
+                    a.remove();
+                }, 60000);
+            }
+        }
+
+        /**
+         * WriterFactory: Creates appropriate writer based on file size and browser capabilities
+         */
+        class WriterFactory {
+        
+            static create(fileName, fileSize) {
+                const USE_BLOB_THRESHOLD = 10 * 1024 * 1024; // 10MB
+
+                // Check if StreamSaver is available and needed
+                const canUseSW = location.protocol === 'https:' ||
+                                location.hostname === 'localhost' ||
+                                location.hostname === '127.0.0.1';
+
+                const streamSaverReady = canUseSW &&
+                                        'serviceWorker' in navigator &&
+                                        typeof streamSaver !== 'undefined';
+
+                // Use StreamSaver for large files if available
+                if (streamSaverReady && fileSize > USE_BLOB_THRESHOLD) {
+                    try {
+                        log("WriterFactory", `Creating StreamSaver writer for ${fileName} (${fileSize} bytes)`);
+
+                        // Configure StreamSaver (encapsulated here)
+                        if (!streamSaver.mitm) {
+                            streamSaver.mitm = '/static/assets/mitm.html';
+                        }
+
+                        const fileStream = streamSaver.createWriteStream(fileName, {
+                            size: fileSize || undefined
+                        });
+
+                        const writer = fileStream.getWriter();
+
+                        return {
+                            type: 'streamsaver',
+                            writer: writer,
+                            fileName: fileName,
+                            fileSize: fileSize
+                        };
+                    } catch (e) {
+                        log('WriterFactory', 'StreamSaver initialization failed, falling back to Blob', e);
+                        // Fall through to blob creation
+                    }
+                }
+
+                // Use Blob for small files or when StreamSaver not available
+                log("WriterFactory", `Creating Blob writer for ${fileName} (${fileSize} bytes)`);
+                const blobWriter = new BlobWriter(fileName, fileSize);
+
+                return {
+                    type: 'blob',
+                    writer: blobWriter,
+                    fileName: fileName,
+                    fileSize: fileSize
+                };
+            }
+
+            static getUnsupportedReason(fileSize) {
+                const USE_BLOB_THRESHOLD = 10 * 1024 * 1024;
+
+                if (fileSize <= USE_BLOB_THRESHOLD) {
+                    return null; // Small files always supported
+                }
+
+                const canUseSW = location.protocol === 'https:' ||
+                                location.hostname === 'localhost' ||
+                                location.hostname === '127.0.0.1';
+
+                if (!canUseSW) {
+                    return 'ServiceWorker not available (requires HTTPS or localhost)';
+                }
+
+                if (!('serviceWorker' in navigator)) {
+                    return 'ServiceWorker not supported by browser';
+                }
+
+                if (typeof streamSaver === 'undefined') {
+                    return 'StreamSaver library not loaded';
+                }
+
+                return null;
+            }
+
+            static isSupported(fileSize) {
+                return this.getUnsupportedReason(fileSize) === null;
+            }
+        }
         </script>
 
         <!-- Utility Functions -->
@@ -759,6 +920,352 @@ Licensed under Apache-2.0 license.
             };
         </script>
 
+        <!-- Download UI Manager -->
+        <script>
+        /**
+         * Manages all UI updates for the download process.
+         * Encapsulates DOM manipulation, progress tracking, and status display.
+         */
+        class DownloadUIManager {
+            constructor(elements, t, options = {}) {
+                // DOM elements
+                this.progressBar = elements.progressBar;
+                this.statusText = elements.statusText;
+                this.connectionType = elements.connectionType;
+                this.downloadMessage = elements.downloadMessage;
+
+                // Translation function
+                this.t = t;
+
+                // Countdown state
+                this.countdownInterval = null;
+                this.countdownSeconds = 0;
+
+                // Callback to check if operations should stop
+                this.shouldStopCallback = options.shouldStopCallback || (() => false);
+            }
+
+            setStatus(text, showLoading = false) {
+                if (!this.statusText) return;
+
+                this.statusText.innerHTML = '';
+
+                if (showLoading) {
+                    const loadingIcon = document.createElement('span');
+                    loadingIcon.className = 'loading-icon';
+                    loadingIcon.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> ';
+                    this.statusText.appendChild(loadingIcon);
+                }
+
+                this.statusText.appendChild(document.createTextNode(text));
+                document.title = `FastFileLink - ${text}`;
+            }
+
+            setConnectionType(text) {
+                if (this.connectionType) {
+                    this.connectionType.textContent = text;
+                }
+            }
+
+            setDownloadMessage(text) {
+                if (this.downloadMessage) {
+                    this.downloadMessage.textContent = text;
+                }
+            }
+
+            updateProgress(current, total = null) {
+                if (this.progressBar) {
+                    this.progressBar.value = current;
+                }
+
+                if (total) {
+                    const percent = Math.round(current * 100 / total);
+                    this.setStatus(
+                        this.t('client.status.downloadingPercent', 'Downloading via P2P: {{percent}}%', { percent })
+                    );
+                }
+            }
+
+            setProgressMax(max) {
+                if (this.progressBar && max > 0) {
+                    this.progressBar.max = max;
+                }
+            }
+
+            removeProgressBar() {
+                const progressElements = document.getElementsByClassName('progress');
+                Array.from(progressElements).forEach(el => el.remove());
+            }
+
+            // ============ Countdown Management ============
+            startCountdown(seconds) {
+                this.stopCountdown(); // Clear any existing countdown
+
+                this.countdownSeconds = seconds;
+                this.setConnectionType(
+                    this.t('client.connection.waitingPeer', 'Waiting for peer ({{seconds}}s)', {
+                        seconds: this.countdownSeconds
+                    })
+                );
+
+                this.countdownInterval = setInterval(() => {
+                    // Check if operations should stop
+                    if (this.shouldStopCallback()) {
+                        this.stopCountdown();
+                        return;
+                    }
+
+                    this.countdownSeconds--;
+
+                    if (this.countdownSeconds >= 0) {
+                        this.setConnectionType(
+                            this.t('client.connection.waitingPeer', 'Waiting for peer ({{seconds}}s)', {
+                                seconds: this.countdownSeconds
+                            })
+                        );
+                    } else {
+                        this.stopCountdown();
+                    }
+                }, 1000);
+            }
+
+            stopCountdown() {
+                if (this.countdownInterval) {
+                    clearInterval(this.countdownInterval);
+                    this.countdownInterval = null;
+                }
+            }
+
+            // ============ Connection States ============
+            showEstablishingP2P(timeoutSeconds) {
+                this.setStatus(
+                    this.t('client.status.establishingP2p', 'Establishing P2P connection...'),
+                    true
+                );
+                this.startCountdown(timeoutSeconds);
+            }
+
+            showP2PChecking() {
+                this.setStatus(
+                    this.t('client.status.p2pChecking', 'P2P connection...[Checking]'),
+                    true
+                );
+            }
+
+            showP2PConnecting() {
+                this.setStatus(
+                    this.t('client.status.p2pConnecting', 'P2P connection...[Connecting]'),
+                    true
+                );
+            }
+
+            showP2PSuccess() {
+                this.setStatus(
+                    this.t('client.status.p2pSuccess', 'P2P connection successful! Downloading...')
+                );
+                this.setConnectionType(
+                    this.t('client.connection.directP2p', 'Direct P2P transfer')
+                );
+                this.setDownloadMessage(
+                    this.t('client.download.deviceStarted', 'Device-to-Device download started.')
+                );
+                this.stopCountdown();
+            }
+
+            showReconnecting() {
+                this.setStatus(
+                    this.t('client.status.reconnecting', 'Connection lost, attempting to reconnect...'),
+                    true
+                );
+            }
+
+            showNetworkFluctuation() {
+                this.setStatus(
+                    this.t('client.status.networkFluctuation', 'Network fluctuation detected, continuing transfer...'),
+                    true
+                );
+            }
+
+            showRetryingP2P() {
+                this.setStatus(
+                    this.t('client.status.retryingP2p', 'Retrying P2P connection…'),
+                    true
+                );
+                this.setConnectionType(
+                    this.t('client.connection.retrying', 'Retrying P2P connection')
+                );
+            }
+
+            showSavingFile() {
+                this.setStatus(
+                    this.t('client.status.savingFile', 'Saving file...')
+                );
+            }
+
+            showSwitchingToRelay(reason) {
+                this.setStatus(
+                    this.t('client.status.switchingRelay', `Switching to relay mode: ${reason}`, { reason })
+                );
+                this.setConnectionType(
+                    this.t('client.connection.serverRelay', 'Using Server Relay Download')
+                );
+                this.stopCountdown();
+            }
+
+            showRelayStarted() {
+                this.setStatus(
+                    this.t('client.status.relayStarted', 'Relayed P2P Download Started.')
+                );
+            }
+
+            showBrowserNotSupported() {
+                this.setStatus(
+                    this.t('client.fallback.browserNotSupported', 'Downloads not supported in this browser')
+                );
+            }
+
+            showComplete(fileSize) {
+                this.setStatus(
+                    this.t('download.complete.title', '✅ Download complete!')
+                );
+
+                if (this.progressBar) {
+                    this.progressBar.value = fileSize || 100;
+                }
+
+                this.setDownloadMessage(
+                    this.t('client.download.fileSaved', 'File saved. Please check your download folder.')
+                );
+
+                // Hide progress bar after 1 second
+                setTimeout(() => {
+                    this.removeProgressBar();
+                }, 1000);
+            }
+
+            updateFallbackMessage() {
+                this.setDownloadMessage(
+                    this.t('client.download.startShortly', 'Your download will start shortly.')
+                );
+            }
+
+            // ============ Cleanup ============
+            cleanup() {
+                this.stopCountdown();
+            }
+        }
+        </script>
+
+        <!-- Debug Configuration Manager -->
+        <script>
+        /**
+         * Manages debug configuration from URL parameters.
+         * Handles test/debug flags for fallback simulation, stall testing, etc.
+         */
+        class DebugConfigManager {
+            constructor(log) {
+                // Store log function for use in methods
+                this.log = log;
+
+                // Parse all debug parameters from URL
+                const urlParams = new URLSearchParams(window.location.search);
+
+                // Fallback timeout override
+                const fallbackMsParam = parseInt(urlParams.get('fallback-ms'), 10);
+                this.fallbackTimeoutMs = !isNaN(fallbackMsParam) && fallbackMsParam > 0
+                    ? fallbackMsParam
+                    : null;
+
+                // Force fallback parameters
+                this.forceFallback = parseBooleanParam(urlParams.get('force-fallback'));
+
+                const forceFallbackAfterParam = parseInt(urlParams.get('force-fallback-after'), 10);
+                this.forceFallbackThreshold = !isNaN(forceFallbackAfterParam) && forceFallbackAfterParam >= 0
+                    ? forceFallbackAfterParam
+                    : 0;
+
+                // Stall simulation parameters
+                this.simulateStall = parseBooleanParam(urlParams.get('simulate-stall'));
+                const stallAfterValue = parseInt(urlParams.get('stall-after'));
+                this.stallAfterBytes = !isNaN(stallAfterValue) ? stallAfterValue : 50000; // Default 50KB
+
+                // ICE failure simulation
+                this.simulateICEFailure = parseBooleanParam(urlParams.get('simulate-ice-failure'));
+
+                // HTTP fallback toggle
+                this.httpFallbackEnabled = parseBooleanParam(urlParams.get('fallback'), true); // Default: true
+
+                // Runtime state
+                this.forceFallbackIssued = false;
+
+                // Log configuration if any debug mode is active
+                if (this.simulateStall || this.simulateICEFailure) {
+                    this.log("Debug", `Testing mode enabled: stall=${this.simulateStall} (after ${this.stallAfterBytes} bytes), ice-failure=${this.simulateICEFailure}`);
+                }
+            }
+
+            getFallbackTimeout(defaultTimeout) {
+                return this.fallbackTimeoutMs || defaultTimeout;
+            }
+
+            isHTTPFallbackEnabled() {
+                return this.httpFallbackEnabled;
+            }
+
+            shouldForceFallback(bytesReceived) {
+                if (!this.forceFallback || this.forceFallbackIssued) {
+                    return false;
+                }
+
+                if (bytesReceived > 0 && bytesReceived >= this.forceFallbackThreshold) {
+                    this.forceFallbackIssued = true;
+                    return true;
+                }
+
+                return false;
+            }
+
+            shouldLogForceFallbackCandidate() {
+                return this.forceFallback && !this.forceFallbackIssued;
+            }
+
+            simulateStallIfNeeded(bytesReceived, dataChannel) {
+                if (!this.simulateStall || bytesReceived < this.stallAfterBytes) {
+                    return false;
+                }
+
+                this.log("Debug", `Simulating network stall - closing data channel after ${bytesReceived} bytes`);
+
+                // Simulate real network failure by closing the data channel
+                setTimeout(() => {
+                    try {
+                        dataChannel.close();
+                        this.log("Debug", "Data channel closed to simulate network failure");
+                    } catch (e) {
+                        this.log("Debug", "Error closing data channel:", e);
+                    }
+                }, 100); // Small delay to complete current processing
+
+                return true; // Indicates stall was simulated
+            }
+
+            // Build debug parameters for server offer URL
+            buildOfferDebugParams() {
+                const debugParams = new URLSearchParams();
+
+                if (this.simulateICEFailure) {
+                    debugParams.set('simulate-ice-failure', 'true');
+                }
+                if (this.simulateStall) {
+                    debugParams.set('simulate-stall', 'true');
+                    debugParams.set('stall-after', this.stallAfterBytes.toString());
+                }
+
+                return debugParams.toString();
+            }
+        }
+        </script>
+
         <!-- WebRTC and Download Script -->
         <script>
 
@@ -783,16 +1290,22 @@ Licensed under Apache-2.0 license.
                 }            
                 
                 (async () => {
-                // Debug configuration
-                const DISABLE_WEBRTC = false; // Set to true if only use Relayed P2P
+                // Initialize Debug Configuration Manager (must be first to configure settings)
+                const debugConfig = new DebugConfigManager(log);
+
+                const DISABLE_WEBRTC = false; // Set to true if only use Relayed P2P, this is controlled by Server.
+                
+                const DEFAULT_FALLBACK_MS = 30000;
+                const FALLBACK_MS = debugConfig.getFallbackTimeout(DEFAULT_FALLBACK_MS);
+                
+                const STALL_MS = 12000; // 12 seconds threshold for detecting stalled transfers                                
+                const CHUNK_SIZE = 256 * 1024;  // 256 KB chunk size for blob storage                                
+                
                 let fallbackTriggered = false; // Flag to track if fallback has been triggered
                 let downloadCompleted = false; // Flag to track if download completed
                 let restartAttempted = false;   // Allow one automatic ICE restart
-                const DEFAULT_FALLBACK_MS = 30000;
-                let FALLBACK_MS = DEFAULT_FALLBACK_MS;      // Timeout before fallback (overridden later)
 
                 let countdownSeconds = Math.floor(FALLBACK_MS / 1000);
-                let countdownInterval;          // For updating "Waiting for peer" countdown
                 let stopCandidatePolling = false; // trickle ICE polling
 
                 // Connection state tracking
@@ -800,9 +1313,8 @@ Licensed under Apache-2.0 license.
                 let bytesReceived = 0;
                 let connectionFailureHandled = false;
                 let disconnectedTime = null;
-                let forceFallbackIssued = false;
+                let disconnectDuringTransferTimer = null;
 
-                // Track write pump instance (defined in separate WritePump module above)
                 let writePump = null;
 
                 // Progress tracking for stall detection
@@ -824,25 +1336,6 @@ Licensed under Apache-2.0 license.
                     e2eeManager = null;
                     webrtcDecryptor = null;
                 }
-                const STALL_MS = 12000; // 12 seconds threshold for detecting stalled transfers
-
-                // DRY: Stall simulation helper function
-                const simulateStallIfNeeded = (received, dc) => {
-                    if (DEBUG_SIMULATE_STALL && received >= DEBUG_STALL_AFTER_BYTES) {
-                        log("Debug", `Simulating network stall - closing data channel after ${received} bytes`);
-                        // Simulate real network failure by closing the data channel
-                        setTimeout(() => {
-                            try {
-                                dc.close();
-                                log("Debug", "Data channel closed to simulate network failure");
-                            } catch (e) {
-                                log("Debug", "Error closing data channel:", e);
-                            }
-                        }, 100); // Small delay to complete current processing
-                        return true; // Indicates stall was simulated
-                    }
-                    return false; // No stall simulation
-                };
 
                 // Unified condition checker - single source of truth for P2P termination
                 const shouldStopPeerOperations = () => {
@@ -857,103 +1350,118 @@ Licensed under Apache-2.0 license.
                 const connectionInfo = await getConnectionInfo();
                 log("Client", `Browser: ${connectionInfo.browser}, Domain: ${connectionInfo.domain}`);
                 log("Client", `Local: ${connectionInfo.isLocalConnection}, InApp: ${connectionInfo.inAppBrowser}, DownloadRestricted: ${connectionInfo.downloadRestricted}`);
-                
+
                 log("Init", "Starting WebRTC download process");
-
-                // Parse URL parameters for testing P2P failure scenarios
-                const urlParams = new URLSearchParams(window.location.search);
-                const fallbackMsParam = parseInt(urlParams.get('fallback-ms'), 10);
-                if (Number.isFinite(fallbackMsParam) && fallbackMsParam > 0) {
-                    FALLBACK_MS = Math.max(500, fallbackMsParam);
-                    log("Fallback", `Using fallback timeout override: ${FALLBACK_MS}ms`);
-                }
-                const rawForceFallback = urlParams.get('force-fallback');
-                const DEBUG_FORCE_FALLBACK = rawForceFallback
-                    ? ['true', '1', 'on', 'yes'].includes(rawForceFallback.toLowerCase())
-                    : false;
-                const forceFallbackAfterParam = parseInt(urlParams.get('force-fallback-after'), 10);
-                const FORCE_FALLBACK_THRESHOLD = Number.isFinite(forceFallbackAfterParam) && forceFallbackAfterParam >= 0
-                    ? forceFallbackAfterParam
-                    : 0;
-                if (DEBUG_FORCE_FALLBACK && FORCE_FALLBACK_THRESHOLD > 0) {
-                    log("Fallback", `Force fallback threshold set to ${FORCE_FALLBACK_THRESHOLD} bytes`);
-                }
-
-                const DEBUG_SIMULATE_STALL = parseBooleanParam(urlParams.get('simulate-stall'));
-                const DEBUG_STALL_AFTER_BYTES = (() => {
-                    const value = parseInt(urlParams.get('stall-after'));
-                    return !isNaN(value) ? value : 50000; // Default 50KB, supports 0
-                })();
-                const DEBUG_SIMULATE_ICE_FAILURE = parseBooleanParam(urlParams.get('simulate-ice-failure'));
-                const DEBUG_HTTP_FALLBACK = parseBooleanParam(urlParams.get('fallback'), true); // Default: true                   
-
-                if (DEBUG_SIMULATE_STALL || DEBUG_SIMULATE_ICE_FAILURE) {
-                    log("Debug", `Testing mode enabled: stall=${DEBUG_SIMULATE_STALL} (after ${DEBUG_STALL_AFTER_BYTES} bytes), ice-failure=${DEBUG_SIMULATE_ICE_FAILURE}`);
-                }
-
-                const CHUNK_SIZE = 256 * 1024;  // 256 KB chunk size for blob storage
                 log("Config", `Fallback timeout: ${FALLBACK_MS}ms, Chunk size: ${CHUNK_SIZE} bytes`);
 
-                // Get DOM elements
-                const progressBar = document.getElementById('downloadProgress');
-                const statusText = document.getElementById('statusText');
-                const connectionType = document.getElementById('connectionType');
-                const downloadMessage = document.getElementById('download-message');
-                log("DOM", "Elements found:", {
-                    progressBar: !!progressBar,
-                    statusText: !!statusText,
-                    connectionType: !!connectionType,
-                    downloadMessage: !!downloadMessage
-                });
-                
                 // Initialize DownloadManager for fallback
                 let downloadManager = null;
-                
+
                 // Get file metadata
                 const fileName = document.getElementById('fileName')?.textContent || 'download.bin';
                 const fileSize = parseInt(document.getElementById('fileSize')?.textContent || '0', 10);
                 log("File", `Name: ${fileName}, Size: ${fileSize} bytes`);
-                
+
+                // Initialize UI Manager
+                const uiManager = new DownloadUIManager({
+                    progressBar: document.getElementById('downloadProgress'),
+                    statusText: document.getElementById('statusText'),
+                    connectionType: document.getElementById('connectionType'),
+                    downloadMessage: document.getElementById('download-message')
+                }, t, {
+                    shouldStopCallback: () => shouldStopPeerOperations()
+                });
+
                 // Set progress bar max if we know the file size
-                if (fileSize > 0 && progressBar) {
-                    progressBar.max = fileSize;
-                    log("UI", `Progress bar max set to ${fileSize}`);
+                uiManager.setProgressMax(fileSize);
+
+                // Initialize writer and WritePump early (always available for both P2P and HTTP fallback)
+                // Check if file download is supported
+                if (!WriterFactory.isSupported(fileSize)) {
+                    const reason = WriterFactory.getUnsupportedReason(fileSize);
+                    log("WriterFactory", `File download not supported: ${reason}`);
+                    // Skip WebRTC and go directly to HTTP fallback
+                    fallbackToHTTP(t('client.fallback.fileTooBig', 'File too large for direct download - using server relay'));
+                    return;
+                }
+
+                // Create writer using WriterFactory (StreamSaver or Blob based on file size)
+                const writerContext = WriterFactory.create(fileName, fileSize);
+                log("WriterFactory", `Created ${writerContext.type} writer`);
+
+                // Initialize WritePump - always available for entire download flow
+                writePump = new WritePump(writerContext.writer, fileSize, {
+                    onComplete: ({ bytesWritten, writer }) => {
+                        log("Download", `✅ Complete! ${bytesWritten} bytes written`);
+                        downloadComplete();
+                    },
+                    onFallback: (reason) => {
+                        log("Download", `WritePump fallback: ${reason}`);
+                        if (!shouldStopPeerOperations()) {
+                            fallbackToHTTP(reason, true);
+                        }
+                    },
+                    log: log
+                });
+                log("WritePump", `Initialized for ${writerContext.type} download (always available)`);
+
+                // Handle download completion
+                // Will be enhanced with cleanup callback after WebRTC setup
+                let cleanupConnectionsCallback = null;
+
+                function downloadComplete() {
+                    if (downloadCompleted) {
+                        return;
+                    }
+
+                    if (fileSize && bytesReceived < fileSize) {
+                        log("Download", `Incomplete P2P transfer detected: expected ${fileSize}, got ${bytesReceived}`);
+                        if (!shouldStopPeerOperations()) {
+                            fallbackToHTTP("Incomplete P2P transfer detected", true);
+                        }
+                        return;
+                    }
+
+                    log("Download", "Complete!");
+
+                    downloadCompleted = true;
+                    fallbackTriggered = true;
+
+                    // Show completion UI
+                    uiManager.showComplete(fileSize);
+
+                    // Notify server that download is complete
+                    if (typeof peerId !== 'undefined' && peerId) {
+                        log("Signal", `Notifying server of download completion for peer ${peerId}`);
+                        fetch('/uid=****/complete', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ peerId: peerId, receivedBytes: bytesReceived }),
+                        }).then(() => {
+                            log("Signal", "Successfully notified server of completion");
+                        }).catch(err => {
+                            log("Signal", `Failed to notify server of completion: ${err}`);
+                            // Don't fail the download if notification fails
+                        });
+                    }
+
+                    // P2P download completed successfully
+                    stopCandidatePolling = true;
+                    connectionFailureHandled = true;
+
+                    if (typeof fallbackTimer !== 'undefined') {
+                        clearTimeout(fallbackTimer);
+                    }
+
+                    // Cleanup countdown timer
+                    uiManager.stopCountdown();
+
+                    // Cleanup WebRTC connections if callback is set (P2P mode)
+                    if (cleanupConnectionsCallback) {
+                        cleanupConnectionsCallback();
+                    }
                 }
                 
-                const removeProgressBar = function() {
-                    const els = document.getElementsByClassName('progress');
-                    Array.from(els).forEach(el => el.remove());
-                };
-                
-                // Status update helper with loading animation option
-                const setStatus = (text, showLoading = false) => {
-                    //log("Status", text);
-                    if (statusText) {
-                        // Clear previous content
-                        statusText.innerHTML = '';
-                    
-                        // Add loading icon if requested
-                        if (showLoading) {
-                            const loadingIcon = document.createElement('span');
-                            loadingIcon.className = 'loading-icon';
-                            loadingIcon.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> '; 
-                            statusText.appendChild(loadingIcon);
-                        }
-                     
-                        // Add the text
-                        statusText.appendChild(document.createTextNode(text));
-                        
-                        // Update title.
-                        document.title = "FastFileLink - " + text;
-                    }
-                };
-                
-                // Connection type display
-                const setConnectionType = (text) => {
-                    log("Connection", text);
-                    if (connectionType) 
-                        connectionType.textContent = text;
-                };
                 
                 // Check if transfer has actually started (data channel open and receiving data)
                 const hasTransferStarted = () => {
@@ -977,8 +1485,8 @@ Licensed under Apache-2.0 license.
 
                 // Fallback to DownloadManager - ensuring it only triggers once
                 const fallbackToHTTP = (reason, force = false) => {
-                    if (!DEBUG_HTTP_FALLBACK) {// Always return if fallback disabled.
-                        log("Fallback", `Skip fallback (${reason}): DEBUG_HTTP_FALLBACK == ${DEBUG_HTTP_FALLBACK}`);
+                    if (!debugConfig.isHTTPFallbackEnabled()) {// Always return if fallback disabled.
+                        log("Fallback", `Skip fallback (${reason}): fallback == ${debugConfig.isHTTPFallbackEnabled()}`);
                         return;
                     }
 
@@ -995,30 +1503,19 @@ Licensed under Apache-2.0 license.
                     }
 
                     log("Fallback", `Switching to HTTP download: ${reason}`);
-                    log("Fallback", `Current state: bytesReceived=${bytesReceived}, pump.bytesWritten=${writePump?.bytesWritten || 0}`);
+                    log("Fallback", `Current state: bytesReceived=${bytesReceived}, pump.bytesWritten=${writePump.bytesWritten}`);
 
-                    // If WritePump exists, prepare for fallback (flush writes but keep writer open for DownloadManager)
-                    const flushPromise = writePump
-                        ? writePump.prepareForFallback(5000, `Fallback: ${reason}`)
-                        : Promise.resolve();
+                    // Prepare WritePump for fallback (flush writes but keep writer open for DownloadManager)
+                    const flushPromise = writePump.prepareForFallback(5000, `Fallback: ${reason}`);
 
                     // Mark as handled to prevent duplicate fallback attempts
                     connectionFailureHandled = true;
 
-                    setStatus(t('client.status.switchingRelay', `Switching to relay mode: ${reason}`, { reason }));
-                    setConnectionType(t('client.connection.serverRelay', 'Using Server Relay Download'));
-
-                    // Clear countdown immediately when fallback is triggered
-                    if (countdownInterval) {
-                        clearInterval(countdownInterval);
-                        countdownInterval = null;
-                    }
+                    // Show switching to relay UI
+                    uiManager.showSwitchingToRelay(reason);
 
                     // Update download message to the full version
-                    if (downloadMessage) {
-                        downloadMessage.textContent = t('client.download.startShortly', 'Your download will start shortly.');
-                        log("UI", "Updated download message to include fallback instructions");
-                    }
+                    uiManager.updateFallbackMessage();
 
                     try {
                         // Check if E2EE is enabled
@@ -1030,7 +1527,7 @@ Licensed under Apache-2.0 license.
                             logFunction: log,
                             uid: 'uid=****',
                             e2eeEnabled: e2eeEnabledValue, // Pass E2EE status via constructor
-                            progressBar: progressBar, // Use WebRTC progress bar
+                            progressBar: document.getElementById('downloadProgress'), // Use WebRTC progress bar
                             statusHeading: '#download-message', // Use download message as status heading
                             statusDetails: '#status-details', // Use newly added status details
                             progressInfo: '#connectionType', // Use connectionType for file size info
@@ -1045,9 +1542,9 @@ Licensed under Apache-2.0 license.
                                     log("E2EE", "✓ E2EE context pre-registered with Service Worker");
                                 }
                             },
-                            onDownloadStartCallback: (downloadId) => {
+                            onDownloadStartCallback: (downloadId, total) => {
                                 // Handle P2P to HTTP transition
-                                log("Fallback", `DownloadManager started, download ID: ${downloadId}`);
+                                log("Fallback", `DownloadManager started, download ID: ${downloadId}, total: ${total}`);
 
                                 // Send E2EE context with specific download ID (already pre-registered with __pre_registered__)
                                 if (downloadManager.httpDecryptor && navigator.serviceWorker && navigator.serviceWorker.controller) {
@@ -1059,16 +1556,13 @@ Licensed under Apache-2.0 license.
                                 connectionFailureHandled = true;
 
                                 // Clear P2P timers
-                                if (countdownInterval) {
-                                    clearInterval(countdownInterval);
-                                    countdownInterval = null;
-                                }
+                                uiManager.stopCountdown();
                                 if (typeof fallbackTimer !== 'undefined' && fallbackTimer) {
                                     clearTimeout(fallbackTimer);
                                 }
 
                                 // Show server relay status
-                                setConnectionType(t('client.connection.serverRelay', 'Using Server Relay Download'));
+                                uiManager.setConnectionType(t('client.connection.serverRelay', 'Using Server Relay Download'));
                                 log("Fallback", "Successfully transitioned from P2P to HTTP download");
                             }
                         });
@@ -1076,7 +1570,7 @@ Licensed under Apache-2.0 license.
                         // Setup retry handlers
                         downloadManager.setupRetryHandlers();
 
-                        // Start download immediately (wrapped in async IIFE to avoid changing fallbackToHTTP signature)
+                        // Start download immediately 
                         (async () => {
                             // Wait for flush to complete (already triggered earlier)
                             await flushPromise;
@@ -1085,60 +1579,53 @@ Licensed under Apache-2.0 license.
                             fallbackTriggered = true;
 
                             // Get actual bytes written from WritePump (accurate for resume)
-                            const actualBytesWritten = writePump?.bytesWritten || 0;
+                            const actualBytesWritten = writePump.bytesWritten;
                             log("Fallback", "Queue flushed, starting DownloadManager download");
                             log("Fallback", `Current state (after flush): bytesReceived=${bytesReceived}, bytesWritten=${actualBytesWritten}`);
-                            
-                            
+
+
                             if (e2eeEnabledValue) {
                                 downloadManager.httpDecryptor = await e2eeManager.setupHTTPDecryptor();
                                 log("E2EE", "✓ HTTP decryptor ready");
-                            }                            
+                            }
 
-                            // Calculate resume options
+                            // Calculate resume options and prepare writer
                             let resumeOptions = null;
 
-                            // Resume only available if WritePump exists (StreamSaver for large files)
-                            // Blob downloads (small files ≤10MB) accumulate in memory, can't resume
-                            // For small files, full redownload is acceptable and fast
-                            if (!writePump) {
-                                log("Fallback", "Resume not available: no WritePump (blob download or small file - will redownload from start)");
+                            const hasBytes = actualBytesWritten > 0;
+                            const hasSize = typeof fileSize === 'number' && fileSize > 0;
+
+                            if (!hasBytes || !hasSize) {
+                                log("Fallback", `Resume not applicable: bytesWritten=${actualBytesWritten}, fileSize=${fileSize}`);
+                            } else if (actualBytesWritten >= fileSize) {
+                                log("Fallback", `Resume skipped: bytesWritten (${actualBytesWritten}) >= fileSize (${fileSize})`);
                             } else {
-                                // Use WritePump's bytesWritten (actual written bytes)
-                                const hasBytes = actualBytesWritten > 0;
-                                const hasSize = typeof fileSize === 'number' && fileSize > 0;
+                                // Always use 256 KiB alignment for resume and E2EE
+                                const ALIGN = 256 * 1024;
+                                const alignedStart = Math.floor(actualBytesWritten / ALIGN) * ALIGN;
+                                const skipBytes = actualBytesWritten - alignedStart;
 
-                                if (!hasBytes || !hasSize) {
-                                    log("Fallback", `Resume not applicable: bytesWritten=${actualBytesWritten}, fileSize=${fileSize}`);
-                                } else if (actualBytesWritten >= fileSize) {
-                                    log("Fallback", `Resume skipped: bytesWritten (${actualBytesWritten}) >= fileSize (${fileSize})`);
+                                const resumePayload = {
+                                    baseBytes: actualBytesWritten,
+                                    rangeStart: alignedStart,
+                                    skipBytes: skipBytes,
+                                    expectedSize: fileSize,
+                                    writer: writePump.writer
+                                };
+
+                                log("Fallback", `Resume calculation: baseBytes=${actualBytesWritten}, rangeStart=${alignedStart}, skipBytes=${skipBytes}, expectedSize=${fileSize}`);
+
+                                if (resumePayload.rangeStart >= 0 && resumePayload.rangeStart < fileSize) {
+                                    resumeOptions = resumePayload;
+                                    log("Fallback", `Resume options prepared`);
                                 } else {
-                                    // Always use 256 KiB alignment for resume (not just E2EE)
-                                    const ALIGN = 256 * 1024;
-                                    const alignedStart = Math.floor(actualBytesWritten / ALIGN) * ALIGN;
-                                    const skipBytes = actualBytesWritten - alignedStart;
-
-                                    const resumePayload = {
-                                        baseBytes: actualBytesWritten,
-                                        rangeStart: alignedStart,
-                                        skipBytes: skipBytes,
-                                        expectedSize: fileSize,
-                                        writer: writePump.writer
-                                    };
-
-                                    log("Fallback", `Resume calculation: baseBytes=${actualBytesWritten}, rangeStart=${alignedStart}, skipBytes=${skipBytes}, expectedSize=${fileSize}`);
-
-                                    if (resumePayload.rangeStart >= 0 && resumePayload.rangeStart < fileSize) {
-                                        resumeOptions = resumePayload;
-                                        log("Fallback", `Resume options prepared with writer: ${resumeOptions.writer ? 'YES' : 'NO'}`);
-                                    } else {
-                                        log("Fallback", `Resume range invalid: start=${resumePayload.rangeStart}, fileSize=${fileSize}`);
-                                    }
+                                    log("Fallback", `Resume range invalid: start=${resumePayload.rangeStart}, fileSize=${fileSize}`);
                                 }
                             }
 
-                            log("Fallback", `Starting DownloadManager with resume: ${resumeOptions ? 'YES' : 'NO'}, writer: ${resumeOptions?.writer ? 'YES' : 'NO'}`);
+                            log("Fallback", `Starting DownloadManager with writer: YES, resume: ${resumeOptions ? 'YES' : 'NO'}`);
                             downloadManager.startDownload({
+                                writer: writePump.writer,  
                                 resume: resumeOptions
                             });
                         })();
@@ -1148,13 +1635,13 @@ Licensed under Apache-2.0 license.
                         // Simple fallback if DownloadManager fails
                         window.location.href = '/uid=****/download';
                     }
-                    setStatus(t('client.status.relayStarted', 'Relayed P2P Download Started.'));
+                    uiManager.showRelayStarted();
                 };
 
                 // Check if we should skip WebRTC due to download restrictions
                 if (DISABLE_WEBRTC || SKIP_WEBRTC_DUE_TO_RESTRICTION) {
                     if (SKIP_WEBRTC_DUE_TO_RESTRICTION) {
-                        setStatus(t('client.fallback.browserNotSupported', 'Downloads not supported in this browser'));
+                        uiManager.showBrowserNotSupported();
                     } else {
                         fallbackToHTTP(t('client.fallback.p2pDisabled', 'Device-to-Device P2P disabled. Use Relayed P2P.'));
                     }
@@ -1162,61 +1649,18 @@ Licensed under Apache-2.0 license.
                 }
                 
                 // Initialize status & countdown
-                setStatus(t('client.status.establishingP2p', 'Establishing P2P connection...'), true);
-                setConnectionType(t('client.connection.waitingPeer', 'Waiting for peer ({{seconds}}s)', { seconds: countdownSeconds }));
-                countdownInterval = setInterval(() => {
-                    // Check if P2P operations should stop - if so, stop countdown
-                    if (shouldStopPeerOperations()) {
-                        clearInterval(countdownInterval);
-                        countdownInterval = null;
-                        return;
-                    }                
-                
-                    countdownSeconds--;
-                    if (countdownSeconds >= 0) {
-                        setConnectionType(t('client.connection.waitingPeer', 'Waiting for peer ({{seconds}}s)', { seconds: countdownSeconds }));
-                    } else {
-                        clearInterval(countdownInterval);
-                    }
-                }, 1000);
-                
-                // Try to initialize StreamSaver if available (service worker-based)
-                let streamSaverReady = false;
-                const canUseSW = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-                log("StreamSaver", `Can use ServiceWorker: ${canUseSW}, protocol: ${location.protocol}, hostname: ${location.hostname}`);
-                
-                if (canUseSW && 'serviceWorker' in navigator) {
-                    log("StreamSaver", "ServiceWorker is available, attempting to load StreamSaver");
-                    try {
-                        // https://cdn.jsdelivr.net/npm/streamsaver@2.0.6/mitm.html seems not working because unable to load sw.js from jsdelivr.
-                        streamSaver.mitm = '/static/assets/mitm.html';
-                        streamSaverReady = true;
-                        log('StreamSaver', 'Successfully initialized');
-                    } catch (e) {
-                        log('StreamSaver', 'Load failed, falling back to Blob', e);
-                    }
-                } else {
-                    log("StreamSaver", "ServiceWorker not available, will use Blob instead");
-                }
-                
+                uiManager.showEstablishingP2P(countdownSeconds);
+
                 // Request offer from server
                 log("WebRTC", "Requesting offer from server");
                 let offerResponse;
                 try {
                     // Build offer URL with debug parameters
                     let offerUrl = '/uid=****/offer';
-                    const debugParams = new URLSearchParams();
+                    const debugParams = debugConfig.buildOfferDebugParams();
 
-                    if (DEBUG_SIMULATE_ICE_FAILURE) {
-                        debugParams.set('simulate-ice-failure', 'true');
-                    }
-                    if (DEBUG_SIMULATE_STALL) {
-                        debugParams.set('simulate-stall', 'true');
-                        debugParams.set('stall-after', DEBUG_STALL_AFTER_BYTES.toString());
-                    }
-
-                    if (debugParams.toString()) {
-                        offerUrl += '?' + debugParams.toString();
+                    if (debugParams) {
+                        offerUrl += '?' + debugParams;
                         log("WebRTC", `Using debug offer URL: ${offerUrl}`);
                     }
 
@@ -1252,8 +1696,18 @@ Licensed under Apache-2.0 license.
                 }              
               
                 try {
+                    // ============================================================
+                    // WebRTC P2P Connection Setup
+                    // ============================================================
+                    // This section:
+                    // 1. Creates RTCPeerConnection with STUN servers
+                    // 2. Sets up fallback timeout for connection failures
+                    // 3. Registers event handlers for ICE state changes
+                    // 4. Handles ICE candidate exchange (trickle ICE)
+                    // 5. Manages data channel for file transfer
+                    // ============================================================
+
                     log("WebRTC", "Creating peer connection");
-                    // Create WebRTC peer connection
                     const pc = new RTCPeerConnection({
                         iceServers: [
                             { urls: 'stun:stun.l.google.com:19302' },
@@ -1271,59 +1725,101 @@ Licensed under Apache-2.0 license.
                         log("Fallback", `Timeout reached after ${FALLBACK_MS}ms`);
                         fallbackToHTTP("Connection timeout");
                     }, FALLBACK_MS);
-                    
-                    // ICE connection state monitoring with improved logic
-                    pc.oniceconnectionstatechange = () => {
+
+                    // ============ ICE Connection State Handler ============
+                    // lifecycle: checking → connected → completed/failed/disconnected.
+                    const handleICEConnectionStateChange = () => {
                         log("ICE", `Connection state changed to: ${pc.iceConnectionState}`);
-                        
+
                         // If P2P operations should stop, ignore
                         if (shouldStopPeerOperations()) {
                             return;
-                        }                        
-                        
+                        }
+
                         switch (pc.iceConnectionState) {
                             case 'checking':
-                                setStatus(t('client.status.p2pChecking', 'P2P connection...[Checking]'), true);
+                                uiManager.showP2PChecking();
                                 break;
+
                             case 'connected':
-                               // Clear countdown when connection established
-                                if (countdownInterval) {
-                                    clearInterval(countdownInterval);
-                                    countdownInterval = null;
-                                    log("UI", "Countdown cleared on connection established");
-                                }
+                                // Clear countdown and disconnect timers when connection established
+                                uiManager.stopCountdown();
+                                log("UI", "Countdown cleared on connection established");
                                 disconnectedTime = null;
-                                stopCandidatePolling = true;  
+
+                                if (disconnectDuringTransferTimer) {
+                                    clearTimeout(disconnectDuringTransferTimer);
+                                    disconnectDuringTransferTimer = null;
+                                }
+
+                                stopCandidatePolling = true;
                                 log("ICE", "Connection established successfully");
                                 break;
+
                             case 'completed':
                                 disconnectedTime = null;
+
+                                if (disconnectDuringTransferTimer) {
+                                    clearTimeout(disconnectDuringTransferTimer);
+                                    disconnectDuringTransferTimer = null;
+                                }
+
                                 log("ICE", "All ICE candidates have been found");
                                 break;
+
                             case 'disconnected':
                                 log("ICE", "Connection lost temporarily");
-                                
-                                // Only trigger fallback if transfer hasn't started
+
                                 if (!hasTransferStarted()) {
                                     disconnectedTime = Date.now();
-                                    setStatus(t('client.status.reconnecting', 'Connection lost, attempting to reconnect...'), true);
-                                    
+                                    uiManager.showReconnecting();
+
                                     // Increased timeout for pre-transfer disconnections
                                     setTimeout(() => {
                                         if (pc.iceConnectionState === 'disconnected' &&
                                             disconnectedTime &&
-                                            Date.now() - disconnectedTime > 15000 && // Increased to 15 seconds
+                                            Date.now() - disconnectedTime > 15000 &&
                                             shouldHandlePreTransferFailure()) {
-                                            
+
                                             fallbackToHTTP("Connection lost before transfer started");
                                         }
                                     }, 16000);
+
+                                // During transfer: show network fluctuation and set fallback timer
                                 } else {
-                                    // During transfer, just log but don't trigger fallback
                                     log("ICE", "Network fluctuation during transfer - continuing");
-                                    setStatus(t('client.status.networkFluctuation', 'Network fluctuation detected, continuing transfer...'), true);
+                                    uiManager.showNetworkFluctuation();
+
+                                    // Don't create duplicate timers
+                                    if (!disconnectDuringTransferTimer) {
+                                        const delay = STALL_MS + 3000; // Buffer beyond stall detection
+
+                                        disconnectDuringTransferTimer = setTimeout(() => {
+                                            disconnectDuringTransferTimer = null;
+
+                                            // Exit if download already completed or fallback triggered
+                                            if (shouldStopPeerOperations()) {
+                                                return;
+                                            }
+
+                                            // Exit if ICE recovered to connected/completed
+                                            if (pc.iceConnectionState !== 'disconnected') {
+                                                return;
+                                            }
+
+                                            // Conservative: only fallback if transfer started AND actually stalled
+                                            if (!hasTransferStarted() || !isStalled()) {
+                                                return;
+                                            }
+
+                                            log("ICE", "Still disconnected and stalled - switching to HTTP fallback");
+                                            // Use force = true to bypass "transfer in progress" protection
+                                            fallbackToHTTP("ICE disconnected during active transfer (stalled)", true);
+                                        }, delay);
+                                    }
                                 }
                                 break;
+
                             case 'failed':
                                 // Only handle failure if transfer hasn't started
                                 if (!hasTransferStarted()) {
@@ -1331,16 +1827,15 @@ Licensed under Apache-2.0 license.
                                         restartAttempted = true;
                                         log("ICE", "ICE failed – trying restartIce() once");
                                         pc.restartIce();
-                                        setStatus(t('client.status.retryingP2p', 'Retrying P2P connection…'), true);
-                                        setConnectionType(t('client.connection.retrying', 'Retrying P2P connection'));
-                                        
+                                        uiManager.showRetryingP2P();
+
                                         setTimeout(() => {
                                             if ((pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') &&
                                                 shouldHandlePreTransferFailure()) {
-                                                
+
                                                 fallbackToHTTP("Connection restart failed");
                                             }
-                                        }, 20000); // Increased to 20 seconds
+                                        }, 20000);
                                     } else {
                                         fallbackToHTTP("Connection failed after restart");
                                     }
@@ -1348,11 +1843,15 @@ Licensed under Apache-2.0 license.
                                     log("ICE", "ICE failed during transfer - but data channel still active");
                                 }
                                 break;
+
                             case 'closed':
                                 log("ICE", "Connection closed");
                                 break;
                         }
                     };
+
+                    // ICE connection state monitoring with improved logic
+                    pc.oniceconnectionstatechange = handleICEConnectionStateChange;
                     
                     // Simplified connection state monitoring to avoid conflicts
                     pc.onconnectionstatechange = () => {
@@ -1368,448 +1867,80 @@ Licensed under Apache-2.0 license.
                         }
                     };
 
-                    // Process and send ICE candidates
-                    pc.onicecandidate = e => {
-                        if (e.candidate) {
-                            const candidateData = {
-                                peerId: peerId,
-                                candidate: e.candidate.candidate,
-                                sdpMid: e.candidate.sdpMid,
-                                sdpMLineIndex: e.candidate.sdpMLineIndex
-                            };
-                            
-                            const candidateJson = JSON.stringify(candidateData);
-                            log("ICE", `New candidate: ${e.candidate.candidate?.substring(0, 50)}...`);
-                            
-                            log("ICE", `Sending candidate to server: ${candidateJson.substring(0, 50)}...`);
-                            fetch('/uid=****/candidate', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: candidateJson,
-                            }).then(() => {
-                                log("ICE", `Successfully sent candidate to server`);
-                                if (!shouldStopPeerOperations()) {
-                                    setStatus(t('client.status.p2pConnecting', 'P2P connection...[Connecting]'), true);
-                                }
-                            }).catch(err => {
-                                log("ICE", `Failed to send candidate:`, err);
-                                // Continue despite error - this might not be fatal
-                            });
+                    // ============ ICE Candidate Handlers ============
+                    const sendLocalCandidate = (candidate) => {
+                        const candidateData = {
+                            peerId: peerId,
+                            candidate: candidate.candidate,
+                            sdpMid: candidate.sdpMid,
+                            sdpMLineIndex: candidate.sdpMLineIndex
+                        };
+
+                        const candidateJson = JSON.stringify(candidateData);
+                        log("ICE", `New candidate: ${candidate.candidate?.substring(0, 50)}...`);
+
+                        log("ICE", `Sending candidate to server: ${candidateJson.substring(0, 50)}...`);
+                        fetch('/uid=****/candidate', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: candidateJson,
+                        }).then(() => {
+                            log("ICE", `Successfully sent candidate to server`);
+                            if (!shouldStopPeerOperations()) {
+                                uiManager.showP2PConnecting();
+                            }
+                        }).catch(err => {
+                            log("ICE", `Failed to send candidate:`, err);
+                            // Continue despite error - this might not be fatal
+                        });
+                    };
+
+                    const sendEndOfCandidates = () => {
+                        const endCandidatesData = {
+                            peerId: peerId,
+                            candidate: 'end-of-candidates'
+                        };
+
+                        fetch('/uid=****/candidate', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(endCandidatesData),
+                        }).catch(err => {
+                            log("ICE", `Failed to send end-of-candidates:`, err);
+                        });
+
+                        log("ICE", "All candidates gathered");
+                    };
+
+                    const handleICECandidate = (event) => {
+                        if (event.candidate) {
+                            sendLocalCandidate(event.candidate);
                         } else {
-                            // Send end-of-candidates message to server
-                            const endCandidatesData = {
-                                peerId: peerId,
-                                candidate: 'end-of-candidates'
-                            };
-                            
-                            fetch('/uid=****/candidate', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify(endCandidatesData),
-                            }).catch(err => {
-                                log("ICE", `Failed to send end-of-candidates:`, err);
-                            });
-                            
-                            log("ICE", "All candidates gathered");
+                            sendEndOfCandidates();
                         }
                     };
 
-                    // Handle data channel with improved state tracking
-                    log("WebRTC", "Setting up data channel handler");
-                    pc.ondatachannel = ({ channel: dc }) => {
-                        log("DataChannel", `Received data channel: ${dc.label}, ID: ${dc.id}`);
-                        log("DataChannel", `ordered=${dc.ordered}, maxRetransmits=${dc.maxRetransmits ?? 'null'}, maxPacketLifeTime=${dc.maxPacketLifeTime ?? 'null'}`);
-                        dataChannelEstablished = true;
-                        lastProgressTs = Date.now(); // Initialize progress timestamp when channel is established
+                    // Process and send ICE candidates
+                    pc.onicecandidate = handleICECandidate;
 
-                        setStatus(t('client.status.p2pSuccess', 'P2P connection successful! Downloading...'));
-                        setConnectionType(t('client.connection.directP2p', 'Direct P2P transfer'));
-                        if (downloadMessage) {
-                            downloadMessage.textContent = t('client.download.deviceStarted', 'Device-to-Device download started.');
-                        }
-                        clearTimeout(fallbackTimer);
-                        clearInterval(countdownInterval);
-                        log("Fallback", "Cleared timeout - connection successful");
-
+                    // ============ Data Channel Setup ============
+                    const setupDataChannelHandlers = (dc) => {
+                        // Configure data channel
                         dc.binaryType = 'arraybuffer';
                         log("DataChannel", `Binary type set to: ${dc.binaryType}`);
-                        
-                        // Enhanced data channel state monitoring
-                        dc.onopen = () => {
-                            log("DataChannel", "Channel opened");
-                            dataChannelEstablished = true;
-                            lastProgressTs = Date.now(); // Initialize progress timestamp when channel opens
-                        };
-                        
-                        dc.onclose = () => {
-                            log("DataChannel", "Channel closed");
-                            // Only trigger fallback if download incomplete and not already handled
-                            // Use WritePump's bytesWritten for accurate completion check
-                            const bytesWrittenSoFar = writePump?.bytesWritten || bytesReceived;
-                            if (!shouldStopPeerOperations() && bytesWrittenSoFar < fileSize) {
-                                log("DataChannel", `Channel closed before completion (written: ${bytesWrittenSoFar}/${fileSize})`);
-                                fallbackToHTTP("Data channel closed unexpectedly", true);
-                            }
-                        };
-                        
-                        dc.onerror = (err) => {
-                            log("DataChannel", "Error:", err);
-                            if (!shouldStopPeerOperations()) {
-                                fallbackToHTTP("Data channel error", true);
-                            }
-                        };
-                        
-                        // Choose streaming strategy - use Blob for files under 10MB to avoid memory issues
-                        const USE_BLOB_THRESHOLD = 10 * 1024 * 1024; // 10MB - Reduced to prevent memory issues
-                        
-                        if (fileSize > USE_BLOB_THRESHOLD && !streamSaverReady) {
-                            // Large file but no StreamSaver support - fallback to HTTP download
-                            log("Strategy", `File too large (${Math.round(fileSize/1024/1024)}MB) for memory-safe download without ServiceWorker support`);
-                            fallbackToHTTP(t('client.fallback.fileTooBig', 'File too large for direct download - using server relay'));
-                            return;
-                        }
-                        
-                        if (streamSaverReady && fileSize > USE_BLOB_THRESHOLD) {
-                            log("Strategy", "Using StreamSaver for large file download");
 
-                            // Create StreamSaver writable stream
-                            const fileStream = streamSaver.createWriteStream(fileName, {
-                                size: fileSize || undefined
-                            });
-
-                            // Initialize WritePump with callbacks
-                            writePump = new WritePump(fileStream, fileSize, {
-                                onComplete: ({ bytesWritten }) => {
-                                    log("Download", `✅ Complete! ${bytesWritten} bytes written`);
-                                    downloadComplete();
-                                },
-                                onFallback: (reason) => {
-                                    log("Download", `WritePump fallback: ${reason}`);
-                                    if (!shouldStopPeerOperations()) {
-                                        fallbackToHTTP(reason, true);
-                                    }
-                                },
-                                log: log
-                            });
-                            log("StreamSaver", `Created WritePump for file: ${fileName}`);
-
-                            let received = 0;
-                            let chunks = 0;
-                            let lastProgressUpdate = 0;
-                            const PROGRESS_THROTTLE_MS = 50; // Faster progress updates (50ms)
-                            
-                            dc.onmessage = async ({ data }) => {
-                                // Check message type (control or data)
-                                if (typeof data === 'string') {
-                                    log("DataChannel", `Received string message: ${data}`);
-                                    if (data === 'EOF') {
-                                        log("DataChannel", `End of file received after ${chunks} chunks, ${received} bytes`);
-                                        setStatus(t('client.status.savingFile', 'Saving file...'));
-
-                                        // EOF with deadline - if writer stuck, fallback to HTTP resume
-                                        const FINISH_DEADLINE_MS = 10000; // 10 seconds for writer to finish
-                                        try {
-                                            await Promise.race([
-                                                writePump.eof(),
-                                                new Promise((_, reject) =>
-                                                    setTimeout(() => reject(new Error('writer-finish-timeout')), FINISH_DEADLINE_MS)
-                                                )
-                                            ]);
-                                            // Success - EOF completed within deadline
-                                            return;
-                                        } catch (err) {
-                                            // Writer stuck (SW/mitm not accepting writes fast enough)
-                                            log("DataChannel", `Writer finish timeout after ${FINISH_DEADLINE_MS}ms: ${err.message}`);
-                                            log("DataChannel", `Preparing for HTTP fallback with resume from ${writePump.bytesWritten} bytes`);
-
-                                            // Prepare for fallback - flush pending writes but keep writer open
-                                            await writePump.prepareForFallback(5000, 'Writer stuck finishing after EOF');
-
-                                            // Trigger HTTP fallback with resume support
-                                            fallbackToHTTP('Writer stuck finishing after EOF', true);
-                                            return;
-                                        }
-
-                                    } else if (data === 'ERROR') {
-                                        log("DataChannel", "Server reported error");
-                                        if (!shouldStopPeerOperations()) {
-                                            fallbackToHTTP("Server reported error", true);
-                                        }
-                                    } else {
-                                        log("DataChannel", `Unknown string message: ${data}`);
-                                    }
-                                } else {
-                                    // Binary data - decrypt if E2EE enabled
-                                    let plainData = data;
-                                    if (webrtcDecryptor) {
-                                        const encryptedChunk = new Uint8Array(data);
-                                        plainData = (await webrtcDecryptor.decryptChunk(encryptedChunk)).buffer;
-                                    }
-
-                                    // Update progress immediately (not tied to writing)
-                                    chunks++;
-                                    received += plainData.byteLength;
-                                    bytesReceived = received; // Update global tracker for UI/progress
-
-                                    if (DEBUG_FORCE_FALLBACK && !forceFallbackIssued) {
-                                        log(
-                                            "Fallback",
-                                            `Force fallback candidate: chunk=${plainData.byteLength}, received=${bytesReceived}, threshold=${FORCE_FALLBACK_THRESHOLD}`
-                                        );
-                                    }
-
-                                    if (
-                                        DEBUG_FORCE_FALLBACK &&
-                                        !forceFallbackIssued &&
-                                        bytesReceived > 0 &&
-                                        bytesReceived >= FORCE_FALLBACK_THRESHOLD
-                                    ) {
-                                        forceFallbackIssued = true;
-                                        log("Fallback", "Force fallback parameter detected - switching to HTTP");
-                                        fallbackToHTTP("Forced fallback via URL parameter", true);
-                                        return;
-                                    }
-
-                                    // Debug: Simulate stall after specified bytes
-                                    if (simulateStallIfNeeded(received, dc)) {
-                                        return;
-                                    }
-
-                                    lastProgressTs = Date.now(); // Update progress timestamp
-
-                                    // Queue data for writing - WritePump handles all write ordering
-                                    writePump.enqueue(new Uint8Array(plainData));
-
-                                    // Immediate progress updates (not tied to write completion)
-                                    const now = Date.now();
-                                    if (now - lastProgressUpdate >= PROGRESS_THROTTLE_MS || received === fileSize) {
-                                        lastProgressUpdate = now;
-
-                                        // Log progress periodically
-                                        if (chunks % 50 === 0 || received === fileSize) {
-                                            log("Progress", `Received ${chunks} chunks, ${received} bytes (written: ${writePump.bytesWritten})`);
-                                        }
-
-                                        if (progressBar)
-                                            progressBar.value = received;
-
-                                        // Update percentage display if file size is known
-                                        if (fileSize) {
-                                            const percent = Math.round(received * 100 / fileSize);
-                                            setStatus(t('client.status.downloadingPercent', 'Downloading via P2P: {{percent}}%', { percent }));
-                                        }
-                                    }
-                                }
-                            };
-                        } else {
-                            log("Strategy", "Using optimized Blob for file download");
-                            // Use Blob for smaller files (≤ 10MB) - accumulates chunks in memory before creating download
-                            const chunks = [];
-                            let received = 0;
-                            let chunkCount = 0;
-                            let lastProgressUpdate = 0;
-                            const PROGRESS_THROTTLE_MS = 50; // Faster progress updates (50ms)
-                            let pendingChunkPromise = Promise.resolve();
-                            let blobFinalized = false;
-
-                            const recordChunk = (plainData) => {
-                                const chunkView = plainData instanceof ArrayBuffer
-                                    ? new Uint8Array(plainData.slice(0))
-                                    : new Uint8Array(plainData);
-                                chunkCount++;
-                                received += chunkView.byteLength;
-                                bytesReceived = received; // Update global tracker
-
-                                if (simulateStallIfNeeded(received, dc)) {
-                                    return;
-                                }
-
-                                lastProgressTs = Date.now();
-                                chunks.push(chunkView);
-
-                                const now = Date.now();
-                                if (now - lastProgressUpdate >= PROGRESS_THROTTLE_MS || received === fileSize) {
-                                    lastProgressUpdate = now;
-
-                                    if (chunkCount % 20 === 0 || received === fileSize) {
-                                        log("Progress", `Received ${chunkCount} chunks, ${received} bytes total`);
-                                    }
-
-                                    if (progressBar) {
-                                        progressBar.value = received;
-                                    }
-
-                                    if (fileSize) {
-                                        const percent = Math.round(received * 100 / fileSize);
-                                        setStatus(t('client.status.downloadingPercent', 'Downloading via P2P: {{percent}}%', { percent }));
-                                    }
-                                }
-                            };
-
-                            const finalizeBlobDownload = () => {
-                                if (blobFinalized) {
-                                    return;
-                                }
-                                blobFinalized = true;
-                                log("DataChannel", `End of file received after ${chunkCount} chunks, ${received} bytes`);
-                                setStatus(t('client.status.savingFile', 'Saving file...'));
-
-                                if (fileSize && received < fileSize) {
-                                    log("DataChannel", `Incomplete transfer detected: expected ${fileSize}, got ${received}`);
-                                    if (!shouldStopPeerOperations()) {
-                                        fallbackToHTTP("Incomplete P2P transfer detected", true);
-                                    }
-                                    return;
-                                }
-
-                                try {
-                                    const blob = new Blob(chunks, { type: 'application/octet-stream' });
-                                    log("Blob", `Created blob of size: ${blob.size} bytes`);
-                                    triggerBlobDownload(blob);
-                                    downloadComplete();
-                                } catch (e) {
-                                    log("DataChannel", `Failed to finalize blob: ${e}`);
-                                    if (!shouldStopPeerOperations()) {
-                                        fallbackToHTTP("Failed to finalize download", true);
-                                    }
-                                }
-                            };
-
-                            dc.onmessage = ({ data }) => {
-                                if (typeof data === 'string') {
-                                    log("DataChannel", `Received string message: ${data}`);
-                                    if (data === 'EOF') {
-                                        pendingChunkPromise = pendingChunkPromise
-                                            .then(() => finalizeBlobDownload())
-                                            .catch(err => {
-                                                log("DataChannel", `Error finishing transfer: ${err}`);
-                                                if (!shouldStopPeerOperations()) {
-                                                    fallbackToHTTP("Decryption error", true);
-                                                }
-                                            });
-                                    } else if (data === 'ERROR') {
-                                        log("DataChannel", "Server reported error");
-                                        if (!shouldStopPeerOperations()) {
-                                            fallbackToHTTP("Server reported error", true);
-                                        }
-                                    } else {
-                                        log("DataChannel", `Unknown string message: ${data}`);
-                                    }
-                                    return;
-                                }
-
-                                pendingChunkPromise = pendingChunkPromise
-                                    .then(async () => {
-                                        if (webrtcDecryptor) {
-                                            const decrypted = await webrtcDecryptor.decryptChunk(new Uint8Array(data));
-                                            recordChunk(decrypted);
-                                        } else {
-                                            recordChunk(data);
-                                        }
-                                    })
-                                    .catch(err => {
-                                        log("DataChannel", `Chunk processing failed: ${err}`);
-                                        if (!shouldStopPeerOperations()) {
-                                            fallbackToHTTP("Decryption error", true);
-                                        }
-                                    });
-                            };
-                        }
-                        
-                        // Trigger download for blob-based transfer
-                        function triggerBlobDownload(blob) {
-                            log("Download", "Creating object URL for blob");
-                            const url = URL.createObjectURL(blob);
-                            log("Download", `Created URL: ${url}`);
-                            
-                            const a = document.createElement('a');
-                            a.href = url;
-                            a.download = fileName;
-                            a.style.display = 'none';
-                            document.body.appendChild(a);
-                            
-                            log("Download", `Clicking download link for ${fileName}`);
-                            a.click();
-                            
-                            setTimeout(() => {
-                                log("Download", "Cleaning up object URL");
-                                URL.revokeObjectURL(url);
-                                a.remove();
-                            }, 60000);
-                        }
-                        
-                        // Handle download completion
-                        function downloadComplete() {
-                            if (downloadCompleted) {
-                                return;
-                            }
-
-                            if (fileSize && bytesReceived < fileSize) {
-                                log("Download", `Incomplete P2P transfer detected: expected ${fileSize}, got ${bytesReceived}`);
-                                if (!shouldStopPeerOperations()) {
-                                    fallbackToHTTP("Incomplete P2P transfer detected", true);
-                                }
-                                return;
-                            }
-
-                            log("Download", "Complete!");
-
-                            downloadCompleted = true;
-                            fallbackTriggered = true;
-                            setStatus(t('download.complete.title', '✅ Download complete!'));
-                            
-                            // Notify server that download is complete
-                            if (peerId) {
-                                log("Signal", `Notifying server of download completion for peer ${peerId}`);
-                                fetch('/uid=****/complete', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ peerId: peerId, receivedBytes: bytesReceived }),
-                                }).then(() => {
-                                    log("Signal", "Successfully notified server of completion");
-                                }).catch(err => {
-                                    log("Signal", `Failed to notify server of completion: ${err}`);
-                                    // Don't fail the download if notification fails
-                                });
-                            }
-
-                            if (progressBar)
-                                progressBar.value = fileSize || 100;
-
-                            if (downloadMessage) {
-                                downloadMessage.textContent = t('client.download.fileSaved', 'File saved. Please check your download folder.');
-                            }
-                    
-                            // Hide progress bar 1 second after completion
-                            if (progressBar) {
-                                setTimeout(() => {
-                                    removeProgressBar();
-                                }, 1000);
-                            }
-
-                            // P2P download completed successfully
-
-                            stopCandidatePolling = true;
-                            connectionFailureHandled = true;
-
-                            if (typeof fallbackTimer !== 'undefined') {
-                                clearTimeout(fallbackTimer);
-                            }
-
-                            if (typeof countdownInterval !== 'undefined') {
-                                clearInterval(countdownInterval);
-                            }
-                            
+                        // Register cleanup callback for downloadComplete function
+                        cleanupConnectionsCallback = () => {
                             setTimeout(() => {
                                 log("WebRTC", "Closing peer connection");
-                                
+
                                 try {
                                     dc.close();
                                     log("DataChannel", "Closed");
                                 } catch (e) {
                                     log("DataChannel", "Error closing:", e);
                                 }
-                                
+
                                 try {
                                     pc.close();
                                     log("WebRTC", "Peer connection closed");
@@ -1817,35 +1948,239 @@ Licensed under Apache-2.0 license.
                                     log("WebRTC", "Error closing peer connection:", e);
                                 }
                             }, 500);
+                        };
+
+                        // Enhanced data channel state monitoring
+                        dc.onopen = () => {
+                            log("DataChannel", "Channel opened");
+                            dataChannelEstablished = true;
+                            lastProgressTs = Date.now();
+                        };
+
+                        dc.onclose = () => {
+                            log("DataChannel", "Channel closed");
+                            const bytesWrittenSoFar = writePump.bytesWritten;
+                            if (!shouldStopPeerOperations() && bytesWrittenSoFar < fileSize) {
+                                log("DataChannel", `Channel closed before completion (written: ${bytesWrittenSoFar}/${fileSize})`);
+                                fallbackToHTTP("Data channel closed unexpectedly", true);
+                            }
+                        };
+
+                        dc.onerror = (err) => {
+                            log("DataChannel", "Error:", err);
+                            if (!shouldStopPeerOperations()) {
+                                fallbackToHTTP("Data channel error", true);
+                            }
+                        };
+                    };
+
+                    // Main handler called when a data channel is received from the peer.
+                    const handleDataChannelReceived = (dc) => {
+                        log("DataChannel", `Received data channel: ${dc.label}, ID: ${dc.id}`);
+                        log("DataChannel", `ordered=${dc.ordered}, maxRetransmits=${dc.maxRetransmits ?? 'null'}, maxPacketLifeTime=${dc.maxPacketLifeTime ?? 'null'}`);
+
+                        dataChannelEstablished = true;
+                        lastProgressTs = Date.now(); // Initialize progress timestamp when channel is established
+
+                        // Update UI for successful connection
+                        // Update UI for successful P2P connection
+                        uiManager.showP2PSuccess();
+                        clearTimeout(fallbackTimer);
+                        log("Fallback", "Cleared timeout - connection successful");
+
+                        // Setup all data channel handlers
+                        setupDataChannelHandlers(dc);
+
+                        // ============ Data Channel Message Handlers ============
+                        let received = 0;
+                        let chunks = 0;
+                        let lastProgressUpdate = 0;
+                        const PROGRESS_THROTTLE_MS = 50; // Faster progress updates (50ms)
+
+                        // Sequential processing to prevent race conditions (especially for small files)
+                        let messageProcessingChain = Promise.resolve();
+
+                        // Handles control messages received over the data channel (EOF, ERROR, etc.).
+                        const handleControlMessage = async (message) => {
+                            log("DataChannel", `Received string message: ${message}`);
+
+                            if (message === 'EOF') {
+                                log("DataChannel", `End of file received after ${chunks} chunks, ${received} bytes`);
+                                uiManager.showSavingFile();
+
+                                // EOF with deadline - if writer stuck, fallback to HTTP resume
+                                const FINISH_DEADLINE_MS = 10000; // 10 seconds for writer to finish
+                                try {
+                                    await Promise.race([
+                                        writePump.eof(),
+                                        new Promise((_, reject) =>
+                                            setTimeout(() => reject(new Error('writer-finish-timeout')), FINISH_DEADLINE_MS)
+                                        )
+                                    ]);
+                                    // Success - EOF completed within deadline
+                                } catch (err) {
+                                    // Writer stuck (SW/mitm not accepting writes fast enough)
+                                    log("DataChannel", `Writer finish timeout after ${FINISH_DEADLINE_MS}ms: ${err.message}`);
+                                    log("DataChannel", `Preparing for HTTP fallback with resume from ${writePump.bytesWritten} bytes`);
+
+                                    // Prepare for fallback - flush pending writes but keep writer open
+                                    await writePump.prepareForFallback(5000, 'Writer stuck finishing after EOF');
+
+                                    // Trigger HTTP fallback with resume support
+                                    fallbackToHTTP('Writer stuck finishing after EOF', true);
+                                }
+                            } else if (message === 'ERROR') {
+                                log("DataChannel", "Server reported error");
+                                if (!shouldStopPeerOperations()) {
+                                    fallbackToHTTP("Server reported error", true);
+                                }
+                            } else {
+                                log("DataChannel", `Unknown string message: ${message}`);
+                            }
+                        };
+
+                        const updateProgressUI = (received, chunks) => {
+                            const now = Date.now();
+                            if (now - lastProgressUpdate >= PROGRESS_THROTTLE_MS || received === fileSize) {
+                                lastProgressUpdate = now;
+
+                                // Log progress periodically
+                                if (chunks % 50 === 0 || received === fileSize) {
+                                    log("Progress", `Received ${chunks} chunks, ${received} bytes (written: ${writePump.bytesWritten})`);
+                                }
+
+                                // Update UI progress
+                                uiManager.updateProgress(received, fileSize);
+                            }
+                        };
+
+                        const handleBinaryData = async (data) => {
+                            log("DataChannel", `Received binary message: chunks: ${chunks}`);
+                            
+                            // Binary data - decrypt if E2EE enabled
+                            let plainData = data;
+                            if (webrtcDecryptor) {
+                                const encryptedChunk = new Uint8Array(data);
+                                plainData = (await webrtcDecryptor.decryptChunk(encryptedChunk)).buffer;
+                            }
+
+                            // Update progress immediately (not tied to writing)
+                            chunks++;
+                            received += plainData.byteLength;
+                            bytesReceived = received; // Update global tracker for UI/progress
+
+                            if (debugConfig.shouldLogForceFallbackCandidate()) {
+                                log(
+                                    "Fallback",
+                                    `Force fallback candidate: chunk=${plainData.byteLength}, received=${bytesReceived}, threshold=${debugConfig.forceFallbackThreshold}`
+                                );
+                            }
+
+                            if (debugConfig.shouldForceFallback(bytesReceived)) {
+                                log("Fallback", "Force fallback parameter detected - switching to HTTP");
+                                fallbackToHTTP("Forced fallback via URL parameter", true);
+                                return;
+                            }
+
+                            // Debug: Simulate stall after specified bytes
+                            if (debugConfig.simulateStallIfNeeded(received, dc)) {
+                                return;
+                            }
+
+                            lastProgressTs = Date.now(); // Update progress timestamp
+
+                            // Queue data for writing - WritePump handles all write ordering
+                            writePump.enqueue(new Uint8Array(plainData));
+
+                            // Immediate progress updates (not tied to write completion)
+                            updateProgressUI(received, chunks);
+                        };
+
+                        const handleDataChannelMessage = async (data) => {
+                            // Check message type (control or data)
+                            if (typeof data === 'string') {
+                                await handleControlMessage(data);
+                            } else {
+                                await handleBinaryData(data);
+                            }
+                        };
+
+                        dc.onmessage = ({ data }) => {
+                            // Chain message processing to ensure sequential execution
+                            messageProcessingChain = messageProcessingChain
+                                .then(() => handleDataChannelMessage(data))
+                                .catch(err => {
+                                    log("DataChannel", `Message processing error: ${err}`);
+                                    if (!shouldStopPeerOperations()) {
+                                        fallbackToHTTP("Message processing error", true);
+                                    }
+                                });
+                        };
+                    };
+
+                    // Handle data channel with improved state tracking
+                    log("WebRTC", "Setting up data channel handler");
+                    pc.ondatachannel = ({ channel: dc }) => {
+                        handleDataChannelReceived(dc);
+                    };
+
+                    // ============ SDP Exchange (Offer/Answer) ============
+                    const setRemoteOffer = async () => {
+                        log("WebRTC", "Setting remote description");
+                        try {
+                            await pc.setRemoteDescription({ type: offerData.type, sdp: offerData.sdp });
+                            log("WebRTC", "Remote description set successfully");
+                        } catch (err) {
+                            log("WebRTC", "Failed to set remote description:", err);
+                            fallbackToHTTP("Failed to set remote description");
+                            throw err; // Re-throw to stop execution
                         }
                     };
-                    
-                    // Set remote description (server's offer)
-                    log("WebRTC", "Setting remote description");
-                    try {
-                        await pc.setRemoteDescription({ type: offerData.type, sdp: offerData.sdp });
-                        log("WebRTC", "Remote description set successfully");
-                    } catch (err) {
-                        log("WebRTC", "Failed to set remote description:", err);
-                        fallbackToHTTP("Failed to set remote description");
-                        return;
-                    }
-                    
-                    // Create answer
-                    log("WebRTC", "Creating answer");
-                    let answer;
-                    try {
-                        answer = await pc.createAnswer();
-                        log("WebRTC", `Answer created: type=${answer.type}, sdp length=${answer.sdp.length}`);
-                        log("WebRTC", `Answer SDP excerpt: ${answer.sdp.substring(0, 50)}...`);
-                    } catch (err) {
-                        log("WebRTC", "Failed to create answer:", err);
-                        fallbackToHTTP("Failed to create answer");
-                        return;
-                    }
-                    
-                    // ---------- ① Server → Browser: Retrieve remote candidate ----------
-                    async function startPollingRemoteCandidates(pcRef) {
+
+                    const createAndSetAnswer = async () => {
+                        log("WebRTC", "Creating answer");
+                        try {
+                            const answer = await pc.createAnswer();
+                            log("WebRTC", `Answer created: type=${answer.type}, sdp length=${answer.sdp.length}`);
+                            log("WebRTC", `Answer SDP excerpt: ${answer.sdp.substring(0, 50)}...`);
+
+                            log("WebRTC", "Setting local description");
+                            await pc.setLocalDescription(answer);
+                            log("WebRTC", "Local description set successfully");
+
+                            return answer;
+                        } catch (err) {
+                            log("WebRTC", "Failed to create/set answer:", err);
+                            fallbackToHTTP("Failed to create answer");
+                            throw err; // Re-throw to stop execution
+                        }
+                    };
+
+                    const sendAnswerToServer = async () => {
+                        log("WebRTC", "Sending answer to server");
+                        try {
+                            const answerResponse = await fetch('/uid=****/answer', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    peerId: peerId,
+                                    sdp: pc.localDescription.sdp,
+                                    type: pc.localDescription.type,
+                                    clientInfo: connectionInfo
+                                }),
+                            });
+                            log("WebRTC", `Answer sent, response: ${answerResponse.status} ${answerResponse.statusText}`);
+                        } catch (err) {
+                            log("WebRTC", "Failed to send answer:", err);
+                            fallbackToHTTP("Failed to send answer to server");
+                            throw err; // Re-throw to stop execution
+                        }
+                    };
+
+                    // ============ Remote ICE Candidate Polling ============
+                    // Polls the server for remote ICE candidates and adds them to the peer connection.
+                    // Continues until end-of-candidates is received or an error occurs.
+                    const startPollingRemoteCandidates = async (pcRef) => {
                         while (!stopCandidatePolling) {
                             try {
                                 // GET /uid=****/candidate  (204 = Temporarily unavailable)
@@ -1854,10 +2189,10 @@ Licensed under Apache-2.0 license.
                                     await new Promise(r => setTimeout(r, 200)); // Ask again in 200 ms
                                     continue;
                                 }
-                                if (resp.status === 404) {      
+                                if (resp.status === 404) {
                                     log("ICE", "Server reports peer closed, stop polling");
                                     break;
-                                }                                
+                                }
                                 if (!resp.ok) {                               // Exit on other errors
                                     log("ICE", `Fetch remote cand failed: ${resp.status}`);
                                     break;
@@ -1876,42 +2211,19 @@ Licensed under Apache-2.0 license.
                                 break;
                             }
                         }
-                    }                    
-                    
-                    // Set local description
-                    log("WebRTC", "Setting local description");
-                    try {
-                        await pc.setLocalDescription(answer);
-                        log("WebRTC", "Local description set successfully");
-                    } catch (err) {
-                        log("WebRTC", "Failed to set local description:", err);
-                        fallbackToHTTP("Failed to set local description");
-                        return;
-                    }
-                    
-                    // Send answer to server
-                    log("WebRTC", "Sending answer to server");
-                    try {
-                        const answerResponse = await fetch('/uid=****/answer', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                peerId: peerId,
-                                sdp: pc.localDescription.sdp,
-                                type: pc.localDescription.type,
-                                clientInfo: connectionInfo
-                            }),
-                        });
-                        log("WebRTC", `Answer sent, response: ${answerResponse.status} ${answerResponse.statusText}`);
-                        
-                        startPollingRemoteCandidates(pc);
-                        
-                    } catch (err) {
-                        log("WebRTC", "Failed to send answer:", err);
-                        fallbackToHTTP("Failed to send answer to server");
-                        return;
-                    }
-                    
+                    };
+
+                    // ============ Execute SDP Exchange ============
+                    // Set remote description (server's offer)
+                    await setRemoteOffer();
+
+                    // Create answer and set as local description
+                    await createAndSetAnswer();
+
+                    // Send answer to server and start candidate polling
+                    await sendAnswerToServer();
+                    startPollingRemoteCandidates(pc);
+
                     log("WebRTC", "Waiting for data channel...");
                 } catch (err) {
                     log("WebRTC", "General error:", err);

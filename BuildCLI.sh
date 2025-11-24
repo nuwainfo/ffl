@@ -13,7 +13,8 @@ echo "Download, unzip and rename pyapp folder"
 
 curl -L https://github.com/ofek/pyapp/releases/latest/download/source.tar.gz -o pyapp-source.tar.gz
 
-mkdir pyapp_$OS
+rm -rf pyapp_$OS
+mkdir -p pyapp_$OS
 tar -xzf pyapp-source.tar.gz --strip-components=1 -C pyapp_$OS
 
 echo "Delete pyapp-source.tar.gz"
@@ -25,6 +26,7 @@ fi
 
 eval "$(conda shell.bash hook)"
 envName="ffl_python_temp"
+rm -rf $envName
 
 echo "Activating conda environment: $envName"
 conda create -n "$envName" python=3.12 -y
@@ -85,9 +87,10 @@ rm -f Setup.py
 
 cd FileShare
 
+rm -f ffl_python_temp.tar.gz
 conda pack -n ffl_python_temp -o ffl_python_temp.tar.gz
 
-mkdir ffl_python_temp
+mkdir -p ffl_python_temp
 tar -xzf ffl_python_temp.tar.gz -C ffl_python_temp
 
 echo "Clean python environment"

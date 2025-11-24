@@ -26,7 +26,7 @@ import platform
 
 from bases.Kernel import PUBLIC_VERSION, getLogger, FFLEvent, configureGlobalLogLevel, AddonsManager, StorageLocator
 from bases.Settings import DEFAULT_AUTH_USER_NAME, SettingsGetter
-from bases.Utils import flushPrint, checkVersionCompatibility
+from bases.Utils import flushPrint, checkVersionCompatibility, getEnv
 
 logger = getLogger(__name__)
 
@@ -88,12 +88,31 @@ def loadEnvFile():
 
 
 def configureLogging(logLevel):
-    """Configure logging level for the application using Kernel's centralized configuration or config file"""
+    """Configure logging level for the application using Kernel's centralized configuration or config file
+
+    Priority order:
+    1. logLevel parameter (from --log-level CLI argument)
+    2. FFL_LOGGING_LEVEL environment variable
+    3. Default to None (no configuration change)
+
+    Both logLevel and FFL_LOGGING_LEVEL can be:
+    - A logging level name (DEBUG, INFO, WARNING, ERROR)
+    - A path to a logging configuration JSON file
+    """
 
     def suppressNoisyLogger():
         logging.getLogger('urllib3').setLevel(logging.INFO)
         logging.getLogger('urllib3.connectionpool').setLevel(logging.INFO)
         logging.getLogger('sentry_sdk').setLevel(logging.INFO)
+
+    # Priority: CLI argument > environment variable > None (no change)
+    if logLevel is None:
+        logLevel = getEnv('FFL_LOGGING_LEVEL', None)
+
+    # If still None, skip configuration (keep existing behavior)
+    if logLevel is None:
+        suppressNoisyLogger()
+        return None
 
     # Check if logLevel is a file path
     if os.path.isfile(logLevel):
@@ -106,7 +125,7 @@ def configureLogging(logLevel):
             logging.config.dictConfig(configDict)
             logger.info(f"Logging configured from file: {logLevel}")
             suppressNoisyLogger()
-            return
+            return logLevel
 
         except (json.JSONDecodeError, FileNotFoundError, KeyError) as e:
             flushPrint(f"Failed to load logging config from {logLevel}: {e}")
@@ -127,6 +146,8 @@ def configureLogging(logLevel):
 
     # Suppress noisy third-party loggers even in DEBUG mode
     suppressNoisyLogger()
+
+    return logLevel
 
 
 def showVersion():
@@ -325,6 +346,9 @@ def configureCLIParser():
         dest="logLevel"
     )
 
+    # Allow addons to register additional global options
+    FFLEvent.cliArgumentsGlobalOptionsRegister.trigger(parser=globalsParent)
+
     # === 2) Main parser + subparsers; all inherit from globalsParent ===
     parser = argparse.ArgumentParser(
         description="FastFileLink makes file sharing fast, simple, and secure.",
@@ -376,6 +400,32 @@ def configureCLIParser():
     # Collect all valid subcommand names (including 'share' and 'download')
     commandNames = {'share', 'download', *commandRegistry.keys()}
     return parser, globalsParent, commandNames, shareSubparser
+
+
+def processGlobalArguments(globalArgs):
+    """
+    Process global arguments (like --enable-reporting, --version) before command processing.
+    This handles global options that affect the entire application or cause early exits.
+
+    Args:
+        globalArgs: Parsed global arguments from globalsParent parser
+
+    Returns:
+        int or None: Exit code if should exit early (e.g., --version), None to continue
+    """
+    # Let addons handle global options (like --enable-reporting)
+    argPolicy = {'exitCode': None}
+    FFLEvent.cliArgumentsGlobalOptionsStore.trigger(args=globalArgs, argPolicy=argPolicy)
+
+    if argPolicy['exitCode'] is not None:
+        return argPolicy['exitCode']
+
+    # Handle --version early exit
+    if globalArgs.version:
+        showVersion()
+        return 0
+
+    return None
 
 
 def processArgumentsAndCommands(args):

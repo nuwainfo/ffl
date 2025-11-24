@@ -39,31 +39,7 @@ from signalslot import Signal
 from sentry_sdk.integrations.logging import SentryHandler, LoggingIntegration
 from sentry_sdk.integrations import atexit as sentryAtexit
 
-
-def getSecret(key: str, jsonFile: str = '.secret'):
-    value = os.getenv(key)
-    if value:
-        return value
-
-    secretPath = Path(jsonFile)
-    if not secretPath.exists():
-        try:
-            callerPath = Path(__file__).resolve().parent.parent / jsonFile
-            if not callerPath.exists():
-                return None
-            secretPath = callerPath
-        except NameError as e: # without __file__ ?
-            logger = logging.getLogger(__name__)
-            logger.debug(f"Unable to determine caller path for secret: {e}")
-            return None
-
-    data = json.loads(secretPath.read_text())
-    return data.get(key)
-
-
-PUBLIC_VERSION = '3.7.2'
-
-SENTRY_DSN = getSecret('SENTRY_DSN')
+PUBLIC_VERSION = '3.7.4'
 
 
 def configureGlobalLogLevel(logLevel):
@@ -91,31 +67,62 @@ def configureGlobalLogLevel(logLevel):
                 handler.setLevel(logLevel)
 
 
-def getLogger(name, version=PUBLIC_VERSION):
+def getLogger(name, version=PUBLIC_VERSION, reinitialize=False):
     """
     Get a logger with Sentry integration. Uses Sentry's own initialization state to avoid duplicate setup.
-    """
-    try:
-        # Import Sentry components locally to avoid circular imports
+    SENTRY_DSN is loaded dynamically via SecretGetter and cached transparently.
 
+    Args:
+        name: Logger name
+        version: Version string for logging context
+        reinitialize: If True, reinitialize Sentry and add handlers to all existing loggers
+    """
+    logger = None
+
+    try:
         # Check if Sentry is already initialized using Sentry's own state
         notInit = not sentry_sdk.Hub.current or not sentry_sdk.Hub.current.client
         sentryInitialized = False
 
-        if notInit and SENTRY_DSN:
-            # Override default_callback to suppress "sentry is attempting to send pending events..." message
-            sentryAtexit.default_callback = lambda pending, timeout: None
+        if notInit or reinitialize:
+            secretGetter = SecretGetter.getInstance()
+            sentryDsn = secretGetter.get('SENTRY_DSN')
 
-            # Initialize Sentry once
-            sentry_sdk.init(
-                dsn=SENTRY_DSN,
-                default_integrations=False,
-                integrations=[
-                    LoggingIntegration(),
-                    sentryAtexit.AtexitIntegration(),
-                ],
-            )
-            sentryInitialized = True
+            if sentryDsn:
+                # Override default_callback to suppress "sentry is attempting to send pending events..." message
+                sentryAtexit.default_callback = lambda pending, timeout: None
+
+                # Initialize Sentry once
+                sentry_sdk.init(
+                    dsn=sentryDsn,
+                    default_integrations=False,
+                    integrations=[
+                        LoggingIntegration(),
+                        sentryAtexit.AtexitIntegration(),
+                    ],
+                )
+                sentryInitialized = True
+
+                # If reinitializing, add Sentry handler to all existing loggers
+                if reinitialize:
+                    extra = {'version': version or 'unknown'}
+                    formatter = logging.Formatter('%(asctime)s version[%(version)s] : %(message)s')
+
+                    # Update root logger
+                    rootLogger = logging.getLogger()
+                    if not any(isinstance(h, SentryHandler) for h in rootLogger.handlers):
+                        syslog = SentryHandler()
+                        syslog.setFormatter(formatter)
+                        rootLogger.addHandler(syslog)
+
+                    # Update all existing loggers
+                    for loggerName in logging.Logger.manager.loggerDict:
+                        existingLogger = logging.getLogger(loggerName)
+                        if hasattr(existingLogger, 'handlers'):
+                            if not any(isinstance(h, SentryHandler) for h in existingLogger.handlers):
+                                syslog = SentryHandler()
+                                syslog.setFormatter(formatter)
+                                existingLogger.addHandler(syslog)
 
         # Create logger
         logger = logging.getLogger(name)
@@ -131,17 +138,17 @@ def getLogger(name, version=PUBLIC_VERSION):
             logger = logging.LoggerAdapter(logger, extra)
 
         if sentryInitialized:
-            logger.debug(f'Sentry initialized with DSN: {SENTRY_DSN}')
+            logger.debug(f'Sentry initialized with DSN: {sentryDsn}')
 
         return logger
 
     except Exception as e:
-        logger = logging.getLogger(name)
+        fallbackLogger = logging.getLogger(name)
 
         # If Sentry setup fails, log the error and continue with standard logging
-        logger.warning(f"Failed to initialize Sentry: {e}")
+        fallbackLogger.warning(f"Failed to initialize Sentry: {e}")
 
-        return logger
+        return fallbackLogger
 
 
 def classForName(qualifiedName):
@@ -762,10 +769,10 @@ class StorageLocator(Singleton):
     def initialize(self, appName='fastfilelink'):
         """Initialize with application name"""
         self.appName = appName
-        self._homeDir = os.path.expanduser(f'~/.{appName}')
+        self._homeDir = os.path.expanduser(f'~{os.path.sep}.{appName}')
         self._platformDir = self._getPlatformDir()
 
-        self.logger = getLogger(__name__)
+        self.logger = logging.getLogger(__name__)
 
     def _getPlatformDir(self):
         """Get platform-specific directory"""
@@ -775,6 +782,7 @@ class StorageLocator(Singleton):
             appdata = os.getenv('APPDATA', os.path.expanduser('~'))
             return os.path.join(appdata, self.appName)
         elif system == 'Darwin': # macOS
+            # HOME will be /home/[user]/Library/Containers/[bundle id]/Data in sandbox mode.
             return os.path.expanduser(f'~/Library/Application Support/{self.appName}')
         else: # Linux and others
             return os.path.expanduser(f'~/.config/{self.appName}')
@@ -906,6 +914,128 @@ class StorageLocator(Singleton):
         return self.findStorage(filename, prefer=prefer)
 
 
+class SecretGetter(Singleton):
+    """
+    Manages secrets with caching mechanism.
+    Searches for secrets in environment variables first, then in .secret file using StorageLocator.
+    """
+
+    DEFAULT_SECRET_FILE = '.secret'
+
+    def initialize(self, secretFileName=DEFAULT_SECRET_FILE):
+        """Initialize SecretGetter with secret file name"""
+        self.secretFileName = secretFileName
+        self._cache = {}
+        self._secretData = None
+
+    def getPath(self):
+        storageLocator = StorageLocator.getInstance()
+        return storageLocator.findStorage(self.secretFileName)
+
+    def _loadSecretFile(self):
+        """Load secret file using StorageLocator"""
+        logger = logging.getLogger(__name__)
+
+        if self._secretData is not None:
+            return
+
+        secretPath = self.getPath()
+
+        if not os.path.exists(secretPath):
+            self._secretData = {}
+            return
+
+        try:
+            self._secretData = json.loads(Path(secretPath).read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"Failed to load secret file {secretPath}: {e}")
+            self._secretData = {}
+
+        logger.info(f"Loaded secret file {secretPath}")
+
+    def get(self, key: str):
+        """
+        Get secret value by key with caching.
+
+        Args:
+            key: Secret key to retrieve
+
+        Returns:
+            str or None: Secret value if found, None otherwise
+        """
+        # Check cache first
+        if self._cache.get(key):
+            return self._cache[key]
+
+        # Check environment variable
+        value = os.getenv(key)
+        if value:
+            self._cache[key] = value
+            return value
+
+        # Load secret file if not loaded yet
+        self._loadSecretFile()
+
+        # Get value from secret file
+        value = self._secretData.get(key)
+        if value:
+            self._cache[key] = value
+
+        return value
+
+    def add(self, key: str, value: str):
+        """
+        Add or update a secret in the .secret file.
+
+        Args:
+            key: Secret key
+            value: Secret value
+        """
+        # Load existing secrets
+        self._loadSecretFile()
+
+        # Update in memory
+        self._secretData[key] = value
+        self._cache[key] = value
+
+        # Write to file
+        secretPath = self.getPath()
+
+        # Ensure parent directory exists
+        secretDir = os.path.dirname(secretPath)
+        if secretDir and not os.path.exists(secretDir):
+            os.makedirs(secretDir, exist_ok=True)
+
+        # Write JSON file
+        with open(secretPath, 'w') as f:
+            json.dump(self._secretData, f, indent=2)
+
+    def remove(self, key: str):
+        """
+        Remove a secret from the .secret file.
+        Note: This only removes the key from the JSON, never deletes the file itself.
+
+        Args:
+            key: Secret key to remove
+        """
+        # Load existing secrets
+        self._loadSecretFile()
+
+        # Remove from memory
+        if key in self._secretData:
+            del self._secretData[key]
+        if key in self._cache:
+            del self._cache[key]
+
+        # Write to file (always keep the file, even if empty)
+        secretPath = self.getPath()
+
+        if os.path.exists(secretPath):
+            # Write remaining secrets (or empty dict if no secrets left)
+            with open(secretPath, 'w') as f:
+                json.dump(self._secretData, f, indent=2)
+
+
 class UIDGenerator:
     """Generate UIDs for file sharing links, with support for custom aliases"""
 
@@ -925,6 +1055,8 @@ class UIDGenerator:
 
 # Event pattern: RESTful + /[action] (create, update, get, delete, others...)
 class FFLEvent:
+    cliArgumentsGlobalOptionsRegister = Event('/cli/arguments/global/options/create')
+    cliArgumentsGlobalOptionsStore = Event('/cli/arguments/global/options/get')
     cliArgumentsCommandsRegister = Event('/cli/arguments/commands/create')
     cliArgumentsShareOptionsRegister = Event('/cli/arguments/share/options/create')
     cliArgumentsStore = Event('/cli/arguments/get')
@@ -932,6 +1064,8 @@ class FFLEvent:
 
 eventService = EventService.getInstance()
 
+eventService.register(FFLEvent.cliArgumentsGlobalOptionsRegister.key)
+eventService.register(FFLEvent.cliArgumentsGlobalOptionsStore.key)
 eventService.register(FFLEvent.cliArgumentsCommandsRegister.key)
 eventService.register(FFLEvent.cliArgumentsShareOptionsRegister.key)
 eventService.register(FFLEvent.cliArgumentsStore.key)

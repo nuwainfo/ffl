@@ -22,7 +22,6 @@ import base64
 import logging
 import os
 import platform
-import re
 import shutil
 import struct
 import subprocess
@@ -43,14 +42,16 @@ if sys.platform == 'win32':
 
 hiddenImports = ['bases.crypto.Cryptography']
 
+if sys.platform == 'darwin':
+    hiddenImports.extend(['Foundation', 'AppKit'])
+
 packageData = [
     ('static/Logo.ico', 'static'),
     ('static/Logo.png', 'static'),
-    ('static/program_icon.png', 'static'), # gooey program icon
+    ('static/assets/gooey/program_icon.png', 'static/assets/gooey'), # gooey program icon
     ('static/index.html', 'static'),
     ('static/assets/mitm.html', 'static/assets'),
     ('static/assets/sw.js', 'static/assets'),
-    ('.secret', '.'),
 ]
 
 featuresSupported = True
@@ -313,6 +314,8 @@ def getVersionInfo(full=True, useSVNRevision=True):
     while len(versionParts) < 3:
         versionParts.append('0')
 
+    baseDir = os.path.dirname(__file__)
+
     if full:
         revision = 0
 
@@ -321,12 +324,17 @@ def getVersionInfo(full=True, useSVNRevision=True):
                 # Note: Even you create a new commit, also need to svn update to update revision number.
                 revision = int(subprocess.getoutput("svn info --show-item revision"))
             except Exception as e:
-                raise RuntimeError("Can't execute 'svn info --show-item revision'")
+                revisionFile = os.path.join(baseDir, 'SVN_Revision.txt') # For Mac in Cloud without svn.
+                if not os.path.exists(revisionFile):
+                    raise RuntimeError("Can't execute 'svn info --show-item revision'")
+
+                with open(revisionFile, 'r', encoding='utf-8') as f:
+                    revision = f.read().strip() # We can leave it empty if you want to use RELEASE.txt
 
         buildNumber = '0'
         if not revision:
             # Read build number from dist/Release.txt as the 4th component
-            releaseFilePath = os.path.join(os.path.dirname(__file__), 'dist', 'RELEASE.txt')
+            releaseFilePath = os.path.join(baseDir, 'dist', 'RELEASE.txt')
 
             if os.path.exists(releaseFilePath):
                 try:

@@ -25,9 +25,7 @@ For security, all connections are forced to use HTTPS/TLS encryption.
 import asyncio
 import json
 import os
-import platform
 import ssl
-import sys
 import traceback
 import uuid
 
@@ -205,7 +203,7 @@ class BoreClient:
         For security, all connections use HTTPS/TLS encryption.
         """
         try:
-            logger.info(f"Connecting to {self.controlHost}:{self.controlPort}…")
+            logger.info(f"Connecting to {self.controlHost}:{self.controlPort}...")
 
             # 1. Establish secure TLS connection (always HTTPS for security)
             try:

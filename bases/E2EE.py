@@ -441,10 +441,8 @@ class StreamDecryptor:
         plaintext = self.crypto.decryptAESGCM(self.contentKey, nonce, ciphertextWithTag, aad)
 
         plaintextHash = hashlib.sha256(plaintext).hexdigest()[:16]
-        logger.debug(
-            f"[E2EE] decryptChunk: plaintext_len={len(plaintext)}, "
-            f"plaintext_hash={plaintextHash}..."
-        )
+        logger.debug(f"[E2EE] decryptChunk: plaintext_len={len(plaintext)}, "
+                     f"plaintext_hash={plaintextHash}...")
 
         return plaintext
 
@@ -582,18 +580,14 @@ class E2EEManager(Singleton):
         """
         keyStatus = 'SET' if self.contentKey else 'NONE'
         nonceStatus = 'SET' if self.nonceBase else 'NONE'
-        logger.debug(
-            f"[E2EE] createWebRTCEncryptor called - "
-            f"contentKey={keyStatus}, nonceBase={nonceStatus}"
-        )
+        logger.debug(f"[E2EE] createWebRTCEncryptor called - "
+                     f"contentKey={keyStatus}, nonceBase={nonceStatus}")
 
         if not self.contentKey or not self.nonceBase:
             hasKey = self.contentKey is not None
             hasNonce = self.nonceBase is not None
-            logger.error(
-                f"[E2EE] E2EE not initialized - "
-                f"contentKey={hasKey}, nonceBase={hasNonce}"
-            )
+            logger.error(f"[E2EE] E2EE not initialized - "
+                         f"contentKey={hasKey}, nonceBase={hasNonce}")
             raise RuntimeError("E2EE not initialized - call handleInit() first")
 
         return WebRTCStreamEncryptor(
@@ -1465,6 +1459,8 @@ class UploadStreamEncryptor:
 class E2EEUploadHelper:
     """Helper utilities for E2EE upload operations"""
 
+    SEPARATE_LINE_WIDTH = 67 # 70 makes Apple version with 2 == in newline.
+
     @staticmethod
     def generateKeys() -> tuple:
         """Generate content key and nonce base for upload encryption
@@ -1497,15 +1493,15 @@ class E2EEUploadHelper:
         """
         lines = [
             "",
-            "=" * 70,
+            "=" * E2EEUploadHelper.SEPARATE_LINE_WIDTH,
             "⚠️  IMPORTANT: ENCRYPTION KEY",
-            "=" * 70,
+            "=" * E2EEUploadHelper.SEPARATE_LINE_WIDTH,
             "This file has been encrypted. You MUST share the encryption key below",
             "with recipients via a SECURE CHANNEL (not the same as the download link).",
             "",
             "Without this key, the file CANNOT be decrypted.",
             "Note: Appending #<key> to the URL works but is less secure and not recommended.",
-            "=" * 70,
+            "=" * E2EEUploadHelper.SEPARATE_LINE_WIDTH,
         ]
         return "\n".join(lines)
 
@@ -1517,4 +1513,21 @@ class E2EEUploadHelper:
             Formatted completion message string
         """
         lines = []
+        return "\n".join(lines)
+
+    @staticmethod
+    def formatEncryptionKey(encryptionKey: str) -> str:
+        """Format encryption key display with separators
+
+        Args:
+            encryptionKey: Base64-encoded encryption key
+
+        Returns:
+            Formatted key display string
+        """
+        lines = [
+            f"Encryption Key: {encryptionKey}",
+            "=" * E2EEUploadHelper.SEPARATE_LINE_WIDTH,
+            ""
+        ]
         return "\n".join(lines)

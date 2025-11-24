@@ -47,8 +47,10 @@ from .CoreTestBase import FastFileLinkTestBase, generateRandomFile, getFileHash
 # ---------------------------
 class BrowserTestBase(FastFileLinkTestBase):
     """Base class for browser-based download tests (Chrome, Firefox)"""
+    
+    USE_BLOB_THRESHOLD = 10 * 1024 * 1024 # 10MB, see static/index.html USE_BLOB_THRESHOLD
 
-    DEFAULT_FILE_SIZE = 11 * 1024 * 1024 # 5MB
+    DEFAULT_FILE_SIZE = USE_BLOB_THRESHOLD + 2 * 1024 * 1024 # > USE_BLOB_THRESHOLD, so use StreamSaver
     _geckoDriverPath = None
     _geckoDriverLock = threading.Lock()
 
@@ -229,6 +231,13 @@ class BrowserTestBase(FastFileLinkTestBase):
         firefoxOptions.set_preference(
             "browser.helperApps.neverAsk.saveToDisk", "application/octet-stream,application/binary,application/x-binary"
         )
+
+        # Allow local HTTP static assets (mixed content) when STATIC_SERVER uses http://
+        staticServer = os.environ.get("STATIC_SERVER", "")
+        if staticServer.startswith("http://"):
+            firefoxOptions.set_preference("security.mixed_content.block_active_content", False)
+            firefoxOptions.set_preference("security.mixed_content.block_display_content", False)
+            firefoxOptions.set_preference("security.insecure_connection_text.enabled", False)
 
         service = FirefoxService(executable_path=geckoDriverPath)
         driver = webdriver.Firefox(service=service, options=firefoxOptions)
@@ -549,7 +558,40 @@ class BrowserTestBase(FastFileLinkTestBase):
         else:
             # Firefox format: (timestamp, level, message)
             timestamp, level, message = logEntry
-            return message, level        
+            return message, level
+
+    def _printBrowserLogs(self, logs=None, driver=None, logFilter=None, title=None):
+        """Print browser console logs with optional filtering
+
+        Args:
+            logs: Pre-fetched list of browser logs (takes precedence if provided)
+            driver: Browser WebDriver instance to fetch logs from (used if logs is None)
+            logFilter: Optional callable(message, level) -> bool to filter logs.
+                      If None, prints all logs. Return True to include the log entry.
+            title: Optional custom title for the log section
+        """
+        if logs is not None:
+            browserLogs = logs
+        elif driver is not None:
+            browserLogs = self._getBrowserLogs(driver)
+        else:
+            raise ValueError("Either logs or driver must be provided")
+
+        if title:
+            print(f"[Test] {title}:")
+        elif logFilter is None:
+            print("[Test] Browser logs (all logs):")
+        else:
+            print("[Test] Browser logs (filtered):")
+            
+        with open('browser_logs.log', 'w', encoding='utf-8') as f:
+            for logEntry in browserLogs:
+                message, level = self._normalizeLogEntry(logEntry)
+
+                if logFilter is None or logFilter(message, level):
+                    print(f"  [{level}] {message}")
+                    print(f"  [{level}] {message}", file=f)
+
 
     def _withBrowserFallbackDisabled(self, url):
         """Return URL with ?fallback=0 to disable browser-side HTTP fallback"""
@@ -619,7 +661,8 @@ class BrowserTestBase(FastFileLinkTestBase):
 })();
 """
         # Currently disabled - can be enabled by uncommenting in _downloadWithBrowser
-        # driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": script})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": script})
+        print(f"[Test] Delay WebRTC datachannel handler to avoid StreamSaver race condition for Jenkins Injected.")
 
     def _injectPerformanceTimelineMonitor(self, driver):
         """Inject JavaScript to monitor page load and iframe events via performance timeline
@@ -673,6 +716,7 @@ class BrowserTestBase(FastFileLinkTestBase):
 })();
 """
         driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": script})
+        print(f"[Test] Monitor page load and iframe events via performance timeline for Jenkins Injected.")
 
     def _injectStreamSaverMitmPrewarm(self, driver):
         """Inject JavaScript to pre-warm StreamSaver mitm iframe and service worker
@@ -696,17 +740,17 @@ class BrowserTestBase(FastFileLinkTestBase):
 
   const MITM_URL = '/static/assets/mitm.html';
 
-  // 提前告訴 StreamSaver 用哪個 mitm（即使主程式稍後還會再設一次，也不會有副作用）
+  // Preemptively tell StreamSaver which mitm to use (even if the main script sets it again later, it won't have side effects)
   try { window.streamSaver = window.streamSaver || {}; streamSaver.mitm = MITM_URL; } catch {}
 
-  // 單例：等到 mitm iframe load 或 SW 發來 "streamsaver/ready" 即視為 ready
+  // Singleton: consider ready when mitm iframe loads or SW sends "streamsaver/ready"
   let resolveReady;
   const readyP = new Promise(r => { resolveReady = r; });
   window.__FFL_STREAMSAVER_READY__ = readyP;
 
   const markReady = () => { try { resolveReady(); } catch {} };
 
-  // 當 SW / mitm 通知 ready 時就完成
+  // Complete when SW / mitm notifies readiness
   window.addEventListener('message', (ev) => {
     const msg = ev && ev.data;
     if (typeof msg === 'string' && msg.indexOf('streamsaver/ready') === 0) {
@@ -733,7 +777,7 @@ class BrowserTestBase(FastFileLinkTestBase):
     } catch { markReady(); }
   };
 
-  // 盡早預取，不阻塞
+  // Prefetch early, non-blocking
   try {
     const link = document.createElement('link');
     link.rel = 'prefetch';
@@ -745,8 +789,8 @@ class BrowserTestBase(FastFileLinkTestBase):
 })();
 """
 
-
         driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": script})
+        print(f"[Test] Pre-warm StreamSaver mitm iframe and service worker for Jenkins Injected.")
 
     def _downloadWithBrowser(self, driver, shareLink, downloadDir, expectedFilename, disableFallback=False):
         """Download file using the specified browser driver"""
@@ -757,9 +801,10 @@ class BrowserTestBase(FastFileLinkTestBase):
                 # Inject JavaScript patches before page navigation to fix Chrome headless + StreamSaver race condition
                 # These scripts must be injected via CDP before the page loads to take effect
                 # Note: DataChannel delay patch is currently disabled as the other two patches are sufficient
-                # Uncomment if needed: self._injectWebRTCDataChannelDelayPatch(driver)
-                self._injectPerformanceTimelineMonitor(driver)
-                self._injectStreamSaverMitmPrewarm(driver)
+                if self.originalFileSize > self.USE_BLOB_THRESHOLD:  # Only patch if use StreamSaver
+                    # Uncomment if needed: self._injectWebRTCDataChannelDelayPatch(driver)
+                    self._injectPerformanceTimelineMonitor(driver)
+                    self._injectStreamSaverMitmPrewarm(driver)
                         
             print(f"[Test] Navigating to: {targetUrl}")
             driver.get(targetUrl)

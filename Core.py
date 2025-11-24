@@ -43,7 +43,7 @@ from bases.Server import createServer, DownloadHandler
 from bases.Tunnel import TunnelRunner
 from bases.WebRTC import WebRTCManager, WebRTCDownloader
 from bases.Settings import (DEFAULT_STATIC_ROOT, ExecutionMode, SettingsGetter)
-from bases.CLI import configureCLIParser, configureLogging, processArgumentsAndCommands, showVersion, loadEnvFile
+from bases.CLI import configureCLIParser, configureLogging, processGlobalArguments, processArgumentsAndCommands, showVersion, loadEnvFile
 from bases.Utils import (
     copy2Clipboard, flushPrint, getLogger, getAvailablePort, sendException, getJSONWriter, validateCompatibleWithServer
 )
@@ -515,14 +515,13 @@ def runCLIMain():
         # Global argument error - let argparse report it properly
         parser.error(str(e))
 
-    # Configure logging level if specified (from global args)
-    if hasattr(globalArgs, 'logLevel') and globalArgs.logLevel:
-        configureLogging(globalArgs.logLevel)
+    # Configure logging level (checks --log-level argument and FFL_LOGGING_LEVEL env var)
+    configureLogging(globalArgs.logLevel)
 
-    # Handle --version early exit (from global args)
-    if globalArgs.version:
-        showVersion()
-        return 0
+    # Process global arguments (handles --enable-reporting, --version, etc.)
+    exitCode = processGlobalArguments(globalArgs)
+    if exitCode is not None:
+        return exitCode
 
     if not rest:
         # No subcommand or remaining arguments -> show help

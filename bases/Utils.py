@@ -111,6 +111,7 @@ def _unicode(s, strict=False, encodings=None, throw=True, confidence=0.8):
 
     return None
 
+
 def copy2Clipboard(text):
     if not text:
         return
@@ -151,9 +152,28 @@ def flushPrint(text):
         print(text, flush=True)
     except UnicodeEncodeError as e:
         # Fallback for terminals that don't support certain characters (e.g., emojis on Windows cp950)
-        # Replace unsupported characters with '?' instead of crashing
-        logger.debug(f"UnicodeEncodeError during print, using fallback encoding: {e}")
-        print(text.encode(sys.stdout.encoding, errors='replace').decode(sys.stdout.encoding), flush=True)
+        logger.debug(f"UnicodeEncodeError during print, using fallback encoding: {e}, {sys.stdout.encoding=}")
+
+        # Prefer writing to the buffer in UTF-8 (preserve emoji)
+        buf = getattr(sys.stdout, "buffer", None)
+        if buf is not None:
+            try:
+                buf.write(text.encode("utf-8", errors="replace"))
+                buf.write(b"\n")
+                buf.flush()
+                return
+            except Exception as e2:
+                logger.debug(f"fallback buffer write failed: {e2}")
+
+        # Still not working...:(
+        try:
+            # Last resort: only use simple substitution when there’s truly no other way.
+            safeText = ''.join(ch if ch.isprintable() else '?' for ch in text)
+            print(safeText, flush=True)
+        except Exception as e3:
+            logger.debug(f"fallback character replace write failed: {e3}")
+            # Replace unsupported characters with '?' instead of crashing
+            print(text.encode(sys.stdout.encoding, errors='replace').decode(sys.stdout.encoding), flush=True)
 
 
 def formatSize(size, decimal=None, plural=None):
@@ -290,8 +310,13 @@ def getEnv(envVar, default):
     try:
         value = os.getenv(envVar)
         if value is not None:
+            if default is None:
+                return value
+
             # Automatically detect type based on default value
-            if isinstance(default, int):
+            if isinstance(default, bool):
+                return value == "True"
+            elif isinstance(default, int):
                 return int(value)
             elif isinstance(default, float):
                 return float(value)
@@ -358,3 +383,77 @@ def validateCompatibleWithServer(action=flushPrint):
         webbrowser.open(user.updateURL)
         return False
     return True
+
+
+class ObjectProxy:
+
+    def __init__(self, proxied=None):
+        # Use super().__setattr__ to avoid going through our own __setattr__
+        super().__setattr__("_proxied", proxied)
+
+    @property
+    def proxied(self):
+        # just return the internal attribute
+        return self._proxied
+
+    @proxied.setter
+    def proxied(self, obj):
+        # set the internal attribute directly
+        super().__setattr__("_proxied", obj)
+
+    def __getattr__(self, name):
+        if self._proxied is None:
+            raise AttributeError("Proxy has no proxied object yet")
+        return getattr(self._proxied, name)
+
+    def __setattr__(self, name, value):
+        # treat internal/proxy-control attributes specially
+        if name in ("_proxied", "proxied"):
+            super().__setattr__(name, value)
+        else:
+            if self._proxied is None:
+                raise AttributeError("Proxy has no proxied object yet")
+            setattr(self._proxied, name, value)
+
+    def __delattr__(self, name):
+        if name == "_proxied":
+            super().__delattr__(name)
+        else:
+            if self._proxied is None:
+                raise AttributeError("Proxy has no proxied object yet")
+            delattr(self._proxied, name)
+
+    def __call__(self, *args, **kwargs):
+        if self._proxied is None:
+            raise TypeError("Proxy has no proxied object yet")
+        return self._proxied(*args, **kwargs)
+
+    def __len__(self):
+        return len(self._proxied)
+
+    def __iter__(self):
+        return iter(self._proxied)
+
+    def __getitem__(self, key):
+        return self._proxied[key]
+
+    def __setitem__(self, key, value):
+        self._proxied[key] = value
+
+    def __delitem__(self, key):
+        del self._proxied[key]
+
+    def __str__(self):
+        return str(self._proxied)
+
+    def __repr__(self):
+        return f"<Proxy for {repr(self._proxied)}>"
+
+    def __eq__(self, other):
+        return self._proxied == other
+
+    def __ne__(self, other):
+        return self._proxied != other
+
+    def __bool__(self):
+        return bool(self._proxied)

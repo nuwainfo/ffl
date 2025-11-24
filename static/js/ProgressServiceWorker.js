@@ -16,6 +16,10 @@ try {
     console.error('[ProgressSW] E2EE.js must be served from the same origin as the Service Worker');
 }
 
+// Firefox detection - use user agent from service worker context
+const isFirefox = (typeof navigator !== 'undefined' && navigator.userAgent.includes('Firefox')) ||
+                  (typeof self !== 'undefined' && self.navigator?.userAgent?.includes('Firefox'));
+
 // Verbose log function for debug mode
 const verboseLog = function(...args) {
     const timestamp = new Date().toISOString();
@@ -29,7 +33,10 @@ const verboseLog = function(...args) {
                 return String(arg);
             }
         }).join(' ');
-        broadcast({ type: 'debug', message: `[${timestamp}] ${formatted}` });
+        
+        if (isFirefox) { // In firefox, console.log in Service Worker is not working.
+            broadcast({ type: 'debug', message: `[${timestamp}] ${formatted}` });
+        }
     } catch (e) {
         // Ignore broadcast errors in logging helper
     }
@@ -67,12 +74,12 @@ function isDownloadRequest(url) {
 }
 
 // Helper function to get configuration from URL parameters
-function getConfigFromUrl(url, paramName, defaultValue) {
+function getConfigFromUrl(url, paramName, defaultValue = 0) {
     try {
         const paramValue = url.searchParams.get(paramName);
         if (paramValue !== null) {
             const parsed = parseInt(paramValue, 10);
-            if (!isNaN(parsed) && parsed > 0) {
+            if (!isNaN(parsed) && parsed >= 0) {
                 return parsed;
             }
         }
@@ -103,14 +110,9 @@ function getFileSize(upstream, url) {
     return total;
 }
 
-// Firefox detection - use user agent from service worker context
-const isFirefox = (typeof navigator !== 'undefined' && navigator.userAgent.includes('Firefox')) ||
-                  (typeof self !== 'undefined' && self.navigator?.userAgent?.includes('Firefox'));
 
 // E2EE decryption context storage (download ID -> context)
 const e2eeContexts = new Map();
-// Resume configuration storage (download ID -> resume settings)
-const resumeConfigs = new Map();
 
 function parseContentRange(header) {
     if (!header) {
@@ -149,7 +151,7 @@ function buildResumeAwareRequest(request, resumeConfig) {
     return new Request(request, { headers });
 }
 
-// Message handler for E2EE context registration and resume configuration
+// Message handler for E2EE context registration
 self.addEventListener('message', (event) => {
     log('[ProgressSW] Message received:', event.data?.type);
 
@@ -162,90 +164,121 @@ self.addEventListener('message', (event) => {
         } else {
             log('[ProgressSW] Invalid E2EE context message - missing downloadId or context');
         }
-    } else if (event.data && event.data.type === 'download-resume') {
-        const { downloadId, resume } = event.data;
-        if (downloadId && resume && typeof resume.rangeStart === 'number') {
-            resumeConfigs.set(downloadId, {
-                rangeStart: Math.max(0, Number(resume.rangeStart) || 0),
-                baseBytes: Math.max(0, Number(resume.baseBytes) || 0),
-                skipBytes: Math.max(0, Number(resume.skipBytes) || 0),
-                expectedSize: Math.max(0, Number(resume.expectedSize) || 0),
-                chunkSize: Math.max(0, Number(resume.chunkSize) || 0)
-            });
-            log('[ProgressSW] Resume config stored - downloadId:', downloadId, 'config:', resumeConfigs.get(downloadId));
-        } else {
-            log('[ProgressSW] Invalid resume message:', event.data);
-        }
     }
 });
 
 self.addEventListener('fetch', (event) => {
     const url = new URL(event.request.url);
 
-    if (event.request.method === 'GET' && isDownloadRequest(url)) {
-        // Check for debug parameter and switch log function accordingly
-        const debugEnabled = url.searchParams.get('debug') === '1';
-        if (debugEnabled) {
-            log = verboseLog;
-            log('[ProgressSW] Debug mode ENABLED for this request');
-        } else {
-            log = silentLog;
-        }
-
-        const downloadId = url.searchParams.get('dl') || url.pathname;
-        const resumeConfig = resumeConfigs.get(downloadId);
-        const hasRangeHeader = !!event.request.headers.get('Range');
-
-        if (hasRangeHeader && !resumeConfig) {
-            log('[ProgressSW] Range request detected without SW resume config, passing through');
-            event.respondWith(fetch(event.request));
-            return;
-        }
-
-        log('[ProgressSW] ✅ INTERCEPTING download request:', url.pathname);
-
-        // Check for Firefox routing flags
-        const ffPass = url.searchParams.get('ff_pass') === '1'; // Large file/unknown → pass-through
-        const ffSW = url.searchParams.get('ff_sw') === '1';     // Small file → SW with transform
-
-        if (resumeConfig) {
-            log('[ProgressSW] Resume configuration detected - forcing TransformStream handling');
-            event.respondWith(handleDownloadWithTransform(event, url, downloadId, resumeConfig));
-        } else if (ffPass) {
-            // Firefox large file: pass-through mode
-            log('[ProgressSW] Firefox large file - using pass-through mode');
-            event.respondWith(handleFirefoxPassthrough(event, url, downloadId));
-        } else if (ffSW || !isFirefox) {
-            // Firefox small file OR Chromium: use TransformStream
-            log('[ProgressSW] Firefox small file or Chromium - using TransformStream mode');
-            event.respondWith(handleDownloadWithTransform(event, url, downloadId, null));
-        } else {
-            // Fallback: use TransformStream for unknown cases
-            log('[ProgressSW] Unknown routing case - defaulting to TransformStream mode');
-            event.respondWith(handleDownloadWithTransform(event, url, downloadId, null));
-        }
+    if (event.request.method !== 'GET' || !isDownloadRequest(url)) {
+        return;
     }
+
+    // Check for debug parameter and switch log function accordingly
+    const debugEnabled = url.searchParams.get('debug') === '1';
+    if (debugEnabled) {
+        log = verboseLog;
+        log('[ProgressSW] Debug mode ENABLED for this request');
+    } else {
+        log = silentLog;
+    }
+
+    const downloadId = url.searchParams.get('dl') || url.pathname;
+    const hasDlId = !!url.searchParams.get('dl');
+    const ffPass = url.searchParams.get('ff_pass') === '1';
+
+    // ---- Extract resume parameters from URL ----
+    const hasUrlResume = url.searchParams.has('resume_start');
+    let resumeConfig = null;
+
+    if (hasUrlResume) {
+        resumeConfig = {
+            rangeStart: getConfigFromUrl(url, 'resume_start', 0),
+            baseBytes: getConfigFromUrl(url, 'resume_base', 0),
+            skipBytes: getConfigFromUrl(url, 'resume_skip', 0),
+            expectedSize: getConfigFromUrl(url, 'resume_expected', 0)
+        };
+        log('[ProgressSW] Resume parameters extracted from URL:', resumeConfig);
+    }
+
+    const hasResume = !!resumeConfig;
+
+    // ---- A. Full file passthrough: no interception at all ----
+    // Conditions: No resume AND (no dl OR ff_pass=1)
+    if (!hasResume && (!hasDlId || ffPass)) {
+        if (!hasDlId) {
+            log('[ProgressSW] Full file passthrough: direct /download without dl');
+        } else {
+            log('[ProgressSW] Full file passthrough: ff_pass=1 without resume');
+        }
+        return; // SW does nothing, most stable
+    }
+
+    // ---- Range header but SW has no resume config → also passthrough ----
+    const hasRangeHeader = !!event.request.headers.get('Range');
+    if (hasRangeHeader && !hasResume) {
+        log('[ProgressSW] Range request without SW resume config, passing through');
+        return;
+    }
+
+    log('[ProgressSW] ✅ INTERCEPTING download request:', url.pathname,
+        'ff_pass=', ffPass, 'hasResume=', hasResume);
+
+    // ---- B. Resume + passthrough (ff_pass=1) → use handlePassthroughForResume ----
+    if (ffPass && hasResume) {
+        log('[ProgressSW] ff_pass=1 with resume - using passthrough resume handler');
+        event.respondWith(handlePassthroughForResume(event, url, downloadId, resumeConfig));
+        return;
+    }
+
+    // ---- C. Normal interception with TransformStream (Chromium or Firefox small files) ----
+    log('[ProgressSW] Using TransformStream mode', resumeConfig ? 'with resume' : '');
+    event.respondWith(handleDownloadWithTransform(event, url, downloadId, resumeConfig));
 });
 
-async function handleFirefoxPassthrough(event, url, downloadId) {
-    log('[ProgressSW] Firefox pass-through mode (large file/unknown size), ID:', downloadId);
+async function handlePassthroughForResume(event, url, downloadId, resumeConfig) {
+    log('[ProgressSW] handlePassthroughForResume for ID:', downloadId, 'config:', resumeConfig);
 
     try {
-        const upstream = await fetch(event.request);
+        // Build request with Range header using helper
+        const request = buildResumeAwareRequest(event.request, resumeConfig);
+        log('[ProgressSW] Passthrough resume - built request with Range:', request.headers.get('Range'));
 
-        if (upstream.ok) {
-            const total = getFileSize(upstream, url);
-            log('[ProgressSW] Firefox passthrough - broadcasting started, size:', total, 'bytes');
+        const upstream = await fetch(request);
 
-            // Broadcast started event for Firefox
-            broadcast({ type: 'download-started', id: downloadId, total });
+        log('[ProgressSW] Upstream status:', upstream.status);
+        log('[ProgressSW] Upstream Content-Range:', upstream.headers.get('Content-Range'));
+        log('[ProgressSW] Upstream Content-Length:', upstream.headers.get('Content-Length'));
+
+        // Handle 416 Range Not Satisfiable - fallback to full file
+        if (resumeConfig && upstream.status === 416) {
+            log('[ProgressSW] Resume request returned 416 - retrying without Range');
+            return fetch(event.request); // Fallback to full file fetch
         }
 
+        if (!upstream.ok && upstream.status !== 206) {
+            console.error('[ProgressSW] Passthrough resume failed:', upstream.status);
+            return upstream;
+        }
+
+        // Parse Content-Range to get total size
+        const contentRange = parseContentRange(upstream.headers.get('Content-Range'));
+        const total = contentRange?.total || getFileSize(upstream, url);
+        const baseBytes = resumeConfig.baseBytes || 0;
+
+        log('[ProgressSW] Passthrough resume - total:', total, 'baseBytes:', baseBytes);
+
+        // Broadcast download started event
+        broadcast({ type: 'download-started', id: downloadId, total, sent: baseBytes });
+
+        // Return upstream response directly - no TransformStream needed for passthrough
+        // The DownloadManager.fetchToWriter will handle the stream reading
         return upstream;
+
     } catch (err) {
-        console.error('[ProgressSW] Firefox passthrough failed:', err);
+        console.error('[ProgressSW] Passthrough resume failed:', err);
         broadcast({ type: 'download-error', id: downloadId, message: String(err) });
-        return fetch(event.request);
+        return fetch(event.request); // Fallback to full file
     }
 }
 
@@ -275,36 +308,29 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
     try {
         upstream = await fetch(request);
         log('[ProgressSW] Fetch completed, status:', upstream.status, 'statusText:', upstream.statusText);
-        // FIXED: Serialize headers to plain object to avoid DataCloneError
         const headersObj = {};
         upstream.headers.forEach((value, key) => { headersObj[key] = value; });
         log('[ProgressSW] Response headers count:', upstream.headers.size || Object.keys(headersObj).length);
         log('[ProgressSW] Content-Range:', upstream.headers.get('Content-Range'));
         log('[ProgressSW] Content-Length:', upstream.headers.get('Content-Length'));
-        log('[ProgressSW] Step 1: After headers log');
-
-        log('[ProgressSW] Step 2: Checking 416 status, status is:', upstream.status);
+        log('[ProgressSW] Checking 416 status, status is:', upstream.status);
         if (resumeConfig && upstream.status === 416) {
-            log('[ProgressSW] Resume request returned 416 - clearing resume config and retrying without Range');
-            resumeConfigs.delete(downloadId);
+            log('[ProgressSW] Resume request returned 416 (Range Not Satisfiable) - retrying without Range');
             return fetch(event.request);
         }
 
-        log('[ProgressSW] Step 3: Checking upstream.ok:', upstream.ok);
         if (!upstream.ok) {
             console.error('[ProgressSW] Upstream response not OK:', upstream.status);
             return upstream;
         }
 
-        log('[ProgressSW] Step 4: Checking upstream.body:', !!upstream.body);
         if (!upstream.body) {
             log('[ProgressSW] No body stream, passing through');
             return upstream;
         }
 
-        log('[ProgressSW] Step 5: About to parse Content-Range');
         const rangeFromServer = parseContentRange(upstream.headers.get('Content-Range'));
-        log('[ProgressSW] Step 6: Parsed Content-Range:', rangeFromServer);
+        log('[ProgressSW] Parsed Content-Range:', rangeFromServer);
 
         const reportedSize = getFileSize(upstream, url);
         log('[ProgressSW] Reported size from headers:', reportedSize);
@@ -321,7 +347,7 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
         log('[ProgressSW] Download size (resolved):', total, 'bytes. BaseBytes:', baseBytes, 'Skip:', skipRemaining);
         log('[ProgressSW] About to broadcast download-started with delivered:', delivered);
 
-        // CRITICAL FIX: Only send serializable data in broadcast
+        // Only send serializable data in broadcast
         try {
             broadcast({
                 type: 'download-started',
@@ -367,13 +393,6 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
         // E2EE decryptor (if enabled)
         let httpDecryptor = null;
         if (e2eeContext) {
-            // Check if HTTPDecryptor is available from imported E2EE.js
-            if (typeof HTTPDecryptor === 'undefined') {
-                console.error('[ProgressSW] HTTPDecryptor not available - E2EE.js not loaded properly');
-                broadcast({ type: 'download-error', id: downloadId, message: 'HTTPDecryptor not available' });
-                return fetch(event.request);
-            }
-
             // Use factory method to create HTTPDecryptor from context
             httpDecryptor = HTTPDecryptor.fromContext(e2eeContext, log);
 
@@ -402,7 +421,9 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
                 if (httpDecryptor) {
                     try {
                         processedChunk = await httpDecryptor.decryptChunk(chunk);
-                        log('[ProgressSW] Chunk decrypted, new size:', processedChunk.byteLength || processedChunk.length);
+                        newSize = processedChunk.byteLength || processedChunk.length;
+                        if (newSize > 0)
+                            log('[ProgressSW] Chunk decrypted, new size:', newSize);
                     } catch (e) {
                         console.error('[ProgressSW] E2EE decryption failed:', e);
                         broadcast({ type: 'download-error', id: downloadId, message: 'E2EE decryption failed: ' + e.message });
@@ -434,10 +455,8 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
                     skipRemaining = 0;
                 }
 
-                if (chunkView.length === 0) {
-                    log('[ProgressSW] Chunk length is 0, skipping enqueue');
+                if (chunkView.length === 0)  // Maybe decrypt buffering
                     return;
-                }
                 
                 // Pass the processed chunk through to the browser
                 controller.enqueue(chunkView);
@@ -545,9 +564,5 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
         console.error('[ProgressSW] Download handling failed:', err);
         broadcast({ type: 'download-error', id: downloadId, message: String(err) });
         return fetch(event.request);
-    } finally {
-        if (resumeConfig) {
-            resumeConfigs.delete(downloadId);
-        }
     }
 }

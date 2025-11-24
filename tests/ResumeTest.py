@@ -496,6 +496,32 @@ class BrowserResumeTest(ResumeBrowserTestBase):
         """Test HTTP resume when WebRTC connection stalls and falls back to HTTP using Firefox"""
         self._testHttpResumeWithFallback('firefox')
 
+    def testHttpResumeWithFallbackByFirefoxPassthrough(self):
+        """Test HTTP resume in Firefox passthrough mode (large file >512MB triggers ff_pass=1)
+
+        This test verifies:
+        1. Large file triggers Firefox passthrough mode (ff_pass=1)
+        2. WebRTC stalls and falls back to HTTP
+        3. Service Worker's handlePassthroughForResume handles resume correctly
+        4. DownloadManager.fetchToWriter receives the resumed stream
+        5. Final file is complete and matches original
+        """
+        # Use 600MB file to exceed Firefox SW limit (512MB default)
+        # This will trigger ff_pass=1 flag in Service Worker
+        largeFileSize = 600 * 1024 * 1024  # 600MB
+        stallAfterBytes = 50 * 1024 * 1024  # Stall after 50MB
+
+        print(f"[Test] Firefox Passthrough Resume Test:")
+        print(f"  - File size: {largeFileSize // (1024*1024)}MB (triggers passthrough mode)")
+        print(f"  - Stall after: {stallAfterBytes // (1024*1024)}MB")
+        print(f"  - Expected flow: P2P → Stall → HTTP resume via handlePassthroughForResume")
+
+        self._testHttpResumeWithFallback(
+            'firefox',
+            largeFileSize=largeFileSize,
+            stallAfterBytes=stallAfterBytes
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

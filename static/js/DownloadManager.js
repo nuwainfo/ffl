@@ -249,7 +249,7 @@ class DownloadManager {
                     // Call external callback if provided
                     if (this.onDownloadStartCallback) {
                         try {
-                            this.onDownloadStartCallback(total);
+                            this.onDownloadStartCallback(id, total);
                         } catch (e) {
                             this.log('DownloadManager', 'Error in onDownloadStartCallback:', e);
                         }
@@ -854,15 +854,22 @@ class DownloadManager {
         }
     }
     
-    async fetchToWriter(urlPath, writer, resume = null) {
-        this.log('DownloadManager', 'Fetching and writing to writer (resume aware)');
-        this.log('DownloadManager', 'Resume mode:', !!resume, 'E2EE enabled:', this.e2eeEnabled);
-        this.log('DownloadManager', 'Has httpDecryptor:', !!this.httpDecryptor);
+    ensureDownloadId(downloadUrl) {
+        // Use existing dl parameter from URL, or generate if missing
+        const existingDl = downloadUrl.searchParams.get('dl');
+        if (existingDl) {
+            this.activeDlId = existingDl;
+        } else {
+            // Generate download token only if not already present
+            this.activeDlId = (crypto?.randomUUID && crypto.randomUUID()) || String(Date.now() + Math.random());
+            downloadUrl.searchParams.set('dl', this.activeDlId);
+        }
 
-        // E2EE decryption only needed when resuming (bypassing Service Worker)
-        // Normal path: Service Worker already decrypts chunks before they reach writer
-        const needsDecryption = resume && this.e2eeEnabled;
+        this.log('DownloadManager', 'Download ID:', this.activeDlId);
+        return this.activeDlId;
+    }
 
+    async fetchToWriter(urlPath, writer, needsDecryption, resume = null) {
         if (needsDecryption) {
             this.log('DownloadManager', 'E2EE decryption will be applied during resume (bypassing Service Worker)');
 
@@ -889,7 +896,8 @@ class DownloadManager {
             wantRange = true;
             this.log('DownloadManager', `Resume request: Range bytes=${resume.rangeStart}-, skipBytes=${resume.skipBytes || 0}`);
         }
-
+        
+        // This fetch will trigger ProgressServiceWorker.
         const response = await fetch(urlPath, { headers, cache: 'no-cache' });
 
         if (!response.ok) {
@@ -993,29 +1001,20 @@ class DownloadManager {
         this.log('DownloadManager', 'Starting native download with broadcast progress');
 
         const downloadUrl = new URL(url, location.origin);
-
-        // Use existing dl parameter from URL, or generate if missing
-        const existingDl = downloadUrl.searchParams.get('dl');
-        if (existingDl) {
-            this.activeDlId = existingDl;
-        } else {
-            // Generate download token only if not already present
-            this.activeDlId = (crypto?.randomUUID && crypto.randomUUID()) || String(Date.now() + Math.random());
-            downloadUrl.searchParams.set('dl', this.activeDlId);
-        }
-
-        this.log('DownloadManager', 'Download ID:', this.activeDlId);
+        this.ensureDownloadId(downloadUrl);
         this.log('DownloadManager', 'Download URL with token:', downloadUrl.href);
-
-        // Notify Service Worker about resume configuration if applicable
-        this.notifyServiceWorkerOfResume(resumeConfig);
 
         // If writer is provided in resumeConfig, read the stream and write to the writer in page context
         const writer = resumeConfig?.writer;
         if (writer) {
             this.log('DownloadManager', 'Writer provided - reading stream and writing to existing writer');
 
-            this.fetchToWriter(downloadUrl.pathname + downloadUrl.search, writer)
+            // E2EE decryption only needed when resuming (bypassing Service Worker)
+            // Normal path: Service Worker already decrypts chunks before they reach writer
+            const needsDecryption = false;
+
+            // Resume will be handled by ProgressServiceWorker, so we don't need to pass it.
+            this.fetchToWriter(downloadUrl.pathname + downloadUrl.search, writer, needsDecryption)
                 .catch(err => {
                     this.log('DownloadManager', 'Writer-based download failed:', err);
                     this.onDownloadErrorCallback && this.onDownloadErrorCallback(String(err));
@@ -1023,10 +1022,10 @@ class DownloadManager {
             return;
         }
 
-        // Trigger native download (no writer - standard path)
+        // Trigger native download (no resume writer - standard path, this will be handled by ProgressServiceWorker)
         const a = document.createElement('a');
         a.href = downloadUrl.pathname + downloadUrl.search;
-        //a.download = filename || '';
+        //a.download = filename || ''; // Don't uncomment it, it disables TransformStream.
         a.style.display = 'none';
         document.body.appendChild(a);
 
@@ -1036,38 +1035,6 @@ class DownloadManager {
 
         document.body.removeChild(a);
     }
-
-    notifyServiceWorkerOfResume(resumeConfig) {
-        if (!resumeConfig || !navigator.serviceWorker || !navigator.serviceWorker.controller) {
-            return;
-        }
-
-        try {
-            const payload = {
-                type: 'download-resume',
-                downloadId: this.activeDlId,
-                resume: {
-                    rangeStart: resumeConfig.rangeStart,
-                    baseBytes: resumeConfig.baseBytes,
-                    skipBytes: resumeConfig.skipBytes,
-                    expectedSize: resumeConfig.expectedSize
-                }
-            };
-
-            if (resumeConfig.chunkSize) {
-                payload.resume.chunkSize = resumeConfig.chunkSize;
-            }
-
-            navigator.serviceWorker.controller.postMessage(payload);
-            this.log(
-                'DownloadManager',
-                `Resume configuration sent to Service Worker (base=${resumeConfig.baseBytes}, rangeStart=${resumeConfig.rangeStart})`
-            );
-        } catch (err) {
-            this.log('DownloadManager', 'Failed to send resume configuration to Service Worker:', err);
-        }
-    }
-
 
     showCompleteBlock() {
         const completeBlock = $(this.completeBlock);
@@ -1200,7 +1167,7 @@ class DownloadManager {
         });
     }
     
-    addSwConfigToUrl(url, plan) {
+    addSwConfigToUrl(url, plan, resumeConfig = null) {
         // Add ServiceWorker configuration parameters to download URL
         try {
             const urlObj = new URL(url, window.location.origin);
@@ -1226,15 +1193,10 @@ class DownloadManager {
                 this.log('DownloadManager', 'Debug mode enabled - ServiceWorker will use verbose logging');
             }
 
-            // Add Firefox routing flags based on plan
-            if (plan.browser === 'firefox') {
-                if (plan.mode === 'sw') {
-                    urlObj.searchParams.set('ff_sw', '1');
-                    this.log('DownloadManager', `Firefox small file mode: using SW (${this.formatBytes(plan.size)})`);
-                } else {
-                    urlObj.searchParams.set('ff_pass', '1');
-                    this.log('DownloadManager', `Firefox large/unknown file mode: pass-through (${this.formatBytes(plan.size) || 'unknown size'})`);
-                }
+            // Add Firefox routing flag for large files (pass-through mode)
+            if (plan.browser === 'firefox' && plan.mode === 'pass') {
+                urlObj.searchParams.set('ff_pass', '1');
+                this.log('DownloadManager', `Firefox large/unknown file mode: pass-through (${this.formatBytes(plan.size) || 'unknown size'})`);
             }
 
             // Add E2EE flag if decryption is enabled
@@ -1243,7 +1205,32 @@ class DownloadManager {
                 this.log('DownloadManager', 'E2EE decryption enabled for HTTP download');
             }
 
-            this.log('DownloadManager', `Added SW config to URL: reportBytes=${this.swReportEveryBytes}, reportMs=${this.swReportEveryMs}, dlId=${dlId}, size=${plan.size || 'unknown'}, debug=${this.DEBUG}, e2ee=${this.e2eeEnabled}`);
+            // Add resume parameters if provided - SW will detect and apply Range header
+            if (resumeConfig) {
+                const rangeStart = resumeConfig.rangeStart ?? 0;
+                const baseBytes = resumeConfig.baseBytes ?? 0;
+                const skipBytes = resumeConfig.skipBytes ?? 0;
+                const expectedSize = resumeConfig.expectedSize ?? 0;
+
+                if (rangeStart > 0) {
+                    urlObj.searchParams.set('resume_start', String(rangeStart));
+                    this.log('DownloadManager', `Added resume_start to URL: ${rangeStart}`);
+                }
+                if (baseBytes > 0) {
+                    urlObj.searchParams.set('resume_base', String(baseBytes));
+                    this.log('DownloadManager', `Added resume_base to URL: ${baseBytes}`);
+                }
+                if (skipBytes > 0) {
+                    urlObj.searchParams.set('resume_skip', String(skipBytes));
+                    this.log('DownloadManager', `Added resume_skip to URL: ${skipBytes}`);
+                }
+                if (expectedSize > 0) {
+                    urlObj.searchParams.set('resume_expected', String(expectedSize));
+                    this.log('DownloadManager', `Added resume_expected to URL: ${expectedSize}`);
+                }
+            }
+
+            this.log('DownloadManager', `Added SW config to URL: reportBytes=${this.swReportEveryBytes}, reportMs=${this.swReportEveryMs}, dlId=${dlId}, size=${plan.size || 'unknown'}, debug=${this.DEBUG}, e2ee=${this.e2eeEnabled}, resume=${!!resumeConfig}`);
             return urlObj.toString();
         } catch (e) {
             this.log('DownloadManager', 'Failed to add SW config to URL:', e);
@@ -1252,6 +1239,9 @@ class DownloadManager {
     }
     
     async startDownload(options = {}) {
+        // Extract writer as first-class parameter
+        const writer = options.writer || null;
+
         const resumeConfig = this.setResumeConfig(options.resume);
         if (resumeConfig) {
             this.log(
@@ -1297,7 +1287,7 @@ class DownloadManager {
         this.scheduleAdaptiveUnlock();
 
         // Add ServiceWorker configuration parameters and routing flags to URL
-        url = this.addSwConfigToUrl(url, plan);
+        url = this.addSwConfigToUrl(url, plan, resumeConfig);
 
         // UI: Show starting message based on plan
         this.showStartingUI({ filename, size: plan.size, indeterminate: plan.mode !== 'sw' });
@@ -1311,29 +1301,29 @@ class DownloadManager {
 
         const progressSwSupported = await this.ensureProgressSWControlled();
 
+        // if ff_pass=1, we still use ProgressServiceWorker.js to handle fetch request, but pass-through browser directly.
+
         // Only use broadcast/native when actually have controller; otherwise use direct fetch→writer
         if (progressSwSupported) {
             this.log('DownloadManager', 'BRANCH: Using Progress SW with broadcast (has controller)');
             this.startNativeDownloadWithBroadcast(url, filename, resumeConfig);
-        } else if (resumeConfig?.writer) {
-            this.log('DownloadManager', 'BRANCH: No controller; using direct fetch→writer (resume)');
+        } else if (writer) {
+            this.log('DownloadManager', 'BRANCH: No controller; using direct fetch→writer');
             try {
                 // Prepare URL with download token for direct fetch
                 const downloadUrl = new URL(url, location.origin);
-                const existingDl = downloadUrl.searchParams.get('dl');
-                if (!existingDl) {
-                    this.activeDlId = (crypto?.randomUUID && crypto.randomUUID()) || String(Date.now() + Math.random());
-                    downloadUrl.searchParams.set('dl', this.activeDlId);
-                    this.log('DownloadManager', 'Download ID:', this.activeDlId);
-                }
+                this.ensureDownloadId(downloadUrl);
 
-                await this.fetchToWriter(downloadUrl.pathname + downloadUrl.search, resumeConfig.writer, resumeConfig);
+                await this.fetchToWriter(downloadUrl.pathname + downloadUrl.search, writer, this.e2eeEnabled, resumeConfig);
             } catch (err) {
                 this.log('DownloadManager', 'Direct fetch→writer failed:', err);
                 this.onDownloadErrorCallback && this.onDownloadErrorCallback(String(err));
             }
         } else {
+            // No writer and no Service Worker - fallback to native download
             this.log('DownloadManager', 'BRANCH: No controller and no writer; falling back to native <a> download');
+            // This wouldn't work if e2ee enabled. (download encrypted data)
+            // Maybe we should also show showE2EEFirefoxBlockedUI (not just for Firefox)
             this.startNativeDownloadWithBroadcast(url, filename, resumeConfig);
         }
     }
