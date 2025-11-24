@@ -118,7 +118,7 @@ So ffl also ships **native builds**:
 
 If you just want “runs everywhere with zero setup”, use **APE**.  
 If you care about maximum performance and smaller size on a specific platform, use **native**.
-Don't worry too much about speed, in most cases, APE and native builds run almost equally fast. The main difference is binary size and platform-specific polish.
+Don't worry too much about speed. In most cases, APE and native builds run almost equally fast. The main difference is binary size and platform-specific polish.
 
 ## Quickstart
 
@@ -278,7 +278,7 @@ This is useful in CI/CD, server-to-server workflows, and custom tooling.
   - [Ngrok](https://ngrok.com/)
   - [Localtunnel](https://theboroer.github.io/localtunnel-www/)
   - [Loophole](https://loophole.cloud/)
-  - [Dev-tunnel](https://learn.microsoft.com/zh-tw/azure/developer/dev-tunnels/overview)
+  - [Dev-tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/overview)
   - [Bore](https://github.com/ekzhang/bore)
 
    If you want to use any of these tunnels, make sure the tunnel program is already installed on your system. Once installed, no additional configuration is needed — simply set your preferred tunnel once using:
@@ -294,6 +294,8 @@ This is useful in CI/CD, server-to-server workflows, and custom tooling.
   ~/.fastfilelink/tunnels.json
   ```
   A full example configuration file:
+  <details>
+  <summary>Click to view example <code>tunnels.json</code></summary>
   ```json
   {
     "tunnels": {
@@ -358,6 +360,7 @@ This is useful in CI/CD, server-to-server workflows, and custom tooling.
     }
   }
   ```
+  </details>
 
   About Fixed Tunnels:
   
@@ -367,14 +370,9 @@ This is useful in CI/CD, server-to-server workflows, and custom tooling.
   "enabled": true,
   ```
   and replace the URL with your own. Once enabled, ffl will always use that fixed address.
-  Note: When using a fixed tunnel, you must also specify the listening port with
-  ```
-  ffl myfile.bin --port 8080
-  ```
-  to ensure it works correctly.
-
+  Note: When using a fixed tunnel, you must also specify the listening port, for example: `ffl myfile.bin --port 8080`
   
-- **⚠️ Performance Note**
+  **⚠️ Performance Note**
 
   `ffl`'s default tunnel is maintained to be as fast, stable, and unrestricted as possible. However, during heavy usage by multiple users, you may still experience lag or slowdowns.
   
@@ -390,7 +388,9 @@ ffl https://zh.wikipedia.org/static/images/icons/wikipedia.png
 ```
 
 For any URL, you can use `--resume` to continue an interrupted download:
-```ffl https://zh.wikipedia.org/static/images/icons/wikipedia.png -o wikipedia.png --resume```
+```bash
+ffl https://zh.wikipedia.org/static/images/icons/wikipedia.png -o wikipedia.png --resume
+```
 
 If the URL is a **FastFileLink** link, `ffl` adds extra benefits:
 - Uses WebRTC when possible
@@ -522,7 +522,7 @@ If you prefer an executable that behaves **strictly identical** to what is in th
 - Download `fflo.com` (a CLI-only APE build), or  
 - Build a native version yourself directly from this source.
 
-You can also control addons via configuration. For example, ```echo '{"disabled": ["API"]}' > ~/.fastfilelink/addons.json```
+You can also control addons via configuration. For example, `echo '{"disabled": ["API"]}' > ~/.fastfilelink/addons.json`
 
 
 Without the API addon, other addons that depend on it cannot load either.  
