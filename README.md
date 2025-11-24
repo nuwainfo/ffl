@@ -35,11 +35,11 @@ Workflows like this also pair naturally with tools such as [llamafile](https://g
 - [Quickstart](#quickstart)
 - [CLI Reference](#cli-reference-short-version)
 - [Features & Advanced Usage](#features--advanced-usage)
-  - [1. E2EE & Authentication](#1-end-to-end-encryption--authentication)
-  - [2. Automation Tips](#2-automation-tips)
-  - [3. Using Tunnels](#3-using-tunnels)
-  - [4. Downloading with ffl](#4-downloading-with-ffl-wget-replacement)
-  - [5. Server Upload (Licensed)](#5-upload-and-share-via-server-licensed-feature)
+  - [1. E2EE & Authentication](#1--end-to-end-encryption--authentication)
+  - [2. Automation Tips](#2--automation-tips)
+  - [3. Using Tunnels](#3--using-tunnels)
+  - [4. Downloading with ffl](#4--downloading-with-ffl-wget-replacement)
+  - [5. Server Upload (Licensed)](#5--upload-and-share-via-server-licensed-feature)
 - [How it Works & Motivation](#how-it-works--motivation)
 - [Open Source & Contributing](#open-source--contributing)
 - [Acknowledgements](#acknowledgements)
@@ -296,6 +296,7 @@ This is useful in CI/CD, server-to-server workflows, and custom tooling.
   A full example configuration file:
   <details>
   <summary>Click to view example <code>tunnels.json</code></summary>
+    
   ```json
   {
     "tunnels": {
