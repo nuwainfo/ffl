@@ -48,6 +48,8 @@ Workflows like this also pair naturally with tools such as [llamafile](https://g
 
 ## Installation
 
+You can download the [latest release](https://github.com/nuwainfo/ffl/releases/) for your system, or install a release from the command-line:
+
 ### Option 1: Native Installs
 
 **Linux / macOS**
@@ -153,55 +155,59 @@ ffl https://4567.81.fastfilelink.com/abcd1234
 
 For full help: `ffl --help` or `ffl download --help`
 
-The core options for sharing:
+### 🌐 Common Options
+These options work for both **sharing** and **downloading**:
 
-```text
-ffl [options] [FILE_OR_FOLDER]
+```
+  --proxy PROXY         Proxy server for all outbound connections.
+                        Supports SOCKS5 (default) and HTTP/HTTPS.
+                        Formats:
+                        - 127.0.0.1:9050 (defaults to SOCKS5, e.g., for Tor)
+                        - socks5://user:pass@host:port
+                        - http://user:pass@host:port
+  --log-level LEVEL     Set logging level (DEBUG, INFO, WARNING, ERROR) or path to config file.
+  --enable-reporting    Enable error reporting to FastFileLink server for diagnostics.
+  --version             Show version information and enabled addons.
+```
+
+> **💡 Pro Tip (Tor Support):** You can route traffic through Tor using `--proxy 127.0.0.1:9050`.
+
+### 📤 Sharing (Default)
+Turn a file or folder into a link.
+
+```
+ffl [options] [FILE_OR_FOLDER] 
 
 Options (most useful ones):
 
-  --log-level LEVEL_OR_FILE
-                        Set logging level (DEBUG, INFO, WARNING, ERROR) or path to logging config
-                        JSON file (default: WARNING)
-  --enable-reporting    Enable error reporting to FastFileLink server for exception diagnostics
-  --max-downloads N
-      Auto-shutdown after N downloads (P2P mode). 0 = unlimited
-  --timeout SECONDS
-      Auto-shutdown after idle timeout (P2P mode). 0 = no timeout
-  --port PORT
-      Local HTTP server port (auto-detect by default)
-  --auth-user USERNAME
-  --auth-password PASSWORD
-      HTTP Basic Auth for downloads
-  --force-relay
-      Force relayed P2P mode, disable direct WebRTC
-  --e2ee
-      Enable end-to-end encryption
-  --preferred-tunnel {cloudflare,default,...}
-      Set preferred tunnel for future runs
-  --upload {3 hours,6 hours,12 hours,24 hours,72 hours, ...}
-      Upload to FastFileLink server and share via temporary storage
-  --resume
-      Resume a previously interrupted upload
-  --pause PERCENTAGE
-      Pause upload at specific percentage (1–99, requires --upload)            
-  --json FILE
-      Output link and settings to a JSON file
+  --max-downloads N        Auto-shutdown after N downloads (P2P mode). 0 = unlimited
+  --timeout SECONDS        Auto-shutdown after idle timeout (P2P mode). 0 = no timeout
+  --port PORT              Local HTTP server port (auto-detect by default)
+  --auth-user USERNAME     HTTP Basic Auth for downloads
+  --auth-password PASSWORD HTTP Basic Auth for downloads
+  --force-relay            Force relayed P2P mode, disable direct WebRTC
+  --alias ALIAS            Use custom alias as UID for sharing link
+  --e2ee                   Enable end-to-end encryption
+  --preferred-tunnel {cloudflare,default,...} Set preferred tunnel for future runs
+  --upload {3 hours,6 hours,12 hours,24 hours,72 hours,...} Upload to FastFileLink server and share via temporary storage
+  --resume                 Resume a previously interrupted upload
+  --pause PERCENTAGE       Pause upload at specific percentage (1–99, requires --upload)
+  --json FILE              Output link and settings to a JSON file
 ```
 
-Download subcommand: (invoked explicitly with `download`, or implicitly when the argument is a URL)
+### 📥 Downloading
+Download a file from an `ffl` link.
 
-```text
-  --log-level LEVEL_OR_FILE
-                        Set logging level (DEBUG, INFO, WARNING, ERROR) or path to logging config
-                        JSON file (default: WARNING)
-  --enable-reporting    Enable error reporting to FastFileLink server for exception diagnostics
-  --output PATH, -o PATH
-                        Output file path (default: use filename from server)
-  --resume              Resume incomplete download (like curl -C), otherwise overwrite existing file
-  --auth-user USERNAME  Username for HTTP Basic Authentication (default: 'ffl')
-  --auth-password PASSWORD
-                        Password for HTTP Basic Authentication
+```
+ffl download [options] <URL>
+# or simply:
+ffl <URL>
+
+Options:
+  --output PATH, -o PATH  Output file path (default: use filename from server)
+  --resume                Resume incomplete download (like curl -C), otherwise overwrite existing file
+  --auth-user USERNAME    Username for HTTP Basic Authentication (default: 'ffl')
+  --auth-password PASSWORD Password for HTTP Basic Authentication
 ```
 
 ## Features & Advanced Usage
@@ -245,6 +251,29 @@ ffl myfile.bin --auth-user tom --auth-password mypassword
 
 This prevents anonymous downloads even if the link leaks.
 
+#### 🕵️ Ultimate Privacy & Anonymity (Tor + E2EE)
+
+You can chain options to achieve a **Zero-Knowledge, Zero-Trust** transfer profile. This ensures that neither the relay server nor the recipient can trace your identity or access your data.
+
+```
+ffl --proxy "socks5h://127.0.0.1:9050" --auth-user tom --auth-password secret --e2ee --force-relay myfile.bin
+```
+
+**What this achieves:**
+
+* **Relay Server is Blind:**
+    * **No Data Access:** Thanks to `--e2ee`, the server only sees encrypted blobs.
+    * **No IP Access:** Thanks to `--proxy` (Tor), the server only sees the Tor exit node's IP, not yours.
+* **Recipient Limitations:**
+    * **No IP Access:** Thanks to `--force-relay`, the transfer happens via the relay tunnel, hiding your real IP address from the recipient.
+    * **No Unauthorized Access:** Protected by HTTP Basic Auth.
+
+> **⚠️ Important Note on WebRTC & IP Leaks:**
+> By default, direct P2P (WebRTC) connections **will reveal your IP address** to the recipient to establish the link.
+> * Using `--force-relay` disables P2P initiation from your side to protect your IP.
+> * **However**, a knowledgeable recipient could manually append `?webrtc=on` to the URL to request a P2P connection.
+> * If you require **strict server-side enforcement** (where WebRTC signaling is completely blocked regardless of client requests), please check the **Licensed Version** features.
+
 ---
 
 ### 2. 🤖 Automation Tips
@@ -252,20 +281,51 @@ This prevents anonymous downloads even if the link leaks.
 ffl is designed for many downloaders; you can always stop sharing with `Ctrl+C`.  
 But for automation / CI/CD or scripts, these flags help:
 
+**Lifecycle Control & JSON Output**
+
+Use `--max-downloads` to auto-close the server after success:
+
 ```bash
 ffl myfile.bin --max-downloads 1
 # Automatically terminate after one successful download
 ```
 
-Generate JSON for scripts:
+Generate JSON for parsing in scripts (useful for dynamic pipelines):
 
 ```bash
 ffl myfile.bin --json ffl.json --max-downloads 1 &
+# ... logic to wait for file ...
 LINK=$(jq -r .link ffl.json)
 echo "Download link: $LINK"
 ```
 
-This is useful in CI/CD, server-to-server workflows, and custom tooling.
+**Best Practice: Predictable URLs**
+
+The biggest challenge in automation is often passing the generated URL to the receiver. 
+You can solve this by creating a **Static URL** using a fixed tunnel and an alias.
+
+* **Fixed Tunnel:** Ensure your tunnel domain is constant and points to a specific local port (see [Using Tunnels](#3--using-tunnels)).
+* **Fixed Alias:** Use `--alias` to set a fixed path.
+
+**Sender (CI Server):**
+```bash
+# Assumes 'my-fixed-tunnel' forwards traffic to localhost:8080
+# URL will always be: https://my-fixed-tunnel.com/nightly-build
+ffl --alias nightly-build --preferred-tunnel my-fixed-tunnel --port 8080 ./dist/app_v1.0.zip
+```
+
+**Receiver (Client/Deploy Server):**
+```bash
+# No need to parse logs or emails - the link is fixed!
+ffl download https://my-fixed-tunnel.com/nightly-build
+```
+
+> **🔒 Security Note:**
+> Since the URL is fixed/predictable, anyone who knows the alias can attempt to download the file.
+> If you are concerned about the link leaking, **always** add password protection:
+>
+> `ffl --alias nightly-build --auth-user dev --auth-password secret ...`
+
 
 ### 3. 🚀 Using Tunnels
 
@@ -379,6 +439,12 @@ This is useful in CI/CD, server-to-server workflows, and custom tooling.
   
   If this happens, we recommend switching to Cloudflare tunnel for better performance - in fact, we suggest using Cloudflare from the start, especially in fixed mode, for the most stable and fastest experience.
 
+  **ℹ️ Bandwidth Routing**
+
+  To keep the default service sustainable, files larger than 500MB are automatically routed through our unlimited bandwidth infrastructure rather than the nearest premium node to prevent astronomical server bills.
+
+  If you prefer to always use the nearest high-performance node regardless of file size, please consider the **Licensed Version**. Your contribution helps us happily maintain these global infrastructure costs.
+
 ### 4. 📥 Downloading with ffl (wget replacement)
 
 ffl can also act like an HTTP download tool:
@@ -406,7 +472,6 @@ If the URL is a **FastFileLink** link, `ffl` adds extra benefits:
   ffl https://53969.852.fastfilelink.com/MZoWzhPl -o myfile.bin --resume
   ```
 
-
 ### 5. ☁️ Upload and share via server (licensed feature)
 
 If you can't keep your device online or both sides cannot be online at the same time, you can upload once and share a server-hosted link.
@@ -415,31 +480,50 @@ If you can't keep your device online or both sides cannot be online at the same 
 ffl myfile.zip --upload "1 day"
 ```
 
-- File is temporarily uploaded to our server  
-- Download link is valid for the chosen duration (e.g. `"1 day"`)
+- File is temporarily uploaded to our server.
+- Download link is valid for the chosen duration (e.g., `"1 day"`).
 
-This requires:
+**🔐 Zero-Knowledge Encryption (E2EE)**
 
-- A registered account  
-- A licensed plan (Standard or higher) See [Pricing](https://fastfilelink.com/#pricing)
+When using `--upload` combined with `--e2ee`, our **Zero-Knowledge** policy is strictly enforced.
+Unlike P2P mode where keys are exchanged transparently, the server **cannot** store the decryption key for uploaded files. If we did, we could read your data.
 
-Login (once you've got an account):
+Therefore, you will receive a separate **Encryption Key** that you must share securely offline:
 
 ```bash
-ffl login     # enter email and OTP
-ffl status    # check account status
+[2025-11-27 08:18:21] All chunks uploaded successfully, waiting for server verification...
+
+===================================================================
+⚠️  IMPORTANT: ENCRYPTION KEY
+===================================================================
+This file has been encrypted. You MUST share the encryption key below
+with recipients via a SECURE CHANNEL (not the same as the download link).
+
+Without this key, the file CANNOT be decrypted.
+Note: Appending #<key> to the URL works but is less secure and not recommended.
+===================================================================
+Encryption Key: UWanqCFbbQ6vaH0GkK/yEGFNFpj6vFxho4ChSkRR2v8=
+===================================================================
 ```
 
-Example:
+**🛠️ Advanced Link Management**
 
-```text
-Authentication Status:
-   User: test@nuwainfo.com
-   Email: test@nuwainfo.com
-   Level: Free
-   Serial: 0123456789
-   Points: 0
-   Registered: Yes
+Uploading to the server unlocks additional management features via a dedicated settings link (e.g., `https://.../settings`):
+* **Traffic Logs:** View download history and stats.
+* **Live Control:** Change the password or disable the link instantly without re-uploading.
+* **Redirect Rules:** Modify where the link points to.
+
+...and more! For a complete list of server-side features, please visit the [Official Website](https://fastfilelink.com).
+
+**Requirements & Access**
+
+This upload feature requires a registered account and a licensed plan (Standard or higher). See [Pricing](https://fastfilelink.com/#pricing).
+
+```bash
+ffl register  # Register a new account / Get license
+ffl login     # Login with email and OTP
+ffl status    # Check account status & points
+ffl logout    # Logout and clear credentials
 ```
 
 ## How it works & Motivation
@@ -501,6 +585,11 @@ To get `ffl` running as an APE:
 
 PS: Building a CLI with Python on Linux turned out to be surprisingly difficult. Glibc issues made it nearly impossible to package a truly small and reliable binary. Cosmopolitan Libc (APE) solved this perfectly: fast, portable, and lightweight.
 
+> **🛠️ A Note on Building APE:**
+> You might notice that the source code for the APE build process (e.g., `BuildAPE.sh`) is currently missing from this repo.
+> This is because the current build environment involves a lot of complex customizations, and the DTLS implementation is still a bit "hacky" and not elegant enough to share just yet.
+> I need some time to refactor and clean these parts up, and I plan to open-source the build tools gradually in the future.
+
 ---
 
 ## Open Source & Contributing
@@ -540,8 +629,9 @@ FastFileLink has gone through many iterations and stands on the shoulders of a l
 
 - [aiortc](https://github.com/aiortc/aiortc)  
 - [Cosmopolitan Libc](https://github.com/jart/cosmopolitan)  
-- [superconfigure](https://github.com/jart/superconfigure)  
+- [superconfigure](https://github.com/ahgamut/superconfigure)  
 - [python-mbedtls](https://github.com/Synss/python-mbedtls)  
+- [bore](https://github.com/ekzhang/bore)
 
 ...and everyone who has tested the tool, reported bugs, suggested improvements, or simply used it in creative ways. 🙏  
 I also relied on many other excellent libraries along the way. They’re all very cool and deserve credit here too.
