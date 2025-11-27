@@ -31,7 +31,7 @@ Workflows like this also pair naturally with tools such as [llamafile](https://g
 ## Table of Contents
 
 - [Installation](#installation)
-- [Why APE and Native?](#why-ape-and-native-executables-both-exist)
+- [Why APE and Native?](#why-both-ape-and-native-executables-exist)
 - [Quickstart](#quickstart)
 - [CLI Reference](#cli-reference-short-version)
 - [Features & Advanced Usage](#features--advanced-usage)
@@ -107,7 +107,7 @@ pip install -r requirements.txt
 
 ---
 
-## Why APE and native executables both exist?
+## Why Both APE and Native Executables Exist
 
 The **APE** ([Actually Portable Executable](https://justine.lol/ape.html)) build is cross-platform and runs on many OSes by emulating a POSIX environment (via [Cosmopolitan Libc](https://justine.lol/cosmopolitan/)). This is powerful but makes platform-specific optimizations harder.
 
@@ -338,7 +338,7 @@ ffl download https://my-fixed-tunnel.com/nightly-build
   - [Ngrok](https://ngrok.com/)
   - [Localtunnel](https://theboroer.github.io/localtunnel-www/)
   - [Loophole](https://loophole.cloud/)
-  - [Dev-tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/overview)
+  - [Dev Tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/overview)
   - [Bore](https://github.com/ekzhang/bore)
 
    If you want to use any of these tunnels, make sure the tunnel program is already installed on your system. Once installed, no additional configuration is needed — simply set your preferred tunnel once using:
@@ -445,6 +445,12 @@ ffl download https://my-fixed-tunnel.com/nightly-build
 
   If you prefer to always use the nearest high-performance node regardless of file size, please consider the **Licensed Version**. Your contribution helps us happily maintain these global infrastructure costs.
 
+  > **🛡️ Privacy Note on Usage Metrics:**
+  > When using the high-performance network, `ffl` reports minimal metrics (Tunnel Domain & File Size) to help us manage infrastructure costs.
+  > **We strictly do NOT report filenames, file contents, or peer IP addresses in these metrics.**
+  >
+  > If you require strict zero-knowledge regarding bandwidth usage, you can opt out by using a third-party tunnel (e.g., `--preferred-tunnel cloudflare`) or by disabling the Features addon (see [Open Source](#open-source--contributing)), which will default to the unlimited infrastructure without metric reporting.  
+
 ### 4. 📥 Downloading with ffl (wget replacement)
 
 ffl can also act like an HTTP download tool:
@@ -464,13 +470,11 @@ If the URL is a **FastFileLink** link, `ffl` adds extra benefits:
 - Falls back to HTTPS relay if needed
 - Supports resume via --resume just like normal downloads
 
-
-  ```bash
-  ffl https://53969.852.fastfilelink.com/MZoWzhPl -o myfile.bin
-
-  # If interrupted:
-  ffl https://53969.852.fastfilelink.com/MZoWzhPl -o myfile.bin --resume
-  ```
+```bash
+ffl https://53969.852.fastfilelink.com/MZoWzhPl -o myfile.bin
+# If interrupted:
+ffl https://53969.852.fastfilelink.com/MZoWzhPl -o myfile.bin --resume
+```
 
 ### 5. ☁️ Upload and share via server (licensed feature)
 
@@ -612,8 +616,10 @@ If you prefer an executable that behaves **strictly identical** to what is in th
 - Download `fflo.com` (a CLI-only APE build), or  
 - Build a native version yourself directly from this source.
 
-You can also control addons via configuration. For example, `echo '{"disabled": ["API"]}' > ~/.fastfilelink/addons.json`
-
+You can also control addons via configuration. For example:
+```bash
+echo '{"disabled": ["API"]}' > ~/.fastfilelink/addons.json
+```
 
 Without the API addon, other addons that depend on it cannot load either.  
 This gives you an executable whose behavior matches the open-source version exactly.
