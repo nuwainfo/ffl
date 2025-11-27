@@ -43,11 +43,35 @@ function Expand-Zip($zipPath, $dest) {
   }
 }
 
+# --- helpers for tag fetching with tolerance (v-prefix/no-prefix) ---
+function Try-GetReleaseByTag([string]$t) {
+  if ([string]::IsNullOrWhiteSpace($t)) { return $null }
+  try { return Get-Json "https://api.github.com/repos/$RepoOwner/$RepoName/releases/tags/$t" } catch { return $null }
+}
+function Normalize-Tag-Candidates([string]$t) {
+  # Yield candidates: as-is, add/remove 'v' prefix
+  if ([string]::IsNullOrWhiteSpace($t)) { return @() }
+  $cands = New-Object System.Collections.Generic.List[string]
+  $cands.Add($t)
+  if ($t -match '^[vV]\d') { $cands.Add(($t.TrimStart('v','V'))) } else { $cands.Add('v' + $t) }
+  return $cands
+}
+# ---------------------------------------------------------------
+
 # 1) Fetch release JSON
 if ([string]::IsNullOrWhiteSpace($tag)) {
   $rel = Get-Json "https://api.github.com/repos/$RepoOwner/$RepoName/releases/latest"
 } else {
-  $rel = Get-Json "https://api.github.com/repos/$RepoOwner/$RepoName/releases/tags/$tag"
+  # Try the provided tag; if not found, try with/without 'v' prefix; then fallback to latest
+  $rel = $null
+  foreach ($cand in (Normalize-Tag-Candidates $tag)) {
+    $rel = Try-GetReleaseByTag $cand
+    if ($rel) { $tag = $cand; break }
+  }
+  if (-not $rel) {
+    Write-Warning "Release tag '$tag' not found; falling back to latest"
+    $rel = Get-Json "https://api.github.com/repos/$RepoOwner/$RepoName/releases/latest"
+  }
 }
 $tag = $rel.tag_name
 if ([string]::IsNullOrWhiteSpace($tag)) { throw "Cannot determine release tag" }
