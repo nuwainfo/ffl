@@ -329,7 +329,7 @@ ffl download https://my-fixed-tunnel.com/nightly-build
 
 ### 3. 🚀 Using Tunnels
 
-`ffl` supports various tunnels for NAT traversal. By default, `ffl` comes with a built-in tunnel called default.
+`ffl` supports various tunnels for NAT traversal. By default, `ffl` comes with a built-in tunnel called `default`.
 
 - **🌐 Supported Tunnels**
   
@@ -449,7 +449,7 @@ ffl download https://my-fixed-tunnel.com/nightly-build
   > When using the high-performance network, `ffl` reports minimal metrics (Tunnel Domain & File Size) to help us manage infrastructure costs.
   > **We strictly do NOT report filenames, file contents, or peer IP addresses in these metrics.**
   >
-  > If you require strict zero-knowledge regarding bandwidth usage, you can opt out by using a third-party tunnel (e.g., `--preferred-tunnel cloudflare`) or by disabling the Features addon (see [Open Source](#open-source--contributing)), which will default to the unlimited infrastructure without metric reporting.  
+  > If you require strict zero-knowledge regarding bandwidth usage, you can opt out by using a third-party tunnel (e.g., `--preferred-tunnel cloudflare`) or by disabling the relevant feature addon via `addons.json` (see [Open Source](#open-source--contributing)), which will default to the unlimited infrastructure without metric reporting.  
 
 ### 4. 📥 Downloading with ffl (wget replacement)
 
@@ -468,7 +468,7 @@ ffl https://zh.wikipedia.org/static/images/icons/wikipedia.png -o wikipedia.png 
 If the URL is a **FastFileLink** link, `ffl` adds extra benefits:
 - Uses WebRTC when possible
 - Falls back to HTTPS relay if needed
-- Supports resume via --resume just like normal downloads
+- Supports resume via `--resume` just like normal downloads
 
 ```bash
 ffl https://53969.852.fastfilelink.com/MZoWzhPl -o myfile.bin
