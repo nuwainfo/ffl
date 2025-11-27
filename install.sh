@@ -21,20 +21,12 @@ esac
 have() { command -v "$1" >/dev/null 2>&1; }
 
 gh_api() {
-  # Optional GITHUB_TOKEN to avoid API rate limits
+  # No token: plain curl/wget to GitHub API
   local url="$1"
   if have curl; then
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
-      curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28" "$url"
-    else
-      curl -fsSL "$url"
-    fi
+    curl -fsSL "$url"
   else
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
-      wget -qO- --header="Authorization: Bearer $GITHUB_TOKEN" --header="X-GitHub-Api-Version: 2022-11-28" "$url"
-    else
-      wget -qO- "$url"
-    fi
+    wget -qO- "$url"
   fi
 }
 
@@ -144,7 +136,7 @@ choose_asset() {
           esac
 
         elif [[ "$os" == "darwin" ]]; then
-          # Your mac assets use "mac"; also accept darwin/macos; support .zip/.tar.gz
+          # mac assets use "mac"; also accept darwin/macos; support .zip/.tar.gz
           if   [[ "$name" =~ mac ]] && [[ "$name" =~ $ARCH_RE ]] && [[ "$name" =~ \.(zip|tar\.gz|tgz)$ ]]; then pick="$name"; break
           elif [[ "$name" =~ (darwin|macos) ]] && [[ "$name" =~ $ARCH_RE ]] && [[ "$name" =~ \.(zip|tar\.gz|tgz)$ ]]; then pick="$name"; break
           fi

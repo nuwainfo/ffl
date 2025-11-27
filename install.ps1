@@ -5,21 +5,17 @@ $RepoOwner = "nuwainfo"
 $RepoName  = "ffl"
 $app       = "ffl"
 
-# 可覆寫：FFL_VERSION、FFL_VARIANT(native|com)、FFL_PREFIX
+# Overridables: FFL_VERSION, FFL_VARIANT(native|com), FFL_PREFIX
 $tag     = $env:FFL_VERSION
 $variant = if ([string]::IsNullOrWhiteSpace($env:FFL_VARIANT)) { "native" } else { $env:FFL_VARIANT }
 
-# 架構偵測
+# Architecture detection
 $arch = "amd64"
 try { if ((Get-CimInstance Win32_Processor).Architecture -eq 12) { $arch = "arm64" } } catch {}
 
 function Get-Json($url) {
-  $headers = @{}
-  if ($env:GITHUB_TOKEN) {
-    $headers["Authorization"] = "Bearer $($env:GITHUB_TOKEN)"
-    $headers["X-GitHub-Api-Version"] = "2022-11-28"
-  }
-  Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri $url
+  # Plain request (no token, no extra headers)
+  Invoke-RestMethod -UseBasicParsing -Uri $url
 }
 
 function Test-IsPE($path) {
@@ -47,7 +43,7 @@ function Expand-Zip($zipPath, $dest) {
   }
 }
 
-# 1) 取 release JSON
+# 1) Fetch release JSON
 if ([string]::IsNullOrWhiteSpace($tag)) {
   $rel = Get-Json "https://api.github.com/repos/$RepoOwner/$RepoName/releases/latest"
 } else {
@@ -74,15 +70,15 @@ if (-not $asset) {
 }
 Write-Host ("Picked asset: " + $asset.name)
 
-# 2) 下載
+# 2) Download
 $pkg = Join-Path $env:TEMP $asset.name
 Invoke-WebRequest -UseBasicParsing -Uri $asset.browser_download_url -OutFile $pkg
 
-# 3) 安裝目錄
+# 3) Install directory
 $dest = if ($env:FFL_PREFIX) { Join-Path $env:FFL_PREFIX 'bin' } else { Join-Path $env:LOCALAPPDATA "Programs\$app" }
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 
-# 4) 佈署
+# 4) Deploy
 if ($variant -eq "com") {
   if ($asset.name -match '\.com$') {
     Copy-Item $pkg (Join-Path $dest "$app.com") -Force
@@ -95,7 +91,7 @@ if ($variant -eq "com") {
   $bin = Get-ChildItem -Path $dest -Filter "$app.com" -Recurse | Select-Object -First 1
   if (-not $bin) { Get-ChildItem -Recurse $dest | Write-Host; throw "$app.com not found under $dest" }
 
-  # shim：ffl.cmd -> ffl.com（給 Command Prompt / 之後新開殼）
+  # shim: ffl.cmd -> ffl.com (handy for Command Prompt / new shells)
   $shim = Join-Path $dest "ffl.cmd"
 @"
 @echo off
@@ -104,9 +100,9 @@ if ($variant -eq "com") {
 
   Write-Host "Installed (com) to $dest"
 
-  # 讓**當前步驟**可立即呼叫
+  # Make available immediately in current step
   if (-not (($env:Path -split ";") -contains $dest)) { $env:Path = ($env:Path + ";" + $dest).Trim(";") }
-  # 若在 GitHub Actions，讓**後續步驟**也吃得到
+  # If running in GitHub Actions, also expose to subsequent steps
   if ($env:GITHUB_PATH) { Add-Content -Path $env:GITHUB_PATH -Value $dest }
 
 } else {
@@ -123,14 +119,14 @@ if ($variant -eq "com") {
   if ($env:GITHUB_PATH) { Add-Content -Path $env:GITHUB_PATH -Value $dest }
 }
 
-# 5) PATH（使用者層級，給未來新殼）
+# 5) PATH (user scope, for future shells)
 $userPath = [Environment]::GetEnvironmentVariable("Path","User")
 if (-not (($userPath -split ";") -contains $dest)) {
   [Environment]::SetEnvironmentVariable("Path", ($userPath + ";" + $dest).Trim(";"), "User")
   Write-Host "PATH updated (user scope). Open a new terminal to use 'ffl'."
 }
 
-# 6) 驗證（variant=com 用 ffl.com）
+# 6) Verify (use ffl.com when variant=com)
 try {
   if ($variant -eq "com") {
     & (Join-Path $dest "$app.com") --version | Out-Host
