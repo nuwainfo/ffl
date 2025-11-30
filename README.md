@@ -445,12 +445,6 @@ ffl download https://my-fixed-tunnel.com/nightly-build
 
   If you prefer to always use the nearest high-performance node regardless of file size, please consider the **Licensed Version**. Your contribution helps us happily maintain these global infrastructure costs.
 
-  > **🛡️ Privacy Note on Usage Metrics:**
-  > When using the high-performance network, `ffl` reports minimal metrics (Tunnel Domain & File Size) to help us manage infrastructure costs.
-  > **We strictly do NOT report filenames, file contents, or peer IP addresses in these metrics.**
-  >
-  > If you require strict zero-knowledge regarding bandwidth usage, you can opt out by using a third-party tunnel (e.g., `--preferred-tunnel cloudflare`) or by disabling the relevant feature addon via `addons.json` (see [Open Source](#open-source--contributing)), which will default to the unlimited infrastructure without metric reporting.  
-
 ### 4. 📥 Downloading with ffl (wget replacement)
 
 ffl can also act like an HTTP download tool:

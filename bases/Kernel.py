@@ -39,7 +39,7 @@ from signalslot import Signal
 from sentry_sdk.integrations.logging import SentryHandler, LoggingIntegration
 from sentry_sdk.integrations import atexit as sentryAtexit
 
-PUBLIC_VERSION = '3.7.4'
+PUBLIC_VERSION = '3.7.5'
 
 
 def configureGlobalLogLevel(logLevel):

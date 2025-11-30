@@ -209,8 +209,7 @@ class DownloadManager {
             rangeStart,
             skipBytes: normalizedSkip,
             expectedSize: normalizedExpected,
-            chunkSize: (chunkSize !== null && chunkSize > 0) ? chunkSize : null,
-            writer: resume.writer || null  // Preserve writer reference for continuation
+            chunkSize: (chunkSize !== null && chunkSize > 0) ? chunkSize : null
         };
     }
 
@@ -230,98 +229,114 @@ class DownloadManager {
         return candidates.length ? Math.max(...candidates) : 0;
     }
     
+    handleDownloadStarted(id, total, sent = 0) {
+        const initialSent = typeof sent === 'number' ? sent : 0;
+        this.log('DownloadManager', `Download started: id=${id}, total=${total}, initialSent=${initialSent}`);
+        this.onDownloadStart(total, initialSent);
+
+        // Call external callback if provided
+        if (this.onDownloadStartCallback) {
+            try {
+                this.onDownloadStartCallback(id, total);
+            } catch (e) {
+                this.log('DownloadManager', 'Error in onDownloadStartCallback:', e);
+            }
+        }
+    }
+
+    handleDownloadProgress(sent, total) {
+        // Skip progress updates only for Firefox pass-through mode (large files)
+        // Firefox small files using SW should show normal progress like Chromium
+        const shouldShowProgress = !this.currentPlan || this.currentPlan.mode !== 'pass';
+
+        if (shouldShowProgress) {
+            const resolvedTotal = this.resolveTotalBytes(total);
+            const safeSent = typeof sent === 'number' ? sent : 0;
+            const clampedSent = resolvedTotal ? Math.min(safeSent, resolvedTotal) : safeSent;
+            const percent = resolvedTotal ? (clampedSent / resolvedTotal) * 100 : 0;
+            this.updateProgressBar(percent);
+
+            const baseBytes = this.resumeConfig ? (this.resumeConfig.baseBytes || 0) : 0;
+            const httpSent = Math.max(0, safeSent - baseBytes);
+            const speed = this.calculateSpeed(httpSent, this.startTime);
+            const transferredStr = this.formatBytes(clampedSent);
+            const totalStr = resolvedTotal ? this.formatBytes(resolvedTotal) : '?';
+
+            this.updateProgressInfo(`${transferredStr} / ${totalStr}${speed ? ' (' + speed + ')' : ''}`);
+        } else {
+            this.log('DownloadManager', 'Skipping progress update for Firefox pass-through mode');
+        }
+    }
+
+    handleDownloadComplete(total) {
+        this.log('DownloadManager', 'Download complete');
+        this.stopProgressMonitoring();
+        if (this.adaptiveUnlockTimer) {
+            clearTimeout(this.adaptiveUnlockTimer);
+            this.adaptiveUnlockTimer = null;
+        }
+        this.updateProgressBar(100);
+
+        // Update progress info to show completion with full file size
+        const resolvedTotal = this.resolveTotalBytes(total);
+        if (resolvedTotal && resolvedTotal > 0) {
+            const totalStr = this.formatBytes(resolvedTotal);
+            this.updateProgressInfo(`${totalStr} / ${totalStr}`);
+        }
+
+        this.updateStatus(this.t('download.complete.title', 'Download completed!'), '');
+        this.showCompleteBlock();
+
+        // Call external callback if provided
+        if (this.onDownloadCompleteCallback) {
+            try {
+                this.onDownloadCompleteCallback(total);
+            } catch (e) {
+                this.log('DownloadManager', 'Error in onDownloadCompleteCallback:', e);
+            }
+        }
+    }
+
+    handleDownloadError(message) {
+        this.log('DownloadManager', 'Download error:', message);
+        this.stopProgressMonitoring();
+        if (this.adaptiveUnlockTimer) {
+            clearTimeout(this.adaptiveUnlockTimer);
+            this.adaptiveUnlockTimer = null;
+        }
+        if (!this.downloadStarted && !this.newTabOpened) {
+            this.showRetryLink();
+        }
+
+        // Call external callback if provided
+        if (this.onDownloadErrorCallback) {
+            try {
+                this.onDownloadErrorCallback(message);
+            } catch (e) {
+                this.log('DownloadManager', 'Error in onDownloadErrorCallback:', e);
+            }
+        }
+    }
+
     setupBroadcastChannel() {
         if (this.dlChannel) {
             this.dlChannel.onmessage = (evt) => {
                 const { type, sent, total, id } = evt.data;
                 this.log('DownloadManager', 'Broadcast event received:', evt.data);
-                
+
                 // Filter events by download ID to prevent cross-tab interference
                 if (id && this.activeDlId && id !== this.activeDlId) {
                     return;
                 }
-                
+
                 if (type === 'download-started') {
-                    const initialSent = typeof sent === 'number' ? sent : 0;
-                    this.log('DownloadManager', `Download started broadcast received, id=${id}, total=${total}, initialSent=${initialSent}`);
-                    this.onDownloadStart(total, initialSent);
-
-                    // Call external callback if provided
-                    if (this.onDownloadStartCallback) {
-                        try {
-                            this.onDownloadStartCallback(id, total);
-                        } catch (e) {
-                            this.log('DownloadManager', 'Error in onDownloadStartCallback:', e);
-                        }
-                    }
+                    this.handleDownloadStarted(id, total, sent);
                 } else if (type === 'download-progress') {
-                    // Skip progress updates only for Firefox pass-through mode (large files)
-                    // Firefox small files using SW should show normal progress like Chromium
-                    const shouldShowProgress = !this.currentPlan || this.currentPlan.mode !== 'pass';
-                    
-                    if (shouldShowProgress) {
-                        const resolvedTotal = this.resolveTotalBytes(total);
-                        const safeSent = typeof sent === 'number' ? sent : 0;
-                        const clampedSent = resolvedTotal ? Math.min(safeSent, resolvedTotal) : safeSent;
-                        const percent = resolvedTotal ? (clampedSent / resolvedTotal) * 100 : 0;
-                        this.updateProgressBar(percent);
-                        
-                        const baseBytes = this.resumeConfig ? (this.resumeConfig.baseBytes || 0) : 0;
-                        const httpSent = Math.max(0, safeSent - baseBytes);
-                        const speed = this.calculateSpeed(httpSent, this.startTime);
-                        const transferredStr = this.formatBytes(clampedSent);
-                        const totalStr = resolvedTotal ? this.formatBytes(resolvedTotal) : '?';
-                        
-                        this.updateProgressInfo(`${transferredStr} / ${totalStr}${speed ? ' (' + speed + ')' : ''}`);
-                    } else {
-                        this.log('DownloadManager', 'Skipping progress update for Firefox pass-through mode');
-                    }
+                    this.handleDownloadProgress(sent, total);
                 } else if (type === 'download-complete') {
-                    this.log('DownloadManager', 'Download complete via broadcast');
-                    this.stopProgressMonitoring();
-                    if (this.adaptiveUnlockTimer) {
-                        clearTimeout(this.adaptiveUnlockTimer);
-                        this.adaptiveUnlockTimer = null;
-                    }
-                    this.updateProgressBar(100);
-
-                    // Update progress info to show completion with full file size
-                    const resolvedTotal = this.resolveTotalBytes(total);
-                    if (resolvedTotal && resolvedTotal > 0) {
-                        const totalStr = this.formatBytes(resolvedTotal);
-                        this.updateProgressInfo(`${totalStr} / ${totalStr}`);
-                    }
-
-                    this.updateStatus(this.t('download.complete.title', 'Download completed!'), '');
-                    this.showCompleteBlock();
-
-                    // Call external callback if provided
-                    if (this.onDownloadCompleteCallback) {
-                        try {
-                            this.onDownloadCompleteCallback(total);
-                        } catch (e) {
-                            this.log('DownloadManager', 'Error in onDownloadCompleteCallback:', e);
-                        }
-                    }
+                    this.handleDownloadComplete(total);
                 } else if (type === 'download-error') {
-                    console.error('[DownloadManager] Download error via broadcast:', evt.data.message);
-                    this.stopProgressMonitoring();
-                    if (this.adaptiveUnlockTimer) {
-                        clearTimeout(this.adaptiveUnlockTimer);
-                        this.adaptiveUnlockTimer = null;
-                    }
-                    if (!this.downloadStarted && !this.newTabOpened) {
-                        this.showRetryLink();
-                    }
-
-                    // Call external callback if provided
-                    if (this.onDownloadErrorCallback) {
-                        try {
-                            this.onDownloadErrorCallback(evt.data.message);
-                        } catch (e) {
-                            this.log('DownloadManager', 'Error in onDownloadErrorCallback:', e);
-                        }
-                    }
+                    this.handleDownloadError(evt.data.message);
                 } else if (type === 'debug' && evt.data.message) {
                     this.log('ProgressSW', evt.data.message);
                 }
@@ -869,7 +884,7 @@ class DownloadManager {
         return this.activeDlId;
     }
 
-    async fetchToWriter(urlPath, writer, needsDecryption, resume = null) {
+    async fetchToWriter(urlPath, writer, needsDecryption, resume = null, progressCallback = null) {
         if (needsDecryption) {
             this.log('DownloadManager', 'E2EE decryption will be applied during resume (bypassing Service Worker)');
 
@@ -896,15 +911,15 @@ class DownloadManager {
             wantRange = true;
             this.log('DownloadManager', `Resume request: Range bytes=${resume.rangeStart}-, skipBytes=${resume.skipBytes || 0}`);
         }
-        
-        // This fetch will trigger ProgressServiceWorker.
+
+        // This fetch will trigger ProgressServiceWorker if SW is available.
         const response = await fetch(urlPath, { headers, cache: 'no-cache' });
 
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
 
-        // Validate 206 / Content-Range for resume
+        // Validate 206 / Content-Range for resume and get total size
         let totalSizeFromServer = 0;
         let contentRange = response.headers.get('Content-Range');
         if (wantRange) {
@@ -932,9 +947,18 @@ class DownloadManager {
             } else {
                 throw new Error(`Unexpected response status for ranged request: ${response.status}`);
             }
-        } 
+        } else {
+            // No range request, get Content-Length for progress
+            const len = response.headers.get('Content-Length');
+            if (len) {
+                totalSizeFromServer = parseInt(len, 10);
+            }
+        }
 
         this.log('DownloadManager', 'Fetch response received, reading stream');
+
+        // Calculate initial sent bytes (for resume scenarios)
+        const baseBytes = resume?.baseBytes || 0;
 
         // Read the stream and write to the writer
         const reader = response.body.getReader();
@@ -984,56 +1008,146 @@ class DownloadManager {
             // Write chunk to the existing StreamSaver writer
             await writer.write(chunk);
             totalWritten += chunk.byteLength;
+
+            // Report progress if callback provided (no-SW case)
+            if (progressCallback) {
+                const currentSent = baseBytes + totalWritten;
+                progressCallback(currentSent, totalSizeFromServer);
+            }
         }
 
         // Close the writer (completes the file)
         await writer.close();
         this.log('DownloadManager', 'Writer closed successfully, HTTP bytes written:', totalWritten);
+
+        // Return total size for caller to handle completion
+        return totalSizeFromServer;
     }
 
-    startNativeDownloadWithBroadcast(url, filename, resumeConfig = null) {
+    triggerNativeDownloadLink(url) {
+        // Helper method to trigger native browser download via <a> tag
+        // Used when Service Worker handles everything or as final fallback
+        const a = document.createElement('a');
+        a.href = url;
+        //a.download = ''; // Don't set - it disables TransformStream in Service Worker
+        a.style.display = 'none';
+        document.body.appendChild(a);
+
+        this.log('DownloadManager', 'Triggering native download link');
+        a.click();
+
+        document.body.removeChild(a);
+    }
+
+    async startNativeDownload(url, filename, {
+        writer = null,
+        progressSwSupported = false,
+        resumeConfig = null
+    } = {}) {
         if (this.downloadTriggeredOnce) {
             this.log('DownloadManager', 'Download already triggered, ignoring duplicate request');
             return;
         }
         this.downloadTriggeredOnce = true;
 
-        this.log('DownloadManager', 'Starting native download with broadcast progress');
+        this.log('DownloadManager', 'Starting native download', {
+            hasWriter: !!writer,
+            progressSwSupported,
+            hasResumeConfig: !!resumeConfig
+        });
 
         const downloadUrl = new URL(url, location.origin);
         this.ensureDownloadId(downloadUrl);
         this.log('DownloadManager', 'Download URL with token:', downloadUrl.href);
 
-        // If writer is provided in resumeConfig, read the stream and write to the writer in page context
-        const writer = resumeConfig?.writer;
-        if (writer) {
-            this.log('DownloadManager', 'Writer provided - reading stream and writing to existing writer');
-
-            // E2EE decryption only needed when resuming (bypassing Service Worker)
-            // Normal path: Service Worker already decrypts chunks before they reach writer
-            const needsDecryption = false;
-
-            // Resume will be handled by ProgressServiceWorker, so we don't need to pass it.
-            this.fetchToWriter(downloadUrl.pathname + downloadUrl.search, writer, needsDecryption)
-                .catch(err => {
+        if (progressSwSupported) {
+            // Case A: Service Worker is available
+            if (writer && resumeConfig) {
+                // Has SW + has resumeConfig + has writer
+                // SW handles resume + decryption, we just write plaintext to writer
+                // No progressCallback needed (SW broadcasts events)
+                this.log('DownloadManager', 'BRANCH: SW + writer + resumeConfig -> fetchToWriter (SW handles resume/decrypt)');
+                const needsDecryption = false;
+                const progressCallback = null;  // SW broadcasts events
+                return this.fetchToWriter(
+                    downloadUrl.pathname + downloadUrl.search,
+                    writer,
+                    needsDecryption,
+                    null,  // Resume handled by SW
+                    progressCallback
+                ).catch(err => {
                     this.log('DownloadManager', 'Writer-based download failed:', err);
                     this.onDownloadErrorCallback && this.onDownloadErrorCallback(String(err));
                 });
+            } else {
+                // Has SW + no resumeConfig (or no writer)
+                // Use <a> tag, let SW handle everything (including all events)
+                this.log('DownloadManager', 'BRANCH: SW without resumeConfig → <a> tag (SW handles download)');
+                this.triggerNativeDownloadLink(downloadUrl.pathname + downloadUrl.search);
+                return;
+            }
+        }
+
+        // Case B: No Service Worker controller
+        if (writer) {
+            // No SW + has writer
+            // Direct fetch with manual resume + decryption
+            // Simulate broadcast events manually
+            this.log('DownloadManager', 'BRANCH: No SW + writer -> direct fetchToWriter (manual resume/decrypt + event simulation)');
+
+            // Prepare callbacks and parameters
+            const needsDecryption = this.e2eeEnabled;
+            const progressCallback = this.handleDownloadProgress.bind(this);
+            const baseBytes = resumeConfig?.baseBytes || 0;
+
+            // Get expected total size for download-started event
+            const expectedSize = resumeConfig?.expectedSize || this.totalBytesHint || 0;
+
+            try {
+                // Simulate download-started event (before fetching)
+                this.log('DownloadManager', 'Simulating download-started event (no SW)');
+                this.handleDownloadStarted(this.activeDlId, expectedSize, baseBytes);
+
+                // Perform the actual download
+                const totalSize = await this.fetchToWriter(
+                    downloadUrl.pathname + downloadUrl.search,
+                    writer,
+                    needsDecryption,
+                    resumeConfig,
+                    progressCallback
+                );
+
+                // Simulate download-complete event (after success)
+                this.log('DownloadManager', 'Simulating download-complete event (no SW)');
+                this.handleDownloadComplete(totalSize || expectedSize);
+
+            } catch (err) {
+                this.log('DownloadManager', 'Direct fetch -> writer failed:', err);
+
+                // Simulate download-error event
+                this.handleDownloadError(String(err));
+            }
+
             return;
         }
 
-        // Trigger native download (no resume writer - standard path, this will be handled by ProgressServiceWorker)
-        const a = document.createElement('a');
-        a.href = downloadUrl.pathname + downloadUrl.search;
-        //a.download = filename || ''; // Don't uncomment it, it disables TransformStream.
-        a.style.display = 'none';
-        document.body.appendChild(a);
+        // No SW + no writer
+        // Final fallback: native <a> download (may download encrypted file)
+        // Can only simulate start event (no way to track progress/completion)
+        this.log('DownloadManager', 'BRANCH: No SW + no writer -> fallback <a> download (no progress tracking)');
 
-        this.log('DownloadManager', 'About to click download link');
-        a.click();
-        this.log('DownloadManager', 'Download link clicked');
+        // Get expected size for UI (if available)
+        const expectedSize = resumeConfig?.expectedSize || this.totalBytesHint || 0;
 
-        document.body.removeChild(a);
+        // Simulate download-started event to show initial UI
+        this.log('DownloadManager', 'Simulating download-started event (no SW, no tracking)');
+        this.handleDownloadStarted(this.activeDlId, expectedSize, 0);
+
+        // Trigger native download (browser handles everything, no progress tracking)
+        this.triggerNativeDownloadLink(downloadUrl.pathname + downloadUrl.search);
+
+        // Note: No download-complete event - we have no way to know when it finishes
+        // User will see "check your downloads" UI via adaptive unlock
     }
 
     showCompleteBlock() {
@@ -1303,29 +1417,12 @@ class DownloadManager {
 
         // if ff_pass=1, we still use ProgressServiceWorker.js to handle fetch request, but pass-through browser directly.
 
-        // Only use broadcast/native when actually have controller; otherwise use direct fetch→writer
-        if (progressSwSupported) {
-            this.log('DownloadManager', 'BRANCH: Using Progress SW with broadcast (has controller)');
-            this.startNativeDownloadWithBroadcast(url, filename, resumeConfig);
-        } else if (writer) {
-            this.log('DownloadManager', 'BRANCH: No controller; using direct fetch→writer');
-            try {
-                // Prepare URL with download token for direct fetch
-                const downloadUrl = new URL(url, location.origin);
-                this.ensureDownloadId(downloadUrl);
-
-                await this.fetchToWriter(downloadUrl.pathname + downloadUrl.search, writer, this.e2eeEnabled, resumeConfig);
-            } catch (err) {
-                this.log('DownloadManager', 'Direct fetch→writer failed:', err);
-                this.onDownloadErrorCallback && this.onDownloadErrorCallback(String(err));
-            }
-        } else {
-            // No writer and no Service Worker - fallback to native download
-            this.log('DownloadManager', 'BRANCH: No controller and no writer; falling back to native <a> download');
-            // This wouldn't work if e2ee enabled. (download encrypted data)
-            // Maybe we should also show showE2EEFirefoxBlockedUI (not just for Firefox)
-            this.startNativeDownloadWithBroadcast(url, filename, resumeConfig);
-        }
+        // Unified download entry point - all branches handled in startNativeDownload
+        return this.startNativeDownload(url, filename, {
+            writer,
+            progressSwSupported,
+            resumeConfig
+        });
     }
 }
 

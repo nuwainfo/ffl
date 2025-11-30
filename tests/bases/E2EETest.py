@@ -81,7 +81,7 @@ class E2EEUploadTestBase:
         Returns:
             tuple: (shareLink, encryptionKey, testServerProcess or None)
         """
-        uploadArgs = ['--e2ee', '--upload', '24 hours']
+        uploadArgs = ['--e2ee', '--upload', '1 day']
         if extraArgs:
             uploadArgs.extend(extraArgs)
 

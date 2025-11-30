@@ -56,13 +56,15 @@ RETENTION_TIMES = {
     '3 hours': timedelta(hours=3),
     '6 hours': timedelta(hours=6),
     '12 hours': timedelta(hours=12),
-    '24 hours': timedelta(days=1),
-    '72 hours': timedelta(days=3),
-    '1 week': timedelta(days=7),
-    '2 weeks': timedelta(days=14),
+    '1 day': timedelta(days=1),
+    '3 days': timedelta(days=3),
+    '7 days': timedelta(days=7),
+    '14 days': timedelta(days=14),
+    '30 days': timedelta(days=30),
 }
 
 DEFAULT_AUTH_USER_NAME = 'ffl'
+DEFAULT_UPLOAD_DURATION = '6 hours'
 
 logger = getLogger(__name__)
 
@@ -206,8 +208,8 @@ class SettingsGetter(Singleton):
         """Initialize the SettingsGetter with execution mode and static root."""
         self._exeMode = exeMode
         self._baseDir = baseDir
-        
-        staticRoot = os.path.join(baseDir, staticRoot) if baseDir else staticRoot        
+
+        staticRoot = os.path.join(baseDir, staticRoot) if baseDir else staticRoot
         self._staticRoot = os.path.abspath(staticRoot)
         self._platform = platform
         self._featureManager = None # Cache for singleton FeatureManager

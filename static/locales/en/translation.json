@@ -160,7 +160,8 @@
     "fallback": {
       "browserNotSupported": "Downloads not supported in this browser",
       "p2pDisabled": "Device-to-Device P2P disabled. Use Relayed P2P.",
-      "fileTooBig": "Large files need modern browser support. Consider switching browsers or using server relay."
+      "fileTooBig": "Large files need modern browser support. Consider switching browsers or using server relay.",
+      "webrtcNotSupported": "WebRTC not supported - using server relay"
     },
     "retry": {
       "button": "Retry Download",

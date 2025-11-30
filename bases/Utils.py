@@ -330,6 +330,125 @@ def getEnv(envVar, default):
         return default
 
 
+def parseProxyString(proxyString):
+    """
+    Parse proxy string and return normalized proxy configuration.
+
+    Accepts formats:
+      - host:port (defaults to socks5h://)
+      - socks5://host:port
+      - socks5h://host:port
+      - socks5://user:pass@host:port
+      - socks5h://user:pass@host:port
+      - http://host:port
+      - https://host:port
+      - http://user:pass@host:port
+      - https://user:pass@host:port
+
+    Returns:
+        dict: {
+            'type': 'socks5' | 'http',
+            'url': 'protocol://[user:pass@]host:port',
+            'host': 'host',
+            'port': port (int),
+            'protocol': 'socks5' | 'socks5h' | 'http' | 'https',
+            'username': 'user' or None,
+            'password': 'pass' or None
+        }
+        or None if invalid
+    """
+    if not proxyString:
+        return None
+
+    proxyString = proxyString.strip()
+    if not proxyString:
+        return None
+
+    # Parse protocol and address
+    if "://" in proxyString:
+        protocol, _, address = proxyString.partition("://")
+        protocol = protocol.lower()
+    else:
+        # No protocol specified - default to socks5h
+        protocol = "socks5h"
+        address = proxyString
+
+    # Validate protocol
+    if protocol not in ["socks5", "socks5h", "http", "https"]:
+        logger.error(f"Invalid proxy protocol: {protocol}. Supported: socks5, socks5h, http, https")
+        return None
+
+    # Parse username:password@host:port or host:port
+    username = None
+    password = None
+
+    if "@" in address:
+        # Has credentials
+        credentials, _, hostPort = address.rpartition("@")
+        if ":" in credentials:
+            username, _, password = credentials.partition(":")
+        else:
+            logger.error(f"Invalid credentials format (expected user:pass@host:port): {proxyString}")
+            return None
+    else:
+        # No credentials
+        hostPort = address
+
+    # Parse host:port
+    host, sep, portStr = hostPort.rpartition(":")
+    if not sep:
+        logger.error(f"Invalid proxy format (expected host:port): {proxyString}")
+        return None
+
+    try:
+        port = int(portStr)
+    except ValueError:
+        logger.error(f"Invalid proxy port: {portStr}")
+        return None
+
+    # Determine proxy type and build normalized URL
+    if protocol in ["socks5", "socks5h"]:
+        proxyType = "socks5"
+        if username and password:
+            normalizedUrl = f"socks5h://{username}:{password}@{host}:{port}"
+        else:
+            normalizedUrl = f"socks5h://{host}:{port}"
+    else:  # http or https
+        proxyType = "http"
+        if username and password:
+            normalizedUrl = f"{protocol}://{username}:{password}@{host}:{port}"
+        else:
+            normalizedUrl = f"{protocol}://{host}:{port}"
+
+    return {
+        'type': proxyType,
+        'url': normalizedUrl,
+        'host': host,
+        'port': port,
+        'protocol': protocol,
+        'username': username,
+        'password': password
+    }
+
+
+def setupProxyEnvironment(proxyConfig):
+    """
+    Setup HTTP_PROXY and HTTPS_PROXY environment variables for requests library.
+
+    Args:
+        proxyConfig: dict returned from parseProxyString()
+    """
+    if not proxyConfig:
+        return
+
+    proxyUrl = proxyConfig['url']
+
+    # Set HTTP/HTTPS proxy for requests library (works for both SOCKS5 and HTTP proxies)
+    os.environ['HTTP_PROXY'] = proxyUrl
+    os.environ['HTTPS_PROXY'] = proxyUrl
+    logger.info(f"Proxy configured for HTTP requests: {proxyUrl}")
+
+
 def compareVersions(version1, version2):
     """
     Compare two version strings (e.g., "3.6.0" vs "10.10")

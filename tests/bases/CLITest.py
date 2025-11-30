@@ -25,6 +25,10 @@ import json
 import tempfile
 import sys
 
+import requests
+
+from urllib.parse import urlparse
+
 from ..CoreTestBase import FastFileLinkTestBase
 
 
@@ -273,37 +277,82 @@ class CLITest(FastFileLinkTestBase):
         # Should NOT show any auth messages
         self.assertNotIn("Authentication enabled", combinedOutput)
 
-    def testForceRelayFreeUserRestriction(self):
-        """Test --force-relay restriction for free users with default tunnel."""
-        extraArgs = ["--force-relay", "--preferred-tunnel", "default"]
-        
+    def testForceRelayFreeUserDisablesWebRTC(self):
+        """Test --force-relay for free users disables WebRTC via JavaScript (soft disable)."""
+        extraArgs = ["--force-relay", "--preferred-tunnel", "default", "--timeout", "10"]
+
         # Set Free user level for this test
         originalFreeLevel = self._setTestEnvVar("FREE_USER_LEVEL", "Free")
-        
+
         try:
-            combinedOutput = self._runCommandAndGetOutput(extraArgs)
-            
-            # Should show restriction error (actual message includes "logged in user")
-            self.assertIn("requires a logged in user", combinedOutput)
-            self.assertIn("Standard or Plus plan", combinedOutput)
-            
+            # Start server and get share link
+            shareLink = self._startAndGetShareLink(extraArgs=extraArgs)
+            print(f"[Test] Share link: {shareLink}")
+
+            # Extract base URL and UID from share link
+            parsed = urlparse(shareLink)
+            baseUrl = f"{parsed.scheme}://{parsed.netloc}"
+            uid = parsed.path.lstrip('/')
+
+            # Request the HTML page like a browser would - use User-Agent header
+            # This prevents redirect to /download and gets us the actual HTML page
+            htmlUrl = f"{baseUrl}/{uid}/static/index.html"
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+
+            print(f"[Test] Requesting HTML from: {htmlUrl}")
+            response = requests.get(htmlUrl, headers=headers)
+            self.assertEqual(response.status_code, 200, "Expected 200 OK for HTML page")
+
+            htmlContent = response.text
+
+            # For free users with --force-relay, the HTML should contain DISABLE_WEBRTC = true
+            # This is a soft disable - browser won't attempt WebRTC
+            self.assertIn("const DISABLE_WEBRTC = true;", htmlContent,
+                         "Expected DISABLE_WEBRTC = true in HTML for free user with --force-relay")
+
+            print("[Test] PASS: Free user with --force-relay: DISABLE_WEBRTC = true in HTML")
+
         finally:
             self._restoreTestEnvVar("FREE_USER_LEVEL", originalFreeLevel)
 
-    def testForceRelayStandardUserAllowed(self):
-        """Test --force-relay works for Standard/Plus users with default tunnel."""
-        extraArgs = ["--force-relay", "--preferred-tunnel", "default", "--timeout", "3"]
-        
-        # Set Standard user level - should bypass restriction with fixed isFreeUser()
+    def testForceRelayStandardUserBlocksOfferEndpoint(self):
+        """Test --force-relay for Standard/Plus users blocks /offer endpoint with 403 (hard enforce)."""
+        extraArgs = ["--force-relay", "--preferred-tunnel", "default", "--timeout", "10"]
+
+        # Set Standard user level - should enforce at server level
         originalFreeLevel = self._setTestEnvVar("FREE_USER_LEVEL", "Standard")
-        
+
         try:
-            combinedOutput = self._runCommandAndGetOutput(extraArgs)
-            
-            # With the fixed isFreeUser() implementation that checks both serial number
-            # AND level, Standard users should not see the restriction message
-            self.assertNotIn("requires a logged in user", combinedOutput)
-            
+            # Start server and get share link
+            shareLink = self._startAndGetShareLink(extraArgs=extraArgs)
+            print(f"[Test] Share link: {shareLink}")
+
+            # Extract base URL and UID from share link
+            # Example: https://domain.com/uid -> base: https://domain.com, uid: uid            
+            parsed = urlparse(shareLink)
+            baseUrl = f"{parsed.scheme}://{parsed.netloc}"
+            uid = parsed.path.lstrip('/')
+
+            # Try to request /offer endpoint (what browser does for WebRTC)
+            offerUrl = f"{baseUrl}/{uid}/offer"
+            print(f"[Test] Requesting {offerUrl}")
+
+            response = requests.get(offerUrl)
+
+            # For licensed users with --force-relay, server should return 403 Forbidden
+            # This is hard enforcement - server blocks WebRTC offer creation
+            self.assertEqual(response.status_code, 403,
+                           f"Expected 403 Forbidden for /offer endpoint with --force-relay, got {response.status_code}")
+
+            # Check error message contains policy information
+            errorText = response.text
+            self.assertIn("disabled by server policy", errorText.lower(),
+                         "Expected error message to mention server policy")
+
+            print("[Test] PASS: Standard user with --force-relay: /offer returns 403 Forbidden")
+
         finally:
             self._restoreTestEnvVar("FREE_USER_LEVEL", originalFreeLevel)
 
@@ -571,6 +620,12 @@ class CLIArgumentParsingTest(unittest.TestCase):
                 ([tempFileName, "--alias", "testAlias"], "start_sharing", "File with --alias should start sharing"),
                 (["--cli", "share", tempFileName, "--alias", "cliTest"], "start_sharing", "--cli share file --alias should start sharing"),
                 ([tempFileName, "--alias", "test123", "--timeout", "3"], "start_sharing", "File with --alias and --timeout should start sharing"),
+
+                # Test global option after file argument
+                (["--cli", tempFileName, "--log-level", "INFO"], "start_sharing", "--cli file --log-level INFO should start sharing (global option after argument)"),
+
+                # Test --upload without duration value (should auto-insert default duration)
+                (["--cli", "--e2ee", "--upload", tempFileName], "start_sharing", "--cli --e2ee --upload file should start sharing (upload before file without value)"),
             ]
             
             for args, expectedBehavior, description in validCases:

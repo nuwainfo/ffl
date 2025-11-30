@@ -106,33 +106,58 @@ class TunnelRunner:
     Designed specifically for Core.py usage pattern.
     """
 
-    def __init__(self, fileSize):
+    def __init__(self, fileSize, proxyConfig=None):
         """
         Initialize TunnelRunner
-        
+
         Args:
             fileSize: Size of file being shared (for tunnel optimization)
+            proxyConfig: Optional proxy configuration dict from parseProxyString()
         """
         self.fileSize = fileSize
+        self.proxyConfig = proxyConfig
         self.tunnelThread = None
         self.lock = threading.Lock()
 
     def getTunnelType(self):
         """
         Get the type/name of tunnel being used
-        
+
         Returns:
             str: Name of the tunnel type (e.g., "default", "Cloudflare", etc.)
         """
         return "default"
 
+    def getProxyInfo(self):
+        """
+        Get proxy information for display purposes
+
+        Returns:
+            str: Proxy info string (e.g., "socks5h://127.0.0.1:9150") or None if no proxy
+        """
+        # Check proxyConfig from --proxy argument (highest priority)
+        if self.proxyConfig and self.proxyConfig['type'] == 'socks5':
+            username = self.proxyConfig.get('username')
+            if username:
+                # Don't show password in output
+                return f"{self.proxyConfig['protocol']}://{username}@{self.proxyConfig['host']}:{self.proxyConfig['port']}"
+            else:
+                return f"{self.proxyConfig['protocol']}://{self.proxyConfig['host']}:{self.proxyConfig['port']}"
+
+        # Check FFL_TUNNEL_SOCKS5 environment variable (fallback)
+        socks5Env = os.environ.get('FFL_TUNNEL_SOCKS5')
+        if socks5Env:
+            return f"socks5h://{socks5Env} (from FFL_TUNNEL_SOCKS5)"
+
+        return None
+
     def createClient(self, port, **kwargs):
         """
         Create BoreClient instance with given parameters
-        
+
         Args:
             port: Local port to tunnel
-            
+
         Returns:
             BoreClient: Configured client instance
         """
@@ -163,6 +188,7 @@ class TunnelRunner:
             verbose=False,
             debug=False,
             useHttps=True,
+            proxyConfig=self.proxyConfig,
             **kwargs
         )
 

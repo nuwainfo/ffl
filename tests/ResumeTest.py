@@ -247,10 +247,8 @@ class ResumeDownloadTest(FastFileLinkTestBase):
 
     def _downloadFileWithCurl(self, shareLink, outputPath, incomplete=False):
         """Download file using curl command"""
-        if sys.platform.startswith('win'):
-            curl = 'curl.exe'
-        else:
-            curl = 'curl'
+        # Use system curl (Windows 10+ has built-in curl.exe in System32)
+        curl = 'curl'
 
         if incomplete:
             # Use limit-rate and max-time options to make download incomplete

@@ -765,15 +765,21 @@ Licensed under Apache-2.0 license.
 
             // Detect RTC connection type (local vs remote)
             const detectRTCConnectionType = async () => {
+                // Check if RTCPeerConnection is supported
+                if (typeof RTCPeerConnection === 'undefined') {
+                    log("Connection", "RTCPeerConnection not supported, skipping connection type detection");
+                    return { isLocalConnection: false, detectedIp: null };
+                }
+
                 return new Promise((resolve, reject) => {
+                    const tempPc = new RTCPeerConnection({
+                        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                    });
+
                     const timeout = setTimeout(() => {
                         tempPc.close();
                         resolve({ isLocalConnection: false, detectedIp: null });
                     }, 5000);
-
-                    const tempPc = new RTCPeerConnection({
-                        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-                    });
 
                     let hostIps = new Set();
                     let srflxIps = new Set();
@@ -940,9 +946,6 @@ Licensed under Apache-2.0 license.
                 // Countdown state
                 this.countdownInterval = null;
                 this.countdownSeconds = 0;
-
-                // Callback to check if operations should stop
-                this.shouldStopCallback = options.shouldStopCallback || (() => false);
             }
 
             setStatus(text, showLoading = false) {
@@ -998,7 +1001,7 @@ Licensed under Apache-2.0 license.
             }
 
             // ============ Countdown Management ============
-            startCountdown(seconds) {
+            startCountdown(seconds, shouldStopCallback) {
                 this.stopCountdown(); // Clear any existing countdown
 
                 this.countdownSeconds = seconds;
@@ -1009,8 +1012,7 @@ Licensed under Apache-2.0 license.
                 );
 
                 this.countdownInterval = setInterval(() => {
-                    // Check if operations should stop
-                    if (this.shouldStopCallback()) {
+                    if (shouldStopCallback && shouldStopCallback()) {
                         this.stopCountdown();
                         return;
                     }
@@ -1037,12 +1039,12 @@ Licensed under Apache-2.0 license.
             }
 
             // ============ Connection States ============
-            showEstablishingP2P(timeoutSeconds) {
+            showEstablishingP2P(timeoutSeconds, shouldStopCallback) {
                 this.setStatus(
                     this.t('client.status.establishingP2p', 'Establishing P2P connection...'),
                     true
                 );
-                this.startCountdown(timeoutSeconds);
+                this.startCountdown(timeoutSeconds, shouldStopCallback);
             }
 
             showP2PChecking() {
@@ -1266,6 +1268,222 @@ Licensed under Apache-2.0 license.
         }
         </script>
 
+        <!-- Fallback Manager -->
+        <script>
+        /**
+         * FallbackManager - Handles HTTP fallback logic
+         */
+        class FallbackManager {
+            constructor({
+                debugConfig,
+                e2eeManager,
+                uiManager,
+                fileSize,
+                log,
+                t,
+                // Callbacks for external state
+                getWritePump,
+                getBytesReceived,
+                getDownloadCompleted,
+                hasTransferStarted,
+                isStalled,
+                onConnectionFailureHandled
+            }) {
+                // Configuration dependencies
+                this.debugConfig = debugConfig;
+                this.e2eeManager = e2eeManager;
+                this.uiManager = uiManager;
+                this.fileSize = fileSize;
+                this.log = log;
+                this.t = t;
+
+                // Callbacks
+                this.getWritePump = getWritePump;
+                this.getBytesReceived = getBytesReceived;
+                this.getDownloadCompleted = getDownloadCompleted;
+                this.hasTransferStarted = hasTransferStarted;
+                this.isStalled = isStalled;
+                this.onConnectionFailureHandled = onConnectionFailureHandled;
+
+                this.fallbackTriggered = false;
+
+                // References
+                this.downloadManager = null;
+                this.fallbackTimer = null;
+            }
+
+            // Create fallback timer with timeout
+            createFallbackTimer(timeoutMs) {
+                this.log("Fallback", `Setting up timeout for ${timeoutMs}ms`);
+                this.fallbackTimer = setTimeout(() => {
+                    this.log("Fallback", `Timeout reached after ${timeoutMs}ms`);
+                    this.triggerFallback("Connection timeout");
+                }, timeoutMs);
+                return this.fallbackTimer;
+            }
+
+            clearFallbackTimer() {
+                if (this.fallbackTimer) {
+                    clearTimeout(this.fallbackTimer);
+                    this.fallbackTimer = null;
+                }
+            }
+
+            // Main fallback trigger method
+            async triggerFallback(reason, force = false) {
+                if (!this.debugConfig.isHTTPFallbackEnabled()) {
+                    this.log("Fallback", `Skip fallback (${reason}): fallback disabled`);
+                    return;
+                }
+
+                if (this.fallbackTriggered || this.getDownloadCompleted()) {
+                    this.log("Fallback", `Skip fallback (${reason}): already handled`);
+                    return;
+                }
+
+                // Use callbacks to check external state
+                if (!force && this.hasTransferStarted() && !this.isStalled()) {
+                    this.log("Fallback", `Skip fallback (${reason}): transfer active / not stalled`);
+                    return;
+                }
+
+                const writePump = this.getWritePump();
+                const bytesReceived = this.getBytesReceived();
+
+                this.log("Fallback", `Switching to HTTP download: ${reason}`);
+                this.log("Fallback", `Current state: bytesReceived=${bytesReceived}, pump.bytesWritten=${writePump ? writePump.bytesWritten : 0}`);
+
+                // Prepare WritePump for fallback
+                const flushPromise = writePump
+                    ? writePump.prepareForFallback(5000, `Fallback: ${reason}`)
+                    : Promise.resolve();
+
+                // Notify external state manager that connection failure has been handled
+                this.onConnectionFailureHandled();
+
+                // Show UI updates
+                this.uiManager.showSwitchingToRelay(reason);
+                this.uiManager.updateFallbackMessage();
+
+                try {
+                    await this._startDownloadManager(flushPromise, writePump);
+                } catch (error) {
+                    this.log("Fallback", "DownloadManager failed, redirecting to download URL:", error);
+                    window.location.href = '/uid=****/download';
+                }
+
+                this.uiManager.showRelayStarted();
+            }
+
+            async _startDownloadManager(flushPromise, writePump) {
+                const e2eeEnabledValue = (this.e2eeManager && this.e2eeManager.e2eeEnabled);
+
+                // Create DownloadManager instance
+                this.downloadManager = new DownloadManager({
+                    debug: DEBUG,
+                    logFunction: this.log,
+                    uid: 'uid=****',
+                    e2eeEnabled: e2eeEnabledValue,
+                    progressBar: document.getElementById('downloadProgress'),
+                    statusHeading: '#download-message',
+                    statusDetails: '#status-details',
+                    progressInfo: '#connectionType',
+                    retryLink: '#retry-link',
+                    onServiceWorkerReadyCallback: async (controller) => {
+                        if (this.downloadManager.httpDecryptor && controller) {
+                            this.log("E2EE", "Sending E2EE context to Service Worker...");
+                            this.downloadManager.httpDecryptor.sendContextToServiceWorker('__pre_registered__', controller);
+                            this.log("E2EE", "✓ E2EE context pre-registered with Service Worker");
+                        }
+                    },
+                    onDownloadStartCallback: (downloadId, total) => {
+                        this.log("Fallback", `DownloadManager started, download ID: ${downloadId}, total: ${total}`);
+
+                        if (this.downloadManager.httpDecryptor && navigator.serviceWorker && navigator.serviceWorker.controller) {
+                            this.downloadManager.httpDecryptor.sendContextToServiceWorker(downloadId, navigator.serviceWorker.controller);
+                            this.log("E2EE", `✓ E2EE context sent for specific download ID: ${downloadId}`);
+                        }
+
+                        // Notify external state that connection failure is handled
+                        this.onConnectionFailureHandled();
+
+                        // Clear P2P timers
+                        this.uiManager.stopCountdown();
+                        if (this.fallbackTimer) {
+                            clearTimeout(this.fallbackTimer);
+                        }
+
+                        this.uiManager.setConnectionType(this.t('client.connection.serverRelay', 'Using Server Relay Download'));
+                        this.log("Fallback", "Successfully transitioned from P2P to HTTP download");
+                    }
+                });
+
+                // Setup retry handlers
+                this.downloadManager.setupRetryHandlers();
+
+                // Start download
+                await flushPromise;
+                this.fallbackTriggered = true;
+
+                const actualBytesWritten = writePump ? writePump.bytesWritten : 0;
+                const bytesReceived = this.getBytesReceived();
+                this.log("Fallback", "Queue flushed, starting DownloadManager download");
+                this.log("Fallback", `Current state (after flush): bytesReceived=${bytesReceived}, bytesWritten=${actualBytesWritten}`);
+
+                if (e2eeEnabledValue) {
+                    this.downloadManager.httpDecryptor = await this.e2eeManager.setupHTTPDecryptor();
+                    this.log("E2EE", "✓ HTTP decryptor ready");
+                }
+
+                // Calculate resume options
+                const resumeOptions = this._calculateResumeOptions(actualBytesWritten);
+
+                this.log("Fallback", `Starting DownloadManager with writer: ${writePump ? 'YES' : 'NO'}, resume: ${resumeOptions ? 'YES' : 'NO'}`);
+                this.downloadManager.startDownload({
+                    writer: writePump ? writePump.writer : null,
+                    resume: resumeOptions
+                });
+            }
+
+            _calculateResumeOptions(actualBytesWritten) {
+                const hasBytes = actualBytesWritten > 0;
+                const hasSize = typeof this.fileSize === 'number' && this.fileSize > 0;
+
+                if (!hasBytes || !hasSize) {
+                    this.log("Fallback", `Resume not applicable: bytesWritten=${actualBytesWritten}, fileSize=${this.fileSize}`);
+                    return null;
+                }
+
+                if (actualBytesWritten >= this.fileSize) {
+                    this.log("Fallback", `Resume skipped: bytesWritten (${actualBytesWritten}) >= fileSize (${this.fileSize})`);
+                    return null;
+                }
+
+                const ALIGN = 256 * 1024;
+                const alignedStart = Math.floor(actualBytesWritten / ALIGN) * ALIGN;
+                const skipBytes = actualBytesWritten - alignedStart;
+
+                const resumePayload = {
+                    baseBytes: actualBytesWritten,
+                    rangeStart: alignedStart,
+                    skipBytes: skipBytes,
+                    expectedSize: this.fileSize,
+                    chunkSize: ALIGN
+                };
+
+                this.log("Fallback", `Resume calculation: baseBytes=${actualBytesWritten}, rangeStart=${alignedStart}, skipBytes=${skipBytes}, expectedSize=${this.fileSize}`);
+
+                if (resumePayload.rangeStart >= 0 && resumePayload.rangeStart < this.fileSize) {
+                    this.log("Fallback", `Resume options prepared`);
+                    return resumePayload;
+                } else {
+                    this.log("Fallback", `Resume range invalid: start=${resumePayload.rangeStart}, fileSize=${this.fileSize}`);
+                    return null;
+                }
+            }
+        }
+        </script>
+
         <!-- WebRTC and Download Script -->
         <script>
 
@@ -1273,6 +1491,12 @@ Licensed under Apache-2.0 license.
             let downloadInitialized = false;
             // Timer reference for fallback mechanism
             let startWebRTCTimer = null;
+
+            // Check if WebRTC is supported in the browser
+            function isWebRTCSupported() {
+                return typeof RTCPeerConnection !== 'undefined' &&
+                       typeof RTCDataChannel !== 'undefined';
+            }
 
             // Wait for i18n to be ready before starting
             function startWebRTCDownload() {
@@ -1298,27 +1522,19 @@ Licensed under Apache-2.0 license.
                 const DEFAULT_FALLBACK_MS = 30000;
                 const FALLBACK_MS = debugConfig.getFallbackTimeout(DEFAULT_FALLBACK_MS);
                 
-                const STALL_MS = 12000; // 12 seconds threshold for detecting stalled transfers                                
-                const CHUNK_SIZE = 256 * 1024;  // 256 KB chunk size for blob storage                                
-                
-                let fallbackTriggered = false; // Flag to track if fallback has been triggered
-                let downloadCompleted = false; // Flag to track if download completed
+                const STALL_MS = 12000; // 12 seconds threshold for detecting stalled transfers
+                const CHUNK_SIZE = 256 * 1024;  // 256 KB chunk size for blob storage
+
                 let restartAttempted = false;   // Allow one automatic ICE restart
 
                 let countdownSeconds = Math.floor(FALLBACK_MS / 1000);
                 let stopCandidatePolling = false; // trickle ICE polling
 
                 // Connection state tracking
-                let dataChannelEstablished = false;
-                let bytesReceived = 0;
-                let connectionFailureHandled = false;
                 let disconnectedTime = null;
                 let disconnectDuringTransferTimer = null;
 
                 let writePump = null;
-
-                // Progress tracking for stall detection
-                let lastProgressTs = 0;
 
                 // E2EE Setup
                 let e2eeManager = null;
@@ -1337,16 +1553,6 @@ Licensed under Apache-2.0 license.
                     webrtcDecryptor = null;
                 }
 
-                // Unified condition checker - single source of truth for P2P termination
-                const shouldStopPeerOperations = () => {
-                    return fallbackTriggered || connectionFailureHandled || downloadCompleted;
-                };
-
-                // Check if we should handle pre-transfer connection failures
-                const shouldHandlePreTransferFailure = () => {
-                    return !shouldStopPeerOperations() && !hasTransferStarted();
-                };
-
                 const connectionInfo = await getConnectionInfo();
                 log("Client", `Browser: ${connectionInfo.browser}, Domain: ${connectionInfo.domain}`);
                 log("Client", `Local: ${connectionInfo.isLocalConnection}, InApp: ${connectionInfo.inAppBrowser}, DownloadRestricted: ${connectionInfo.downloadRestricted}`);
@@ -1362,15 +1568,69 @@ Licensed under Apache-2.0 license.
                 const fileSize = parseInt(document.getElementById('fileSize')?.textContent || '0', 10);
                 log("File", `Name: ${fileName}, Size: ${fileSize} bytes`);
 
+                // Transfer state tracking
+                let dataChannelEstablished = false;
+                let bytesReceived = 0;
+                let connectionFailureHandled = false;
+                let downloadCompleted = false;
+                let lastProgressTs = 0; // Progress tracking for stall detection
+
+                // Helper functions for state checking
+                const hasTransferStarted = () => {
+                    return dataChannelEstablished && bytesReceived > 0;
+                };
+
+                const isStalled = () => {
+                    if (!hasTransferStarted()) {
+                        return false;
+                    }
+
+                    if (lastProgressTs === 0) {
+                        return false;
+                    }
+
+                    const timeSinceLastProgress = Date.now() - lastProgressTs;
+                    return timeSinceLastProgress >= STALL_MS;
+                };
+
+                // P2P operation control (defined early, will use fallbackManager after it's created)
+                let fallbackManager = null;
+
+                const shouldStopPeerOperations = () => {
+                    return (fallbackManager && fallbackManager.fallbackTriggered) || connectionFailureHandled || downloadCompleted;
+                };
+
+                const shouldHandlePreTransferFailure = () => {
+                    return !shouldStopPeerOperations() && !hasTransferStarted();
+                };
+
                 // Initialize UI Manager
                 const uiManager = new DownloadUIManager({
                     progressBar: document.getElementById('downloadProgress'),
                     statusText: document.getElementById('statusText'),
                     connectionType: document.getElementById('connectionType'),
                     downloadMessage: document.getElementById('download-message')
-                }, t, {
-                    shouldStopCallback: () => shouldStopPeerOperations()
+                }, t);
+
+                // Initialize FallbackManager
+                fallbackManager = new FallbackManager({
+                    debugConfig,
+                    e2eeManager,
+                    uiManager,  
+                    fileSize,
+                    log,
+                    t,
+                    // Callbacks for external state
+                    getWritePump: () => writePump,
+                    getBytesReceived: () => bytesReceived,
+                    getDownloadCompleted: () => downloadCompleted,
+                    hasTransferStarted,
+                    isStalled,
+                    onConnectionFailureHandled: () => { connectionFailureHandled = true; }
                 });
+
+                // Convenience method for triggering fallback
+                const fallbackToHTTP = (reason, force = false) => fallbackManager.triggerFallback(reason, force);
 
                 // Set progress bar max if we know the file size
                 uiManager.setProgressMax(fileSize);
@@ -1403,6 +1663,7 @@ Licensed under Apache-2.0 license.
                     },
                     log: log
                 });
+
                 log("WritePump", `Initialized for ${writerContext.type} download (always available)`);
 
                 // Handle download completion
@@ -1425,7 +1686,6 @@ Licensed under Apache-2.0 license.
                     log("Download", "Complete!");
 
                     downloadCompleted = true;
-                    fallbackTriggered = true;
 
                     // Show completion UI
                     uiManager.showComplete(fileSize);
@@ -1449,9 +1709,7 @@ Licensed under Apache-2.0 license.
                     stopCandidatePolling = true;
                     connectionFailureHandled = true;
 
-                    if (typeof fallbackTimer !== 'undefined') {
-                        clearTimeout(fallbackTimer);
-                    }
+                    fallbackManager.clearFallbackTimer();
 
                     // Cleanup countdown timer
                     uiManager.stopCountdown();
@@ -1461,186 +1719,15 @@ Licensed under Apache-2.0 license.
                         cleanupConnectionsCallback();
                     }
                 }
-                
-                
-                // Check if transfer has actually started (data channel open and receiving data)
-                const hasTransferStarted = () => {
-                    return dataChannelEstablished && bytesReceived > 0;
-                };
 
-                // Check if an active transfer has stalled (no progress for STALL_MS duration)
-                const isStalled = () => {
-                    if (!hasTransferStarted()) {
-                        return false;
-                    }
+                // Check if we should skip WebRTC due to browser support or download restrictions
+                const webrtcSupported = isWebRTCSupported();
 
-                    // Safety check: ensure lastProgressTs is initialized
-                    if (lastProgressTs === 0) {
-                        return false;
-                    }
-
-                    const timeSinceLastProgress = Date.now() - lastProgressTs;
-                    return timeSinceLastProgress >= STALL_MS;
-                };
-
-                // Fallback to DownloadManager - ensuring it only triggers once
-                const fallbackToHTTP = (reason, force = false) => {
-                    if (!debugConfig.isHTTPFallbackEnabled()) {// Always return if fallback disabled.
-                        log("Fallback", `Skip fallback (${reason}): fallback == ${debugConfig.isHTTPFallbackEnabled()}`);
-                        return;
-                    }
-
-                    // If relay mode already kicked in or download completed, ignore duplicates.
-                    if (fallbackTriggered || downloadCompleted) {
-                        log("Fallback", `Skip fallback (${reason}): already handled`);
-                        return;
-                    }
-
-                    // When P2P is still making forward progress, avoid falling back unless this is a forced failure.
-                    if (!force && hasTransferStarted() && !isStalled()) {
-                        log("Fallback", `Skip fallback (${reason}): transfer active / not stalled`);
-                        return;
-                    }
-
-                    log("Fallback", `Switching to HTTP download: ${reason}`);
-                    log("Fallback", `Current state: bytesReceived=${bytesReceived}, pump.bytesWritten=${writePump.bytesWritten}`);
-
-                    // Prepare WritePump for fallback (flush writes but keep writer open for DownloadManager)
-                    const flushPromise = writePump.prepareForFallback(5000, `Fallback: ${reason}`);
-
-                    // Mark as handled to prevent duplicate fallback attempts
-                    connectionFailureHandled = true;
-
-                    // Show switching to relay UI
-                    uiManager.showSwitchingToRelay(reason);
-
-                    // Update download message to the full version
-                    uiManager.updateFallbackMessage();
-
-                    try {
-                        // Check if E2EE is enabled
-                        const e2eeEnabledValue = (e2eeManager && e2eeManager.e2eeEnabled);
-
-                        // Create DownloadManager instance with custom UI elements and callbacks
-                        downloadManager = new DownloadManager({
-                            debug: DEBUG,
-                            logFunction: log,
-                            uid: 'uid=****',
-                            e2eeEnabled: e2eeEnabledValue, // Pass E2EE status via constructor
-                            progressBar: document.getElementById('downloadProgress'), // Use WebRTC progress bar
-                            statusHeading: '#download-message', // Use download message as status heading
-                            statusDetails: '#status-details', // Use newly added status details
-                            progressInfo: '#connectionType', // Use connectionType for file size info
-                            retryLink: '#retry-link', // Use retry link element
-                            onServiceWorkerReadyCallback: async (controller) => {
-                                // Called when Service Worker is ready and controlling
-                                if (downloadManager.httpDecryptor && controller) {
-                                    log("E2EE", "Sending E2EE context to Service Worker...");
-
-                                    // Send E2EE context immediately (pre-registered with generic ID)
-                                    downloadManager.httpDecryptor.sendContextToServiceWorker('__pre_registered__', controller);
-                                    log("E2EE", "✓ E2EE context pre-registered with Service Worker");
-                                }
-                            },
-                            onDownloadStartCallback: (downloadId, total) => {
-                                // Handle P2P to HTTP transition
-                                log("Fallback", `DownloadManager started, download ID: ${downloadId}, total: ${total}`);
-
-                                // Send E2EE context with specific download ID (already pre-registered with __pre_registered__)
-                                if (downloadManager.httpDecryptor && navigator.serviceWorker && navigator.serviceWorker.controller) {
-                                    downloadManager.httpDecryptor.sendContextToServiceWorker(downloadId, navigator.serviceWorker.controller);
-                                    log("E2EE", `✓ E2EE context sent for specific download ID: ${downloadId}`);
-                                }
-
-                                // Prevent subsequent P2P errors from overwriting UI
-                                connectionFailureHandled = true;
-
-                                // Clear P2P timers
-                                uiManager.stopCountdown();
-                                if (typeof fallbackTimer !== 'undefined' && fallbackTimer) {
-                                    clearTimeout(fallbackTimer);
-                                }
-
-                                // Show server relay status
-                                uiManager.setConnectionType(t('client.connection.serverRelay', 'Using Server Relay Download'));
-                                log("Fallback", "Successfully transitioned from P2P to HTTP download");
-                            }
-                        });
-
-                        // Setup retry handlers
-                        downloadManager.setupRetryHandlers();
-
-                        // Start download immediately 
-                        (async () => {
-                            // Wait for flush to complete (already triggered earlier)
-                            await flushPromise;
-
-                            // NOW set fallbackTriggered after queue is fully drained
-                            fallbackTriggered = true;
-
-                            // Get actual bytes written from WritePump (accurate for resume)
-                            const actualBytesWritten = writePump.bytesWritten;
-                            log("Fallback", "Queue flushed, starting DownloadManager download");
-                            log("Fallback", `Current state (after flush): bytesReceived=${bytesReceived}, bytesWritten=${actualBytesWritten}`);
-
-
-                            if (e2eeEnabledValue) {
-                                downloadManager.httpDecryptor = await e2eeManager.setupHTTPDecryptor();
-                                log("E2EE", "✓ HTTP decryptor ready");
-                            }
-
-                            // Calculate resume options and prepare writer
-                            let resumeOptions = null;
-
-                            const hasBytes = actualBytesWritten > 0;
-                            const hasSize = typeof fileSize === 'number' && fileSize > 0;
-
-                            if (!hasBytes || !hasSize) {
-                                log("Fallback", `Resume not applicable: bytesWritten=${actualBytesWritten}, fileSize=${fileSize}`);
-                            } else if (actualBytesWritten >= fileSize) {
-                                log("Fallback", `Resume skipped: bytesWritten (${actualBytesWritten}) >= fileSize (${fileSize})`);
-                            } else {
-                                // Always use 256 KiB alignment for resume and E2EE
-                                const ALIGN = 256 * 1024;
-                                const alignedStart = Math.floor(actualBytesWritten / ALIGN) * ALIGN;
-                                const skipBytes = actualBytesWritten - alignedStart;
-
-                                const resumePayload = {
-                                    baseBytes: actualBytesWritten,
-                                    rangeStart: alignedStart,
-                                    skipBytes: skipBytes,
-                                    expectedSize: fileSize,
-                                    writer: writePump.writer
-                                };
-
-                                log("Fallback", `Resume calculation: baseBytes=${actualBytesWritten}, rangeStart=${alignedStart}, skipBytes=${skipBytes}, expectedSize=${fileSize}`);
-
-                                if (resumePayload.rangeStart >= 0 && resumePayload.rangeStart < fileSize) {
-                                    resumeOptions = resumePayload;
-                                    log("Fallback", `Resume options prepared`);
-                                } else {
-                                    log("Fallback", `Resume range invalid: start=${resumePayload.rangeStart}, fileSize=${fileSize}`);
-                                }
-                            }
-
-                            log("Fallback", `Starting DownloadManager with writer: YES, resume: ${resumeOptions ? 'YES' : 'NO'}`);
-                            downloadManager.startDownload({
-                                writer: writePump.writer,  
-                                resume: resumeOptions
-                            });
-                        })();
-
-                    } catch (error) {
-                        log("Fallback", "DownloadManager failed, redirecting to download URL:", error);
-                        // Simple fallback if DownloadManager fails
-                        window.location.href = '/uid=****/download';
-                    }
-                    uiManager.showRelayStarted();
-                };
-
-                // Check if we should skip WebRTC due to download restrictions
-                if (DISABLE_WEBRTC || SKIP_WEBRTC_DUE_TO_RESTRICTION) {
-                    if (SKIP_WEBRTC_DUE_TO_RESTRICTION) {
+                if (!webrtcSupported || DISABLE_WEBRTC || SKIP_WEBRTC_DUE_TO_RESTRICTION) {
+                    if (!webrtcSupported) {
+                        log("WebRTC", "WebRTC not supported in this browser (RTCPeerConnection or RTCDataChannel unavailable)");
+                        fallbackToHTTP(t('client.fallback.webrtcNotSupported', 'WebRTC not supported - using server relay'));
+                    } else if (SKIP_WEBRTC_DUE_TO_RESTRICTION) {
                         uiManager.showBrowserNotSupported();
                     } else {
                         fallbackToHTTP(t('client.fallback.p2pDisabled', 'Device-to-Device P2P disabled. Use Relayed P2P.'));
@@ -1649,7 +1736,7 @@ Licensed under Apache-2.0 license.
                 }
                 
                 // Initialize status & countdown
-                uiManager.showEstablishingP2P(countdownSeconds);
+                uiManager.showEstablishingP2P(countdownSeconds, shouldStopPeerOperations);
 
                 // Request offer from server
                 log("WebRTC", "Requesting offer from server");
@@ -1720,11 +1807,7 @@ Licensed under Apache-2.0 license.
                     log("WebRTC", "Peer connection created:", pc);
 
                     // Fallback timer
-                    log("Fallback", `Setting up timeout for ${FALLBACK_MS}ms`);
-                    const fallbackTimer = setTimeout(() => {
-                        log("Fallback", `Timeout reached after ${FALLBACK_MS}ms`);
-                        fallbackToHTTP("Connection timeout");
-                    }, FALLBACK_MS);
+                    fallbackManager.createFallbackTimer(FALLBACK_MS);
 
                     // ============ ICE Connection State Handler ============
                     // lifecycle: checking → connected → completed/failed/disconnected.
@@ -1985,7 +2068,7 @@ Licensed under Apache-2.0 license.
                         // Update UI for successful connection
                         // Update UI for successful P2P connection
                         uiManager.showP2PSuccess();
-                        clearTimeout(fallbackTimer);
+                        fallbackManager.clearFallbackTimer();
                         log("Fallback", "Cleared timeout - connection successful");
 
                         // Setup all data channel handlers
@@ -2241,9 +2324,11 @@ Licensed under Apache-2.0 license.
             }, 2000);
         </script>
         
-        <script>        
+        <script>
             // Status polling for server-side error notifications
             let statusPoller = null;
+            let consecutiveStatusFailures = 0;
+            const MAX_STATUS_FAILURES = 2;
 
             function startStatusPolling() {
                 // Poll every 2 seconds
@@ -2251,8 +2336,19 @@ Licensed under Apache-2.0 license.
                     try {
                         const response = await fetch('/status');
                         if (!response.ok) {
-                            return; // Ignore failed status requests
+                            consecutiveStatusFailures++;
+                            log("Status", `Status request failed (${response.status}): ${consecutiveStatusFailures}/${MAX_STATUS_FAILURES}`);
+
+                            // Stop polling after consecutive failures
+                            if (consecutiveStatusFailures >= MAX_STATUS_FAILURES) {
+                                log("Status", `Stopping status polling after ${MAX_STATUS_FAILURES} consecutive failures`);
+                                stopStatusPolling();
+                            }
+                            return;
                         }
+
+                        // Reset failure counter on success
+                        consecutiveStatusFailures = 0;
 
                         const status = await response.json();
                         if (status.error) {
@@ -2271,8 +2367,15 @@ Licensed under Apache-2.0 license.
                             }
                         }
                     } catch (e) {
-                        // Ignore network errors during polling
-                        console.debug('Status polling error:', e);
+                        // Count network errors as failures
+                        consecutiveStatusFailures++;
+                        console.debug(`Status polling error (${consecutiveStatusFailures}/${MAX_STATUS_FAILURES}):`, e);
+
+                        // Stop polling after consecutive network errors
+                        if (consecutiveStatusFailures >= MAX_STATUS_FAILURES) {
+                            log("Status", `Stopping status polling after ${MAX_STATUS_FAILURES} consecutive network errors`);
+                            stopStatusPolling();
+                        }
                     }
                 }, 2000);
             }

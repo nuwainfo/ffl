@@ -52,6 +52,15 @@ class WebRTCConnectionTimeout(Exception):
     pass
 
 
+# Custom exception for WebRTC disabled by server policy
+class WebRTCDisabledError(Exception):
+    """Raised when WebRTC is disabled by server policy (e.g., --force-relay for licensed users)"""
+
+    def __init__(self, reason="WebRTC connections are disabled by server policy"):
+        self.reason = reason
+        super().__init__(reason)
+
+
 @dataclass
 class URLInfo:
     """Information extracted from a download URL"""

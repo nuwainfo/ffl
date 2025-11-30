@@ -42,10 +42,18 @@ from bases.Kernel import UIDGenerator, getLogger, PUBLIC_VERSION
 from bases.Server import createServer, DownloadHandler
 from bases.Tunnel import TunnelRunner
 from bases.WebRTC import WebRTCManager, WebRTCDownloader
-from bases.Settings import (DEFAULT_STATIC_ROOT, ExecutionMode, SettingsGetter)
-from bases.CLI import configureCLIParser, configureLogging, processGlobalArguments, processArgumentsAndCommands, showVersion, loadEnvFile
+from bases.Settings import DEFAULT_STATIC_ROOT, ExecutionMode, SettingsGetter
+from bases.CLI import (
+    configureCLIParser, processGlobalArguments, processArgumentsAndCommands, loadEnvFile, preprocessArguments
+)
 from bases.Utils import (
-    copy2Clipboard, flushPrint, getLogger, getAvailablePort, sendException, getJSONWriter, validateCompatibleWithServer
+    copy2Clipboard,
+    flushPrint,
+    getLogger,
+    getAvailablePort,
+    sendException,
+    getJSONWriter,
+    validateCompatibleWithServer,
 )
 from bases.Reader import SourceReader
 
@@ -120,10 +128,14 @@ def isCLIMode():
 
 
 # Main business logic - shared between CLI and GUI modes
-def processFileSharing(args):
+def processFileSharing(args, proxyConfig=None):
     """
     Process the file sharing request with the given arguments
-    
+
+    Args:
+        args: Parsed command-line arguments
+        proxyConfig: Optional proxy configuration dict from parseProxyString()
+
     Returns:
         int: Exit code (0 for success, 1 for error)
     """
@@ -336,12 +348,18 @@ def processFileSharing(args):
                 except Exception as e:
                     sendException(logger, 'Unable to create tunnel by your tunnel configuration.')
 
-            with tunnelRunnerClass(size) as tunnelRunner:
+            # Use proxyConfig passed from global arguments processing
+            with tunnelRunnerClass(size, proxyConfig=proxyConfig) as tunnelRunner:
                 tunnelType = tunnelRunner.getTunnelType()
                 if tunnelType != "default":
                     flushPrint(f'Using tunnel: {tunnelType}')
 
-                flushPrint('Establishing tunnel connection...\n')
+                # Show proxy status for tunnel connections
+                proxyInfo = tunnelRunner.getProxyInfo()
+                if proxyInfo:
+                    flushPrint(f'Establishing tunnel connection via proxy {proxyInfo}...\n')
+                else:
+                    flushPrint('Establishing tunnel connection...\n')
 
                 domain, tunnelLink = tunnelRunner.start(port)
                 link = f"{tunnelLink}{uid}"
@@ -392,7 +410,7 @@ def processFileSharing(args):
                     webRTCManagerClass = WebRTCManager
                     if settingsGetter.hasFeaturesSupport():
                         handlerClass = featureManager.getDownloadHandlerClass(handlerClass)
-                        webRTCManagerClass = featureManager.getWebRTCManagerClass(webRTCManagerClass)
+                        webRTCManagerClass = featureManager.getWebRTCManagerClass(webRTCManagerClass, forceRelay=args.forceRelay)
 
                     # Get auth credentials from args - password enables auth
                     authPassword = args.authPassword
@@ -400,20 +418,6 @@ def processFileSharing(args):
 
                     # Get force-relay setting from args
                     enableWebRTC = not args.forceRelay
-
-                    # Check --force-relay feature restriction for free users with default tunnel
-                    if not enableWebRTC:
-                        if featureManager.user.isFreeUser() and 'fastfilelink.com' in domain:
-                            flushPrint(
-                                "Error: The --force-relay option with the default tunnel requires a logged in"
-                                " user (Standard or Plus plan)."
-                            )
-                            flushPrint("")
-                            flushPrint("As a free user, you can enable this feature by providing an external tunnel:")
-                            flushPrint("  ffl MyFile --force-relay --preferred-tunnel <external tunnel>")
-                            flushPrint("")
-                            flushPrint("Alternatively, consider upgrading your plan for unrestricted access.")
-                            return 1
 
                     # Create server with enhanced handler and WebRTC manager
                     server = createServer(
@@ -515,30 +519,21 @@ def runCLIMain():
         # Global argument error - let argparse report it properly
         parser.error(str(e))
 
-    # Configure logging level (checks --log-level argument and FFL_LOGGING_LEVEL env var)
-    configureLogging(globalArgs.logLevel)
+    # Process global arguments (handles --log-level, --enable-reporting, --version, --proxy, etc.)
+    globalResult = processGlobalArguments(globalArgs)
+    if globalResult['exitCode'] is not None:
+        return globalResult['exitCode']
 
-    # Process global arguments (handles --enable-reporting, --version, etc.)
-    exitCode = processGlobalArguments(globalArgs)
-    if exitCode is not None:
-        return exitCode
+    # Extract proxyConfig from global arguments processing
+    proxyConfig = globalResult['proxyConfig']
 
     if not rest:
         # No subcommand or remaining arguments -> show help
         parser.print_help()
         return 0
 
-    # Phase 2: Auto-insert 'share' or 'download' based on first argument
-    if rest[0] not in commandNames:
-        prefixLen = len(argv) - len(rest) # Length of global arguments prefix
-
-        # Check if first argument is a URL (FastFileLink or generic HTTP URL)
-        if rest[0].startswith('https://') or rest[0].startswith('http://'):
-            # Auto-insert 'download' command for any HTTP(S) URL
-            argv = argv[:prefixLen] + ['download'] + rest
-        else:
-            # Auto-insert 'share' command for file paths (existing behavior)
-            argv = argv[:prefixLen] + ['share'] + rest
+    # Phase 2: Preprocess arguments (auto-insert commands, fix --upload)
+    argv = preprocessArguments(argv, commandNames, shareSubparser, globalsParent)
 
     # Phase 3: Final parsing with subcommand determined
     try:
@@ -568,7 +563,7 @@ def runCLIMain():
     if not validateCompatibleWithServer():
         return 1
 
-    return processFileSharing(args)
+    return processFileSharing(args, proxyConfig=proxyConfig)
 
 
 # GUI mode implementation - delegated to addons.GUI plugin

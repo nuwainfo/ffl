@@ -160,7 +160,8 @@
     "fallback": {
       "browserNotSupported": "此瀏覽器不支援下載",
       "p2pDisabled": "設備對設備P2P已停用。使用中繼P2P。",
-      "fileTooBig": "大檔案需要現代瀏覽器支援。請考慮更換瀏覽器或使用伺服器中繼。"
+      "fileTooBig": "大檔案需要現代瀏覽器支援。請考慮更換瀏覽器或使用伺服器中繼。",
+      "webrtcNotSupported": "不支援 WebRTC - 使用伺服器中繼"
     },
     "retry": {
       "button": "重試下載",

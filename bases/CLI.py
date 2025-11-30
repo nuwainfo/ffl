@@ -25,8 +25,8 @@ import logging.config
 import platform
 
 from bases.Kernel import PUBLIC_VERSION, getLogger, FFLEvent, configureGlobalLogLevel, AddonsManager, StorageLocator
-from bases.Settings import DEFAULT_AUTH_USER_NAME, SettingsGetter
-from bases.Utils import flushPrint, checkVersionCompatibility, getEnv
+from bases.Settings import DEFAULT_AUTH_USER_NAME, DEFAULT_UPLOAD_DURATION, SettingsGetter
+from bases.Utils import flushPrint, checkVersionCompatibility, getEnv, parseProxyString, setupProxyEnvironment
 
 logger = getLogger(__name__)
 
@@ -247,10 +247,13 @@ def configureCLIParser():
         parser.add_argument("--json", metavar="JSON_FILE", help="Output link and settings to a JSON file")
         parser.add_argument(
             "--upload",
-            help="Upload file to FastFileLink server to share it (Share duration after upload). Default: 6 hours",
+            help=(
+                f"Upload file to FastFileLink server to share it (Share duration after upload). "
+                f"Default: {DEFAULT_UPLOAD_DURATION}"
+            ),
             choices=times if times else ['unavailable'],
             nargs='?',
-            const='6 hours' if times else 'unavailable',
+            const=DEFAULT_UPLOAD_DURATION if times else 'unavailable',
             default=None,
         )
         parser.add_argument(
@@ -345,6 +348,18 @@ def configureCLIParser():
         metavar="LEVEL_OR_FILE",
         dest="logLevel"
     )
+    globalsParent.add_argument(
+        "--proxy",
+        help=(
+            "Proxy server for all outbound connections. "
+            "Formats: [user:pass@]host:port (defaults to SOCKS5), "
+            "socks5[h]://[user:pass@]host:port, http[s]://[user:pass@]host:port. "
+            "SOCKS5 proxies work for both tunnel and HTTP requests. "
+            "HTTP proxies only work for HTTP requests (not tunnel)"
+        ),
+        metavar="PROXY",
+        dest="proxy"
+    )
 
     # Allow addons to register additional global options
     FFLEvent.cliArgumentsGlobalOptionsRegister.trigger(parser=globalsParent)
@@ -404,28 +419,49 @@ def configureCLIParser():
 
 def processGlobalArguments(globalArgs):
     """
-    Process global arguments (like --enable-reporting, --version) before command processing.
+    Process global arguments (like --log-level, --enable-reporting, --version, --proxy) before command processing.
     This handles global options that affect the entire application or cause early exits.
 
     Args:
         globalArgs: Parsed global arguments from globalsParent parser
 
     Returns:
-        int or None: Exit code if should exit early (e.g., --version), None to continue
+        dict: Returns dict with 'exitCode' (int or None) and 'proxyConfig' (dict or None)
     """
+    result = {'exitCode': None, 'proxyConfig': None}
+
+    # Configure logging level (checks --log-level argument and FFL_LOGGING_LEVEL env var)
+    configureLogging(globalArgs.logLevel)
+
+    # Handle --proxy option
+    if globalArgs.proxy:
+        proxyConfig = parseProxyString(globalArgs.proxy)
+        if not proxyConfig:
+            flushPrint(f"Error: Invalid proxy format: {globalArgs.proxy}")
+            result['exitCode'] = 1
+            return result
+
+        # Setup HTTP_PROXY/HTTPS_PROXY for requests library
+        setupProxyEnvironment(proxyConfig)
+
+        # Store proxyConfig to pass to tunnel creation flow
+        result['proxyConfig'] = proxyConfig
+
     # Let addons handle global options (like --enable-reporting)
     argPolicy = {'exitCode': None}
     FFLEvent.cliArgumentsGlobalOptionsStore.trigger(args=globalArgs, argPolicy=argPolicy)
 
     if argPolicy['exitCode'] is not None:
-        return argPolicy['exitCode']
+        result['exitCode'] = argPolicy['exitCode']
+        return result
 
     # Handle --version early exit
     if globalArgs.version:
         showVersion()
-        return 0
+        result['exitCode'] = 0
+        return result
 
-    return None
+    return result
 
 
 def processArgumentsAndCommands(args):
@@ -454,11 +490,113 @@ def processArgumentsAndCommands(args):
     return None
 
 
+def preprocessArguments(argv, commandNames, shareSubparser, globalsParent):
+    """
+    Preprocess command-line arguments before final parsing.
+
+    Handles:
+    - Auto-insertion of 'share' or 'download' command based on first argument
+    - Auto-insertion of default duration for --upload when followed by file path
+
+    Args:
+        argv: Command-line argument list (sys.argv[1:])
+        commandNames: Set of valid command names
+        shareSubparser: Parser for share command (to get --upload action config)
+        globalsParent: Global arguments parser (to identify global options)
+
+    Returns:
+        list: Preprocessed argv ready for final parsing
+    """
+    # Make a copy to avoid modifying the original
+    argv = argv.copy()
+
+    # Build set of global option strings from globalsParent parser
+    globalOptions = set()
+    globalOptionsWithValues = set() # Options that take a value
+
+    for action in globalsParent._actions:
+        if action.option_strings: # Skip positional arguments
+            for opt in action.option_strings:
+                globalOptions.add(opt)
+                # Check if this option takes a value (not a store_true/store_false action)
+                if action.nargs is not None or action.const is None:
+                    if not isinstance(action, argparse._StoreConstAction):
+                        globalOptionsWithValues.add(opt)
+
+    # Phase 2: Auto-insert 'share' or 'download' based on first argument
+    # Find where command arguments start (after global arguments)
+    globalArgCount = 0
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+
+        # Check if it's a global option (--option or --option=value format)
+        if '=' in arg:
+            # --option=value format
+            optName = arg.split('=', 1)[0]
+            if optName in globalOptions:
+                globalArgCount = i + 1
+                i += 1
+                continue
+
+        # Check if it's a global option
+        if arg in globalOptions:
+            globalArgCount = i + 1
+            # Check if this option takes a value
+            if arg in globalOptionsWithValues:
+                # Skip the value too
+                if i + 1 < len(argv) and not argv[i + 1].startswith('-'):
+                    globalArgCount = i + 2
+                    i += 2
+                    continue
+            i += 1
+            continue
+
+        # First non-global argument found
+        break
+
+    if globalArgCount < len(argv) and argv[globalArgCount] not in commandNames:
+        firstArg = argv[globalArgCount]
+
+        # Check if first argument is a URL (FastFileLink or generic HTTP URL)
+        if firstArg.startswith('https://') or firstArg.startswith('http://'):
+            # Auto-insert 'download' command for any HTTP(S) URL
+            argv.insert(globalArgCount, 'download')
+            logger.debug(f"Auto-inserted 'download' command before URL")
+        else:
+            # Auto-insert 'share' command for file paths (existing behavior)
+            argv.insert(globalArgCount, 'share')
+            logger.debug(f"Auto-inserted 'share' command before file path")
+
+    # Phase 2.5: Fix --upload argument when followed by file path instead of duration
+    # If --upload is followed by a value that looks like a file/folder path, insert default duration
+    if '--upload' in argv:
+        uploadIdx = argv.index('--upload')
+        # Check if there's a next argument and it's not a valid duration choice
+        if uploadIdx + 1 < len(argv):
+            nextArg = argv[uploadIdx + 1]
+
+            # Get valid durations and default from the share subparser's --upload action
+            uploadAction = next((action for action in shareSubparser._actions if '--upload' in action.option_strings),
+                                None)
+
+            validDurations = set(uploadAction.choices) if uploadAction and uploadAction.choices else set()
+            defaultDuration = uploadAction.const if uploadAction else DEFAULT_UPLOAD_DURATION
+
+            # If next arg is not a valid duration and doesn't look like another flag, insert default duration
+            if nextArg not in validDurations and not nextArg.startswith('-'):
+                # Insert default duration after --upload
+                argv.insert(uploadIdx + 1, defaultDuration)
+                logger.debug(f"Auto-inserted default duration '{defaultDuration}' for --upload before file argument")
+
+    return argv
+
+
 def validateShareArguments(args):
     """
     Validate arguments specifically for the share command.
     Used by GUI mode which only supports share command.
-    
+
     Returns:
         int or None: Exit code if validation fails, None if validation passes
     """

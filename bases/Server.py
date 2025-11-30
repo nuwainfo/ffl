@@ -36,7 +36,7 @@ from urllib.parse import parse_qs, quote, urlparse
 from bases.Kernel import getLogger, PUBLIC_VERSION
 from bases.Utils import flushPrint, utf8, formatSize
 from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
-from bases.WebRTC import WebRTCManager
+from bases.WebRTC import WebRTCManager, WebRTCDisabledError
 from bases.Progress import Progress
 from bases.E2EE import E2EEManager
 from bases.Reader import SourceReader, FolderChangedException
@@ -848,6 +848,12 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 )
             )
             self._sendBytes(json.dumps(offer).encode(), "application/json; charset=utf-8")
+
+        except WebRTCDisabledError as e:
+            # Handle WebRTC policy enforcement - use 403 Forbidden
+            logger.info(f"WebRTC offer rejected by policy: {e.reason}")
+            self.send_error(HTTPStatus.FORBIDDEN, e.reason)
+
         except Exception as e:
             logger.exception(e)
             self.send_error(500, str(e))

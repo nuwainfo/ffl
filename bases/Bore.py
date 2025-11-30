@@ -25,6 +25,7 @@ For security, all connections are forced to use HTTPS/TLS encryption.
 import asyncio
 import json
 import os
+import socket
 import ssl
 import traceback
 import uuid
@@ -44,6 +45,11 @@ NETWORK_TIMEOUT = 60 # seconds
 
 BORE_DEBUG = os.getenv('BORE_DEBUG', False)
 BORE_VERBOSE = os.getenv('BORE_VERBOSE', False)
+
+# SOCKS5 proxy support via environment variable
+SOCKS5_ENV_VAR = "FFL_TUNNEL_SOCKS5"
+
+
 
 
 class Authenticator:
@@ -158,6 +164,7 @@ class BoreClient:
         verbose=False,
         debug=True,
         useHttps=False, # Ignored - always uses HTTPS for security
+        proxyConfig=None, # Optional proxy configuration dict from parseProxyString()
     ):
         self.localhost = localhost
         self.localPort = localPort
@@ -170,6 +177,7 @@ class BoreClient:
         self.bufferSize = bufferSize
         self.connectionLock = asyncio.Lock() # Add a lock for connection handling
         self.runningTasks = set() # Task management per instance
+        self.proxyConfig = proxyConfig # Store proxy configuration
 
         # Force HTTPS mode for security (ignores useHttps parameter)
         self.useHttps = True # Always True for security
@@ -197,31 +205,209 @@ class BoreClient:
             # Task was already removed or set was cleared during shutdown
             logger.debug(f"Task already removed from running tasks: {e}")
 
+    @staticmethod
+    def _parseSocks5Env():
+        """
+        Parse FFL_TUNNEL_SOCKS5 environment variable.
+        Returns (host, port) tuple or None if not configured.
+        """
+        value = os.environ.get(SOCKS5_ENV_VAR)
+        if not value:
+            return None
+
+        value = value.strip()
+        if not value:
+            return None
+
+        # Parse as host:port format
+        host, sep, portStr = value.rpartition(":")
+        if not sep:
+            logger.error(f"Invalid {SOCKS5_ENV_VAR} value (expected host:port): {value!r}")
+            return None
+
+        try:
+            port = int(portStr)
+        except ValueError:
+            logger.error(f"Invalid {SOCKS5_ENV_VAR} port in {value!r}")
+            return None
+
+        return host, port
+
+    @staticmethod
+    def _recvExact(sock, n):
+        """
+        Blocking recv until exactly n bytes are received.
+        Raises OSError if connection closes before n bytes received.
+        """
+        data = bytearray()
+        while len(data) < n:
+            chunk = sock.recv(n - len(data))
+            if not chunk:
+                raise OSError("SOCKS5 proxy closed connection unexpectedly")
+            data.extend(chunk)
+        return bytes(data)
+
+    @staticmethod
+    def _connectViaSocks5Blocking(proxyHost, proxyPort, destHost, destPort, timeout):
+        """
+        Establish connection to destHost:destPort via SOCKS5 proxy using blocking I/O.
+        This function runs in a thread executor to avoid blocking the event loop.
+
+        Args:
+            proxyHost: SOCKS5 proxy host
+            proxyPort: SOCKS5 proxy port
+            destHost: Destination host to connect to
+            destPort: Destination port to connect to
+            timeout: Connection timeout in seconds
+
+        Returns a non-blocking socket connected to destHost:destPort.
+        Raises OSError if SOCKS5 handshake fails.
+        """
+        logger.info(f"Connecting to {destHost}:{destPort} via SOCKS5 proxy {proxyHost}:{proxyPort}")
+
+        # Connect to SOCKS5 proxy
+        sock = socket.create_connection((proxyHost, proxyPort), timeout=timeout)
+        sock.settimeout(timeout)
+
+        try:
+            # 1. SOCKS5 greeting: VER=5, NMETHODS=1, METHOD=0 (no authentication)
+            sock.sendall(b"\x05\x01\x00")
+            resp = BoreClient._recvExact(sock, 2)
+            if resp[0] != 5 or resp[1] == 0xFF:
+                raise OSError(f"SOCKS5 proxy does not accept no-auth method, resp={resp!r}")
+
+            # 2. CONNECT request: use ATYP=3 (DOMAIN) so proxy does DNS resolution
+            destBytes = destHost.encode("idna")
+            if len(destBytes) > 255:
+                raise OSError("Destination hostname too long for SOCKS5")
+
+            req = bytearray()
+            # VER=5, CMD=1 (CONNECT), RSV=0, ATYP=3 (DOMAIN), LEN
+            req.extend((5, 1, 0, 3, len(destBytes)))
+            req.extend(destBytes)
+            req.extend(destPort.to_bytes(2, "big"))
+            sock.sendall(req)
+
+            # 3. Read CONNECT response header: VER REP RSV ATYP
+            hdr = BoreClient._recvExact(sock, 4)
+            if hdr[0] != 5:
+                raise OSError(f"Invalid SOCKS5 version in response: {hdr[0]}")
+            if hdr[1] != 0:
+                raise OSError(f"SOCKS5 CONNECT failed with reply code: {hdr[1]}")
+
+            # 4. Read BND.ADDR based on ATYP
+            atyp = hdr[3]
+            if atyp == 1:      # IPv4
+                toRead = 4
+            elif atyp == 3:    # DOMAIN
+                ln = BoreClient._recvExact(sock, 1)[0]
+                toRead = ln
+            elif atyp == 4:    # IPv6
+                toRead = 16
+            else:
+                raise OSError(f"Unknown SOCKS5 ATYP: {atyp}")
+
+            # Read BND.ADDR + BND.PORT (2 bytes) - we don't need these values
+            _ = BoreClient._recvExact(sock, toRead + 2)
+
+            # 5. SOCKS5 handshake complete - switch to non-blocking for asyncio
+            sock.settimeout(None)
+            sock.setblocking(False)
+            logger.debug(f"SOCKS5 connection established to {destHost}:{destPort}")
+            return sock
+
+        except Exception:
+            sock.close()
+            raise
+
+    async def _openTlsConnection(self, host, port, sslCtx, serverHostname=None, timeout=None):
+        """
+        Establish TLS connection to host:port, optionally via SOCKS5 proxy.
+
+        Priority order for proxy configuration:
+        1. self.proxyConfig (from --proxy CLI argument)
+        2. FFL_TUNNEL_SOCKS5 environment variable
+        3. No proxy (direct connection)
+
+        Returns (reader, writer) tuple compatible with asyncio streams.
+        """
+        # Determine proxy from priority: self.proxyConfig > FFL_TUNNEL_SOCKS5 > None
+        proxyHost = None
+        proxyPort = None
+
+        if self.proxyConfig and self.proxyConfig['type'] == 'socks5':
+            # Use proxy from --proxy argument (highest priority)
+            proxyHost = self.proxyConfig['host']
+            proxyPort = self.proxyConfig['port']
+            logger.debug(f"Using SOCKS5 proxy from --proxy: {proxyHost}:{proxyPort}")
+        else:
+            # Fall back to FFL_TUNNEL_SOCKS5 environment variable
+            envProxy = self._parseSocks5Env()
+            if envProxy:
+                proxyHost, proxyPort = envProxy
+                logger.debug(f"Using SOCKS5 proxy from FFL_TUNNEL_SOCKS5: {proxyHost}:{proxyPort}")
+
+        if not proxyHost:
+            # No proxy configured - use standard asyncio connection
+            return await asyncio.wait_for(
+                asyncio.open_connection(
+                    host,
+                    port,
+                    ssl=sslCtx,
+                    server_hostname=serverHostname,
+                ),
+                timeout,
+            )
+
+        # SOCKS5 proxy configured - establish connection via proxy
+        loop = asyncio.get_running_loop()
+
+        # Run blocking SOCKS5 handshake in thread pool to avoid blocking event loop
+        sock = await loop.run_in_executor(
+            None,
+            self._connectViaSocks5Blocking,
+            proxyHost,
+            proxyPort,
+            host,
+            port,
+            timeout,
+        )
+
+        # Wrap existing socket with TLS and create asyncio streams
+        return await asyncio.wait_for(
+            asyncio.open_connection(
+                sock=sock,
+                ssl=sslCtx,
+                server_hostname=serverHostname,
+            ),
+            timeout,
+        )
+
     async def connect(self):
         """
         Establish secure control channel via TLS to 0.<domain>:443
         For security, all connections use HTTPS/TLS encryption.
+        Optionally uses SOCKS5 proxy if FFL_TUNNEL_SOCKS5 is configured.
         """
         try:
             logger.info(f"Connecting to {self.controlHost}:{self.controlPort}...")
 
-            # 1. Establish secure TLS connection (always HTTPS for security)
+            # 1. Establish secure TLS connection (always HTTPS, optionally via SOCKS5)
             try:
                 sslCtx = ssl.create_default_context()
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(
-                        self.controlHost,
-                        self.controlPort,
-                        ssl=sslCtx,
-                        server_hostname=self.controlHost,
-                    ),
-                    NETWORK_TIMEOUT,
+                reader, writer = await self._openTlsConnection(
+                    self.controlHost,
+                    self.controlPort,
+                    sslCtx,
+                    serverHostname=self.controlHost,
+                    timeout=NETWORK_TIMEOUT,
                 )
             except asyncio.TimeoutError:
                 logger.error(f"Connect timed-out after {NETWORK_TIMEOUT}s")
                 return False
             except Exception as e:
-                logger.error(f"TCP connect failed: {type(e).__name__}: {e}")
+                logger.error(f"Failed to establish control TLS connection: {type(e).__name__}: {e}")
+                logger.error(traceback.format_exc())
                 return False
 
             # 2. Wrap as DelimitedStream
@@ -322,15 +508,19 @@ class BoreClient:
             port = self._getConnectionPort()
             logger.info(f"Data-channel {connectionId}: connecting to {host}:{port}")
 
-            # 1. Establish secure data channel connection (always HTTPS)
+            # 1. Establish secure data channel connection (always HTTPS, optionally via SOCKS5)
             try:
                 sslCtx = ssl.create_default_context()
-                remoteReader, remoteWriter = await asyncio.wait_for(
-                    asyncio.open_connection(host, port, ssl=sslCtx, server_hostname=host),
-                    NETWORK_TIMEOUT,
+                remoteReader, remoteWriter = await self._openTlsConnection(
+                    host,
+                    port,
+                    sslCtx,
+                    serverHostname=host,
+                    timeout=NETWORK_TIMEOUT,
                 )
             except Exception as e:
-                logger.error(f"Failed to open data channel {connectionId}: {e}")
+                logger.error(f"Failed to open data channel {connectionId}: {type(e).__name__}: {e}")
+                logger.error(traceback.format_exc())
                 return
 
             remoteConn = DelimitedStream(remoteReader, remoteWriter)

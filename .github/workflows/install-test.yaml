@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 env:
-  FFL_VERSION: v3.7.4
+  FFL_VERSION: "v3.7.5"
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:

@@ -19,7 +19,7 @@
 
 import unittest
 
-from bases.Utils import formatSize, compareVersions, ONE_KB, ONE_MB, ONE_GB, ONE_TB
+from bases.Utils import formatSize, compareVersions, parseProxyString, ONE_KB, ONE_MB, ONE_GB, ONE_TB
 
 
 class TestFormatSize(unittest.TestCase):
@@ -379,6 +379,217 @@ class TestCompareVersions(unittest.TestCase):
 
         print("\n=== compareVersions Tests Complete ===")
 
+
+class TestParseProxyString(unittest.TestCase):
+    """Test cases for the parseProxyString utility function."""
+
+    def testSimpleHostPort(self):
+        """Test parsing simple host:port format (defaults to socks5h)."""
+        result = parseProxyString("127.0.0.1:9150")
+        self.assertIsNotNone(result)
+        self.assertEqual(result['type'], 'socks5')
+        self.assertEqual(result['protocol'], 'socks5h')
+        self.assertEqual(result['host'], '127.0.0.1')
+        self.assertEqual(result['port'], 9150)
+        self.assertEqual(result['url'], 'socks5h://127.0.0.1:9150')
+        self.assertIsNone(result['username'])
+        self.assertIsNone(result['password'])
+        print(f"[OK] Simple host:port: {result}")
+
+    def testSocks5WithProtocol(self):
+        """Test parsing socks5:// protocol."""
+        result = parseProxyString("socks5://proxy.example.com:1080")
+        self.assertIsNotNone(result)
+        self.assertEqual(result['type'], 'socks5')
+        self.assertEqual(result['protocol'], 'socks5')
+        self.assertEqual(result['host'], 'proxy.example.com')
+        self.assertEqual(result['port'], 1080)
+        self.assertEqual(result['url'], 'socks5h://proxy.example.com:1080')
+        self.assertIsNone(result['username'])
+        self.assertIsNone(result['password'])
+        print(f"[OK] socks5:// protocol: {result}")
+
+    def testSocks5hWithProtocol(self):
+        """Test parsing socks5h:// protocol."""
+        result = parseProxyString("socks5h://localhost:9050")
+        self.assertIsNotNone(result)
+        self.assertEqual(result['type'], 'socks5')
+        self.assertEqual(result['protocol'], 'socks5h')
+        self.assertEqual(result['host'], 'localhost')
+        self.assertEqual(result['port'], 9050)
+        self.assertEqual(result['url'], 'socks5h://localhost:9050')
+        print(f"[OK] socks5h:// protocol: {result}")
+
+    def testHttpProtocol(self):
+        """Test parsing http:// protocol."""
+        result = parseProxyString("http://proxy.company.com:8080")
+        self.assertIsNotNone(result)
+        self.assertEqual(result['type'], 'http')
+        self.assertEqual(result['protocol'], 'http')
+        self.assertEqual(result['host'], 'proxy.company.com')
+        self.assertEqual(result['port'], 8080)
+        self.assertEqual(result['url'], 'http://proxy.company.com:8080')
+        self.assertIsNone(result['username'])
+        self.assertIsNone(result['password'])
+        print(f"[OK] http:// protocol: {result}")
+
+    def testHttpsProtocol(self):
+        """Test parsing https:// protocol."""
+        result = parseProxyString("https://secure-proxy.com:443")
+        self.assertIsNotNone(result)
+        self.assertEqual(result['type'], 'http')
+        self.assertEqual(result['protocol'], 'https')
+        self.assertEqual(result['host'], 'secure-proxy.com')
+        self.assertEqual(result['port'], 443)
+        self.assertEqual(result['url'], 'https://secure-proxy.com:443')
+        print(f"[OK] https:// protocol: {result}")
+
+    def testSocks5WithCredentials(self):
+        """Test parsing socks5:// with username and password."""
+        result = parseProxyString("socks5://user:pass@proxy.example.com:1080")
+        self.assertIsNotNone(result)
+        self.assertEqual(result['type'], 'socks5')
+        self.assertEqual(result['protocol'], 'socks5')
+        self.assertEqual(result['host'], 'proxy.example.com')
+        self.assertEqual(result['port'], 1080)
+        self.assertEqual(result['username'], 'user')
+        self.assertEqual(result['password'], 'pass')
+        self.assertEqual(result['url'], 'socks5h://user:pass@proxy.example.com:1080')
+        print(f"[OK] socks5:// with credentials: {result}")
+
+    def testSocks5hWithCredentials(self):
+        """Test parsing socks5h:// with username and password."""
+        result = parseProxyString("socks5h://admin:secret123@localhost:9050")
+        self.assertIsNotNone(result)
+        self.assertEqual(result['type'], 'socks5')
+        self.assertEqual(result['protocol'], 'socks5h')
+        self.assertEqual(result['host'], 'localhost')
+        self.assertEqual(result['port'], 9050)
+        self.assertEqual(result['username'], 'admin')
+        self.assertEqual(result['password'], 'secret123')
+        self.assertEqual(result['url'], 'socks5h://admin:secret123@localhost:9050')
+        print(f"[OK] socks5h:// with credentials: {result}")
+
+    def testHttpWithCredentials(self):
+        """Test parsing http:// with username and password."""
+        result = parseProxyString("http://john:doe123@proxy.company.com:8080")
+        self.assertIsNotNone(result)
+        self.assertEqual(result['type'], 'http')
+        self.assertEqual(result['protocol'], 'http')
+        self.assertEqual(result['host'], 'proxy.company.com')
+        self.assertEqual(result['port'], 8080)
+        self.assertEqual(result['username'], 'john')
+        self.assertEqual(result['password'], 'doe123')
+        self.assertEqual(result['url'], 'http://john:doe123@proxy.company.com:8080')
+        print(f"[OK] http:// with credentials: {result}")
+
+    def testHttpsWithCredentials(self):
+        """Test parsing https:// with username and password."""
+        result = parseProxyString("https://admin:p@ssw0rd@secure-proxy.com:443")
+        self.assertIsNotNone(result)
+        self.assertEqual(result['type'], 'http')
+        self.assertEqual(result['protocol'], 'https')
+        self.assertEqual(result['host'], 'secure-proxy.com')
+        self.assertEqual(result['port'], 443)
+        self.assertEqual(result['username'], 'admin')
+        self.assertEqual(result['password'], 'p@ssw0rd')
+        self.assertEqual(result['url'], 'https://admin:p@ssw0rd@secure-proxy.com:443')
+        print(f"[OK] https:// with credentials: {result}")
+
+    def testComplexPassword(self):
+        """Test parsing with complex password containing special characters."""
+        result = parseProxyString("socks5h://user:p@ss:w0rd!@proxy.example.com:1080")
+        self.assertIsNotNone(result)
+        self.assertEqual(result['username'], 'user')
+        # Password is everything after first : in credentials, so includes : and !
+        self.assertEqual(result['password'], 'p@ss:w0rd!')
+        self.assertEqual(result['host'], 'proxy.example.com')
+        self.assertEqual(result['port'], 1080)
+        print(f"[OK] Complex password with special chars: {result}")
+
+    def testEmptyString(self):
+        """Test parsing empty string."""
+        result = parseProxyString("")
+        self.assertIsNone(result)
+        print("[OK] Empty string returns None")
+
+    def testNone(self):
+        """Test parsing None."""
+        result = parseProxyString(None)
+        self.assertIsNone(result)
+        print("[OK] None returns None")
+
+    def testWhitespaceOnly(self):
+        """Test parsing whitespace-only string."""
+        result = parseProxyString("   ")
+        self.assertIsNone(result)
+        print("[OK] Whitespace-only returns None")
+
+    def testInvalidProtocol(self):
+        """Test parsing with unsupported protocol."""
+        result = parseProxyString("ftp://proxy.example.com:21")
+        self.assertIsNone(result)
+        print("[OK] Invalid protocol returns None")
+
+    def testMissingPort(self):
+        """Test parsing host without port."""
+        result = parseProxyString("proxy.example.com")
+        self.assertIsNone(result)
+        print("[OK] Missing port returns None")
+
+    def testInvalidPort(self):
+        """Test parsing with non-numeric port."""
+        result = parseProxyString("proxy.example.com:abc")
+        self.assertIsNone(result)
+        print("[OK] Invalid port returns None")
+
+    def testMissingPassword(self):
+        """Test parsing with username but missing password."""
+        result = parseProxyString("socks5://user@proxy.example.com:1080")
+        self.assertIsNone(result)
+        print("[OK] Username without password returns None")
+
+    def testIPv6Address(self):
+        """Test parsing IPv6 address (edge case)."""
+        # IPv6 addresses with colons need special handling
+        # For now, just verify it doesn't crash
+        result = parseProxyString("[::1]:9050")
+        # May or may not parse correctly depending on implementation
+        print(f"IPv6 address result: {result}")
+
+    def testWhitespaceHandling(self):
+        """Test that leading/trailing whitespace is handled."""
+        result = parseProxyString("  127.0.0.1:9150  ")
+        self.assertIsNotNone(result)
+        self.assertEqual(result['host'], '127.0.0.1')
+        self.assertEqual(result['port'], 9150)
+        print(f"[OK] Whitespace trimmed: {result}")
+
+    def testCaseInsensitiveProtocol(self):
+        """Test that protocol is case-insensitive."""
+        result = parseProxyString("SOCKS5://proxy.example.com:1080")
+        self.assertIsNotNone(result)
+        self.assertEqual(result['protocol'], 'socks5')
+        print(f"[OK] Case-insensitive protocol: {result}")
+
+    def testDifferentPorts(self):
+        """Test parsing with various port numbers."""
+        testCases = [
+            ("127.0.0.1:1", 1),
+            ("127.0.0.1:80", 80),
+            ("127.0.0.1:443", 443),
+            ("127.0.0.1:1080", 1080),
+            ("127.0.0.1:8080", 8080),
+            ("127.0.0.1:9150", 9150),
+            ("127.0.0.1:65535", 65535),
+        ]
+
+        for proxyStr, expectedPort in testCases:
+            with self.subTest(proxyStr=proxyStr):
+                result = parseProxyString(proxyStr)
+                self.assertIsNotNone(result)
+                self.assertEqual(result['port'], expectedPort)
+        print(f"[OK] All port numbers parsed correctly")
 
 if __name__ == '__main__':
     unittest.main()

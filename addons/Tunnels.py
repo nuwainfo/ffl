@@ -414,8 +414,8 @@ class TunnelRunnerProvider:
         class ExternalTunnelRunner(baseTunnelRunnerClass):
             """TunnelRunner with external tunnel support"""
 
-            def __init__(self, fileSize):
-                super().__init__(fileSize)
+            def __init__(self, fileSize, proxyConfig=None):
+                super().__init__(fileSize, proxyConfig=proxyConfig)
                 self.preferredTunnel = self._getPreferredTunnel()
 
             def getTunnelType(self):
