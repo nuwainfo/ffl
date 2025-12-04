@@ -43,6 +43,24 @@ python3 -m pip install pefile conda-pack setuptools wheel pip
 currentDir="$(pwd)"
 parentDir="$(dirname "$currentDir")"
 
+echo "Copy server static folders (js, client, css, locales) to FileShare/static"
+serverStaticDir="$parentDir/FileShareServer/static"
+targetStaticDir="$currentDir/static"
+
+if [ -d "$serverStaticDir" ]; then
+    for folder in js client css locales; do
+        if [ -d "$serverStaticDir/$folder" ]; then
+            echo "Copying server static folder: $folder"
+            rm -rf "$targetStaticDir/$folder"
+            cp -r "$serverStaticDir/$folder" "$targetStaticDir/"
+        else
+            echo "Warning: Server static folder not found: $serverStaticDir/$folder"
+        fi
+    done
+else
+    echo "Warning: Server static directory not found: $serverStaticDir"
+fi
+
 echo "Copy Setup.py"
 cp "$currentDir/dist/CLI/Setup.py" "$parentDir/"
 

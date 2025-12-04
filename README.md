@@ -22,7 +22,7 @@ AFAIK, `ffl` is the only CLI file-transfer tool that does all of the following:
 
 This simple demo shows how I sent `ffl.com` from Windows to my phone and then transferred photos back.
 
-[Demo GIF will be placed here]
+![Demo](demo.gif)
 
 Workflows like this also pair naturally with tools such as [llamafile](https://github.com/mozilla-ai/llamafile).
 

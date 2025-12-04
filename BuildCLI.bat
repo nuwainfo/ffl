@@ -16,6 +16,24 @@ mv pyapp-v* pyapp;"
 echo "Delete pyapp.zip"
 del pyapp-source.zip
 
+echo "Copy server static folders (js, client, css, locales) to FileShare\static"
+set serverStaticDir=%parentDir%\FileShareServer\static
+set targetStaticDir=%currentDir%\static
+
+if exist "%serverStaticDir%" (
+    for %%f in (js client css locales) do (
+        if exist "%serverStaticDir%\%%f" (
+            echo Copying server static folder: %%f
+            if exist "%targetStaticDir%\%%f" rd /s /q "%targetStaticDir%\%%f"
+            xcopy "%serverStaticDir%\%%f" "%targetStaticDir%\%%f\" /E /I /Y >nul
+        ) else (
+            echo Warning: Server static folder not found: %serverStaticDir%\%%f
+        )
+    )
+) else (
+    echo Warning: Server static directory not found: %serverStaticDir%
+)
+
 echo "Copy Setup.py"
 copy "%currentDir%\dist\CLI\Setup.py" "%parentDir%" /Y
 
