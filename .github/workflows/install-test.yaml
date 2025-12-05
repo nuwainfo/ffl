@@ -24,7 +24,7 @@ jobs:
           FFL_VARIANT: ${{ matrix.variant }}
         run: |
           set -eux
-          bash ./install.sh
+          bash ./dist/install.sh
       - name: Verify
         run: |
           set -eux
@@ -43,7 +43,7 @@ jobs:
           FFL_VARIANT: ${{ matrix.variant }}
         run: |
           set -eux
-          bash ./install.sh
+          bash ./dist/install.sh
       - name: Verify
         run: |
           set -eux
@@ -62,7 +62,7 @@ jobs:
           FFL_VARIANT: ${{ matrix.variant }}
         run: |
           $ErrorActionPreference = "Stop"
-          pwsh -File ./install.ps1
+          pwsh -File ./dist/install.ps1
       - name: Verify
         shell: pwsh
         run: |

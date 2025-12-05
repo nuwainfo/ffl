@@ -99,7 +99,7 @@ choose_asset() {
   local ARCH_RE=""
   case "$arch" in
     amd64)  ARCH_RE='(amd64|x86_64|x64)';;
-    arm64)  ARCH_RE='(arm64|aarch64)';;
+    arm64)  ARCH_RE='(arm64|aarch64|aarch)';; 
     *)      ARCH_RE="$arch";;
   esac
 

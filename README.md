@@ -22,7 +22,7 @@ AFAIK, `ffl` is the only CLI file-transfer tool that does all of the following:
 
 This simple demo shows how I sent `ffl.com` from Windows to my phone and then transferred photos back.
 
-![Demo](demo.gif)
+![Demo](dist/demo.gif)
 
 Workflows like this also pair naturally with tools such as [llamafile](https://github.com/mozilla-ai/llamafile).
 
@@ -54,16 +54,16 @@ You can download the [latest release](https://github.com/nuwainfo/ffl/releases/)
 
 **Linux / macOS**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl/refs/heads/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl/refs/heads/main/dist/install.sh | bash
 ```
 *Install for current user only:*
 ```bash
-FFL_PREFIX=$HOME/.local curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl/refs/heads/main/install.sh | bash
+FFL_PREFIX=$HOME/.local curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl/refs/heads/main/dist/install.sh | bash
 ```
 
 **Windows (PowerShell)**
 ```powershell
-iwr -useb https://raw.githubusercontent.com/nuwainfo/ffl/refs/heads/main/install.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/nuwainfo/ffl/refs/heads/main/dist/install.ps1 | iex
 ```
 
 After installation, you should have `ffl` on your `$PATH`:
