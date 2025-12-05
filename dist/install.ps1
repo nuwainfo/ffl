@@ -43,11 +43,11 @@ function Expand-Zip($zipPath, $dest) {
   }
 }
 
-# 1) Fetch release page HTML and extract asset download URLs
-$releaseUrl = "https://github.com/$RepoOwner/$RepoName/releases/tag/$tag"
-Write-Host "Fetching release from: $releaseUrl"
+# 1) Fetch expanded assets HTML fragment (GitHub loads assets via lazy-loaded fragment)
+$assetsUrl = "https://github.com/$RepoOwner/$RepoName/releases/expanded_assets/$tag"
+Write-Host "Fetching release from: $assetsUrl"
 
-$html = Get-ReleaseHtml $releaseUrl
+$html = Get-ReleaseHtml $assetsUrl
 
 # 2) Extract download URLs from HTML
 # GitHub release pages have download links in format: href="/owner/repo/releases/download/tag/filename"

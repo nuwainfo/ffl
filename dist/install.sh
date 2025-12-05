@@ -30,15 +30,15 @@ fetch_html() {
   fi
 }
 
-# 1) Fetch release page HTML and extract asset download URLs
-RELEASE_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/tag/${TAG}"
-echo "Fetching release from: $RELEASE_URL"
+# 1) Fetch expanded assets HTML fragment (GitHub loads assets via lazy-loaded fragment)
+ASSETS_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/expanded_assets/${TAG}"
+echo "Fetching release from: $ASSETS_URL"
 
-RELEASE_HTML="$(fetch_html "$RELEASE_URL")"
+ASSETS_HTML="$(fetch_html "$ASSETS_URL")"
 
 # 2) Extract asset names and URLs from HTML
 # GitHub release pages have download links in format: href="/owner/repo/releases/download/tag/filename"
-ASSETS_DATA="$(printf '%s\n' "$RELEASE_HTML" | grep -oE "/${REPO_OWNER}/${REPO_NAME}/releases/download/${TAG}/[^\"']+" | sed 's|^|https://github.com|')"
+ASSETS_DATA="$(printf '%s\n' "$ASSETS_HTML" | grep -oE "/${REPO_OWNER}/${REPO_NAME}/releases/download/${TAG}/[^\"']+" | sed 's|^|https://github.com|')"
 
 # Extract just the filenames for matching
 NAMES_LIST="$(printf '%s\n' "$ASSETS_DATA" | sed "s|.*/||")"
