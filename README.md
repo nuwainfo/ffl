@@ -31,7 +31,7 @@ This simple demo shows how I sent `ffl.com` from Windows to my phone and then tr
 The recipient doesn't need to install anything!  
 Verify the P2P connection and download speed in a modern browser:
 
-https://github.com/user-attachments/assets/5dcdaf6a-48f7-4c9b-b322-0fd619aa23ab
+https://github.com/user-attachments/assets/fe0d6bc6-3116-4633-9c42-41566fe5fd30
 
 </details>
 
