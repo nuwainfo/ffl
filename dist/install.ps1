@@ -51,7 +51,7 @@ $html = Get-ReleaseHtml $assetsUrl
 
 # 2) Extract download URLs from HTML
 # GitHub release pages have download links in format: href="/owner/repo/releases/download/tag/filename"
-$downloadPattern = "/$RepoOwner/$RepoName/releases/download/$tag/([^""']+)"
+$downloadPattern = "/$RepoOwner/$RepoName/releases/download/$tag/([^"">< ]+)"
 $matches = [regex]::Matches($html, $downloadPattern)
 
 $assets = @()

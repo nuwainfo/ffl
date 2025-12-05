@@ -38,14 +38,16 @@ ASSETS_HTML="$(fetch_html "$ASSETS_URL")"
 
 # 2) Extract asset names and URLs from HTML
 # GitHub release pages have download links in format: href="/owner/repo/releases/download/tag/filename"
-ASSETS_DATA="$(printf '%s\n' "$ASSETS_HTML" | grep -oE "/${REPO_OWNER}/${REPO_NAME}/releases/download/${TAG}/[^\"']+" | sed 's|^|https://github.com|')"
+ASSETS_DATA="$(printf '%s\n' "$ASSETS_HTML" | grep -oE "/${REPO_OWNER}/${REPO_NAME}/releases/download/${TAG}/[^\">< ]+" | sed 's|^|https://github.com|')"
 
 # Extract just the filenames for matching
 NAMES_LIST="$(printf '%s\n' "$ASSETS_DATA" | sed "s|.*/||")"
 
 asset_url_by_name() {
   local want="$1"
-  printf '%s\n' "$ASSETS_DATA" | grep -F "/${want}$" | head -n1
+  # Escape dots in filename for regex matching
+  local escaped="${want//./\\.}"
+  printf '%s\n' "$ASSETS_DATA" | grep "/${escaped}$" | head -n1
 }
 
 # ---------- Linux glibc detection & baseline selection ----------
