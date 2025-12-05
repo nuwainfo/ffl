@@ -4,18 +4,18 @@ $ErrorActionPreference = "Stop"
 $RepoOwner = "nuwainfo"
 $RepoName  = "ffl"
 $app       = "ffl"
+$ReleaseTag = "v3.7.5"  # Default release version
 
 # Overridables: FFL_VERSION, FFL_VARIANT(native|com), FFL_PREFIX
-$tag     = $env:FFL_VERSION
+$tag     = if ([string]::IsNullOrWhiteSpace($env:FFL_VERSION)) { $ReleaseTag } else { $env:FFL_VERSION }
 $variant = if ([string]::IsNullOrWhiteSpace($env:FFL_VARIANT)) { "native" } else { $env:FFL_VARIANT }
 
 # Architecture detection
 $arch = "amd64"
 try { if ((Get-CimInstance Win32_Processor).Architecture -eq 12) { $arch = "arm64" } } catch {}
 
-function Get-Json($url) {
-  # Plain request (no token, no extra headers)
-  Invoke-RestMethod -UseBasicParsing -Uri $url
+function Get-ReleaseHtml($url) {
+  Invoke-WebRequest -UseBasicParsing -Uri $url | Select-Object -ExpandProperty Content
 }
 
 function Test-IsPE($path) {
@@ -43,39 +43,26 @@ function Expand-Zip($zipPath, $dest) {
   }
 }
 
-# --- helpers for tag fetching with tolerance (v-prefix/no-prefix) ---
-function Try-GetReleaseByTag([string]$t) {
-  if ([string]::IsNullOrWhiteSpace($t)) { return $null }
-  try { return Get-Json "https://api.github.com/repos/$RepoOwner/$RepoName/releases/tags/$t" } catch { return $null }
-}
-function Normalize-Tag-Candidates([string]$t) {
-  # Yield candidates: as-is, add/remove 'v' prefix
-  if ([string]::IsNullOrWhiteSpace($t)) { return @() }
-  $cands = New-Object System.Collections.Generic.List[string]
-  $cands.Add($t)
-  if ($t -match '^[vV]\d') { $cands.Add(($t.TrimStart('v','V'))) } else { $cands.Add('v' + $t) }
-  return $cands
-}
-# ---------------------------------------------------------------
+# 1) Fetch release page HTML and extract asset download URLs
+$releaseUrl = "https://github.com/$RepoOwner/$RepoName/releases/tag/$tag"
+Write-Host "Fetching release from: $releaseUrl"
 
-# 1) Fetch release JSON
-if ([string]::IsNullOrWhiteSpace($tag)) {
-  $rel = Get-Json "https://api.github.com/repos/$RepoOwner/$RepoName/releases/latest"
-} else {
-  # Try the provided tag; if not found, try with/without 'v' prefix; then fallback to latest
-  $rel = $null
-  foreach ($cand in (Normalize-Tag-Candidates $tag)) {
-    $rel = Try-GetReleaseByTag $cand
-    if ($rel) { $tag = $cand; break }
-  }
-  if (-not $rel) {
-    Write-Warning "Release tag '$tag' not found; falling back to latest"
-    $rel = Get-Json "https://api.github.com/repos/$RepoOwner/$RepoName/releases/latest"
+$html = Get-ReleaseHtml $releaseUrl
+
+# 2) Extract download URLs from HTML
+# GitHub release pages have download links in format: href="/owner/repo/releases/download/tag/filename"
+$downloadPattern = "/$RepoOwner/$RepoName/releases/download/$tag/([^""']+)"
+$matches = [regex]::Matches($html, $downloadPattern)
+
+$assets = @()
+foreach ($match in $matches) {
+  $filename = $match.Groups[1].Value
+  $url = "https://github.com/$RepoOwner/$RepoName/releases/download/$tag/$filename"
+  $assets += [PSCustomObject]@{
+    name = $filename
+    browser_download_url = $url
   }
 }
-$tag = $rel.tag_name
-if ([string]::IsNullOrWhiteSpace($tag)) { throw "Cannot determine release tag" }
-$assets = $rel.assets
 
 function Pick-Com {
   $assets | Where-Object { $_.name -match 'ffl\.com($|\.zip$|\.tar\.gz$)' } | Select-Object -First 1

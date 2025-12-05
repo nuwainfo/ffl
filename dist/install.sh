@@ -4,9 +4,10 @@ set -euo pipefail
 REPO_OWNER="nuwainfo"
 REPO_NAME="ffl"
 APP="ffl"
+RELEASE_TAG="v3.7.5"  # Default release version
 
 # Overridables: FFL_VERSION (e.g. v3.6.2), FFL_VARIANT (native|glibc|manylinux|com), FFL_PREFIX (install prefix)
-TAG="${FFL_VERSION:-}"
+TAG="${FFL_VERSION:-$RELEASE_TAG}"
 VARIANT="${FFL_VARIANT:-native}"
 PREFIX="${FFL_PREFIX:-}"
 
@@ -20,8 +21,7 @@ esac
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
-gh_api() {
-  # No token: plain curl/wget to GitHub API
+fetch_html() {
   local url="$1"
   if have curl; then
     curl -fsSL "$url"
@@ -30,26 +30,22 @@ gh_api() {
   fi
 }
 
-# 1) Fetch release JSON
-if [ -z "$TAG" ]; then
-  REL_JSON="$(gh_api "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest")"
-else
-  REL_JSON="$(gh_api "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/tags/${TAG}")"
-fi
-TAG="$(printf '%s' "$REL_JSON" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
-[ -z "$TAG" ] && { echo "Cannot determine release tag"; exit 1; }
+# 1) Fetch release page HTML and extract asset download URLs
+RELEASE_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/tag/${TAG}"
+echo "Fetching release from: $RELEASE_URL"
 
-# 2) Collect asset names (bash 3.2-compatible; do not use mapfile)
-NAMES_LIST="$(printf '%s\n' "$REL_JSON" | sed -n 's/.*"name":[[:space:]]*"\([^"]*\)".*/\1/p')"
+RELEASE_HTML="$(fetch_html "$RELEASE_URL")"
+
+# 2) Extract asset names and URLs from HTML
+# GitHub release pages have download links in format: href="/owner/repo/releases/download/tag/filename"
+ASSETS_DATA="$(printf '%s\n' "$RELEASE_HTML" | grep -oE "/${REPO_OWNER}/${REPO_NAME}/releases/download/${TAG}/[^\"']+" | sed 's|^|https://github.com|')"
+
+# Extract just the filenames for matching
+NAMES_LIST="$(printf '%s\n' "$ASSETS_DATA" | sed "s|.*/||")"
 
 asset_url_by_name() {
   local want="$1"
-  # Pair "name" with "browser_download_url" in order of appearance
-  awk -v n="$want" '
-    BEGIN{FS="\""; name=""}
-    /"name":/ {name=$4}
-    /"browser_download_url":/ {url=$4; if(name==n){print url; exit}}
-  ' <<<"$REL_JSON"
+  printf '%s\n' "$ASSETS_DATA" | grep -F "/${want}$" | head -n1
 }
 
 # ---------- Linux glibc detection & baseline selection ----------
