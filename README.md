@@ -24,6 +24,17 @@ This simple demo shows how I sent `ffl.com` from Windows to my phone and then tr
 
 ![Demo](dist/demo.gif)
 
+<details>
+<summary><b>🌐 Want to see a browser download? (Click to expand)</b></summary>
+<br>
+
+The recipient doesn't need to install anything!  
+Verify the P2P connection and download speed in a modern browser:
+
+https://github.com/user-attachments/assets/5dcdaf6a-48f7-4c9b-b322-0fd619aa23ab
+
+</details>
+
 Workflows like this also pair naturally with tools such as [llamafile](https://github.com/mozilla-ai/llamafile).
 
 ---
