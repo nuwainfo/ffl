@@ -63,6 +63,11 @@ You can download the [latest release](https://github.com/nuwainfo/ffl/releases/)
 
 ### Option 1: Native Installs
 
+> **Note:** Native builds are currently **x86_64 only** for Windows and Linux.
+> **macOS** builds support both Intel and Apple Silicon (ARM64).
+>
+> If you are on **Linux ARM64** (e.g., Raspberry Pi), please use **Option 2 (APE)**.
+
 **Linux / macOS**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl/refs/heads/main/dist/install.sh | bash
