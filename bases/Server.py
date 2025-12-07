@@ -1009,7 +1009,11 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
     # Override utility methods
     def send_response(self, code, message=None):
-        self.send_response_only(code, utf8(message))
+        if isinstance(message, str):
+            self.send_response_only(code, utf8(message))
+        else:
+            self.send_response_only(code, message)
+
         self.send_header('Date', self.date_time_string())
 
     # To let shutdown request can close server correctly
@@ -1027,7 +1031,10 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
     def end_headers(self) -> None:
         self.send_header("Server", f"FFL Server/{PUBLIC_VERSION}")
-        self.send_header("Last-Modified", self.date_time_string())
+        self.send_header(
+            "Last-Modified",
+            self.date_time_string(os.path.getmtime(os.path.join(self.server.directory, self.server.file)))
+        )
         self.send_header("Accept-Ranges", 'bytes')
         self.send_header("ETag", str(self.etag)) # To let browser can resume downloads
 

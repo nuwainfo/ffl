@@ -115,7 +115,6 @@ echo "Wrap exe"
 powershell -Command ^
 "$env:PYAPP_EXEC_SPEC = 'FileShare.Core:main'; ^
 $env:PYAPP_DISTRIBUTION_PATH = '.\ffl_python.zip'; ^
-$env:PYAPP_PROJECT_VERSION = '3.6.0'; ^
 $env:PYAPP_PROJECT_NAME = 'ffl'; ^
 $env:PYAPP_FULL_ISOLATION = '1'; ^
 $env:PYAPP_DISTRIBUTION_EMBED = '1'; ^

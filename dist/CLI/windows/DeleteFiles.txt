@@ -209,11 +209,9 @@ Lib\site-packages\packaging
 Lib\site-packages\PIL
 Lib\site-packages\pip
 Lib\site-packages\pkg_resources
-Lib\site-packages\psutil
 Lib\site-packages\pycparser
 Lib\site-packages\pygments
 Lib\site-packages\PyInstaller
-Lib\site-packages\pyperclip
 Lib\site-packages\readme_renderer
 Lib\site-packages\requests_toolbelt
 Lib\site-packages\rfc3986
@@ -226,4 +224,5 @@ Lib\site-packages\wx
 Lib\site-packages\README.txt
 Lib\site-packages\distutils-precedence.pth
 Lib\site-packages\FileShare\addons\GUI.py
+Lib\site-packages\FileShare\tests
 Lib\site-packages\FileShare\setup.py
