@@ -7,23 +7,23 @@ APP="ffl"
 RELEASE_TAG="v3.7.5"  # Default release version
 
 # Overridables: FFL_VERSION (e.g. v3.6.2), FFL_VARIANT (native|glibc|manylinux|com), FFL_PREFIX (install prefix)
-TAG="${FFL_VERSION:-$RELEASE_TAG}"
-VARIANT="${FFL_VARIANT:-native}"
-PREFIX="${FFL_PREFIX:-}"
+tag="${FFL_VERSION:-$RELEASE_TAG}"
+variant="${FFL_VARIANT:-native}"
+prefix="${FFL_PREFIX:-}"
 
-OS="$(uname -s | tr '[:upper:]' '[:lower:]')"   # linux/darwin
-ARCH_RAW="$(uname -m)"
-case "$ARCH_RAW" in
-  x86_64|amd64) ARCH="amd64" ;;
-  aarch64|arm64) ARCH="arm64" ;;
-  *) echo "Unsupported arch: $ARCH_RAW"; exit 1 ;;
+os="$(uname -s | tr '[:upper:]' '[:lower:]')"   # linux/darwin
+archRaw="$(uname -m)"
+case "$archRaw" in
+  x86_64|amd64) arch="amd64" ;;
+  aarch64|arm64) arch="arm64" ;;
+  *) echo "Unsupported arch: $archRaw"; exit 1 ;;
 esac
 
-have() { command -v "$1" >/dev/null 2>&1; }
+hasCommand() { command -v "$1" >/dev/null 2>&1; }
 
-fetch_html() {
+fetchHtml() {
   local url="$1"
-  if have curl; then
+  if hasCommand curl; then
     curl -fsSL "$url"
   else
     wget -qO- "$url"
@@ -31,101 +31,113 @@ fetch_html() {
 }
 
 # 1) Fetch expanded assets HTML fragment (GitHub loads assets via lazy-loaded fragment)
-ASSETS_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/expanded_assets/${TAG}"
-echo "Fetching release from: $ASSETS_URL"
+assetsUrl="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/expanded_assets/${tag}"
+echo "Fetching release from: $assetsUrl"
 
-ASSETS_HTML="$(fetch_html "$ASSETS_URL")"
+assetsHtml="$(fetchHtml "$assetsUrl")"
 
 # 2) Extract asset names and URLs from HTML
 # GitHub release pages have download links in format: href="/owner/repo/releases/download/tag/filename"
-ASSETS_DATA="$(printf '%s\n' "$ASSETS_HTML" | grep -oE "/${REPO_OWNER}/${REPO_NAME}/releases/download/${TAG}/[^\">< ]+" | sed 's|^|https://github.com|')"
+assetsData="$(printf '%s\n' "$assetsHtml" | grep -oE "/${REPO_OWNER}/${REPO_NAME}/releases/download/${tag}/[^\">< ]+" | sed 's|^|https://github.com|')"
 
 # Extract just the filenames for matching
-NAMES_LIST="$(printf '%s\n' "$ASSETS_DATA" | sed "s|.*/||")"
+namesList="$(printf '%s\n' "$assetsData" | sed "s|.*/||")"
 
-asset_url_by_name() {
+getAssetUrlByName() {
   local want="$1"
   # Escape dots in filename for regex matching
   local escaped="${want//./\\.}"
-  printf '%s\n' "$ASSETS_DATA" | grep "/${escaped}$" | head -n1
+  printf '%s\n' "$assetsData" | grep "/${escaped}$" | head -n1
 }
 
 # ---------- Linux glibc detection & baseline selection ----------
 # Returns detected glibc version like "2.39"; empty if not glibc (e.g., musl/Alpine).
-detect_glibc_version() {
-  local v=""
+detectGlibcVersion() {
+  local version=""
   if command -v getconf >/dev/null 2>&1; then
-    v="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
+    version="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
   fi
-  if [ -z "$v" ] && command -v ldd >/dev/null 2>&1; then
+  if [ -z "$version" ] && command -v ldd >/dev/null 2>&1; then
     # e.g. first line: "ldd (Ubuntu GLIBC 2.35-0ubuntu3.1) 2.35"
-    v="$(ldd --version 2>/dev/null | head -n1 | grep -Eo '([0-9]+\.){1,2}[0-9]+' | head -n1)"
+    version="$(ldd --version 2>/dev/null | head -n1 | grep -Eo '([0-9]+\.){1,2}[0-9]+' | head -n1)"
   fi
-  printf '%s' "$v"
+  printf '%s' "$version"
 }
 
 # Compare versions: returns true if $1 >= $2 (with sort -V)
-version_ge() {
+isVersionGreaterOrEqual() {
   [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]
 }
 
 # Pick the glibc baseline we should use among known targets (highest not exceeding system)
-pick_glibc_baseline() {
-  local sys glibc_targets=("2.39" "2.28")
-  sys="$(detect_glibc_version)"
-  if [ -z "$sys" ]; then
+pickGlibcBaseline() {
+  local systemVersion glibcTargets=("2.39" "2.28")
+  systemVersion="$(detectGlibcVersion)"
+
+  if [ -z "$systemVersion" ]; then
     echo "fallback"  # not glibc; will use APE (ffl.com)
     return
   fi
-  for base in "${glibc_targets[@]}"; do
-    if version_ge "$sys" "$base"; then
-      echo "$base"
+
+  for baseline in "${glibcTargets[@]}"; do
+    if isVersionGreaterOrEqual "$systemVersion" "$baseline"; then
+      echo "$baseline"
       return
     fi
   done
+
   # System glibc lower than our lowest target (2.28): still return 2.28 (may fail; outer logic can fallback to com)
   echo "2.28"
 }
 # ----------------------------------------------------------------
 
-choose_asset() {
-  # Params: OS, ARCH, VARIANT
-  local os="$1" arch="$2" variant="$3"
+chooseAsset() {
+  # Params: os, arch, variant
+  local targetOs="$1" targetArch="$2" targetVariant="$3"
   shopt -s nocasematch
 
   # Arch alias regex
-  local ARCH_RE=""
-  case "$arch" in
-    amd64)  ARCH_RE='(amd64|x86_64|x64)';;
-    arm64)  ARCH_RE='(arm64|aarch64|aarch)';; 
-    *)      ARCH_RE="$arch";;
+  local archRegex=""
+  case "$targetArch" in
+    amd64)  archRegex='(amd64|x86_64|x64)';;
+    arm64)  archRegex='(arm64|aarch64|aarch)';;
+    *)      archRegex="$targetArch";;
   esac
 
-  local pick=""
+  local selectedAsset=""
   while IFS= read -r name; do
     [ -z "$name" ] && continue
-    case "$variant" in
+    case "$targetVariant" in
       com)
-        if [[ "$name" =~ ffl\.com($|\.zip$|\.tar\.gz$) ]]; then pick="$name"; break; fi
+        if [[ "$name" =~ ffl\.com($|\.zip$|\.tar\.gz$) ]]; then
+          selectedAsset="$name"
+          break
+        fi
         ;;
       glibc|manylinux|native)
-        if [[ "$os" == "linux" ]]; then
+        if [[ "$targetOs" == "linux" ]]; then
           [[ "$name" =~ linux ]] || continue
-          [[ "$name" =~ $ARCH_RE ]] || continue
+          [[ "$name" =~ $archRegex ]] || continue
           [[ "$name" =~ \.(tar\.gz|tgz)$ ]] || continue
 
           # Auto-select Linux glibc baseline between glibc2.39 and glibc2.28
-          if [ -z "${_FFL_GLIBC_BASELINE:-}" ]; then
-            _FFL_GLIBC_BASELINE="$(pick_glibc_baseline)"
+          if [ -z "${_fflGlibcBaseline:-}" ]; then
+            _fflGlibcBaseline="$(pickGlibcBaseline)"
           fi
 
-          case "$_FFL_GLIBC_BASELINE" in
+          case "$_fflGlibcBaseline" in
             "2.39")
               # Prefer 2.39; if absent we may fall back to 2.28 later
-              if [[ "$name" =~ glibc2\.39 ]]; then pick="$name"; break; fi
+              if [[ "$name" =~ glibc2\.39 ]]; then
+                selectedAsset="$name"
+                break
+              fi
               ;;
             "2.28")
-              if [[ "$name" =~ glibc2\.28 ]]; then pick="$name"; break; fi
+              if [[ "$name" =~ glibc2\.28 ]]; then
+                selectedAsset="$name"
+                break
+              fi
               ;;
             "fallback")
               # Non-glibc (musl/unknown): skip Linux archives; outer logic will try APE (ffl.com)
@@ -133,131 +145,188 @@ choose_asset() {
               ;;
           esac
 
-        elif [[ "$os" == "darwin" ]]; then
+        elif [[ "$targetOs" == "darwin" ]]; then
           # mac assets use "mac"; also accept darwin/macos; support .zip/.tar.gz
-          if   [[ "$name" =~ mac ]] && [[ "$name" =~ $ARCH_RE ]] && [[ "$name" =~ \.(zip|tar\.gz|tgz)$ ]]; then pick="$name"; break
-          elif [[ "$name" =~ (darwin|macos) ]] && [[ "$name" =~ $ARCH_RE ]] && [[ "$name" =~ \.(zip|tar\.gz|tgz)$ ]]; then pick="$name"; break
+          if   [[ "$name" =~ mac ]] && [[ "$name" =~ $archRegex ]] && [[ "$name" =~ \.(zip|tar\.gz|tgz)$ ]]; then
+            selectedAsset="$name"
+            break
+          elif [[ "$name" =~ (darwin|macos) ]] && [[ "$name" =~ $archRegex ]] && [[ "$name" =~ \.(zip|tar\.gz|tgz)$ ]]; then
+            selectedAsset="$name"
+            break
           fi
         fi
         ;;
     esac
-  done <<< "$NAMES_LIST"
+  done <<< "$namesList"
 
-  echo "$pick"
+  echo "$selectedAsset"
 }
 
-ASSET_NAME="$(choose_asset "$OS" "$ARCH" "$VARIANT")"
+assetName="$(chooseAsset "$os" "$arch" "$variant")"
 
 # Linux: if no matching glibc archive (e.g., musl), fallback to APE ffl.com automatically
-if [ -z "$ASSET_NAME" ] && [ "$OS" = "linux" ]; then
-  if printf '%s\n' "$NAMES_LIST" | grep -qiE '^ffl\.com$|/ffl\.com$'; then
-    ASSET_NAME="ffl.com"
-    VARIANT="com"
+if [ -z "$assetName" ] && [ "$os" = "linux" ]; then
+  if printf '%s\n' "$namesList" | grep -qiE '^ffl\.com$|/ffl\.com$'; then
+    assetName="ffl.com"
+    variant="com"
     echo "No compatible glibc archive; falling back to APE (ffl.com)"
   fi
 fi
 
-echo "Picked asset: ${ASSET_NAME:-<none>}"
+echo "Picked asset: ${assetName:-<none>}"
 
-if [ -z "$ASSET_NAME" ]; then
-  echo "No matching asset for OS=$OS ARCH=$ARCH VARIANT=$VARIANT in tag $TAG."
-  echo "Available assets:"; IFS=$'\n'; for x in $NAMES_LIST; do [ -n "$x" ] && printf '  - %s\n' "$x"; done
+if [ -z "$assetName" ]; then
+  echo "No matching asset for OS=$os ARCH=$arch VARIANT=$variant in tag $tag."
+  echo "Available assets:"; IFS=$'\n'; for x in $namesList; do [ -n "$x" ] && printf '  - %s\n' "$x"; done
   exit 1
 fi
 
-DL_URL="$(asset_url_by_name "$ASSET_NAME")"
-[ -z "$DL_URL" ] && { echo "Download URL not found for $ASSET_NAME"; exit 1; }
+downloadUrl="$(getAssetUrlByName "$assetName")"
+if [ -z "$downloadUrl" ]; then
+  echo "Download URL not found for $assetName"
+  exit 1
+fi
 
 # 3) Download
-TMPDIR="$(mktemp -d)"; trap 'rm -rf "$TMPDIR"' EXIT
-FILE="$TMPDIR/$ASSET_NAME"
+tmpDir="$(mktemp -d)"; trap 'rm -rf "$tmpDir"' EXIT
+downloadFile="$tmpDir/$assetName"
 
-echo "Downloading $ASSET_NAME"
-if have curl; then curl -fL --retry 3 -o "$FILE" "$DL_URL"; else wget -O "$FILE" "$DL_URL"; fi
+echo "Downloading $assetName"
+if hasCommand curl; then
+  curl -fL --retry 3 -o "$downloadFile" "$downloadUrl"
+else
+  wget -O "$downloadFile" "$downloadUrl"
+fi
 
 # 4) Install location
-if [ -n "$PREFIX" ]; then
-  INSTALL_DIR="$PREFIX/bin"
+if [ -n "$prefix" ]; then
+  installDir="$prefix/bin"
 elif [ -w /usr/local/bin ]; then
-  INSTALL_DIR="/usr/local/bin"
+  installDir="/usr/local/bin"
 else
-  INSTALL_DIR="$HOME/.local/bin"
+  installDir="$HOME/.local/bin"
 fi
-mkdir -p "$INSTALL_DIR"
+mkdir -p "$installDir"
 
-install_bin() {
-  local src="$1" dst="$2"
-  install -m 0755 "$src" "$dst"
-  echo "Installed to $dst"
-  case ":$PATH:" in *":$INSTALL_DIR:"*) ;; *) echo "Note: add $INSTALL_DIR to PATH";; esac
-  "$dst" --version || true
+installBinary() {
+  local sourcePath="$1" destPath="$2"
+  install -m 0755 "$sourcePath" "$destPath"
+  echo "Installed to $destPath"
+  case ":$PATH:" in
+    *":$installDir:"*) ;;
+    *) echo "Note: add $installDir to PATH";;
+  esac
+  "$destPath" --version || true
 }
 
 # --- File header detection: ELF / Mach-O / PE ---
-is_elf()  { [ "$(head -c 4 "$1" | LC_ALL=C tr -d '\0')" = $'\x7f''ELF' ]; }
-is_pe()   { head -c 2 "$1" | grep -q "^MZ$"; }
-is_macho(){
+isElf() {
+  [ "$(head -c 4 "$1" | LC_ALL=C tr -d '\0')" = $'\x7f''ELF' ]
+}
+
+isPe() {
+  head -c 2 "$1" | grep -q "^MZ$"
+}
+
+isMacho() {
   # Use hexdump (available on macOS by default)
-  local m; m="$(dd if="$1" bs=4 count=1 2>/dev/null | hexdump -v -e '1/1 "%02x"')"
-  case "$m" in cffaedfe|feedface|feeface|cafebabe) return 0;; esac
+  local magic
+  magic="$(dd if="$1" bs=4 count=1 2>/dev/null | hexdump -v -e '1/1 "%02x"')"
+  case "$magic" in
+    cffaedfe|feedface|feeface|cafebabe) return 0;;
+  esac
   return 1
 }
 
-extract_into() {
+extractArchive() {
   # Try several formats: bsdtar(auto) -> tar.gz -> tar.xz -> tar.zstd -> tar -> zip.
   # If all fail but the file itself is an executable (mislabelled), treat as single-file install.
-  local archive="$1" outdir="$2"
-  mkdir -p "$outdir"
+  local archivePath="$1" outputDir="$2"
+  mkdir -p "$outputDir"
 
-  if have bsdtar && bsdtar -tf "$archive" >/dev/null 2>&1; then bsdtar -xf "$archive" -C "$outdir" && return 0; fi
-  if tar -tzf "$archive" >/dev/null 2>&1; then tar -xzf "$archive" -C "$outdir" && return 0; fi
-  if tar -tJf "$archive" >/dev/null 2>&1; then tar -xJf "$archive" -C "$outdir" && return 0; fi
-  if tar --help 2>/dev/null | grep -q -- '--zstd' && tar --zstd -tf "$archive" >/dev/null 2>&1; then tar --zstd -xf "$archive" -C "$outdir" && return 0; fi
-  if tar -tf "$archive" >/dev/null 2>&1; then tar -xf "$archive" -C "$outdir" && return 0; fi
-  if have unzip && unzip -tq "$archive" >/dev/null 2>&1; then unzip -q "$archive" -d "$outdir" && return 0; fi
-  if have bsdtar; then bsdtar -xf "$archive" -C "$outdir" && return 0; fi
-
-  if is_elf "$archive" || is_macho "$archive" || is_pe "$archive"; then
-    cp "$archive" "$outdir/" && return 0
+  if hasCommand bsdtar && bsdtar -tf "$archivePath" >/dev/null 2>&1; then
+    bsdtar -xf "$archivePath" -C "$outputDir" && return 0
+  fi
+  if tar -tzf "$archivePath" >/dev/null 2>&1; then
+    tar -xzf "$archivePath" -C "$outputDir" && return 0
+  fi
+  if tar -tJf "$archivePath" >/dev/null 2>&1; then
+    tar -xJf "$archivePath" -C "$outputDir" && return 0
+  fi
+  if tar --help 2>/dev/null | grep -q -- '--zstd' && tar --zstd -tf "$archivePath" >/dev/null 2>&1; then
+    tar --zstd -xf "$archivePath" -C "$outputDir" && return 0
+  fi
+  if tar -tf "$archivePath" >/dev/null 2>&1; then
+    tar -xf "$archivePath" -C "$outputDir" && return 0
+  fi
+  if hasCommand unzip && unzip -tq "$archivePath" >/dev/null 2>&1; then
+    unzip -q "$archivePath" -d "$outputDir" && return 0
+  fi
+  if hasCommand bsdtar; then
+    bsdtar -xf "$archivePath" -C "$outputDir" && return 0
   fi
 
-  echo "Cannot extract archive: $archive"
+  if isElf "$archivePath" || isMacho "$archivePath" || isPe "$archivePath"; then
+    cp "$archivePath" "$outputDir/" && return 0
+  fi
+
+  echo "Cannot extract archive: $archivePath"
   return 1
 }
 
 # 5) Install
-if [[ "$VARIANT" == "com" ]]; then
-  if [[ "$ASSET_NAME" =~ \.com$ ]]; then
-    install_bin "$FILE" "$INSTALL_DIR/$APP.com"
+if [[ "$variant" == "com" ]]; then
+  if [[ "$assetName" =~ \.com$ ]]; then
+    installBinary "$downloadFile" "$installDir/$APP.com"
   else
-    UNPACK="$TMPDIR/unpack"; extract_into "$FILE" "$UNPACK"
-    BIN="$(find "$UNPACK" -type f -name "$APP.com" -o -name "$APP" -o -name "$APP.exe" | head -n1)"
-    [ -z "$BIN" ] && { echo "ffl.com not found in archive"; exit 1; }
-    case "$BIN" in
-      *.com) install_bin "$BIN" "$INSTALL_DIR/$APP.com"; ln -sf "$APP.com" "$INSTALL_DIR/$APP" ;;
-      *.exe) install_bin "$BIN" "$INSTALL_DIR/$APP" ;;
-      *)     install_bin "$BIN" "$INSTALL_DIR/$APP" ;;
+    unpackDir="$tmpDir/unpack"
+    extractArchive "$downloadFile" "$unpackDir"
+    binaryPath="$(find "$unpackDir" -type f -name "$APP.com" -o -name "$APP" -o -name "$APP.exe" | head -n1)"
+
+    if [ -z "$binaryPath" ]; then
+      echo "ffl.com not found in archive"
+      exit 1
+    fi
+
+    case "$binaryPath" in
+      *.com)
+        installBinary "$binaryPath" "$installDir/$APP.com"
+        ln -sf "$APP.com" "$installDir/$APP"
+        ;;
+      *.exe)
+        installBinary "$binaryPath" "$installDir/$APP"
+        ;;
+      *)
+        installBinary "$binaryPath" "$installDir/$APP"
+        ;;
     esac
   fi
-  ln -sf "$APP.com" "$INSTALL_DIR/$APP" 2>/dev/null || true
+  ln -sf "$APP.com" "$installDir/$APP" 2>/dev/null || true
 else
-  UNPACK="$TMPDIR/unpack"; extract_into "$FILE" "$UNPACK"
+  unpackDir="$tmpDir/unpack"
+  extractArchive "$downloadFile" "$unpackDir"
+
   # Prefer exact name, then ffl_*, then any executable containing "ffl"
-  BIN="$(find "$UNPACK" -maxdepth 6 -type f -name "$APP" | head -n1)"
-  if [ -z "$BIN" ]; then
-    BIN="$(find "$UNPACK" -maxdepth 6 -type f -regex ".*/${APP}[_-].*" | head -n1)"
+  binaryPath="$(find "$unpackDir" -maxdepth 6 -type f -name "$APP" | head -n1)"
+  if [ -z "$binaryPath" ]; then
+    binaryPath="$(find "$unpackDir" -maxdepth 6 -type f -regex ".*/${APP}[_-].*" | head -n1)"
   fi
-  if [ -z "$BIN" ]; then
-    BIN="$(find "$UNPACK" -maxdepth 6 -type f -perm -111 -iname "*$APP*" | head -n1)"
+  if [ -z "$binaryPath" ]; then
+    binaryPath="$(find "$unpackDir" -maxdepth 6 -type f -perm -111 -iname "*$APP*" | head -n1)"
   fi
-  if [ -z "$BIN" ]; then
+  if [ -z "$binaryPath" ]; then
     # If the downloaded file is actually a single binary (mislabelled), use it.
-    if is_elf "$FILE" || is_macho "$FILE" || is_pe "$FILE"; then
-      BIN="$FILE"
+    if isElf "$downloadFile" || isMacho "$downloadFile" || isPe "$downloadFile"; then
+      binaryPath="$downloadFile"
     fi
   fi
-  [ -z "$BIN" ] && { echo "Executable '$APP' not found in archive"; exit 1; }
-  chmod +x "$BIN" || true
+
+  if [ -z "$binaryPath" ]; then
+    echo "Executable '$APP' not found in archive"
+    exit 1
+  fi
+
+  chmod +x "$binaryPath" || true
   # Always install as unified name "ffl"
-  install_bin "$BIN" "$INSTALL_DIR/$APP"
+  installBinary "$binaryPath" "$installDir/$APP"
 fi
