@@ -155,6 +155,7 @@ You’ll get a shareable link like:
 * **Method:** Prefers **WebRTC P2P**. If P2P fails, it automatically falls back to HTTPS relay via a tunnel (third‑party or our free unlimited tunnel).
 
 > **Note:** Standard CLI tools like `curl` or `wget` use HTTPS only (Relay mode). If you want P2P speed on the receiving CLI, use `ffl` to download.
+
 > Tip: If using wget, add --content-disposition to save with the correct filename.
 
 ### 🔁 Receive using `ffl`
