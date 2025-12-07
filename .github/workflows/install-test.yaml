@@ -1,4 +1,6 @@
 name: Install script e2e test
+permissions:
+  contents: read
 on:
   push:
   workflow_dispatch:
