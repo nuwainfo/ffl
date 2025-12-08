@@ -97,12 +97,14 @@ If you prefer a single-file binary that runs almost anywhere with zero dependenc
 curl -fL https://github.com/nuwainfo/ffl/releases/latest/download/ffl.com -o ffl.com 
 chmod +x ffl.com
 # You can now run it directly: ./ffl.com
+# Tip: mv ffl.com ~/.local/bin/ffl to run it as 'ffl' from anywhere
 ```
 
 **Windows (CMD / PowerShell)**
 ```powershell
 curl.exe "https://github.com/nuwainfo/ffl/releases/latest/download/ffl.com" -o "ffl.com"
 # Run as: .\ffl.com
+# Tip: Move to a folder in your PATH to run from anywhere
 ```
 
 ### Option 3: Build from source
