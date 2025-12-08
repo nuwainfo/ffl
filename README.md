@@ -156,7 +156,7 @@ You’ll get a shareable link like:
 
 > **Note:** Standard CLI tools like `curl` or `wget` use HTTPS only (Relay mode). If you want P2P speed on the receiving CLI, use `ffl` to download.
 
-> Tip: If using `wget`, add `--content-disposition` to save with the correct filename.
+> 💡Tip: Use `curl -JLO` or `wget --content-disposition` to automatically save with the correct filename.
 
 ### 🔁 Receive using `ffl`
 
