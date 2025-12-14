@@ -39,7 +39,7 @@ from aiortc import (RTCConfiguration, RTCDataChannel, RTCIceServer, RTCPeerConne
 from aiortc.sdp import candidate_from_sdp
 
 from bases.Kernel import getLogger
-from bases.Utils import ONE_MB, formatSize, getEnv
+from bases.Utils import ONE_MB, formatSize, getEnv, StallResilientAdapter
 from bases.Progress import Progress
 from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
 from bases.E2EE import E2EEClient
@@ -87,6 +87,12 @@ DEFAULT_ICE_SERVERS = [
 CHROME_EDGE_LOCAL_SLEEP_DELAY = getEnv('WEBRTC_CHROME_EDGE_LOCAL_SLEEP_DELAY', 0.047)
 # Sleep once every N bytes to avoid excessive sleeping (default: TRANSFER_CHUNK_SIZE for original behavior)
 CHROME_EDGE_LOCAL_SLEEP_INTERVAL = getEnv('WEBRTC_CHROME_EDGE_LOCAL_SLEEP_INTERVAL', TRANSFER_CHUNK_SIZE)
+
+# HTTP download timeout configuration (seconds)
+# Connect timeout: How long to wait for initial connection
+# Read timeout: How long to wait between chunks (increased from 30s to handle stalls)
+HTTP_CONNECT_TIMEOUT = getEnv('HTTP_CONNECT_TIMEOUT', 10)
+HTTP_READ_TIMEOUT = getEnv('HTTP_READ_TIMEOUT', 600)  # 10 minutes to handle large file stalls
 
 # Without winloop, Edge will fail to use WebRTC, it will cause consent query timeout after few seconds.
 # It speeds up a lot on Firefox, but slow down a little on Chrome/Edge.
@@ -1784,14 +1790,25 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
 
         # Start download without extra logging if using shared progress
 
+        # Create session with StallResilientAdapter for Python 3.12 workarounds and better stall handling
+        session = requests.Session()
+        adapter = StallResilientAdapter(
+            chunkSize=TRANSFER_CHUNK_SIZE,
+            allowedMethods={'GET'}  # Download method only
+        )
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+
         # Start background thread for status polling
         statusStopEvent = threading.Event()
         statusErrorQueue = deque()
         self._startStatusPollingThread(urlInfo.baseURL, downloadHeaders, statusStopEvent, statusErrorQueue)
 
         try:
-            # Use tuple timeout: (connect_timeout, read_timeout) for better control
-            with requests.get(downloadURL, headers=downloadHeaders, stream=True, timeout=(10, 30)) as response:
+            # Use tuple timeout: (connect_timeout, read_timeout) with increased read timeout
+            # to handle large file stalls (especially on Python 3.12 + TLS 1.3)
+            with session.get(downloadURL, headers=downloadHeaders, stream=True, 
+                             timeout=(HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT)) as response:
                 # Check status codes
                 if response.status_code not in (200, 206): # 206 is partial content for resume
                     raise RuntimeError(f"HTTP download failed: {response.status_code}")
@@ -1865,6 +1882,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             raise RuntimeError(f"HTTP download failed: {e}")
         finally:
             statusStopEvent.set()
+            session.close()  # Clean up session resources
 
         # Verify final file size (skip for generic URLs as HEAD/GET may return different content lengths)
         finalSize = os.path.getsize(finalOutputPath)

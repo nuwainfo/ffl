@@ -4,7 +4,7 @@ set -euo pipefail
 REPO_OWNER="nuwainfo"
 REPO_NAME="ffl"
 APP="ffl"
-RELEASE_TAG="v3.7.5"  # Default release version
+RELEASE_TAG="v3.7.6"  # Default release version
 
 # Overridables: FFL_VERSION (e.g. v3.6.2), FFL_VARIANT (native|glibc|manylinux|com), FFL_PREFIX (install prefix)
 tag="${FFL_VERSION:-$RELEASE_TAG}"

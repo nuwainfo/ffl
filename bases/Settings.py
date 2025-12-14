@@ -20,6 +20,8 @@
 import shutil
 import sys
 import os
+import urllib.parse
+import webbrowser
 
 from datetime import timedelta
 from enum import Enum
@@ -38,6 +40,9 @@ EMAIL = 'support@fastfilelink.com'
 
 # Default support URL for open source users
 SUPPORT_URL = 'https://github.com/nuwainfo/ffl/discussions'
+
+# Invite URL for sharing referral links
+INVITE_URL = 'https://fastfilelink.com/invite'
 
 # Default copyright for open source users
 COPYRIGHT = 'Copyright (c) 2025 FastFileLink Contributors. Licensed under Apache-2.0.'
@@ -144,6 +149,26 @@ class DummyFeatureManager(Singleton):
     def getWebRTCManager(self, managerClass):
         """Dummy implementation - returns original manager class"""
         return managerClass
+
+    def invite(self, link, params=None):
+        """Open invite page in browser with the sharing link for referral rewards
+
+        Args:
+            link: The sharing link to include in the invite URL
+            params: Optional dict of additional URL GET parameters
+        """
+        inviteURL = INVITE_URL
+
+        # Build query parameters starting with the link
+        queryParams = {'link': link}
+
+        # Add any additional parameters if provided
+        if params:
+            queryParams.update(params)
+
+        # Construct the full URL with all parameters
+        inviteWithLink = f'{inviteURL}?{urllib.parse.urlencode(queryParams)}'
+        webbrowser.open(inviteWithLink)
 
 
 # =============================================================================
@@ -332,6 +357,13 @@ class SettingsGetter(Singleton):
         Features addon may overwrite SUPPORT_URL based on user level or GUI support.
         """
         return SUPPORT_URL
+
+    def getInviteURL(self):
+        """
+        Get invite URL for sharing referral links.
+        Returns the current INVITE_URL value.
+        """
+        return INVITE_URL
 
     def getCopyright(self):
         """

@@ -39,7 +39,7 @@ from signalslot import Signal
 from sentry_sdk.integrations.logging import SentryHandler, LoggingIntegration
 from sentry_sdk.integrations import atexit as sentryAtexit
 
-PUBLIC_VERSION = '3.7.5'
+PUBLIC_VERSION = '3.7.6'
 
 
 def configureGlobalLogLevel(logLevel):
@@ -1061,6 +1061,8 @@ class FFLEvent:
     cliArgumentsShareOptionsRegister = Event('/cli/arguments/share/options/create')
     cliArgumentsStore = Event('/cli/arguments/get')
 
+    shareLinkCreate = Event('/share/link/create')
+
 
 eventService = EventService.getInstance()
 
@@ -1069,3 +1071,4 @@ eventService.register(FFLEvent.cliArgumentsGlobalOptionsStore.key)
 eventService.register(FFLEvent.cliArgumentsCommandsRegister.key)
 eventService.register(FFLEvent.cliArgumentsShareOptionsRegister.key)
 eventService.register(FFLEvent.cliArgumentsStore.key)
+eventService.register(FFLEvent.shareLinkCreate.key)

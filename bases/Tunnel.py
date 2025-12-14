@@ -34,6 +34,11 @@ TUNNEL_TOKEN_SERVER_URL = os.getenv('TUNNEL_TOKEN_SERVER_URL', 'https://fastfile
 logger = getLogger(__name__)
 
 
+class TunnelUnavailableError(Exception):
+    """Raised when tunnel server is temporarily unavailable"""
+    pass
+
+
 def fetchTunnelToken():
     """Fetch tunnel authentication token from token server"""
     serverURL = os.getenv(
@@ -53,7 +58,7 @@ def fetchTunnelToken():
         return token
     except Exception as e:
         logger.error(f"Failed to fetch tunnel token from {TUNNEL_TOKEN_SERVER_URL}: {e}")
-        raise ConnectionError(f'Cannot fetch tunnel token: {e}')
+        raise TunnelUnavailableError(f'Cannot fetch tunnel token: {e}')
 
 
 class AsyncTunnelThread(threading.Thread):
@@ -79,16 +84,12 @@ class AsyncTunnelThread(threading.Thread):
     async def main(self):
         # Connect and start listening
         if await self.client.connect():
-            try:
-                tunnelUrl = self.client.getTunnelURL()
-                self.resultQueue.put((True, tunnelUrl))
-                await self.client.listen()
-            except Exception as e:
-                logger.exception(e)
-                await self.client.shutdown()
+            tunnelUrl = self.client.getTunnelURL()
+            self.resultQueue.put((True, tunnelUrl))
+            await self.client.listen()
         else:
             logger.error("Failed to connect to the server. Exiting.")
-            raise ConnectionError(f'Failed to connect to tunnel server.')
+            raise TunnelUnavailableError('Failed to connect to tunnel server')
 
     def kill(self):
         if self.client:
@@ -171,10 +172,10 @@ class TunnelRunner:
             reachable = requests.get(f"https://{domain}/", timeout=5).text is not None
         except Exception as e:
             logger.error(f"Failed to verify tunnel server reachability: {e}")
-            raise ConnectionError('Cannot connect to any FastFileLink server.')
+            raise TunnelUnavailableError('Cannot connect to tunnel server')
 
         if not reachable:
-            raise ConnectionError('Cannot connect to any FastFileLink server.')
+            raise TunnelUnavailableError('Cannot connect to tunnel server')
 
         # Fetch authentication token from token server
         secret = fetchTunnelToken()
@@ -209,15 +210,15 @@ class TunnelRunner:
     def start(self, port):
         """
         Start tunnel connection
-        
+
         Args:
             port: Local port to tunnel
-            
+
         Returns:
             tuple: (domain: str, link: str)
-            
+
         Raises:
-            ConnectionError: When tunnel connection fails
+            TunnelUnavailableError: When tunnel connection fails
         """
         with self.lock:
             if self.tunnelThread:
@@ -233,16 +234,13 @@ class TunnelRunner:
             try:
                 success, tunnelUrl = resultQueue.get(timeout=120)
                 if not success:
-                    ex = None
-                    if hasattr(self.tunnelThread, 'e') and self.tunnelThread.e:
-                        ex = self.tunnelThread.e
-
+                    ex = self.tunnelThread.e
                     self._cleanup()
 
                     if ex:
                         raise ex
                     else:
-                        raise ConnectionError("Tunnel connection failed")
+                        raise TunnelUnavailableError("Tunnel connection failed")
 
                 # tunnelUrl is now the complete URL from getTunnelURL()
                 link = tunnelUrl if tunnelUrl.endswith('/') else tunnelUrl + "/"
@@ -256,7 +254,7 @@ class TunnelRunner:
 
             except queue.Empty:
                 self._cleanup()
-                raise ConnectionError('Tunnel server timeout.')
+                raise TunnelUnavailableError('Tunnel server timeout')
 
         except Exception as e:
             self._cleanup()

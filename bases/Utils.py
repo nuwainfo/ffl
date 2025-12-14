@@ -17,10 +17,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
 import locale
 import os
 import socket
+import ssl
 import sys
 import webbrowser
 
@@ -28,6 +28,11 @@ import bitmath
 import chardet
 
 from itertools import zip_longest
+
+from urllib3 import PoolManager
+from urllib3.connection import HTTPConnection
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
 
 from bases.Kernel import getLogger, PUBLIC_VERSION
 from bases.Settings import LANGUAGES, SettingsGetter
@@ -268,42 +273,6 @@ def sendException(logger, e, action=None, errorPrefix="Oops, something went wron
         raise e
 
 
-def getJSONWriter(args, fileSize, link, tunnelType=None, e2ee=False):
-    settingsGetter = SettingsGetter.getInstance()
-    featureManager = settingsGetter.getFeatureManager()
-    user = featureManager.user
-
-    if hasattr(args, 'json') and args.json:
-        outputData = {
-            "file": args.file,
-            "file_size": fileSize,
-            "upload_mode": "server" if args.upload else "p2p",
-            "tunnel_type": tunnelType or "default",
-            "link": link,
-            "e2ee": e2ee,
-            "user": {
-                "user": user.name,
-                "email": user.email,
-                "level": user.level,
-                "points": user.points,
-                "serial_number": user.serialNumber
-            }
-        }
-
-        def writeJSON():
-            try:
-                with open(args.json, 'w', encoding='utf-8') as f:
-                    json.dump(outputData, f, indent=2)
-                flushPrint(f"Sharing information saved to {args.json}")
-            except Exception as e:
-                flushPrint(f"Failed to write JSON file: {e}")
-                sendException(logger, e)
-
-        return writeJSON
-    else:
-        return None
-
-
 # Helper functions for environment variable configuration
 def getEnv(envVar, default):
     """Safely get value from environment variable with automatic type detection based on default"""
@@ -413,7 +382,7 @@ def parseProxyString(proxyString):
             normalizedUrl = f"socks5h://{username}:{password}@{host}:{port}"
         else:
             normalizedUrl = f"socks5h://{host}:{port}"
-    else:  # http or https
+    else: # http or https
         proxyType = "http"
         if username and password:
             normalizedUrl = f"{protocol}://{username}:{password}@{host}:{port}"
@@ -576,3 +545,147 @@ class ObjectProxy:
 
     def __bool__(self):
         return bool(self._proxied)
+
+
+# HTTP/HTTPS connection timeout and retry configuration
+# https://github.com/urllib3/urllib3/issues/3100
+# https://github.com/urllib3/urllib3/issues/2733
+# https://github.com/python/cpython/issues/115627
+
+# Minimum stall timeout in seconds (for both upload and download)
+DEFAULT_MIN_STALL_TIMEOUT_SECONDS = getEnv('HTTP_DEFAULT_MIN_STALL_TIMEOUT_SECONDS', 120)
+
+# Minimum speed threshold in MBps for stall calculation
+DEFAULT_STALL_SPEED_THRESHOLD_MBPS = getEnv('HTTP_DEFAULT_STALL_SPEED_THRESHOLD_MBPS', 1.0)
+
+# Python 3.12 workaround control
+ENABLE_PY312_WORKAROUND = getEnv('HTTP_ENABLE_PY312_WORKAROUND', True)
+
+
+class StallResilientAdapter(HTTPAdapter):
+    """
+    HTTP adapter that provides stall resistance through TCP socket options and Python 3.12 workarounds.
+
+    Features:
+    - TCP keepalive for early dead connection detection
+    - TCP_USER_TIMEOUT on Linux for write stall detection
+    - Python 3.12 + OpenSSL 3.x workarounds (TLS 1.2 force, limited retries)
+
+    This adapter is used for both uploads and downloads to handle:
+    - SSLEOFError issues in Python 3.12 + TLS 1.3
+    - Connection stalls during large file transfers
+    - Network interruptions with automatic retry
+    """
+
+    DEFAULT_SOCKET_OPTIONS = HTTPConnection.default_socket_options
+
+    @classmethod
+    def calculateStallTimeoutMs(cls, chunkSize):
+        """
+        Calculate dynamic stall timeout based on chunk size and minimum acceptable speed.
+        Formula: stall = max(120s, chunkSize / speedThreshold)
+
+        Args:
+            chunkSize: Size of transfer chunks in bytes
+
+        Returns:
+            int: Stall timeout in milliseconds
+        """
+        # Convert threshold from MBps to bytes per second
+        speedThresholdBps = DEFAULT_STALL_SPEED_THRESHOLD_MBPS * ONE_MB
+
+        # Calculate time needed at minimum speed (in seconds)
+        calculatedTimeSeconds = chunkSize / speedThresholdBps
+
+        # Apply minimum timeout
+        stallTimeoutSeconds = max(DEFAULT_MIN_STALL_TIMEOUT_SECONDS, calculatedTimeSeconds)
+
+        # Convert to milliseconds
+        stallTimeoutMs = int(stallTimeoutSeconds * 1000)
+
+        return stallTimeoutMs
+
+    def __init__(self, stallTimeoutMs: int = None, chunkSize: int = None, allowedMethods=None, *args, **kwargs):
+        """
+        Initialize stall-resilient adapter.
+
+        Args:
+            stallTimeoutMs: Explicit stall timeout in milliseconds (overrides calculation)
+            chunkSize: Chunk size for dynamic timeout calculation
+            allowedMethods: HTTP methods to allow retries on (default: GET, PUT, POST)
+        """
+        settingsGetter = SettingsGetter.getInstance()
+
+        # Calculate dynamic stall timeout if chunkSize provided
+        if stallTimeoutMs is None and chunkSize is not None:
+            self.stallTimeoutMs = self.calculateStallTimeoutMs(chunkSize)
+        elif stallTimeoutMs is not None:
+            self.stallTimeoutMs = stallTimeoutMs
+        else:
+            # Fallback to 120 seconds (minimum) if no parameters provided
+            self.stallTimeoutMs = DEFAULT_MIN_STALL_TIMEOUT_SECONDS * 1000
+
+        self.isLinux = settingsGetter.isLinux()
+
+        # Default to allowing retries on GET, PUT, POST (covers both upload and download)
+        if allowedMethods is None:
+            allowedMethods = {'GET', 'PUT', 'POST'}
+
+        # Configure urllib3 retries based on Python version and user settings
+        if sys.version_info >= (3, 12) and ENABLE_PY312_WORKAROUND:
+            # Python 3.12+ workaround: Enable limited urllib3 retries for SSL/connection issues
+            # This helps with SSLEOFError and read/write timeout issues specific to Python 3.12 + OpenSSL 3.x
+            retry_config = Retry(
+                total=2, # Limited retries to avoid confusion with application layer
+                connect=1, # Retry connection failures once
+                read=1, # Retry read failures once
+                status=0, # No status-based retries (handled by application layer)
+                backoff_factor=0.5, # Short backoff for quick recovery
+                allowed_methods=allowedMethods, # Allow retries for specified methods
+                raise_on_status=False # Don't raise on status codes, let application handle
+            )
+            logger.debug(
+                f"Python 3.12+ workaround enabled: limited urllib3 retries for SSL/connection issues "
+                f"(methods: {allowedMethods})"
+            )
+        else:
+            # Python < 3.12 or workaround disabled: Disable urllib3 internal retry completely
+            # All retries handled at application layer for better observability
+            retry_config = Retry(total=0)
+
+        kwargs['max_retries'] = retry_config
+
+        super().__init__(*args, **kwargs)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **kwargs):
+        """Initialize pool manager with custom socket options and SSL context."""
+        socketOptions = list(self.DEFAULT_SOCKET_OPTIONS)
+
+        # Enable TCP keepalive for early dead connection detection
+        socketOptions.append((socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1))
+
+        # Aggressive keepalive parameters (available on most platforms)
+        if hasattr(socket, "TCP_KEEPIDLE"):
+            socketOptions.append((socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30))
+        if hasattr(socket, "TCP_KEEPINTVL"):
+            socketOptions.append((socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10))
+        if hasattr(socket, "TCP_KEEPCNT"):
+            socketOptions.append((socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3))
+
+        # Linux-specific: Timeout for unacknowledged data (stall detection for both read/write)
+        if self.isLinux and hasattr(socket, "TCP_USER_TIMEOUT"):
+            socketOptions.append((socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT, self.stallTimeoutMs))
+
+        kwargs["socket_options"] = socketOptions
+
+        # Python 3.12 + OpenSSL 3.x workaround for SSLEOFError issues
+        # Force TLS 1.2 to avoid TLS 1.3 + OpenSSL 3.x EOF behavior issues
+        if sys.version_info >= (3, 12) and ENABLE_PY312_WORKAROUND:
+            logger.debug("Python 3.12+ workaround enabled: forcing TLS 1.2 to avoid SSLEOFError issues")
+            # Create SSL context that forces TLS 1.2 (avoids TLS 1.3 EOF issues)
+            ssl_context = ssl.create_default_context()
+            ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+            ssl_context.maximum_version = ssl.TLSVersion.TLSv1_2
+            kwargs["ssl_context"] = ssl_context
+
+        self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, **kwargs)

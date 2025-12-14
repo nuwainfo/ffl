@@ -22,6 +22,7 @@ import sys
 import os
 import argparse
 import signal
+import json
 
 if 'Cosmopolitan' in platform.version():
     if sys.prefix not in sys.path:
@@ -38,9 +39,11 @@ import bases.Stub # isort:skip
 import requests
 import certifi
 
-from bases.Kernel import UIDGenerator, getLogger, PUBLIC_VERSION
+from functools import partial
+
+from bases.Kernel import UIDGenerator, getLogger, FFLEvent
 from bases.Server import createServer, DownloadHandler
-from bases.Tunnel import TunnelRunner
+from bases.Tunnel import TunnelRunner, TunnelUnavailableError
 from bases.WebRTC import WebRTCManager, WebRTCDownloader
 from bases.Settings import DEFAULT_STATIC_ROOT, ExecutionMode, SettingsGetter
 from bases.CLI import (
@@ -52,7 +55,6 @@ from bases.Utils import (
     getLogger,
     getAvailablePort,
     sendException,
-    getJSONWriter,
     validateCompatibleWithServer,
 )
 from bases.Reader import SourceReader
@@ -127,6 +129,47 @@ def isCLIMode():
     return settingsGetter.isCLIMode()
 
 
+def onShareLinkCreate(args, link, filePath, fileSize, tunnelType, e2ee, **kwargs):
+    """Handle share link creation - invite and JSON writing"""
+    # Handle --invite flag
+    if args.invite:
+        flushPrint('Opening invite page in browser...')
+        featureManager.invite(link)
+
+    # Handle --json flag
+    if args.json:
+        user = featureManager.user
+        outputData = {
+            "file": filePath,
+            "file_size": fileSize,
+            "upload_mode": "server" if args.upload else "p2p",
+            "tunnel_type": tunnelType or "default",
+            "link": link,
+            "e2ee": e2ee,
+            "user": {
+                "user": user.name,
+                "email": user.email,
+                "level": user.level,
+                "points": user.points,
+                "serial_number": user.serialNumber
+            }
+        }
+
+        try:
+            with open(args.json, 'w', encoding='utf-8') as f:
+                json.dump(outputData, f, indent=2)
+            flushPrint(f"Sharing information saved to {args.json}")
+        except Exception as e:
+            flushPrint(f"Failed to write JSON file: {e}")
+            sendException(logger, e)
+
+    # Handle FFL_LINK_OUTPUT environment variable.
+    linkOutputPath = os.getenv('FFL_LINK_OUTPUT')
+    if linkOutputPath:
+        with open(linkOutputPath, 'w', encoding='utf-8') as f:
+            f.write(link)
+
+
 # Main business logic - shared between CLI and GUI modes
 def processFileSharing(args, proxyConfig=None):
     """
@@ -144,8 +187,11 @@ def processFileSharing(args, proxyConfig=None):
         flushPrint(f'"{args.file}" does not exist!')
         return 1
 
-    try:
+    # Subscribe handler for share link creation with bound args
+    handler = partial(onShareLinkCreate, args)
+    FFLEvent.shareLinkCreate.subscribe(handler)
 
+    try:
         if args.upload:
             if not settingsGetter.hasUploadSupport():
                 flushPrint('Error: Upload functionality requires Upload addon (addons/Upload.py)')
@@ -311,10 +357,9 @@ def processFileSharing(args, proxyConfig=None):
 
                 if uploadResult and uploadResult.success:
                     uploadMethod.publish(uploadResult)
-
-                    writeJSON = getJSONWriter(args, size, uploadResult.link, e2ee=e2eeEnabled)
-                    if writeJSON:
-                        writeJSON()
+                    FFLEvent.shareLinkCreate.trigger(
+                        link=uploadResult.link, filePath=args.file, fileSize=size, tunnelType=None, e2ee=e2eeEnabled
+                    )
                     return 0
                 else:
                     # Try fallback strategy if available
@@ -385,6 +430,11 @@ def processFileSharing(args, proxyConfig=None):
                     flushPrint(f'{link}\n')
                     copy2Clipboard(f'{link}')
 
+                    # Trigger share link create event for GUI and other subscribers
+                    FFLEvent.shareLinkCreate.trigger(
+                        link=link, filePath=args.file, fileSize=size, tunnelType=tunnelType, e2ee=e2eeEnabled
+                    )
+
                     # Show auth info if enabled (password enables auth)
                     authPassword = args.authPassword
                     if authPassword:
@@ -397,10 +447,6 @@ def processFileSharing(args, proxyConfig=None):
                     else:
                         flushPrint('')
 
-                    writeJSON = getJSONWriter(args, size, link, tunnelType, e2ee=e2eeEnabled)
-                    if writeJSON:
-                        writeJSON() # P2P mode, write before start server.
-
                 try:
                     # Get maxDownloads and timeout values
                     maxDownloads = args.maxDownloads
@@ -410,7 +456,9 @@ def processFileSharing(args, proxyConfig=None):
                     webRTCManagerClass = WebRTCManager
                     if settingsGetter.hasFeaturesSupport():
                         handlerClass = featureManager.getDownloadHandlerClass(handlerClass)
-                        webRTCManagerClass = featureManager.getWebRTCManagerClass(webRTCManagerClass, forceRelay=args.forceRelay)
+                        webRTCManagerClass = featureManager.getWebRTCManagerClass(
+                            webRTCManagerClass, forceRelay=args.forceRelay
+                        )
 
                     # Get auth credentials from args - password enables auth
                     authPassword = args.authPassword
@@ -435,10 +483,13 @@ def processFileSharing(args, proxyConfig=None):
                 # If we used pull upload, publish the link after server ends
                 if uploadMethod and uploadResult and uploadResult.success:
                     uploadMethod.publish(uploadResult)
-
-                    writeJSON = getJSONWriter(args, size, uploadResult.link, tunnelType, e2ee=e2eeEnabled)
-                    if writeJSON:
-                        writeJSON()
+                    FFLEvent.shareLinkCreate.trigger(
+                        link=uploadResult.link,
+                        filePath=args.file,
+                        fileSize=size,
+                        tunnelType=tunnelType,
+                        e2ee=e2eeEnabled
+                    )
                     return 0
         else:
             sendException(logger, 'User email address has been lost')
@@ -610,6 +661,12 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         flushPrint('\nExiting on user request (Ctrl+C)...')
         sys.exit(0) # Exit with success code
+    except TunnelUnavailableError as e:
+        sendException(
+            logger, 'Tunnel server temporarily unavailable. '
+            'See https://github.com/nuwainfo/ffl#3--using-tunnels for alternative tunnels.'
+        )
+        sys.exit(1)
     except (requests.exceptions.ConnectionError, ConnectionError) as e:
         sendException(logger, 'Failed to connect server')
         sys.exit(1)

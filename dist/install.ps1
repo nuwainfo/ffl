@@ -4,7 +4,7 @@ $ErrorActionPreference = "Stop"
 $repoOwner = "nuwainfo"
 $repoName  = "ffl"
 $app       = "ffl"
-$releaseTag = "v3.7.5"  # Default release version
+$releaseTag = "v3.7.6"  # Default release version
 
 # Overridables: FFL_VERSION, FFL_VARIANT(native|com), FFL_PREFIX
 $tag     = if ([string]::IsNullOrWhiteSpace($env:FFL_VERSION)) { $releaseTag } else { $env:FFL_VERSION }

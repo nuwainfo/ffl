@@ -318,6 +318,13 @@ def configureCLIParser():
             help="Enable end-to-end encryption for file sharing (both HTTP and WebRTC)",
             dest="e2ee"
         )
+        parser.add_argument(
+            "--invite",
+            action="store_true",
+            default=False,
+            help="Open invite page in browser with the sharing link",
+            dest="invite"
+        )
 
         # Allow addons to register additional arguments for share command
         FFLEvent.cliArgumentsShareOptionsRegister.trigger(parser=parser)
