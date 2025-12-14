@@ -19,7 +19,7 @@ AFAIK, `ffl` is the only CLI file-transfer tool that does all of the following:
 
 👉 **Official site:** <https://fastfilelink.com>  
 
-This simple demo shows how I sent `ffl.com` from **Windows (x64)** to **Android (arm64)** and used it directly to transfer photos back.
+This simple demo shows how I sent `ffl.com` from **Windows (x64)** to **Android (arm64)** and **used it directly** to transfer photos back.
 
 ![Demo](dist/demo.gif)
 
