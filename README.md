@@ -18,9 +18,8 @@ AFAIK, `ffl` is the only CLI file-transfer tool that does all of the following:
 - ☁️ **Optional temporary upload to server** (licensed feature) when both sides can’t be online simultaneously
 
 👉 **Official site:** <https://fastfilelink.com>  
-👉 **Technical details:** [*Technical FAQ*](https://fastfilelink.com/static/blog/technical_faqs.html)
 
-This simple demo shows how I sent `ffl.com` from Windows to my phone and then transferred photos back.
+This simple demo shows how I sent `ffl.com` from **Windows (x64)** to **Android (arm64)** and used it directly to transfer photos back.
 
 ![Demo](dist/demo.gif)
 
