@@ -50,6 +50,7 @@ Workflows like this also pair naturally with tools such as [llamafile](https://g
   - [3. Using Tunnels](#3--using-tunnels)
   - [4. Downloading with ffl](#4--downloading-with-ffl-wget-replacement)
   - [5. Server Upload (Licensed)](#5--upload-and-share-via-server-licensed-feature)
+- [Privacy & Security](#privacy--security)
 - [How it Works & Motivation](#how-it-works--motivation)
 - [Open Source & Contributing](#open-source--contributing)
 - [Acknowledgements](#acknowledgements)
@@ -185,7 +186,7 @@ These options work for both **sharing** and **downloading**:
                         - socks5://user:pass@host:port
                         - http://user:pass@host:port
   --log-level LEVEL     Set logging level (DEBUG, INFO, WARNING, ERROR) or path to config file.
-  --enable-reporting    Enable error reporting to FastFileLink server for diagnostics.
+  --enable-reporting    Enable error reporting to FastFileLink server for diagnostics. *Disabled by default.*
   --version             Show version information and enabled addons.
 ```
 
@@ -542,6 +543,29 @@ ffl login     # Login with email and OTP
 ffl status    # Check account status & points
 ffl logout    # Logout and clear credentials
 ```
+
+
+## Privacy & Security
+
+**We believe privacy should be the default, not an option you have to dig for.**
+
+### 🔒 Zero Telemetry by Default
+
+`ffl` does not collect usage data, hardware stats, or “phone home” in the background.
+
+While Sentry (error tracking) is included in the binary, **error reporting is strictly disabled by default**. No crash logs or diagnostic data are sent to us unless you explicitly run with `--enable-reporting` to help debug a specific issue.
+
+> If you prefer a clean binary, please refer to [Open Source & Contributing](#open-source--contributing).
+
+### 🛡️ Additional Security Controls
+
+For maximum privacy and security, `ffl` provides:
+
+* **[End-to-End Encryption](#1--end-to-end-encryption--authentication)** — Relays (ours or third-party) cannot read your data
+* **[Password Protection](#1--end-to-end-encryption--authentication)** — HTTP Basic Auth for download links
+* **[Tor Support](#%EF%B8%8F-ultimate-privacy--anonymity-tor--e2ee)** — Route traffic through Tor via SOCKS5 for IP-level anonymity
+
+See [Features & Advanced Usage](#features--advanced-usage) for complete details.
 
 ## How it works & Motivation
 
