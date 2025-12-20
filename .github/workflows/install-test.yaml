@@ -22,6 +22,9 @@ jobs:
             ape: ffl
           - variant: com
             ape: fflo
+          - variant: com
+            ape: fflo
+            target: 1
     steps:
       - uses: actions/checkout@v4
       - name: Install deps
@@ -32,6 +35,7 @@ jobs:
         env:
           FFL_VARIANT: ${{ matrix.variant }}
           FFL_APE: ${{ matrix.ape }}
+          FFL_TARGET: ${{ matrix.target && '/tmp/ffl_target_test' || '' }}
         run: |
           set -eux
           bash ./dist/install.sh
@@ -39,8 +43,13 @@ jobs:
         env:
           FFL_VARIANT: ${{ matrix.variant }}
           FFL_APE: ${{ matrix.ape }}
+          FFL_TARGET: ${{ matrix.target && '/tmp/ffl_target_test' || '' }}
         run: |
           set -eux
+          if [ -n "${FFL_TARGET:-}" ]; then
+            "${FFL_TARGET}" --version || true
+            exit 0
+          fi
           which ffl || true
           if [ "${FFL_VARIANT}" = "com" ] && [ -n "${FFL_APE:-}" ]; then
             if command -v "${FFL_APE}.com" >/dev/null 2>&1; then
@@ -64,12 +73,16 @@ jobs:
             ape: ffl
           - variant: com
             ape: fflo
+          - variant: com
+            ape: fflo
+            target: 1
     steps:
       - uses: actions/checkout@v4
       - name: Run installer (local)
         env:
           FFL_VARIANT: ${{ matrix.variant }}
           FFL_APE: ${{ matrix.ape }}
+          FFL_TARGET: ${{ matrix.target && '/tmp/ffl_target_test' || '' }}
         run: |
           set -eux
           bash ./dist/install.sh
@@ -77,8 +90,13 @@ jobs:
         env:
           FFL_VARIANT: ${{ matrix.variant }}
           FFL_APE: ${{ matrix.ape }}
+          FFL_TARGET: ${{ matrix.target && '/tmp/ffl_target_test' || '' }}
         run: |
           set -eux
+          if [ -n "${FFL_TARGET:-}" ]; then
+            "${FFL_TARGET}" --version || true
+            exit 0
+          fi
           if [ "${FFL_VARIANT}" = "com" ] && [ -n "${FFL_APE:-}" ]; then
             if command -v "${FFL_APE}.com" >/dev/null 2>&1; then
               "${FFL_APE}.com" --version || true
@@ -100,6 +118,9 @@ jobs:
             ape: ffl
           - variant: com
             ape: fflo
+          - variant: com
+            ape: fflo
+            target: 1
     steps:
       - uses: actions/checkout@v4
       - name: Run installer (local)
@@ -107,6 +128,7 @@ jobs:
         env:
           FFL_VARIANT: ${{ matrix.variant }}
           FFL_APE: ${{ matrix.ape }}
+          FFL_TARGET: ${{ matrix.target && format('{0}\ffl_target_test.com', env.TEMP) || '' }}
         run: |
           $ErrorActionPreference = "Stop"
           pwsh -File ./dist/install.ps1
@@ -115,7 +137,18 @@ jobs:
         env:
           FFL_VARIANT: ${{ matrix.variant }}
           FFL_APE: ${{ matrix.ape }}
+          FFL_TARGET: ${{ matrix.target && format('{0}\ffl_target_test.com', env.TEMP) || '' }}
         run: |
+          $ErrorActionPreference = "Stop"
+          if (-not [string]::IsNullOrWhiteSpace($env:FFL_TARGET)) {
+            if (Test-Path $env:FFL_TARGET) {
+              & $env:FFL_TARGET --version
+            } else {
+              throw "FFL_TARGET not found: $($env:FFL_TARGET)"
+            }
+            exit 0
+          }
+
           $dest = Join-Path $env:LOCALAPPDATA "Programs\ffl"
           Write-Host "Dest: $dest"
           if ("${{ matrix.variant }}" -eq "com") {

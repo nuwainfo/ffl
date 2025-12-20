@@ -6,11 +6,12 @@ $repoName  = "ffl"
 $app       = "ffl"
 $releaseTag = "v3.7.6"  # Default release version
 
-# Overridables: FFL_VERSION, FFL_VARIANT(native|com), FFL_APE(ffl|fflo|ffl.com|fflo.com), FFL_PREFIX
+# Overridables: FFL_VERSION, FFL_VARIANT(native|com), FFL_APE(ffl|fflo|ffl.com|fflo.com), FFL_PREFIX, FFL_TARGET (install full path, e.g. C:\abc\ffl_123)
 $tag     = if ([string]::IsNullOrWhiteSpace($env:FFL_VERSION)) { $releaseTag } else { $env:FFL_VERSION }
 $variant = if ([string]::IsNullOrWhiteSpace($env:FFL_VARIANT)) { "native" } else { $env:FFL_VARIANT }
 $apeName = if ([string]::IsNullOrWhiteSpace($env:FFL_APE)) { "ffl.com" } else { $env:FFL_APE }
 if ($apeName -notmatch '\.com$') { $apeName = "$apeName.com" }
+$target = $env:FFL_TARGET
 
 # Architecture detection
 $arch = "amd64"
@@ -103,80 +104,126 @@ $packagePath = Join-Path $env:TEMP $asset.name
 Invoke-WebRequest -UseBasicParsing -Uri $asset.browserDownloadUrl -OutFile $packagePath
 
 # 4) Install directory
-$installDir = if ($env:FFL_PREFIX) { Join-Path $env:FFL_PREFIX 'bin' } else { Join-Path $env:LOCALAPPDATA "Programs\$app" }
+if (-not [string]::IsNullOrWhiteSpace($target)) {
+  $installDir = Split-Path -Parent $target
+} else {
+  $installDir = if ($env:FFL_PREFIX) { Join-Path $env:FFL_PREFIX 'bin' } else { Join-Path $env:LOCALAPPDATA "Programs\$app" }
+}
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
 # 5) Deploy
 if ($variant -eq "com") {
   if ($asset.name -match '\.com$') {
-    Copy-Item $packagePath (Join-Path $installDir "$app.com") -Force
+    if (-not [string]::IsNullOrWhiteSpace($target)) {
+      if ([string]::IsNullOrWhiteSpace([System.IO.Path]::GetExtension($target))) { $target = "$target.com" }
+      Copy-Item $packagePath $target -Force
+      $binaryPath = Get-Item $target
+    } else {
+      Copy-Item $packagePath (Join-Path $installDir "$app.com") -Force
+      $binaryPath = Get-ChildItem -Path $installDir -Filter "$app.com" -Recurse | Select-Object -First 1
+    }
   } elseif ($asset.name -match '\.zip$') {
     expandZipArchive $packagePath $installDir
+    if (-not [string]::IsNullOrWhiteSpace($target)) {
+      if ([string]::IsNullOrWhiteSpace([System.IO.Path]::GetExtension($target))) { $target = "$target.com" }
+      $found = Get-ChildItem -Path $installDir -Filter "$app.com" -Recurse | Select-Object -First 1
+      if (-not $found) { Get-ChildItem -Recurse $installDir | Write-Host; throw "$app.com not found under $installDir" }
+      Copy-Item $found.FullName $target -Force
+      $binaryPath = Get-Item $target
+    } else {
+      $binaryPath = Get-ChildItem -Path $installDir -Filter "$app.com" -Recurse | Select-Object -First 1
+    }
   } else {
     throw "ffl.com packaged as tar.gz is not supported on Windows installer; please publish .com or .zip"
   }
 
-  $binaryPath = Get-ChildItem -Path $installDir -Filter "$app.com" -Recurse | Select-Object -First 1
   if (-not $binaryPath) {
     Get-ChildItem -Recurse $installDir | Write-Host
     throw "$app.com not found under $installDir"
   }
 
-  # shim: ffl.cmd -> ffl.com (handy for Command Prompt / new shells)
-  $shimPath = Join-Path $installDir "ffl.cmd"
+  if ([string]::IsNullOrWhiteSpace($target)) {
+    # shim: ffl.cmd -> ffl.com (handy for Command Prompt / new shells)
+    $shimPath = Join-Path $installDir "ffl.cmd"
 @"
 @echo off
 "%~dp0ffl.com" %*
 "@ | Out-File -Encoding ascii -FilePath $shimPath -Force
 
-  Write-Host "Installed (com) to $installDir"
+    Write-Host "Installed (com) to $installDir"
 
-  # Make available immediately in current step
-  if (-not (($env:Path -split ";") -contains $installDir)) {
-    $env:Path = ($env:Path + ";" + $installDir).Trim(";")
-  }
-  # If running in GitHub Actions, also expose to subsequent steps
-  if ($env:GITHUB_PATH) {
-    Add-Content -Path $env:GITHUB_PATH -Value $installDir
+    # Make available immediately in current step
+    if (-not (($env:Path -split ";") -contains $installDir)) {
+      $env:Path = ($env:Path + ";" + $installDir).Trim(";")
+    }
+    # If running in GitHub Actions, also expose to subsequent steps
+    if ($env:GITHUB_PATH) {
+      Add-Content -Path $env:GITHUB_PATH -Value $installDir
+    }
+  } else {
+    Write-Host "Installed (com) to $target"
   }
 
 } else {
   if (isPeExecutable $packagePath) {
-    $exePath = Join-Path $installDir "$app.exe"
-    Copy-Item $packagePath $exePath -Force
+    if (-not [string]::IsNullOrWhiteSpace($target)) {
+      if ([string]::IsNullOrWhiteSpace([System.IO.Path]::GetExtension($target))) { $target = "$target.exe" }
+      Copy-Item $packagePath $target -Force
+      $binaryPath = Get-Item $target
+    } else {
+      $exePath = Join-Path $installDir "$app.exe"
+      Copy-Item $packagePath $exePath -Force
+    }
   } else {
     expandZipArchive $packagePath $installDir
+    if (-not [string]::IsNullOrWhiteSpace($target)) {
+      if ([string]::IsNullOrWhiteSpace([System.IO.Path]::GetExtension($target))) { $target = "$target.exe" }
+      $found = Get-ChildItem -Path $installDir -Filter "$app.exe" -Recurse | Select-Object -First 1
+      if (-not $found) { Get-ChildItem -Recurse $installDir | Write-Host; throw "$app.exe not found under $installDir" }
+      Copy-Item $found.FullName $target -Force
+      $binaryPath = Get-Item $target
+    }
   }
 
-  $binaryPath = Get-ChildItem -Path $installDir -Filter "$app.exe" -Recurse | Select-Object -First 1
-  if (-not $binaryPath) {
-    Get-ChildItem -Recurse $installDir | Write-Host
-    throw "$app.exe not found under $installDir"
-  }
+  if ([string]::IsNullOrWhiteSpace($target)) {
+    $binaryPath = Get-ChildItem -Path $installDir -Filter "$app.exe" -Recurse | Select-Object -First 1
+    if (-not $binaryPath) {
+      Get-ChildItem -Recurse $installDir | Write-Host
+      throw "$app.exe not found under $installDir"
+    }
 
-  Write-Host "Installed (native) to $installDir"
+    Write-Host "Installed (native) to $installDir"
 
-  if (-not (($env:Path -split ";") -contains $installDir)) {
-    $env:Path = ($env:Path + ";" + $installDir).Trim(";")
-  }
-  if ($env:GITHUB_PATH) {
-    Add-Content -Path $env:GITHUB_PATH -Value $installDir
+    if (-not (($env:Path -split ";") -contains $installDir)) {
+      $env:Path = ($env:Path + ";" + $installDir).Trim(";")
+    }
+    if ($env:GITHUB_PATH) {
+      Add-Content -Path $env:GITHUB_PATH -Value $installDir
+    }
+  } else {
+    Write-Host "Installed (native) to $target"
   }
 }
 
 # 6) PATH (user scope, for future shells)
-$userPath = [Environment]::GetEnvironmentVariable("Path","User")
-if (-not (($userPath -split ";") -contains $installDir)) {
-  [Environment]::SetEnvironmentVariable("Path", ($userPath + ";" + $installDir).Trim(";"), "User")
-  Write-Host "PATH updated (user scope). Open a new terminal to use 'ffl'."
+if ([string]::IsNullOrWhiteSpace($target)) {
+  $userPath = [Environment]::GetEnvironmentVariable("Path","User")
+  if (-not (($userPath -split ";") -contains $installDir)) {
+    [Environment]::SetEnvironmentVariable("Path", ($userPath + ";" + $installDir).Trim(";"), "User")
+    Write-Host "PATH updated (user scope). Open a new terminal to use 'ffl'."
+  }
 }
 
-# 7) Verify (use ffl.com when variant=com)
+# 7) Verify (use installed target when FFL_TARGET is set)
 try {
-  if ($variant -eq "com") {
-    & (Join-Path $installDir "$app.com") --version | Out-Host
-  } else {
+  if (-not [string]::IsNullOrWhiteSpace($target)) {
     & $binaryPath.FullName --version | Out-Host
+  } else {
+    if ($variant -eq "com") {
+      & (Join-Path $installDir "$app.com") --version | Out-Host
+    } else {
+      & $binaryPath.FullName --version | Out-Host
+    }
   }
 } catch {
   Write-Warning "Running version command failed: $($_.Exception.Message)"

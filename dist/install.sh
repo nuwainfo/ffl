@@ -6,10 +6,11 @@ REPO_NAME="ffl"
 APP="ffl"
 RELEASE_TAG="v3.7.6"  # Default release version
 
-# Overridables: FFL_VERSION (e.g. v3.6.2), FFL_VARIANT (native|glibc|manylinux|com), FFL_APE (ffl|fflo|ffl.com|fflo.com), FFL_PREFIX (install prefix)
+# Overridables: FFL_VERSION (e.g. v3.6.2), FFL_VARIANT (native|glibc|manylinux|com), FFL_APE (ffl|fflo|ffl.com|fflo.com), FFL_PREFIX (install prefix), FFL_TARGET (install full path, e.g. /abc/ffl_123)
 tag="${FFL_VERSION:-$RELEASE_TAG}"
 variant="${FFL_VARIANT:-native}"
 prefix="${FFL_PREFIX:-}"
+target="${FFL_TARGET:-}"
 ape="${FFL_APE:-ffl.com}"
 if [[ "$ape" != *.com ]]; then ape="${ape}.com"; fi
 
@@ -207,7 +208,9 @@ else
 fi
 
 # 4) Install location
-if [ -n "$prefix" ]; then
+if [ -n "$target" ]; then
+  installDir="$(dirname "$target")"
+elif [ -n "$prefix" ]; then
   installDir="$prefix/bin"
 elif [ -w /usr/local/bin ]; then
   installDir="/usr/local/bin"
@@ -285,7 +288,11 @@ extractArchive() {
 # 5) Install
 if [[ "$variant" == "com" ]]; then
   if [[ "$assetName" =~ \.com$ ]]; then
-    installBinary "$downloadFile" "$installDir/$APP.com"
+    if [ -n "$target" ]; then
+      installBinary "$downloadFile" "$target"
+    else
+      installBinary "$downloadFile" "$installDir/$APP.com"
+    fi
   else
     unpackDir="$tmpDir/unpack"
     extractArchive "$downloadFile" "$unpackDir"
@@ -298,8 +305,14 @@ if [[ "$variant" == "com" ]]; then
 
     case "$binaryPath" in
       *.com)
-        installBinary "$binaryPath" "$installDir/$APP.com"
-        ln -sf "$APP.com" "$installDir/$APP"
+        if [ -n "$target" ]; then
+          installBinary "$binaryPath" "$target"
+        else
+          installBinary "$binaryPath" "$installDir/$APP.com"
+        fi
+        if [ -z "$target" ]; then
+          ln -sf "$APP.com" "$installDir/$APP"
+        fi
         ;;
       *.exe)
         installBinary "$binaryPath" "$installDir/$APP"
@@ -309,7 +322,9 @@ if [[ "$variant" == "com" ]]; then
         ;;
     esac
   fi
-  ln -sf "$APP.com" "$installDir/$APP" 2>/dev/null || true
+  if [ -z "$target" ]; then
+    ln -sf "$APP.com" "$installDir/$APP" 2>/dev/null || true
+  fi
 else
   unpackDir="$tmpDir/unpack"
   extractArchive "$downloadFile" "$unpackDir"
@@ -336,5 +351,7 @@ else
 
   chmod +x "$binaryPath" || true
   # Always install as unified name "ffl"
-  installBinary "$binaryPath" "$installDir/$APP"
+  destPath="$installDir/$APP"
+  if [ -n "$target" ]; then destPath="$target"; fi
+  installBinary "$binaryPath" "$destPath"
 fi
