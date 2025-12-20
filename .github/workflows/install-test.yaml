@@ -13,8 +13,15 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        variant: [native, manylinux, com]
+        include:
+          - variant: native
+          - variant: manylinux
+          - variant: com
+            ape: ffl
+          - variant: com
+            ape: fflo
     steps:
       - uses: actions/checkout@v4
       - name: Install deps
@@ -24,61 +31,106 @@ jobs:
       - name: Run installer (local)
         env:
           FFL_VARIANT: ${{ matrix.variant }}
+          FFL_APE: ${{ matrix.ape }}
         run: |
           set -eux
           bash ./dist/install.sh
       - name: Verify
+        env:
+          FFL_VARIANT: ${{ matrix.variant }}
+          FFL_APE: ${{ matrix.ape }}
         run: |
           set -eux
           which ffl || true
-          ffl --version || true
+          if [ "${FFL_VARIANT}" = "com" ] && [ -n "${FFL_APE:-}" ]; then
+            if command -v "${FFL_APE}.com" >/dev/null 2>&1; then
+              "${FFL_APE}.com" --version || true
+            else
+              # if installer created `ffl` symlink, still allow `ffl --version`
+              ffl --version || true
+            fi
+          else
+            ffl --version || true
+          fi
 
   macos:
     runs-on: macos-latest
     strategy:
+      fail-fast: false
       matrix:
-        variant: [native, com]
+        include:
+          - variant: native
+          - variant: com
+            ape: ffl
+          - variant: com
+            ape: fflo
     steps:
       - uses: actions/checkout@v4
       - name: Run installer (local)
         env:
           FFL_VARIANT: ${{ matrix.variant }}
+          FFL_APE: ${{ matrix.ape }}
         run: |
           set -eux
           bash ./dist/install.sh
       - name: Verify
+        env:
+          FFL_VARIANT: ${{ matrix.variant }}
+          FFL_APE: ${{ matrix.ape }}
         run: |
           set -eux
-          ffl --version || true
+          if [ "${FFL_VARIANT}" = "com" ] && [ -n "${FFL_APE:-}" ]; then
+            if command -v "${FFL_APE}.com" >/dev/null 2>&1; then
+              "${FFL_APE}.com" --version || true
+            else
+              ffl --version || true
+            fi
+          else
+            ffl --version || true
+          fi
 
   windows:
     runs-on: windows-latest
     strategy:
+      fail-fast: false
       matrix:
-        variant: [native, com]
+        include:
+          - variant: native
+          - variant: com
+            ape: ffl
+          - variant: com
+            ape: fflo
     steps:
       - uses: actions/checkout@v4
       - name: Run installer (local)
         shell: pwsh
         env:
           FFL_VARIANT: ${{ matrix.variant }}
+          FFL_APE: ${{ matrix.ape }}
         run: |
           $ErrorActionPreference = "Stop"
           pwsh -File ./dist/install.ps1
       - name: Verify
         shell: pwsh
+        env:
+          FFL_VARIANT: ${{ matrix.variant }}
+          FFL_APE: ${{ matrix.ape }}
         run: |
           $dest = Join-Path $env:LOCALAPPDATA "Programs\ffl"
           Write-Host "Dest: $dest"
-          if ("${{ matrix.variant }}" -eq "com") {
-            if (Test-Path (Join-Path $dest "ffl.com")) {
-              & (Join-Path $dest "ffl.com") --version
+          if ($env:FFL_VARIANT -eq "com") {
+            $ape = $env:FFL_APE
+            if ([string]::IsNullOrWhiteSpace($ape)) { $ape = "ffl" }
+            $comPath = Join-Path $dest ("{0}.com" -f $ape)
+            if (Test-Path $comPath) {
+              & $comPath --version
             } else {
-              throw "ffl.com not found under $dest"
+              throw ("{0} not found under {1}" -f (Split-Path $comPath -Leaf), $dest)
             }
           } else {
-            if (Test-Path (Join-Path $dest "ffl.exe")) {
-              & (Join-Path $dest "ffl.exe") --version
+            $exePath = Join-Path $dest "ffl.exe"
+            if (Test-Path $exePath) {
+              & $exePath --version
             } else {
               throw "ffl.exe not found under $dest"
             }

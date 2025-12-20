@@ -6,9 +6,11 @@ $repoName  = "ffl"
 $app       = "ffl"
 $releaseTag = "v3.7.6"  # Default release version
 
-# Overridables: FFL_VERSION, FFL_VARIANT(native|com), FFL_PREFIX
+# Overridables: FFL_VERSION, FFL_VARIANT(native|com), FFL_APE(ffl|fflo|ffl.com|fflo.com), FFL_PREFIX
 $tag     = if ([string]::IsNullOrWhiteSpace($env:FFL_VERSION)) { $releaseTag } else { $env:FFL_VERSION }
 $variant = if ([string]::IsNullOrWhiteSpace($env:FFL_VARIANT)) { "native" } else { $env:FFL_VARIANT }
+$apeName = if ([string]::IsNullOrWhiteSpace($env:FFL_APE)) { "ffl.com" } else { $env:FFL_APE }
+if ($apeName -notmatch '\.com$') { $apeName = "$apeName.com" }
 
 # Architecture detection
 $arch = "amd64"
@@ -76,7 +78,10 @@ foreach ($match in $matches) {
 }
 
 function pickComAsset {
-  $assets | Where-Object { $_.name -match 'ffl\.com($|\.zip$|\.tar\.gz$)' } | Select-Object -First 1
+  $esc = [regex]::Escape($apeName)
+  $asset = $assets | Where-Object { $_.name -match ("^" + $esc + '($|\.zip$|\.tar\.gz$)') } | Select-Object -First 1
+  if (-not $asset -and $apeName -ne "ffl.com") { $asset = $assets | Where-Object { $_.name -match '^ffl\.com($|\.zip$|\.tar\.gz$)' } | Select-Object -First 1 }
+  $asset
 }
 
 function pickNativeAsset {

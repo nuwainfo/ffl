@@ -6,10 +6,12 @@ REPO_NAME="ffl"
 APP="ffl"
 RELEASE_TAG="v3.7.6"  # Default release version
 
-# Overridables: FFL_VERSION (e.g. v3.6.2), FFL_VARIANT (native|glibc|manylinux|com), FFL_PREFIX (install prefix)
+# Overridables: FFL_VERSION (e.g. v3.6.2), FFL_VARIANT (native|glibc|manylinux|com), FFL_APE (ffl|fflo|ffl.com|fflo.com), FFL_PREFIX (install prefix)
 tag="${FFL_VERSION:-$RELEASE_TAG}"
 variant="${FFL_VARIANT:-native}"
 prefix="${FFL_PREFIX:-}"
+ape="${FFL_APE:-ffl.com}"
+if [[ "$ape" != *.com ]]; then ape="${ape}.com"; fi
 
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"   # linux/darwin
 archRaw="$(uname -m)"
@@ -109,7 +111,8 @@ chooseAsset() {
     [ -z "$name" ] && continue
     case "$targetVariant" in
       com)
-        if [[ "$name" =~ ffl\.com($|\.zip$|\.tar\.gz$) ]]; then
+        apeRe="${ape//./\\.}"
+        if [[ "$name" =~ ${apeRe}($|\.zip$|\.tar\.gz$) ]]; then
           selectedAsset="$name"
           break
         fi
@@ -164,12 +167,17 @@ chooseAsset() {
 
 assetName="$(chooseAsset "$os" "$arch" "$variant")"
 
-# Linux: if no matching glibc archive (e.g., musl), fallback to APE ffl.com automatically
+# Linux: if no matching glibc archive (e.g., musl), fallback to APE automatically
 if [ -z "$assetName" ] && [ "$os" = "linux" ]; then
-  if printf '%s\n' "$namesList" | grep -qiE '^ffl\.com$|/ffl\.com$'; then
+  apeEsc="${ape//./\\.}"
+  if printf '%s\n' "$namesList" | grep -qiE "^${apeEsc}$|/${apeEsc}$"; then
+    assetName="$ape"
+    variant="com"
+    echo "No compatible glibc archive; falling back to APE ($ape)"
+  elif [ "$ape" != "ffl.com" ] && printf '%s\n' "$namesList" | grep -qiE '^ffl\.com$|/ffl\.com$'; then
     assetName="ffl.com"
     variant="com"
-    echo "No compatible glibc archive; falling back to APE (ffl.com)"
+    echo "No compatible glibc archive; requested APE ($ape) not found; falling back to APE (ffl.com)"
   fi
 fi
 
