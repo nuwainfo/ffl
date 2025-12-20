@@ -118,19 +118,15 @@ jobs:
         run: |
           $dest = Join-Path $env:LOCALAPPDATA "Programs\ffl"
           Write-Host "Dest: $dest"
-          if ($env:FFL_VARIANT -eq "com") {
-            $ape = $env:FFL_APE
-            if ([string]::IsNullOrWhiteSpace($ape)) { $ape = "ffl" }
-            $comPath = Join-Path $dest ("{0}.com" -f $ape)
-            if (Test-Path $comPath) {
-              & $comPath --version
+          if ("${{ matrix.variant }}" -eq "com") {
+            if (Test-Path (Join-Path $dest "ffl.com")) {
+              & (Join-Path $dest "ffl.com") --version
             } else {
-              throw ("{0} not found under {1}" -f (Split-Path $comPath -Leaf), $dest)
+              throw "ffl.com not found under $dest"
             }
           } else {
-            $exePath = Join-Path $dest "ffl.exe"
-            if (Test-Path $exePath) {
-              & $exePath --version
+            if (Test-Path (Join-Path $dest "ffl.exe")) {
+              & (Join-Path $dest "ffl.exe") --version
             } else {
               throw "ffl.exe not found under $dest"
             }
