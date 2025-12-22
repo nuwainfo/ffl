@@ -93,7 +93,11 @@ function Add-ToUserPath($directory) {
 
 function Install-Binary($sourcePath, $destPath) {
   Copy-Item $sourcePath $destPath -Force
-  Write-Host "Installed to $destPath"
+
+  # Suppress install location messages during upgrade
+  if ([string]::IsNullOrWhiteSpace($env:FFL_UPGRADE)) {
+    Write-Host "Installed to $destPath"
+  }
 }
 
 function Get-InstallDir() {
@@ -186,9 +190,12 @@ function Install-ApeVariant($packagePath, $installDir) {
 "%~dp0$app.com" %*
 "@ | Out-File -Encoding ascii -FilePath $shimPath -Force
 
-    Write-Host "Installed (com) to $installDir"
+    # Suppress install location messages during upgrade
+    if ([string]::IsNullOrWhiteSpace($env:FFL_UPGRADE)) {
+      Write-Host "Installed (com) to $installDir"
+    }
     Add-ToPath $installDir
-  } else {
+  } elseif ([string]::IsNullOrWhiteSpace($env:FFL_UPGRADE)) {
     Write-Host "Installed (com) to $target"
   }
 
@@ -228,10 +235,13 @@ function Install-NativeVariant($packagePath, $installDir) {
     }
   }
 
+  # Suppress install location messages during upgrade
   if ([string]::IsNullOrWhiteSpace($target)) {
-    Write-Host "Installed (native) to $installDir"
+    if ([string]::IsNullOrWhiteSpace($env:FFL_UPGRADE)) {
+      Write-Host "Installed (native) to $installDir"
+    }
     Add-ToPath $installDir
-  } else {
+  } elseif ([string]::IsNullOrWhiteSpace($env:FFL_UPGRADE)) {
     Write-Host "Installed (native) to $target"
   }
 

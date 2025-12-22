@@ -210,12 +210,16 @@ determineInstallDir() {
 installBinary() {
   local sourcePath="$1" destPath="$2"
   install -m 0755 "$sourcePath" "$destPath"
-  echo "Installed to $destPath"
 
-  case ":$PATH:" in
-    *":$(dirname "$destPath"):"*) ;;
-    *) echo "Note: add $(dirname "$destPath") to PATH" ;;
-  esac
+  # Suppress install location messages during upgrade
+  if [ -z "${FFL_UPGRADE:-}" ]; then
+    echo "Installed to $destPath"
+
+    case ":$PATH:" in
+      *":$(dirname "$destPath"):"*) ;;
+      *) echo "Note: add $(dirname "$destPath") to PATH" ;;
+    esac
+  fi
 
   "$destPath" --version || true
 }
