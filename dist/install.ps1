@@ -147,7 +147,7 @@ function Install-ApeVariant($packagePath, $installDir) {
   if ($assetName -match '\.com$') {
     # Direct .com file
     $destPath = if (-not [string]::IsNullOrWhiteSpace($target)) {
-      if ([string]::IsNullOrWhiteSpace([System.IO.Path]::GetExtension($target))) { "$target.com" } else { $target }
+      $target
     } else {
       Join-Path $installDir "$app.com"
     }
@@ -166,9 +166,8 @@ function Install-ApeVariant($packagePath, $installDir) {
     }
 
     if (-not [string]::IsNullOrWhiteSpace($target)) {
-      $destPath = if ([string]::IsNullOrWhiteSpace([System.IO.Path]::GetExtension($target))) { "$target.com" } else { $target }
-      Install-Binary $found.FullName $destPath
-      $binaryPath = Get-Item $destPath
+      Install-Binary $found.FullName $target
+      $binaryPath = Get-Item $target
     } else {
       $binaryPath = $found
     }
@@ -208,7 +207,7 @@ function Install-NativeVariant($packagePath, $installDir) {
   if (Test-PeExecutable $packagePath) {
     # Direct executable file
     $destPath = if (-not [string]::IsNullOrWhiteSpace($target)) {
-      if ([string]::IsNullOrWhiteSpace([System.IO.Path]::GetExtension($target))) { "$target.exe" } else { $target }
+      $target
     } else {
       Join-Path $installDir "$app.exe"
     }
@@ -227,9 +226,8 @@ function Install-NativeVariant($packagePath, $installDir) {
     }
 
     if (-not [string]::IsNullOrWhiteSpace($target)) {
-      $destPath = if ([string]::IsNullOrWhiteSpace([System.IO.Path]::GetExtension($target))) { "$target.exe" } else { $target }
-      Install-Binary $found.FullName $destPath
-      $binaryPath = Get-Item $destPath
+      Install-Binary $found.FullName $target
+      $binaryPath = Get-Item $target
     } else {
       $binaryPath = $found
     }
