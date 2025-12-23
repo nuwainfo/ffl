@@ -10,6 +10,7 @@ RELEASE_TAG="v3.7.6"  # Default release version
 # FFL_VERSION: Version to install (e.g., v3.7.6)
 # FFL_VARIANT: Variant to install (native|glibc|manylinux|com)
 # FFL_APE: APE binary name (ffl|fflo|ffl.com|fflo.com)
+# FFL_GLIBC: Force specific glibc version (2.39, 2.28) for Linux native variant
 # FFL_PREFIX: Install prefix directory
 # FFL_TARGET: Full install path (e.g., /abc/ffl_123)
 tag="${FFL_VERSION:-$RELEASE_TAG}"
@@ -17,6 +18,7 @@ variant="${FFL_VARIANT:-native}"
 prefix="${FFL_PREFIX:-}"
 target="${FFL_TARGET:-}"
 ape="${FFL_APE:-ffl.com}"
+glibc="${FFL_GLIBC:-}"
 [[ "$ape" != *.com ]] && ape="${ape}.com"
 
 # Platform detection
@@ -91,6 +93,12 @@ isVersionGreaterOrEqual() {
 }
 
 pickGlibcBaseline() {
+  # Check if FFL_GLIBC is explicitly set (for upgrades)
+  if [ -n "${glibc:-}" ]; then
+    echo "$glibc"
+    return
+  fi
+
   local systemVersion="$(detectGlibcVersion)"
   local glibcTargets=("2.39" "2.28")
 
