@@ -28,7 +28,6 @@ from enum import Enum
 
 from bases.Kernel import PUBLIC_VERSION, Singleton, AddonsManager, getLogger
 
-
 DEFAULT_STATIC_ROOT = 'static'
 # Default static server for open source users - serves from local directory
 STATIC_SERVER = os.getenv('STATIC_SERVER', '.')
@@ -49,10 +48,10 @@ INVITE_URL = 'https://fastfilelink.com/invite'
 COPYRIGHT = 'Copyright (c) 2025 FastFileLink Contributors. Licensed under Apache-2.0.'
 
 # Default footer message HTML for open source users (entire HTML block)
-FOOTER_MESSAGE_HTML = """<span data-i18n="footer.message">
+FOOTER_MESSAGE_HTML = """<span data-i18n="Download:downloadFooter.message">
 PS: Wishing you a great day! Download your free file sharing app at</span> 
 <a href="https://github.com/nuwainfo/ffl" target="_blank">GitHub</a>
-<span data-i18n="footer.period">.</span>
+<span data-i18n="Common:period">.</span>
 """
 
 RETENTION_TIMES = {
@@ -69,11 +68,13 @@ RETENTION_TIMES = {
 DEFAULT_AUTH_USER_NAME = 'ffl'
 DEFAULT_UPLOAD_DURATION = '6 hours'
 
+
 class ExecutionMode(Enum):
     """Enum representing the execution environment mode"""
     PURE_PYTHON = 1
     COSMOPOLITAN_LIBC = 2
     EXECUTABLE = 3
+
 
 logger = getLogger(__name__)
 
