@@ -28,6 +28,7 @@ from enum import Enum
 
 from bases.Kernel import PUBLIC_VERSION, Singleton, AddonsManager, getLogger
 
+
 DEFAULT_STATIC_ROOT = 'static'
 # Default static server for open source users - serves from local directory
 STATIC_SERVER = os.getenv('STATIC_SERVER', '.')
@@ -54,9 +55,6 @@ PS: Wishing you a great day! Download your free file sharing app at</span>
 <span data-i18n="footer.period">.</span>
 """
 
-LANGUAGES = []
-# LANGUAGES = ['zh_TW', 'zh_CN']
-
 RETENTION_TIMES = {
     '3 hours': timedelta(hours=3),
     '6 hours': timedelta(hours=6),
@@ -71,13 +69,13 @@ RETENTION_TIMES = {
 DEFAULT_AUTH_USER_NAME = 'ffl'
 DEFAULT_UPLOAD_DURATION = '6 hours'
 
-logger = getLogger(__name__)
-
-
 class ExecutionMode(Enum):
+    """Enum representing the execution environment mode"""
     PURE_PYTHON = 1
     COSMOPOLITAN_LIBC = 2
     EXECUTABLE = 3
+
+logger = getLogger(__name__)
 
 
 # Dummy objects for consistent interface when Features addon is not available
@@ -229,6 +227,7 @@ class SettingsGetter(Singleton):
         baseDir=None,
         staticRoot=DEFAULT_STATIC_ROOT,
         platform=None,
+        exePath=None,
     ):
         """Initialize the SettingsGetter with execution mode and static root."""
         self._exeMode = exeMode
@@ -237,6 +236,7 @@ class SettingsGetter(Singleton):
         staticRoot = os.path.join(baseDir, staticRoot) if baseDir else staticRoot
         self._staticRoot = os.path.abspath(staticRoot)
         self._platform = platform
+        self._exePath = exePath
         self._featureManager = None # Cache for singleton FeatureManager
 
         self._addonsManager = AddonsManager.getInstance()
@@ -253,6 +253,10 @@ class SettingsGetter(Singleton):
     @property
     def staticRoot(self):
         return self._staticRoot
+
+    @property
+    def exePath(self):
+        return self._exePath
 
     def isRunOnExecutable(self) -> bool:
         return self._exeMode == ExecutionMode.EXECUTABLE

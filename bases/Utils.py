@@ -35,7 +35,8 @@ from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 
 from bases.Kernel import getLogger, PUBLIC_VERSION
-from bases.Settings import LANGUAGES, SettingsGetter
+from bases.Settings import SettingsGetter
+from bases.I18n import _
 
 ONE_KB = bitmath.KiB(1).bytes
 ONE_MB = bitmath.MiB(1).bytes
@@ -137,7 +138,7 @@ def copy2Clipboard(text):
             xclipBefore = list(filter(lambda p: p.name() == "xclip", psutil.process_iter(['pid'])))
 
         pyperclip.copy(text)
-        flushPrint('The link has been copied to the clipboard.')
+        flushPrint(_('The link has been copied to the clipboard.'))
 
         if isLinux:
             xclipAfter = list(filter(lambda p: p.name() == "xclip", psutil.process_iter(['pid'])))
@@ -146,8 +147,7 @@ def copy2Clipboard(text):
             for process in kill:
                 os.system(f"kill {process.pid}")
     except Exception as e:
-        logger.error(f"Clipboard error: {e}")
-        logger.exception(e)
+        logger.debug(f"Clipboard error: {e}")
 
 
 # https://github.com/chriskiehl/Gooey/issues/701
@@ -203,15 +203,6 @@ def formatSize(size, decimal=None, plural=None):
         return sizeStr.replace('Byte', ' Byte').replace('Bit', ' Byte')
 
 
-def detectOSLanguage():
-    language = locale.getdefaultlocale()[0]
-
-    if language in LANGUAGES:
-        return language
-    else:
-        return 'english'
-
-
 def getApplicationPath():
     return os.path.dirname(__file__)
 
@@ -259,13 +250,14 @@ def sendException(logger, e, action=None, errorPrefix="Oops, something went wron
     if action:
         flushPrint(action)
     else:
-        flushPrint('Please try again or try later.')
+        flushPrint(_('Please try again or try later.'))
 
     # Get dynamic support URL based on GUI support and user level
     settingsGetter = SettingsGetter.getInstance()
     supportURL = settingsGetter.getSupportURL()
-    flushPrint(f'\nIf you still get the same problem, please contact us at {supportURL}.')
-    flushPrint('We will fix the problem as soon as possible.\n')
+    flushPrint(_('\nIf you still get the same problem, please contact us at {supportURL}.').format(
+        supportURL=supportURL))
+    flushPrint(_('We will fix the problem as soon as possible.\n'))
 
     logger.exception(e)
 

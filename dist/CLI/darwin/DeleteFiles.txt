@@ -140,11 +140,9 @@ lib/python3.12/site-packages/packaging
 lib/python3.12/site-packages/PIL
 lib/python3.12/site-packages/pip
 lib/python3.12/site-packages/pkg_resources
-lib/python3.12/site-packages/psutil
 lib/python3.12/site-packages/pycparser
 lib/python3.12/site-packages/pygments
 lib/python3.12/site-packages/PyInstaller
-lib/python3.12/site-packages/pyperclip
 lib/python3.12/site-packages/readme_renderer
 lib/python3.12/site-packages/requests_toolbelt
 lib/python3.12/site-packages/rfc3986

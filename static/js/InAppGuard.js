@@ -264,23 +264,23 @@
 
         function getRecommendedBrowser() {
             if (ENV.isIOS) 
-                return iagT('inappguard.browsers.safari', 'Safari');
+                return iagT('Download:inappguard.browsers.safari', 'Safari');
             if (ENV.isAndroid) 
-                return iagT('inappguard.browsers.chrome', 'Chrome');
-            return iagT('inappguard.browsers.yourBrowser', 'your browser');
+                return iagT('Download:inappguard.browsers.chrome', 'Chrome');
+            return iagT('Download:inappguard.browsers.yourBrowser', 'your browser');
         }
 
         function getRestrictedMessage(action) {
-            const actionText = action || iagT('inappguard.actions.download', 'download');
+            const actionText = action || iagT('Download:inappguard.actions.download', 'download');
             const browser = getRecommendedBrowser();
             
             if (ENV.isIOS) {
-                return iagT('inappguard.messages.iosRestricted', 'To {{action}} this file, please open this link in {{browser}}. Tap the share button and select "Open in {{browser}}".', { action: actionText, browser: browser });
+                return iagT('Download:inappguard.messages.iosRestricted', 'To {{action}} this file, please open this link in {{browser}}. Tap the share button and select "Open in {{browser}}".', { action: actionText, browser: browser });
             }
             if (ENV.isAndroid) {
-                return iagT('inappguard.messages.androidRestricted', 'To {{action}} this file, please open this link in {{browser}}. Tap the menu button and select "Open in browser".', { action: actionText, browser: browser });
+                return iagT('Download:inappguard.messages.androidRestricted', 'To {{action}} this file, please open this link in {{browser}}. Tap the menu button and select "Open in browser".', { action: actionText, browser: browser });
             }
-            return iagT('inappguard.messages.generalRestricted', 'To {{action}} this file, please open this link in {{browser}}.', { action: actionText, browser: browser });
+            return iagT('Download:inappguard.messages.generalRestricted', 'To {{action}} this file, please open this link in {{browser}}.', { action: actionText, browser: browser });
         }
 
         // Initialize InApp Guard and handle UI warnings

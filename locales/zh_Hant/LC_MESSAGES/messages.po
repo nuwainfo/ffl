@@ -1,0 +1,826 @@
+# Chinese (Traditional) translations for PROJECT.
+# Copyright (C) 2025 ORGANIZATION
+# This file is distributed under the same license as the PROJECT project.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2025.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: PROJECT VERSION\n"
+"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
+"POT-Creation-Date: 2025-12-23 00:22+0800\n"
+"PO-Revision-Date: 2025-12-21 08:43+0800\n"
+"Last-Translator: \n"
+"Language: zh_TW\n"
+"Language-Team: zh_Hant <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.17.0\n"
+
+msgid "Opening invite page in browser..."
+msgstr "正在瀏覽器中開啟邀請頁面..."
+
+#, python-brace-format
+msgid "Sharing information saved to {jsonFile}"
+msgstr "分享資訊已儲存至 {jsonFile}"
+
+#, python-brace-format
+msgid "Failed to write JSON file: {error}"
+msgstr "無法寫入 JSON 檔案：{error}"
+
+#, python-brace-format
+msgid "{file} does not exist!"
+msgstr "{file} 不存在！"
+
+msgid "Error: Upload functionality requires Upload addon (addons/Upload.py)"
+msgstr "錯誤：上傳功能需要 Upload 附加元件 (addons/Upload.py)"
+
+msgid ""
+"If a firewall notification appears, please allow the application to "
+"connect.\n"
+msgstr "如果出現防火牆通知，請允許應用程式連線。\n"
+
+msgid ""
+"📁 Sharing folder as ZIP - please keep folder contents unchanged during "
+"transfer\n"
+msgstr "📁 以 ZIP 格式分享資料夾 - 請在傳輸過程中保持資料夾內容不變\n"
+
+msgid "🔐 End-to-end encryption enabled\n"
+msgstr "🔐 已啟用端對端加密\n"
+
+msgid "You can stop the upload at any time and resume it later.\n"
+msgstr "您可以隨時停止上傳並稍後繼續。\n"
+
+#, python-brace-format
+msgid ""
+"Upload paused at {percentage:.1f}% ({completedChunks}/{totalChunks} "
+"chunks completed)"
+msgstr "上傳已暫停於 {percentage:.1f}%（已完成 {completedChunks}/{totalChunks} 個區塊）"
+
+msgid "Use --resume to continue upload"
+msgstr "使用 --resume 繼續上傳"
+
+msgid ""
+"Resume is only available for direct upload mode (without external "
+"tunnels).\n"
+"Please restart the upload without --resume to upload the file normally."
+msgstr ""
+"繼續上傳僅適用於直接上傳模式（不使用外部通道）。\n"
+"請在不使用 --resume 的情況下重新啟動上傳以正常上傳檔案。"
+
+msgid ""
+"Pause functionality is only available for direct upload mode (without "
+"external tunnels).\n"
+"Please restart the upload without --pause to upload the file normally."
+msgstr ""
+"暫停功能僅適用於直接上傳模式（不使用外部通道）。\n"
+"請在不使用 --pause 的情況下重新啟動上傳以正常上傳檔案。"
+
+msgid ""
+"End-to-end encryption is only available for direct upload mode (without "
+"external tunnels).\n"
+"Please restart the upload without --e2ee to upload the file normally."
+msgstr ""
+"端對端加密僅適用於直接上傳模式（不使用外部通道）。\n"
+"請在不使用 --e2ee 的情況下重新啟動上傳以正常上傳檔案。"
+
+#, python-brace-format
+msgid ""
+"Cannot resume: {parameter} mismatch.\n"
+"Original upload used \"{originalValue}\" but \"{requestedValue}\" was "
+"requested.\n"
+"Please use the same parameters as the original upload."
+msgstr ""
+"無法繼續：{parameter} 不匹配。\n"
+"原始上傳使用 \"{originalValue}\"，但要求使用 \"{requestedValue}\"。\n"
+"請使用與原始上傳相同的參數。"
+
+msgid ""
+"Your user points are not enough. Please top up on our website "
+"(https://fastfilelink.com/)."
+msgstr "您的使用者點數不足。請在我們的網站上儲值 (https://fastfilelink.com/)。"
+
+msgid "Upload not allowed."
+msgstr "不允許上傳。"
+
+msgid "Retrying...\n"
+msgstr "正在重試...\n"
+
+msgid "Unable to create tunnel by your tunnel configuration."
+msgstr "無法使用您的通道配置建立通道。"
+
+#, python-brace-format
+msgid "Using tunnel: {tunnelType}"
+msgstr "使用通道：{tunnelType}"
+
+#, python-brace-format
+msgid "Establishing tunnel connection via proxy {proxyInfo}...\n"
+msgstr "正在透過代理 {proxyInfo} 建立通道連線...\n"
+
+msgid "Establishing tunnel connection...\n"
+msgstr "正在建立通道連線...\n"
+
+#, python-brace-format
+msgid "Upload failed: {error}"
+msgstr "上傳失敗：{error}"
+
+msgid "Unknown error"
+msgstr "未知錯誤"
+
+msgid ""
+"Please share the link below with the person you'd like to share the file "
+"with."
+msgstr "請將以下連結分享給您想要分享檔案的人。"
+
+#, python-brace-format
+msgid "Authentication enabled - Username: {authUser}\n"
+msgstr "已啟用身份驗證 - 使用者名稱：{authUser}\n"
+
+msgid ""
+"Please keep the application running so the recipient can download the "
+"file."
+msgstr "請保持應用程式運作，以便接收者可以下載檔案。"
+
+msgid "Press Ctrl+C to terminate the program when done.\n"
+msgstr "完成後請按 Ctrl+C 終止程式。\n"
+
+msgid ""
+"\n"
+"Exiting on user request (Ctrl+C)..."
+msgstr ""
+"\n"
+"應使用者要求退出 (Ctrl+C)..."
+
+msgid "User email address has been lost"
+msgstr "使用者電子郵件地址已遺失"
+
+#, python-brace-format
+msgid "Downloaded: {outputPath}"
+msgstr "已下載：{outputPath}"
+
+#, python-brace-format
+msgid ""
+"{serverMsg}\n"
+"\n"
+"The shared folder contents changed during the transfer.\n"
+"Please contact the person who shared the file and ask them to share it "
+"again."
+msgstr ""
+"{serverMsg}\n"
+"\n"
+"共享資料夾的內容在傳輸過程中發生變更。\n"
+"請聯絡分享檔案的人並要求他們重新分享。"
+
+#, python-brace-format
+msgid "Download failed: {error}"
+msgstr "下載失敗：{error}"
+
+msgid "GUI support not available. Install required dependencies or use CLI mode."
+msgstr "GUI 支援不可用。請安裝所需的相依套件或使用 CLI 模式。"
+
+msgid "Error: App has not been registered"
+msgstr "錯誤：應用程式尚未註冊"
+
+msgid "App has not been registered"
+msgstr "應用程式尚未註冊"
+
+msgid ""
+"Tunnel server temporarily unavailable. See "
+"https://github.com/nuwainfo/ffl#3--using-tunnels for alternative tunnels."
+msgstr "通道伺服器暫時無法使用。請參閱 https://github.com/nuwainfo/ffl#3--using-tunnels 以了解替代通道。"
+
+msgid "Failed to connect server"
+msgstr "無法連線到伺服器"
+
+msgid "Server return error"
+msgstr "伺服器回傳錯誤"
+
+#, python-brace-format
+msgid "Loading .env file from: {envFilePath}"
+msgstr "正在從以下位置載入 .env 檔案：{envFilePath}"
+
+#, python-brace-format
+msgid "Warning: .env line {lineNum}: Invalid format (missing =): {line}"
+msgstr "警告：.env 第 {lineNum} 行：格式無效（缺少 =）：{line}"
+
+#, python-brace-format
+msgid "Warning: .env line {lineNum}: Empty key"
+msgstr "警告：.env 第 {lineNum} 行：空的鍵"
+
+#, python-brace-format
+msgid "Loaded {loadedCount} environment variables from .env"
+msgstr "已從 .env 載入 {loadedCount} 個環境變數"
+
+#, python-brace-format
+msgid "Error: Unexpected error loading .env file: {error}"
+msgstr "錯誤：載入 .env 檔案時發生意外錯誤：{error}"
+
+#, python-brace-format
+msgid "Failed to load logging config from {logLevel}: {error}"
+msgstr "無法從 {logLevel} 載入日誌配置：{error}"
+
+msgid "Falling back to default logging level configuration"
+msgstr "退回到預設日誌層級配置"
+
+#, python-brace-format
+msgid "FastFileLink v{version}"
+msgstr "快檔連結 v{version}"
+
+msgid "🔄 Update available!"
+msgstr "🔄 有可用更新！"
+
+#, python-brace-format
+msgid "   Your version: {version}"
+msgstr "   您的版本：{version}"
+
+#, python-brace-format
+msgid "   Latest version: {serverVersion}"
+msgstr "   最新版本：{serverVersion}"
+
+msgid "   Consider updating for the latest features and improvements."
+msgstr "   請考慮更新以獲得最新功能和改進。"
+
+msgid "⚠️ VERSION INCOMPATIBLE!"
+msgstr "⚠️ 版本不相容！"
+
+#, python-brace-format
+msgid "   Server Minimum required: {minimumVersion}"
+msgstr "   伺服器最低要求版本：{minimumVersion}"
+
+msgid "   Please update to continue using the service."
+msgstr "   請更新以繼續使用服務。"
+
+msgid "Enabled addons:"
+msgstr "已啟用的附加元件："
+
+msgid "[OK] Loaded"
+msgstr "[正常] 已載入"
+
+msgid "[FAIL] Failed to load"
+msgstr "[失敗] 載入失敗"
+
+msgid "[UNKNOWN] Not loaded"
+msgstr "[未知] 未載入"
+
+msgid "No addons available"
+msgstr "沒有可用的附加元件"
+
+#, python-brace-format
+msgid "Architecture: {system} {release} {machine} - {version} ({processor})"
+msgstr "架構：{system} {release} {machine} - {version} ({processor})"
+
+#, python-brace-format
+msgid "Support: {supportURL}"
+msgstr "支援：{supportURL}"
+
+msgid "Choose a file or folder you want to share"
+msgstr "選擇您想要分享的檔案或資料夾"
+
+msgid "Output link and settings to a JSON file"
+msgstr "將連結和設定輸出到 JSON 檔案"
+
+#, python-brace-format
+msgid ""
+"Upload file to FastFileLink server to share it (Share duration after "
+"upload). Default: {default}"
+msgstr "上傳檔案到 快檔連結 伺服器以分享（上傳後的分享期限）。預設：{default}"
+
+msgid ""
+"Resume a previously interrupted upload (requires previous upload session "
+"to exist)"
+msgstr "繼續先前中斷的上傳（需要先前的上傳工作階段存在）"
+
+msgid "Pause upload at specified percentage (1-99, requires --upload)"
+msgstr "在指定百分比時暫停上傳（1-99，需要 --upload）"
+
+msgid ""
+"Maximum number of downloads before the server automatically shuts down "
+"(P2P mode only). 0 means unlimited."
+msgstr "伺服器自動關閉前的最大下載次數（僅限 P2P 模式）。0 表示無限制。"
+
+msgid ""
+"Timeout in seconds before the server automatically shuts down (P2P mode "
+"only). 0 means no timeout."
+msgstr "伺服器自動關閉前的逾時秒數（僅限 P2P 模式）。0 表示無逾時。"
+
+msgid ""
+"Port number for local server (1024-65535, default: auto-detect available "
+"port)"
+msgstr "本地伺服器的連接埠號碼（1024-65535，預設：自動偵測可用連接埠）"
+
+#, python-brace-format
+msgid "Username for HTTP Basic Authentication (default: '{default}')"
+msgstr "HTTP 基本驗證的使用者名稱（預設：'{default}'）"
+
+msgid "Password for HTTP Basic Authentication (enables auth protection)"
+msgstr "HTTP 基本驗證的密碼（啟用驗證保護）"
+
+msgid ""
+"Force relayed P2P mode, disable direct WebRTC connections (can be "
+"overridden by ?webrtc=on URL parameter)"
+msgstr "強制中繼 P2P 模式，停用直接 WebRTC 連線（可由 ?webrtc=on URL 參數覆寫）"
+
+msgid "Enable end-to-end encryption for file sharing (both HTTP and WebRTC)"
+msgstr "啟用檔案分享的端對端加密（HTTP 和 WebRTC）"
+
+msgid "Open invite page in browser with the sharing link"
+msgstr "在瀏覽器中開啟包含分享連結的邀請頁面"
+
+#, python-brace-format
+msgid "Invalid log level '{logLevel}'. Valid levels are: {validLevels}"
+msgstr "無效的記錄層級 '{logLevel}'。有效層級為：{validLevels}"
+
+msgid "Show version information and enabled addons"
+msgstr "顯示版本資訊和已啟用的附加元件"
+
+msgid "Run in CLI mode without GUI (optional)"
+msgstr "以 CLI 模式執行而不使用 GUI（選用）"
+
+msgid ""
+"Set logging level (DEBUG, INFO, WARNING, ERROR) or path to logging config"
+" JSON file (default: WARNING)"
+msgstr "設定記錄層級（DEBUG、INFO、WARNING、ERROR）或記錄設定 JSON 檔案的路徑（預設：WARNING）"
+
+msgid ""
+"Proxy server for all outbound connections. Formats: [user:pass@]host:port"
+" (defaults to SOCKS5), socks5[h]://[user:pass@]host:port, "
+"http[s]://[user:pass@]host:port. SOCKS5 proxies work for both tunnel and "
+"HTTP requests. HTTP proxies only work for HTTP requests (not tunnel)"
+msgstr ""
+"所有出站連線的代理伺服器。格式：[user:pass@]host:port（預設為 "
+"SOCKS5）、socks5[h]://[user:pass@]host:port、http[s]://[user:pass@]host:port。SOCKS5"
+" 代理適用於通道和 HTTP 請求。HTTP 代理僅適用於 HTTP 請求（不適用於通道）"
+
+msgid "FastFileLink makes file sharing fast, simple, and secure."
+msgstr "快檔連結 讓檔案分享快速、簡單且安全。"
+
+msgid "Available commands"
+msgstr "可用命令"
+
+msgid "Share a file (default command)"
+msgstr "分享檔案（預設命令）"
+
+msgid "Download a file from FastFileLink URL"
+msgstr "從 快檔連結 URL 下載檔案"
+
+msgid "FastFileLink URL to download from"
+msgstr "要下載的 快檔連結 URL"
+
+msgid "Output file path (default: use filename from server)"
+msgstr "輸出檔案路徑（預設：使用來自伺服器的檔案名稱）"
+
+msgid ""
+"Resume incomplete download (like curl -C), otherwise overwrite existing "
+"file"
+msgstr "繼續未完成的下載（類似 curl -C），否則覆寫現有檔案"
+
+msgid "Password for HTTP Basic Authentication"
+msgstr "HTTP 基本驗證的密碼"
+
+msgid "Upgrade to latest version or specified version"
+msgstr "升級到最新版本或指定版本"
+
+msgid ""
+"Target binary path to upgrade (for development mode), or version (e.g., "
+"v3.7.5)"
+msgstr "要升級的目標二進位檔路徑（用於開發模式），或版本（例如：v3.7.5）"
+
+msgid "Target version when binary path is specified (default: latest)"
+msgstr "指定二進位檔路徑時的目標版本（預設：最新）"
+
+#, python-brace-format
+msgid "Error: Invalid proxy format: {proxy}"
+msgstr "錯誤：無效的代理格式：{proxy}"
+
+#, fuzzy
+msgid "Error: --upload option requires Upload addon (addons/Upload.py)"
+msgstr "錯誤：上傳功能需要 Upload 附加元件 (addons/Upload.py)"
+
+msgid ""
+"Please install the Upload addon (use Standard/Plus version) or use P2P "
+"mode without --upload"
+msgstr "請安裝 Upload 附加元件（使用 Standard/Plus 版本）或使用不帶 --upload 的 P2P 模式"
+
+msgid "Error: --pause requires --upload"
+msgstr "錯誤：--pause 需要 --upload"
+
+msgid "Use: --upload <duration> --pause <percentage>"
+msgstr "使用方式：--upload <持續時間> --pause <百分比>"
+
+msgid "Error: --pause percentage must be between 1 and 99"
+msgstr "錯誤：--pause 百分比必須介於 1 到 99 之間"
+
+msgid "Error: --resume flag can only be used with --upload"
+msgstr "錯誤：--resume 標記只能與 --upload 一起使用"
+
+msgid "Error: --pause and --resume cannot be used together"
+msgstr "錯誤：--pause 和 --resume 不能同時使用"
+
+msgid "Use --pause to pause a new upload, or --resume to continue a paused upload"
+msgstr "使用 --pause 暫停新上傳，或使用 --resume 繼續已暫停的上傳"
+
+msgid "Error: --auth-user requires --auth-password"
+msgstr "錯誤：--auth-user 需要 --auth-password"
+
+#, python-brace-format
+msgid ""
+"Use --auth-password to enable authentication (username defaults to "
+"'{defaultUser}' if not specified)"
+msgstr "使用 --auth-password 啟用身份驗證（如果未指定，使用者名稱預設為 '{defaultUser}'）"
+
+msgid "⚠️  IMPORTANT: ENCRYPTION KEY"
+msgstr "⚠️  重要：加密金鑰"
+
+msgid "This file has been encrypted. You MUST share the encryption key below"
+msgstr "此檔案已加密。您必須將下方的加密金鑰"
+
+msgid "with recipients via a SECURE CHANNEL (not the same as the download link)."
+msgstr "透過安全管道（不同於下載連結）分享給接收者。"
+
+msgid "Without this key, the file CANNOT be decrypted."
+msgstr "沒有此金鑰，檔案將無法解密。"
+
+msgid ""
+"Note: Appending #<key> to the URL works but is less secure and not "
+"recommended."
+msgstr "注意：在 URL 後附加 #<金鑰> 可以運作，但較不安全且不建議使用。"
+
+#, python-brace-format
+msgid "Encryption Key: {encryptionKey}"
+msgstr "加密金鑰：{encryptionKey}"
+
+msgid "0/sec"
+msgstr "0/秒"
+
+#, python-brace-format
+msgid "{speed}/sec"
+msgstr "{speed}/秒"
+
+msgid "Progress"
+msgstr "進度"
+
+#, python-brace-format
+msgid "Progress bar error: {e}"
+msgstr "進度列錯誤：{e}"
+
+#, python-brace-format
+msgid ""
+"Progress: {sizeDisplay}/{totalDisplay} ({percentage:.2f}%), "
+"{speedDisplay}/sec"
+msgstr "進度：{sizeDisplay}/{totalDisplay}（{percentage:.2f}%），{speedDisplay}/秒"
+
+#, python-brace-format
+msgid "[{timestamp}] Downloading by user"
+msgstr "[{timestamp}] 使用者正在下載"
+
+msgid ""
+"File sending is complete. Please wait for the recipient to finish "
+"downloading before you close the application.\n"
+msgstr "檔案傳送完成。請等待接收者完成下載後再關閉應用程式。\n"
+
+#, python-brace-format
+msgid ""
+"\n"
+"⚠️  TRANSFER ABORTED: {errorMsg}"
+msgstr ""
+"\n"
+"⚠️  傳輸已中止：{errorMsg}"
+
+msgid "The shared folder contents changed during the transfer."
+msgstr "共享資料夾的內容在傳輸過程中發生變更。"
+
+msgid "Please ensure the folder contents remain stable and try sharing again.\n"
+msgstr "請確保資料夾內容保持穩定並重新嘗試分享。\n"
+
+msgid ""
+"\n"
+"Connection disconnected, wait retrying.\n"
+msgstr ""
+"\n"
+"連線中斷，等待重試。\n"
+
+msgid ""
+"\n"
+"User closes the connection, please try again.\n"
+msgstr ""
+"\n"
+"使用者關閉連線，請重試。\n"
+
+#, python-brace-format
+msgid "Timeout ({timeout} seconds) reached. Shutting down server."
+msgstr "已達到逾時時間（{timeout} 秒）。正在關閉伺服器。"
+
+#, python-brace-format
+msgid "Maximum downloads ({maxDownloads}) reached. Shutting down server."
+msgstr "已達到最大下載次數（{maxDownloads}）。正在關閉伺服器。"
+
+#, python-brace-format
+msgid "Downloading install script from: {url}"
+msgstr "正在從以下位置下載安裝腳本：{url}"
+
+msgid "Install script downloaded successfully"
+msgstr "安裝腳本下載成功"
+
+#, python-brace-format
+msgid "Failed to download install script: {error}"
+msgstr "下載安裝腳本失敗：{error}"
+
+#, python-brace-format
+msgid "Target executable: {path}"
+msgstr "目標執行檔：{path}"
+
+msgid "Error: FFL_UPGRADE_VARIANT is required when upgrading a different binary"
+msgstr "錯誤：升級其他二進位檔時需要指定 FFL_UPGRADE_VARIANT"
+
+msgid "Supported formats:"
+msgstr "支援的格式："
+
+msgid "  APE variants: ffl.com, fflo.com"
+msgstr "  APE 變體：ffl.com、fflo.com"
+
+msgid "  Windows: windows"
+msgstr "  Windows：windows"
+
+msgid "  Linux: linux-2.39, linux-2.28 (glibc version)"
+msgstr "  Linux：linux-2.39、linux-2.28（glibc 版本）"
+
+msgid "  macOS: darwin"
+msgstr "  macOS：darwin"
+
+#, python-brace-format
+msgid "Example: FFL_UPGRADE_VARIANT=ffl.com python Core.py --cli upgrade {path}"
+msgstr "範例：FFL_UPGRADE_VARIANT=ffl.com python Core.py --cli upgrade {path}"
+
+#, python-brace-format
+msgid "Using FFL_UPGRADE_VARIANT: {variant}"
+msgstr "使用 FFL_UPGRADE_VARIANT：{variant}"
+
+#, python-brace-format
+msgid "Upgrading to APE variant ({ape})"
+msgstr "升級到 APE 變體（{ape}）"
+
+msgid "Upgrading to Windows native variant"
+msgstr "升級到 Windows 原生變體"
+
+#, python-brace-format
+msgid "Upgrading to Linux native variant (glibc {version})"
+msgstr "升級到 Linux 原生變體（glibc {version}）"
+
+msgid "Upgrading to Linux native variant (glibc auto-detect)"
+msgstr "升級到 Linux 原生變體（glibc 自動偵測）"
+
+msgid "Upgrading to macOS native variant"
+msgstr "升級到 macOS 原生變體"
+
+#, python-brace-format
+msgid "Error: Unknown variant '{variant}'"
+msgstr "錯誤：未知的變體 '{variant}'"
+
+msgid ""
+"Supported formats: ffl.com, fflo.com, windows, linux-2.39, linux-2.28, "
+"darwin"
+msgstr "支援的格式：ffl.com、fflo.com、windows、linux-2.39、linux-2.28、darwin"
+
+#, python-brace-format
+msgid "Detected APE variant ({variant}), will replace with same variant"
+msgstr "偵測到 APE 變體（{variant}），將以相同變體替換"
+
+msgid "Failed to detect glibc version from binary"
+msgstr "無法從二進位檔偵測 glibc 版本"
+
+#, python-brace-format
+msgid "Detected native variant with glibc {version}"
+msgstr "偵測到原生變體，glibc 版本 {version}"
+
+msgid "Failed to detect architecture from binary"
+msgstr "無法從二進位檔偵測架構"
+
+#, python-brace-format
+msgid "Detected macOS native variant ({arch})"
+msgstr "偵測到 macOS 原生變體（{arch}）"
+
+msgid "Detected native variant, will replace with same variant"
+msgstr "偵測到原生變體，將以相同變體替換"
+
+msgid "Executing install script..."
+msgstr "正在執行安裝腳本..."
+
+#, python-brace-format
+msgid "Install script failed with exit code {code}"
+msgstr "安裝腳本執行失敗，結束代碼 {code}"
+
+#, python-brace-format
+msgid "Failed to execute install script: {error}"
+msgstr "執行安裝腳本失敗：{error}"
+
+#, python-brace-format
+msgid "Unexpected error during installation: {error}"
+msgstr "安裝時發生意外錯誤：{error}"
+
+#, python-brace-format
+msgid "Current version: v{version}"
+msgstr "目前版本：v{version}"
+
+#, python-brace-format
+msgid "Development mode: upgrading target binary {path}"
+msgstr "開發模式：升級目標二進位檔 {path}"
+
+msgid "Cannot upgrade when running from Python source"
+msgstr "從 Python 原始碼執行時無法升級"
+
+msgid ""
+"Tip: Use 'upgrade <binary_path>' to upgrade a specific binary in "
+"development mode"
+msgstr "提示：使用 'upgrade <binary_path>' 在開發模式中升級特定二進位檔"
+
+msgid "Could not determine latest version from GitHub"
+msgstr "無法從 GitHub 確定最新版本"
+
+msgid ""
+"Could not check latest version from GitHub, proceeding with specified "
+"version"
+msgstr "無法從 GitHub 檢查最新版本，繼續使用指定版本"
+
+#, python-brace-format
+msgid "Latest version available: {version}"
+msgstr "可用的最新版本：{version}"
+
+msgid "✓ You are already running the latest version!"
+msgstr "✓ 您已經在使用最新版本！"
+
+#, python-brace-format
+msgid ""
+"✓ You are running a newer version ({current}) than the latest release "
+"({latest})!"
+msgstr "✓ 您正在執行比最新發行版本 ({latest}) 更新的版本 ({current})！"
+
+msgid "Could not determine target version from GitHub"
+msgstr "無法從 GitHub 確定目標版本"
+
+#, python-brace-format
+msgid "Upgrading to {version}..."
+msgstr "正在升級到 {version}..."
+
+msgid "Unsupported operating system"
+msgstr "不支援的作業系統"
+
+#, python-brace-format
+msgid "Platform: {os}"
+msgstr "平台：{os}"
+
+#, python-brace-format
+msgid "✓ Successfully upgraded to {version}!"
+msgstr "✓ 成功升級到 {version}！"
+
+msgid "The link has been copied to the clipboard."
+msgstr "連結已複製到剪貼簿。"
+
+msgid "Please try again or try later."
+msgstr "請稍後再試或稍後重試。"
+
+#, python-brace-format
+msgid ""
+"\n"
+"If you still get the same problem, please contact us at {supportURL}."
+msgstr ""
+"\n"
+"如果您仍然遇到相同的問題，請透過 {supportURL} 聯絡我們。"
+
+msgid "We will fix the problem as soon as possible.\n"
+msgstr "我們會盡快修復問題。\n"
+
+msgid "P2P direct"
+msgstr "P2P 直連"
+
+#, python-brace-format
+msgid ""
+"Finish transfer {sizeDisplay} for [#{peerId}], please wait for the "
+"recipient to finish downloading before you close the application..\n"
+msgstr "完成給 [#{peerId}] 的 {sizeDisplay} 傳輸，請等待接收者完成下載後再關閉應用程式。\n"
+
+msgid "Connecting to server"
+msgstr "正在連線到伺服器"
+
+msgid "Requesting connection"
+msgstr "正在請求連線"
+
+msgid "Setting up WebRTC"
+msgstr "正在設定 WebRTC"
+
+msgid "Establishing connection"
+msgstr "正在建立連線"
+
+msgid "Negotiating connection"
+msgstr "正在協商連線"
+
+msgid "Waiting for data channel"
+msgstr "正在等待資料通道"
+
+msgid "Downloading"
+msgstr "正在下載"
+
+msgid "HTTP download"
+msgstr "HTTP 下載"
+
+msgid "HTTP fallback"
+msgstr "HTTP 備援"
+
+msgid "File already downloaded"
+msgstr "檔案已下載"
+
+msgid "Getting file metadata"
+msgstr "正在取得檔案中繼資料"
+
+msgid ""
+"\n"
+"⚠️  This file is encrypted. Please enter the encryption key:"
+msgstr ""
+"\n"
+"⚠️  此檔案已加密。請輸入加密金鑰："
+
+msgid "(The key should be provided by the person who shared this file)\n"
+msgstr "（金鑰應由分享此檔案的人提供）\n"
+
+msgid "Encryption key: "
+msgstr "加密金鑰： "
+
+msgid "Encryption key is required to download this file"
+msgstr "下載此檔案需要加密金鑰"
+
+#, python-brace-format
+msgid "Invalid key length: {keyLength} bytes (expected 32 bytes for AES-256)"
+msgstr "無效的金鑰長度：{keyLength} 位元組（AES-256 需要 32 位元組）"
+
+msgid "Download cancelled by user"
+msgstr "使用者取消下載"
+
+#, python-brace-format
+msgid "Invalid encryption key: {error}"
+msgstr "無效的加密金鑰：{error}"
+
+#, python-brace-format
+msgid "Downloading {filename} ({fileSize:,} bytes)"
+msgstr "正在下載 {filename}（{fileSize:,} 位元組）"
+
+#, python-brace-format
+msgid "Resuming WebRTC download from {resumePos} / {totalSize}"
+msgstr "從 {resumePos} / {totalSize} 繼續 WebRTC 下載"
+
+#, python-brace-format
+msgid "Resuming download from {resumePos} / {totalSize}"
+msgstr "從 {resumePos} / {totalSize} 繼續下載"
+
+msgid ""
+"⚠️  This is not a FastFileLink URL, downloading directly via HTTP (like "
+"wget)..."
+msgstr "⚠️  這不是 快檔連結 網址，正在直接透過 HTTP 下載（類似 wget）..."
+
+msgid "🔒 End-to-end encryption detected"
+msgstr "🔒 偵測到端對端加密"
+
+msgid "✓ Encryption key verified successfully"
+msgstr "✓ 加密金鑰驗證成功"
+
+msgid "WebRTC not supported, using HTTP download..."
+msgstr "不支援 WebRTC，使用 HTTP 下載..."
+
+msgid "Attempting WebRTC download..."
+msgstr "正在嘗試 WebRTC 下載..."
+
+#~ msgid "Upgrade to latest version or specified version (e.g., --upgrade v3.7.5)"
+#~ msgstr "升級到最新版本或指定版本（例如：--upgrade v3.7.5）"
+
+#~ msgid "Current executable: {path}"
+#~ msgstr ""
+
+#~ msgid "Target version to upgrade to (default: latest)"
+#~ msgstr "要升級到的目標版本（預設：最新版）"
+
+#~ msgid "Could not determine target version from server"
+#~ msgstr "無法從伺服器確定目標版本"
+
+#~ msgid "Failed to execute install script"
+#~ msgstr "執行安裝腳本失敗"
+
+#~ msgid "Unexpected error during installation"
+#~ msgstr "安裝時發生意外錯誤"
+
+#~ msgid "Detected Linux native variant (glibc auto-detect)"
+#~ msgstr "偵測到 Linux 原生變體（glibc 自動偵測）"
+
+#~ msgid "Detected macOS native variant (architecture auto-detect)"
+#~ msgstr "偵測到 macOS 原生變體（架構自動偵測）"
+
+#~ msgid "Upgrading to Linux native variant (glibc 2.39)"
+#~ msgstr "升級到 Linux 原生變體（glibc 2.39）"
+
+#~ msgid "Upgrading to Linux native variant (glibc 2.28)"
+#~ msgstr "升級到 Linux 原生變體（glibc 2.28）"
+
+#~ msgid "Detected APE variant (fflo.com), will replace with same variant"
+#~ msgstr "偵測到 APE 變體（fflo.com），將以相同變體替換"
+
+#~ msgid "Detected APE variant (ffl.com), will replace with same variant"
+#~ msgstr "偵測到 APE 變體（ffl.com），將以相同變體替換"
+

@@ -317,8 +317,12 @@ class FastFileLinkTestBase(unittest.TestCase):
             # Always parse output to get actual path (handles directory case)
             if logFile:
                 logFile.close()
-                with open(logPath, 'r', encoding='utf-8') as f:
-                    output = f.read()
+                try:
+                    with open(logPath, 'r') as f:
+                        output = f.read()
+                except Exception as e:
+                    with open(logPath, 'r', encoding='utf-8') as f: # Try again.
+                        output = f.read()
             else:
                 output = stdout or ""
 

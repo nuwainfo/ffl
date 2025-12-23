@@ -1,0 +1,20 @@
+{
+    "home": "首頁",
+    "introduction": "介紹", 
+    "howItWorks":"如何運作",
+    "pay":"點數運作方式",
+    "invite":"邀請",
+    "cli":"開源 CLI 版本",
+    "faq":"FAQ",
+    "technicalFaq":"技術相關 FAQ",
+    "features": "功能",
+    "tutorial": "教學",
+    "free": "免費下載",
+    "pricing": "方案",
+    "support": "支援",
+    "language": "語言",
+    "blog": "部落格",
+    "account":"帳號",
+    "clientArea": "個人設定",
+    "menu": "選單"
+}

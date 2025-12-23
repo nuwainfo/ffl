@@ -1,0 +1,20 @@
+{
+    "home": "首页",
+    "introduction": "介绍", 
+    "howItWorks":"如何运作",
+    "pay":"点数运作方式",
+    "invite":"邀请",
+    "cli":"开源 CLI 版本",
+    "faq":"FAQ",
+    "technicalFaq":"技术相关 FAQ",
+    "features": "功能",
+    "tutorial": "教学",
+    "free": "免费下载",
+    "pricing": "方案",
+    "support": "支援",
+    "language": "语言",
+    "blog": "部落格",
+    "account":"帐号",
+    "clientArea": "个人设定",
+    "menu": "选单"
+}

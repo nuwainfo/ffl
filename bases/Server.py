@@ -40,6 +40,7 @@ from bases.WebRTC import WebRTCManager, WebRTCDisabledError
 from bases.Progress import Progress
 from bases.E2EE import E2EEManager
 from bases.Reader import SourceReader, FolderChangedException
+from bases.I18n import _
 
 LOG_OUTPUT_DURATION = 1 # Seconds
 
@@ -65,7 +66,7 @@ try:
         else:
             logger.info("WSL detected - using default asyncio event loop instead of uvloop for compatibility")
 except ImportError:
-    logger.warn("Unable to optimize event loop in platform")
+    logger.debug("Unable to optimize event loop in platform")
 
 
 class AuthMixin:
@@ -351,13 +352,13 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Redirect handler not found")
 
     def _handleStartDownloadActions(self, size):
-        flushPrint(f'[{self.date_time_string()}] Downloading by user')
+        flushPrint(_('[{timestamp}] Downloading by user').format(timestamp=self.date_time_string()))
 
     def _handlePostDownloadActions(self, size):
-        flushPrint(
+        flushPrint(_(
             'File sending is complete. '
             'Please wait for the recipient to finish downloading before you close the application.\n'
-        )
+        ))
         self.server.doAfterDownload()
 
     def _handleDownloadExceptionActions(self, exception):
@@ -367,9 +368,9 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             filePath = getattr(exception, 'filePath', None)
 
             # Notify sharer
-            flushPrint(f'\n⚠️  TRANSFER ABORTED: {errorMsg}')
-            flushPrint('The shared folder contents changed during the transfer.')
-            flushPrint('Please ensure the folder contents remain stable and try sharing again.\n')
+            flushPrint(_('\n⚠️  TRANSFER ABORTED: {errorMsg}').format(errorMsg=errorMsg))
+            flushPrint(_('The shared folder contents changed during the transfer.'))
+            flushPrint(_('Please ensure the folder contents remain stable and try sharing again.\n'))
 
             # Set error state for status polling with error type for i18n
             self.server.lastError = {
@@ -379,9 +380,9 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 'exceptionClass': exception.__class__.__name__
             }
         elif isinstance(exception, (ConnectionResetError, ConnectionAbortedError, ConnectionError, BrokenPipeError)):
-            flushPrint('\nConnection disconnected, wait retrying.\n')
+            flushPrint(_('\nConnection disconnected, wait retrying.\n'))
         elif isinstance(exception, OSError):
-            flushPrint('\nUser closes the connection, please try again.\n')
+            flushPrint(_('\nUser closes the connection, please try again.\n'))
         else:
             logger.debug(f'_handleDownloadExceptionActions: {exception}')
 
@@ -1150,7 +1151,8 @@ class Server(ThreadingHTTPServer):
         def timeoutChecker():
             while not self.stop:
                 if self.timeout > 0 and (time.time() - self.startTime) >= self.timeout:
-                    flushPrint(f'Timeout ({self.timeout} seconds) reached. Shutting down server.')
+                    flushPrint(_('Timeout ({timeout} seconds) reached. Shutting down server.').format(
+                        timeout=self.timeout))
                     self.shutdown()
                     break
 
@@ -1167,7 +1169,8 @@ class Server(ThreadingHTTPServer):
         # It increments the download count and checks for auto-shutdown conditions.
         self.downloadCount += 1
         if self.maxDownloads > 0 and self.downloadCount >= self.maxDownloads:
-            flushPrint(f'Maximum downloads ({self.maxDownloads}) reached. Shutting down server.')
+            flushPrint(_('Maximum downloads ({maxDownloads}) reached. Shutting down server.').format(
+                maxDownloads=self.maxDownloads))
             self.shutdown()
 
     # Let normal shutdown not be printed

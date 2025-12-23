@@ -35,10 +35,19 @@ conda activate "$envName"
 
 export PYTHONIOENCODING=utf-8
 
+if [ "$OS" = "linux" ]; then
+    cp REQUIREMENTS.txt REQUIREMENTS.txt.bak
+    grep -vi -e "Gooey==1.0.8.1" -e "pyinstaller" REQUIREMENTS.txt > REQUIREMENTS.txt.tmp 
+    mv REQUIREMENTS.txt.tmp REQUIREMENTS.txt
+fi
+
 python3 -m pip install -r REQUIREMENTS.txt 
 # Used only for DistUtil.py not bundled in final executable.
 python3 -m pip install pefile conda-pack setuptools wheel pip
 
+if [ "$OS" = "linux" ]; then
+    mv REQUIREMENTS.txt.bak REQUIREMENTS.txt
+fi
 
 currentDir="$(pwd)"
 parentDir="$(dirname "$currentDir")"
@@ -148,6 +157,7 @@ export PYAPP_FULL_ISOLATION='1'
 export PYAPP_PROJECT_NAME='ffl'
 export PYAPP_DISTRIBUTION_PATH='./ffl_python.tar.gz'
 export PYAPP_EXEC_SPEC='FileShare.Core:main'
+export PYAPP_PASS_LOCATION='1'
 
 cargo clean
 

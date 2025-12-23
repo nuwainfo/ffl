@@ -29,6 +29,10 @@ import functools
 import secrets
 import string
 
+# While Sentry (error tracking) is included, error reporting is strictly disabled by default.
+# No crash logs or diagnostic data are sent to us unless you explicitly
+# run with --enable-reporting to help debug a specific issue.
+# Please see [Privacy & Security] section in README.md
 import sentry_sdk
 
 from pathlib import Path
@@ -36,10 +40,14 @@ from enum import Enum
 
 from signalslot import Signal
 
+# Strictly disabled by default, Please see [Privacy & Security] section in README.md
 from sentry_sdk.integrations.logging import SentryHandler, LoggingIntegration
 from sentry_sdk.integrations import atexit as sentryAtexit
 
-PUBLIC_VERSION = '3.7.6'
+PUBLIC_VERSION = '3.8.0'
+
+# Map string levels to logging constants for standard level names
+LOG_LEVEL_MAPPING = {'DEBUG': logging.DEBUG, 'INFO': logging.INFO, 'WARNING': logging.WARNING, 'ERROR': logging.ERROR}
 
 
 def configureGlobalLogLevel(logLevel):
@@ -53,11 +61,12 @@ def configureGlobalLogLevel(logLevel):
     rootLogger = logging.getLogger()
     rootLogger.setLevel(logLevel)
 
+    formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+
     # Add console handler if none exists
     if not rootLogger.handlers:
         consoleHandler = logging.StreamHandler()
         consoleHandler.setLevel(logLevel)
-        formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
         consoleHandler.setFormatter(formatter)
         rootLogger.addHandler(consoleHandler)
     else:
@@ -65,6 +74,16 @@ def configureGlobalLogLevel(logLevel):
         for handler in rootLogger.handlers:
             if isinstance(handler, logging.StreamHandler) and not isinstance(handler, SentryHandler):
                 handler.setLevel(logLevel)
+                handler.setFormatter(formatter)
+
+
+if os.getenv('FFL_LOGGING_LEVEL'):
+    logLevel = LOG_LEVEL_MAPPING.get(os.getenv('FFL_LOGGING_LEVEL').upper())
+    configureGlobalLogLevel(logLevel)
+
+if os.getenv('FFL_PUBLIC_VERSION'):
+    PUBLIC_VERSION = os.environ['FFL_PUBLIC_VERSION']
+    logging.info(f'[WARN] FFL_PUBLIC_VERSION is set to {PUBLIC_VERSION}, TEST PURPOSE ONLY.')
 
 
 def getLogger(name, version=PUBLIC_VERSION, reinitialize=False):
@@ -590,7 +609,7 @@ class AddonsManager(Singleton):
             return True
 
         # Check if addon already failed to load
-        failedAddonNames = [name for name, _ in self.failedAddons]
+        failedAddonNames = [name for name, _, _ in self.failedAddons]
         if addonName in failedAddonNames:
             self.logger.debug(f"Addon {addonName} previously failed to load, skipping")
             return False
@@ -633,7 +652,7 @@ class AddonsManager(Singleton):
                             f"Required: {required}"
                         )
                         self.logger.warning(errorMsg)
-                        self.failedAddons.append((addonName, errorMsg))
+                        self.failedAddons.append((addonName, errorMsg, None))
                         return False
 
                     self.logger.debug(f"Addon {addonName} dependency check passed: {', '.join(requiredAddons)}")
@@ -651,12 +670,12 @@ class AddonsManager(Singleton):
             return True
 
         except ImportError as e:
-            self.logger.warning(f"Could not import addon {addonName}: {e}")
-            self.failedAddons.append((addonName, str(e)))
+            self.logger.debug(f"Could not import addon {addonName}: {e}")
+            self.failedAddons.append((addonName, str(e), type(e)))
             return False
         except Exception as e:
             self.logger.error(f"Error loading addon {addonName}: {e}", exc_info=True)
-            self.failedAddons.append((addonName, str(e)))
+            self.failedAddons.append((addonName, str(e), type(e)))
             if os.getenv('RAISE_EXCEPTION') == "True":
                 raise
 
@@ -675,8 +694,8 @@ class AddonsManager(Singleton):
             self.loadAddon(addonName)
 
         if self.failedAddons:
-            failedNames = [name for name, _ in self.failedAddons]
-            self.logger.warning(f"Failed to load addons: {failedNames}")
+            failedNames = [name for name, _, _ in self.failedAddons]
+            self.logger.debug(f"Failed to load addons: {failedNames}")
 
     def getLoadedAddons(self):
         """
@@ -686,7 +705,8 @@ class AddonsManager(Singleton):
 
     def getFailedAddons(self):
         """
-        Get list of tuples (addon_name, error_message) for failed addons.
+        Get list of tuples (addon_name, error_message, exception_class) for failed addons.
+        exception_class may be None for dependency failures.
         """
         return self.failedAddons[:]
 
@@ -702,7 +722,7 @@ class AddonsManager(Singleton):
         Returns None if addon is not loaded or object doesn't exist.
         """
         if not self.isAddonLoaded(addonName):
-            self.logger.warning(f"Addon {addonName} is not loaded")
+            self.logger.debug(f"Addon {addonName} is not loaded")
             return None
 
         try:
@@ -729,7 +749,9 @@ class AddonsManager(Singleton):
                 self.loadedAddons.remove(addonName)
 
             # Remove from failed list if present
-            self.failedAddons = [(name, error) for name, error in self.failedAddons if name != addonName]
+            self.failedAddons = [
+                (name, error, excClass) for name, error, excClass in self.failedAddons if name != addonName
+            ]
 
             # Reload the module
             moduleName = f'addons.{addonName}'
@@ -765,12 +787,14 @@ class StorageLocator(Singleton):
         CURRENT = 'current'
         HOME = 'home'
         PLATFORM = 'platform'
+        SOURCE_BASE = 'source_base'
 
     def initialize(self, appName='fastfilelink'):
         """Initialize with application name"""
         self.appName = appName
         self._homeDir = os.path.expanduser(f'~{os.path.sep}.{appName}')
         self._platformDir = self._getPlatformDir()
+        self._sourceBaseDir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
         self.logger = logging.getLogger(__name__)
 
@@ -803,11 +827,11 @@ class StorageLocator(Singleton):
     def ensureStorageDir(self, prefer=None):
         """
         Ensure storage directory exists for saving config/data files
-        
+
         Args:
-            prefer: Preferred location (Location.HOME, Location.PLATFORM, Location.CURRENT)
-                   If None: home -> platform -> current
-                   
+            prefer: Preferred location (Location.HOME, Location.PLATFORM, Location.CURRENT, Location.SOURCE_BASE)
+                   If None: home -> platform -> current -> source_base
+
         Returns:
             Path to created storage directory
         """
@@ -818,14 +842,16 @@ class StorageLocator(Singleton):
             storageDirs = [envStorageLocation]
             self.logger.info(f'Using FFL_STORAGE_LOCATION environment override: {envStorageLocation}')
         elif prefer == self.Location.HOME:
-            storageDirs = [self._homeDir, self._platformDir, os.path.abspath('.')]
+            storageDirs = [self._homeDir, self._platformDir, os.path.abspath('.'), self._sourceBaseDir]
         elif prefer == self.Location.PLATFORM:
-            storageDirs = [self._platformDir, self._homeDir, os.path.abspath('.')]
+            storageDirs = [self._platformDir, self._homeDir, os.path.abspath('.'), self._sourceBaseDir]
         elif prefer == self.Location.CURRENT:
-            storageDirs = [os.path.abspath('.'), self._homeDir, self._platformDir]
+            storageDirs = [os.path.abspath('.'), self._homeDir, self._platformDir, self._sourceBaseDir]
+        elif prefer == self.Location.SOURCE_BASE:
+            storageDirs = [self._sourceBaseDir, self._homeDir, self._platformDir, os.path.abspath('.')]
         else:
-            # Default: home -> platform -> current
-            storageDirs = [self._homeDir, self._platformDir, os.path.abspath('.')]
+            # Default: home -> platform -> current -> source_base
+            storageDirs = [self._homeDir, self._platformDir, os.path.abspath('.'), self._sourceBaseDir]
 
         for storageDir in storageDirs:
             testFile = os.path.join(storageDir, '.write_test')
@@ -849,13 +875,13 @@ class StorageLocator(Singleton):
     def findStorage(self, filename, prefer=None):
         """
         Find storage location for reading config/data files
-        Default priority: current -> home -> platform
+        Default priority: current -> home -> platform -> source_base
         If prefer specified: prefer location first, then original sequence
-        
+
         Args:
             filename: Name of the file to find
-            prefer: Preferred location (Location.CURRENT, Location.HOME, Location.PLATFORM)
-            
+            prefer: Preferred location (Location.CURRENT, Location.HOME, Location.PLATFORM, Location.SOURCE_BASE)
+
         Returns:
             Path to the file (may not exist)
         """
@@ -866,11 +892,12 @@ class StorageLocator(Singleton):
             if os.path.exists(envPath):
                 return envPath
 
-        # Original search sequence: current -> home -> platform
+        # Original search sequence: current -> home -> platform -> source_base
         originalPaths = [
             os.path.abspath(filename), # Current directory
-            os.path.join(self._homeDir, filename), # Home directory  
-            os.path.join(self._platformDir, filename) # Platform specific
+            os.path.join(self._homeDir, filename), # Home directory
+            os.path.join(self._platformDir, filename), # Platform specific
+            os.path.join(self._sourceBaseDir, filename) # Source base directory
         ]
 
         # If prefer is specified, try that location first
@@ -881,6 +908,8 @@ class StorageLocator(Singleton):
                 preferPath = originalPaths[1]
             elif prefer == self.Location.PLATFORM:
                 preferPath = originalPaths[2]
+            elif prefer == self.Location.SOURCE_BASE:
+                preferPath = originalPaths[3]
             else:
                 preferPath = None
 

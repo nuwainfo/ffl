@@ -1274,6 +1274,9 @@ class ZipDirSourceReader(SourceReader):
         """
         Stream file data segment with efficient seeking (for resume)
 
+        Optimized to compute CRC during streaming when skip==0 (full file read),
+        avoiding the need for a second I/O pass in _computeCRC().
+
         Args:
             entry: Entry dict with file metadata
             chunkSize: Chunk size for reading
@@ -1285,9 +1288,17 @@ class ZipDirSourceReader(SourceReader):
         """
         fileSize = entry['data_length']
         if fileSize == 0 or skip >= fileSize:
+            # Cache CRC for empty files when reading from start
+            if fileSize == 0 and skip == 0 and 'crc' not in entry:
+                entry['crc'] = 0
             return
 
         path = entry['path']
+
+        # Only compute CRC if reading from start (skip==0)
+        # This avoids incorrect CRC for partial reads during resume
+        computeCRC = (skip == 0)
+        crc = 0
 
         try:
             with open(path, 'rb') as f:
@@ -1296,24 +1307,48 @@ class ZipDirSourceReader(SourceReader):
                     f.seek(skip)
 
                 # Stream remaining data
+                bytesRead = 0
                 while True:
                     chunk = f.read(chunkSize)
                     if not chunk:
                         break
+
+                    # Compute CRC while streaming (only if skip==0)
+                    if computeCRC:
+                        crc = zlib.crc32(chunk, crc)
+
                     buffer.extend(chunk)
+                    bytesRead += len(chunk)
                     yield from self._yieldChunks(buffer, chunkSize)
+
+                # Cache CRC only if we read the complete file from start
+                if computeCRC and bytesRead == fileSize:
+                    entry['crc'] = crc
 
         except OSError as e:
             # Handle I/O error with strictMode-aware logic
             self._handleIOError(e, path, "File read")
 
             # Lenient mode: stream zeros for unreadable files
+            # IMPORTANT: Must compute CRC for ALL zeros to match actual output
             remaining = fileSize - skip
+
             while remaining > 0:
                 zeroSize = min(chunkSize, remaining)
-                buffer.extend(b'\x00' * zeroSize)
+                zeroChunk = b'\x00' * zeroSize
+
+                # Update CRC for each zero chunk to match actual output
+                if computeCRC:
+                    crc = zlib.crc32(zeroChunk, crc)
+
+                buffer.extend(zeroChunk)
                 yield from self._yieldChunks(buffer, chunkSize)
                 remaining -= zeroSize
+
+            # Cache the actual CRC of all zeros (not 0!)
+            # This ensures ZIP descriptor/central dir matches the data we sent
+            if computeCRC:
+                entry['crc'] = crc
 
     def _computeCRC(self, entry: dict) -> int:
         """

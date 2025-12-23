@@ -1,0 +1,685 @@
+# Chinese (Traditional) translations for PROJECT.
+# Copyright (C) 2025 ORGANIZATION
+# This file is distributed under the same license as the PROJECT project.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2025.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: PROJECT VERSION\n"
+"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
+"POT-Creation-Date: 2025-12-23 00:22+0800\n"
+"PO-Revision-Date: 2025-12-21 14:22+0800\n"
+"Last-Translator: \n"
+"Language: zh_TW\n"
+"Language-Team: zh_Hant <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.17.0\n"
+
+msgid "This --upload option is not available in the Free Version"
+msgstr "此 --upload 選項在免費版本中不可用"
+
+#, python-brace-format
+msgid ""
+"For files over {size}MB, Relayed P2P in Free version uses unlimited "
+"bandwidth tunnel (may be slower but handles any file size), while Device-"
+"to-Device transfers remain fast with no restrictions.\n"
+"(Relayed P2P is rarely used — only when direct connection fails.)\n"
+"\n"
+"✨ NO WORRIES — you can still share files **FREELY**!"
+msgstr ""
+"對於超過 {size}MB 的檔案，免費版本的中繼 P2P "
+"使用無限頻寬通道（可能較慢但可處理任何大小的檔案），而裝置對裝置傳輸則不受限制且速度快。\n"
+"（中繼 P2P 很少使用 — 僅在直連失敗時使用。）\n"
+"\n"
+"✨ 別擔心 — 您仍然可以**免費**分享檔案！"
+
+#, python-brace-format
+msgid ""
+"One peer was unable to establish a Device-to-Device P2P connection and "
+"fell back to Relayed P2P. However, it was aborted because the Free "
+"version only supports files smaller than {size}MB when using Relayed P2P."
+"\n"
+msgstr ""
+"一個對等端無法建立裝置對裝置的 P2P 連線，因此退回到中繼 P2P。但由於免費版本在使用中繼 P2P 時僅支援小於 {size}MB "
+"的檔案，因此已中止。\n"
+
+msgid "You need to use this feature after login. (Please run ffl login)"
+msgstr "您需要在登入後才能使用此功能。（請執行 ffl login）"
+
+msgid "Authorize failed! Please try login again."
+msgstr "授權失敗！請重新登入。"
+
+msgid ""
+"WebRTC connections are disabled by server policy (--force-relay). Please "
+"use HTTP download mode."
+msgstr "根據伺服器政策（--force-relay），WebRTC 連線已停用。請使用 HTTP 下載模式。"
+
+msgid "Login successful."
+msgstr "登入成功。"
+
+msgid "Login failed!"
+msgstr "登入失敗！"
+
+msgid "Logging out and clearing credentials"
+msgstr "正在登出並清除憑證"
+
+msgid "Logout successful."
+msgstr "登出成功。"
+
+msgid "Logout failed!"
+msgstr "登出失敗！"
+
+msgid "Authentication Status:"
+msgstr "身份驗證狀態："
+
+#, python-brace-format
+msgid "   User: {user}"
+msgstr "   使用者：{user}"
+
+msgid "Not logged in"
+msgstr "未登入"
+
+#, python-brace-format
+msgid "   Email: {email}"
+msgstr "   電子郵件：{email}"
+
+msgid "Not set"
+msgstr "未設定"
+
+#, python-brace-format
+msgid "   Level: {level}"
+msgstr "   等級：{level}"
+
+msgid "Free"
+msgstr "免費"
+
+msgid "Standard"
+msgstr "標準"
+
+msgid "Plus"
+msgstr "進階"
+
+#, python-brace-format
+msgid "   Serial: {serial}"
+msgstr "   序號：{serial}"
+
+msgid "   Points: 0"
+msgstr "   點數：0"
+
+#, python-brace-format
+msgid "   Points: {points}"
+msgstr "   點數：{points}"
+
+#, python-brace-format
+msgid "   Registered: {registered}"
+msgstr "   已註冊：{registered}"
+
+msgid "Yes"
+msgstr "是"
+
+msgid "No"
+msgstr "否"
+
+msgid "Enable error reporting to FastFileLink server for exception diagnostics"
+msgstr "啟用錯誤回報至快檔連結伺服器以進行例外診斷"
+
+msgid "Login to FastFileLink account"
+msgstr "登入快檔連結帳號"
+
+msgid "Register/Login to FastFileLink account (alias for login)"
+msgstr "註冊/登入快檔連結帳號（login 的別名）"
+
+msgid "Logout and clear credentials"
+msgstr "登出並清除憑證"
+
+msgid "Show authentication status"
+msgstr "顯示驗證狀態"
+
+#, python-brace-format
+msgid "Unknown auth command: {command}"
+msgstr "未知的驗證命令：{command}"
+
+msgid ""
+"Use custom alias as UID for sharing link (e.g., --alias cool creates link"
+" with 'cool' as UID)"
+msgstr "使用自訂別名作為分享連結的 UID（例如：--alias cool 會建立以 'cool' 為 UID 的連結）"
+
+msgid "Error: --alias with --upload is under development and not yet supported."
+msgstr "錯誤：--alias 搭配 --upload 正在開發中，尚未支援。"
+
+msgid ""
+"Error: HTTP Basic Authentication (--auth-user/--auth-password) with "
+"--upload is under development and not yet supported."
+msgstr "錯誤：HTTP 基本認證（--auth-user/--auth-password）搭配 --upload 正在開發中，尚未支援。"
+
+msgid "GUI.py requires Upload addon (addons/Upload.py) to function properly"
+msgstr "GUI.py 需要 Upload 附加元件（addons/Upload.py）才能正常運作"
+
+#, python-brace-format
+msgid "Loading advanced arguments from: {argsFile}"
+msgstr "正在從以下位置載入進階參數：{argsFile}"
+
+msgid "📁Select Folder"
+msgstr "📁選擇資料夾"
+
+msgid "Choose This Folder"
+msgstr "選擇此資料夾"
+
+msgid "Choose File"
+msgstr "選擇檔案"
+
+msgid "Cancel"
+msgstr "取消"
+
+msgid ""
+"Tip: Click 'Choose This Folder' to select current folder; 'Choose File' "
+"to select a file"
+msgstr "提示：點選「選擇此資料夾」以選取目前資料夾；「選擇檔案」以選取檔案"
+
+msgid "No folder selected."
+msgstr "未選擇資料夾。"
+
+msgid "Tip"
+msgstr "提示"
+
+msgid "Please select a file first."
+msgstr "請先選擇檔案。"
+
+msgid "Choose a file or folder"
+msgstr "選擇檔案或資料夾"
+
+msgid "This field is required"
+msgstr "此欄位為必填"
+
+msgid "🎁 Invite"
+msgstr "🎁 邀請"
+
+msgid ""
+"End-to-end encryption protects your files with strong encryption.\n"
+"\n"
+"Recipients can download using:\n"
+"  • Any web browser (recommended)\n"
+"  • FastFileLink CLI\n"
+"\n"
+"Note: Basic tools like curl/wget won't work with encrypted files."
+msgstr ""
+"端對端加密使用強加密保護您的檔案。\n"
+"\n"
+"接收者可使用以下方式下載：\n"
+"  • 任何網頁瀏覽器（推薦）\n"
+"  • 快檔連結 CLI\n"
+"\n"
+"注意：curl/wget 等基本工具無法處理加密檔案。"
+
+msgid "End-to-End Encryption"
+msgstr "端對端加密"
+
+msgid ""
+"Error reporting helps improve FastFileLink by sending crash reports and "
+"errors.\n"
+"\n"
+"What is sent:\n"
+"  • Error messages and stack traces\n"
+"  • Application version\n"
+"\n"
+"What is NOT sent:\n"
+"  • Your files or file contents\n"
+"  • Personal information\n"
+"\n"
+"You can disable this anytime in Preferences."
+msgstr ""
+"錯誤回報透過傳送當機報告和錯誤來協助改善快檔連結。\n"
+"\n"
+"會傳送的內容：\n"
+"  • 錯誤訊息和堆疊追蹤\n"
+"  • 應用程式版本\n"
+"\n"
+"不會傳送的內容：\n"
+"  • 您的檔案或檔案內容\n"
+"  • 個人資訊\n"
+"\n"
+"您可以隨時在偏好設定中停用此功能。"
+
+msgid "Error Reporting"
+msgstr "錯誤回報"
+
+msgid ""
+"Error reporting has been disabled.\n"
+"\n"
+"This change will take effect after you restart FastFileLink."
+msgstr ""
+"錯誤回報已停用。\n"
+"\n"
+"此變更將在您重新啟動快檔連結後生效。"
+
+msgid "Error Reporting Disabled"
+msgstr "錯誤回報已停用"
+
+msgid "3 hours"
+msgstr "3 小時"
+
+msgid "6 hours"
+msgstr "6 小時"
+
+msgid "12 hours"
+msgstr "12 小時"
+
+msgid "1 day"
+msgstr "1 天"
+
+msgid "3 days"
+msgstr "3 天"
+
+msgid "7 days"
+msgstr "7 天"
+
+msgid "14 days"
+msgstr "14 天"
+
+msgid "30 days"
+msgstr "30 天"
+
+#, python-brace-format
+msgid ""
+"Language has been changed to {language}.\n"
+"\n"
+"Please restart FastFileLink for the change to take effect."
+msgstr ""
+"語言已變更為 {language}。\n"
+"\n"
+"請重新啟動快檔連結以使變更生效。"
+
+msgid "Language Changed"
+msgstr "語言已變更"
+
+msgid "Complete Activation in Browser"
+msgstr "在瀏覽器中完成啟用"
+
+msgid ""
+"🌐 Your browser has been opened to complete login and activate this "
+"device. 🌐\n"
+"If you'd like to cancel, click below."
+msgstr ""
+"🌐 您的瀏覽器已開啟以完成登入並啟用此裝置。🌐\n"
+"如要取消，請點選下方按鈕。"
+
+msgid "Device activation canceled."
+msgstr "裝置啟用已取消。"
+
+msgid "Canceled"
+msgstr "已取消"
+
+msgid "Device activation successful!"
+msgstr "裝置啟用成功！"
+
+msgid "Success"
+msgstr "成功"
+
+msgid "Device activation failed."
+msgstr "裝置啟用失敗。"
+
+msgid "Login Error"
+msgstr "登入錯誤"
+
+msgid "👤 Account – Free (Not Activated)"
+msgstr "👤 帳戶 – 免費版（未啟用）"
+
+#, python-brace-format
+msgid "👤 Account – Plus ({userName})"
+msgstr "👤 帳戶 – Plus 版（{userName}）"
+
+#, python-brace-format
+msgid "👤 Account – Standard ({userName})"
+msgstr "👤 帳戶 – 標準版（{userName}）"
+
+msgid "👤 Account – Free (⁉️)"
+msgstr "👤 帳戶 – 免費版（⁉️）"
+
+msgid "🔐 User Settings"
+msgstr "🔐 使用者設定"
+
+msgid "📲 Activate This Device"
+msgstr "📲 啟用此裝置"
+
+msgid "🔧 Preferences"
+msgstr "🔧 偏好設定"
+
+msgid "🔐 Enable End-to-End Encryption"
+msgstr "🔐 啟用端對端加密"
+
+msgid "📊 Enable Error Reporting"
+msgstr "📊 啟用錯誤回報"
+
+msgid "🌐 Language"
+msgstr "🌐 語言"
+
+#, python-brace-format
+msgid "Help (v{version})"
+msgstr "說明（v{version}）"
+
+msgid "🎓 Tutorial"
+msgstr "🎓 教學"
+
+msgid "💬 Support"
+msgstr "💬 支援"
+
+msgid "🕵️‍♂️ Privacy Policy"
+msgstr "🕵️‍♂️ 隱私權政策"
+
+msgid "📜 Terms of Usage"
+msgstr "📜 使用條款"
+
+msgid "✨ Update available!"
+msgstr "✨ 有可用更新！"
+
+msgid "⚠️ VERSION INCOMPATIBLE!"
+msgstr "⚠️ 版本不相容！"
+
+msgid "⬇️ Download latest version"
+msgstr "⬇️ 下載最新版本"
+
+#, python-brace-format
+msgid "Require {cost} points, your current points are {points} Points."
+msgstr "需要 {cost} 點數，您目前的點數為 {points} 點。"
+
+msgid "Unable to get user points balance."
+msgstr "無法取得使用者點數餘額。"
+
+msgid "How it works?"
+msgstr "如何計算？"
+
+msgid "Buy More"
+msgstr "購買更多"
+
+#, python-brace-format
+msgid ""
+"\n"
+"    Congrats! You've earned {bonusDescription} promo!\n"
+"    Use promo code {bonusCode} at checkout to save on your next purchase."
+"\n"
+"    Shop now by the link below.\n"
+"    "
+msgstr ""
+"\n"
+"    恭喜！您已獲得 {bonusDescription} 優惠！\n"
+"    結帳時使用優惠碼 {bonusCode} 即可在下次購買時省錢。\n"
+"    請透過以下連結立即選購。\n"
+"    "
+
+msgid "Special Offer"
+msgstr "特別優惠"
+
+msgid "Error"
+msgstr "錯誤"
+
+msgid "File or Folder"
+msgstr "檔案或資料夾"
+
+msgid "Choose a file or folder you want to share"
+msgstr "選擇您要分享的檔案或資料夾"
+
+msgid "Upload mode"
+msgstr "上傳模式"
+
+msgid "Directly share file (P2P, need to keep running for the others download)"
+msgstr "直接分享檔案（P2P，需持續執行以供他人下載）"
+
+msgid "Upload file to FastFileLink server to share it"
+msgstr "上傳檔案至快檔連結伺服器進行分享"
+
+msgid "Share duration after upload"
+msgstr "上傳後的分享期限"
+
+msgid "Resume Upload"
+msgstr "繼續上傳"
+
+msgid "Resume Upload Found"
+msgstr "發現可繼續的上傳"
+
+#, python-brace-format
+msgid "File: {file}"
+msgstr "檔案：{file}"
+
+#, python-brace-format
+msgid "Progress: {percent:.1f}% completed"
+msgstr "進度：{percent:.1f}% 已完成"
+
+#, python-brace-format
+msgid "{completed} of {total} chunks uploaded"
+msgstr "已上傳 {completed}/{total} 個區塊"
+
+msgid "Would you like to continue from where you left off?"
+msgstr "您想要從上次中斷的地方繼續嗎？"
+
+msgid "▶️ Resume Upload"
+msgstr "▶️ 繼續上傳"
+
+msgid "🔄 Start Over"
+msgstr "🔄 重新開始"
+
+msgid "FastFileLink"
+msgstr "快檔連結"
+
+msgid "FastFileLink makes file sharing fast, simple, and secure."
+msgstr "快檔連結讓檔案分享變得快速、簡單又安全。"
+
+#, python-brace-format
+msgid "Set preferred tunnel for future runs. Available: {tunnels}"
+msgstr "設定未來執行時的首選通道。可用：{tunnels}"
+
+#, python-brace-format
+msgid "Server validation for UID {uid} failed explicitly."
+msgstr "UID {uid} 的伺服器驗證明確失敗。"
+
+#, python-brace-format
+msgid ""
+"Server validation for UID {uid} returned success=false. Response: "
+"{message}"
+msgstr "UID {uid} 的伺服器驗證返回 success=false。回應：{message}"
+
+msgid "No message"
+msgstr "無訊息"
+
+#, python-brace-format
+msgid "Retrying server ready check for UID {uid} due to request error: {error}"
+msgstr "由於請求錯誤，正在重試 UID {uid} 的伺服器就緒檢查：{error}"
+
+#, python-brace-format
+msgid "Retrying server ready check for UID {uid} due to unexpected error: {error}"
+msgstr "由於意外錯誤，正在重試 UID {uid} 的伺服器就緒檢查：{error}"
+
+#, python-brace-format
+msgid "Server for UID {uid} did not become ready after {retries} retries."
+msgstr "UID {uid} 的伺服器在 {retries} 次重試後仍未就緒。"
+
+#, python-brace-format
+msgid "API call failed (attempt {current}/{total}): {error}"
+msgstr "API 呼叫失敗（嘗試 {current}/{total}）：{error}"
+
+#, python-brace-format
+msgid "Retrying in {delay:.1f} seconds..."
+msgstr "將在 {delay:.1f} 秒後重試..."
+
+#, python-brace-format
+msgid "API call failed permanently after {total} attempts: {error}"
+msgstr "API 呼叫在 {total} 次嘗試後永久失敗：{error}"
+
+msgid ""
+"Please share the link below with the person you'd like to share the file "
+"with.\n"
+msgstr "請將以下連結分享給您想要分享檔案的人。\n"
+
+#, python-brace-format
+msgid "Your file will be stored on our servers until {end}"
+msgstr "您的檔案將儲存在我們的伺服器上直到 {end}"
+
+msgid ""
+"Once the sharing duration ends, your files will be permanently removed "
+"from our servers."
+msgstr "分享期限結束後，您的檔案將從我們的伺服器上永久移除。"
+
+msgid ""
+"\n"
+"You can adjust the point limit and other settings for this link below: "
+msgstr ""
+"\n"
+"您可以在下方調整此連結的點數限制和其他設定： "
+
+#, python-brace-format
+msgid "Resuming upload: {completed}/{total} chunks already completed"
+msgstr "繼續上傳：已完成 {completed}/{total} 個區塊"
+
+msgid "Starting upload..."
+msgstr "正在開始上傳..."
+
+msgid "Uploading..."
+msgstr "上傳中..."
+
+#, python-brace-format
+msgid "Preparing your {size:.1f} GB file..."
+msgstr "正在準備您的 {size:.1f} GB 檔案..."
+
+msgid "Initializing transfer... Progress will be shown momentarily."
+msgstr "正在初始化傳輸...進度即將顯示。"
+
+#, python-brace-format
+msgid ""
+"Processing {size:.1f} GB file. The transfer will be handled in chunks for"
+" stability and speed."
+msgstr "正在處理 {size:.1f} GB 檔案。為了穩定性和速度，將以區塊方式處理傳輸。"
+
+msgid "Reading initial data chunks and starting concurrent uploads..."
+msgstr "正在讀取初始資料區塊並開始並行上傳..."
+
+msgid ""
+"\n"
+"Upload was cancelled due to chunk failure!"
+msgstr ""
+"\n"
+"由於區塊失敗，上傳已取消！"
+
+msgid "Upload cancelled due to chunk failure"
+msgstr "由於區塊失敗，上傳已取消"
+
+msgid "Upload cancelled by user"
+msgstr "使用者已取消上傳"
+
+msgid "Upload timed out"
+msgstr "上傳逾時"
+
+msgid "Upload failed due to error"
+msgstr "上傳因錯誤而失敗"
+
+msgid "All chunks uploaded successfully, waiting for server verification..."
+msgstr "所有分塊已成功上傳，正在等待伺服器驗證..."
+
+#, python-brace-format
+msgid "[{timestamp}] Uploading empty file: {filename}"
+msgstr "[{timestamp}] 正在上傳空檔案：{filename}"
+
+#, python-brace-format
+msgid "Upload timed out after {timeout} seconds. Cancelling remaining operations."
+msgstr "上傳在 {timeout} 秒後逾時。正在取消剩餘操作。"
+
+msgid "Upload cancelled by user."
+msgstr "使用者已取消上傳。"
+
+#, python-brace-format
+msgid "Error during upload: {error}"
+msgstr "上傳期間發生錯誤：{error}"
+
+msgid "Cleanup timeout, forcing cleanup"
+msgstr "清理逾時，強制清理"
+
+#, python-brace-format
+msgid ""
+"\n"
+"Upload cancelled due to chunk {chunk} failure: {error}"
+msgstr ""
+"\n"
+"由於區塊 {chunk} 失敗，上傳已取消：{error}"
+
+#, python-brace-format
+msgid "Cancellation detected, stopping at chunk {chunk}"
+msgstr "偵測到取消，正在區塊 {chunk} 停止"
+
+msgid "Chunk producer cancelled."
+msgstr "區塊產生器已取消。"
+
+#, python-brace-format
+msgid "Error in chunk producer: {error}"
+msgstr "區塊產生器錯誤：{error}"
+
+#, python-brace-format
+msgid ""
+"Progress: {successfulChunks}/{totalChunks} chunks. "
+"{uploadedSize}/{totalSize} ({percentage:.2f}%), {speed}/sec"
+msgstr ""
+"進度：{successfulChunks}/{totalChunks} 個分塊。{uploadedSize}/{totalSize} "
+"({percentage:.2f}%)，{speed}/秒"
+
+msgid "Progress monitoring cancelled."
+msgstr "進度監控已取消。"
+
+#, python-brace-format
+msgid "Chunk #{chunk}: Upload cancelled before attempt {attempt}"
+msgstr "區塊 #{chunk}：在嘗試 {attempt} 之前上傳已取消"
+
+#, python-brace-format
+msgid "Chunk #{chunk} cancelled before attempt {attempt}"
+msgstr "區塊 #{chunk} 在嘗試 {attempt} 之前已取消"
+
+#, python-brace-format
+msgid "Retrying chunk #{chunk} (attempt {current}/{total}) in {delay:.2f}s..."
+msgstr "正在重試區塊 #{chunk}（嘗試 {current}/{total}），{delay:.2f} 秒後..."
+
+#, python-brace-format
+msgid "Chunk #{chunk} attempt {attempt} failed: {message}"
+msgstr "區塊 #{chunk} 嘗試 {attempt} 失敗：{message}"
+
+#, python-brace-format
+msgid "Chunk #{chunk} attempt {attempt} failed (FINAL): {message}"
+msgstr "區塊 #{chunk} 嘗試 {attempt} 失敗（最終）：{message}"
+
+#, python-brace-format
+msgid "Server error reported: {message}"
+msgstr "伺服器回報錯誤：{message}"
+
+#, python-brace-format
+msgid "Error handling shutdown request: {error}"
+msgstr "處理關閉請求時發生錯誤：{error}"
+
+#, python-brace-format
+msgid "[{timestamp}] Uploading to server"
+msgstr "[{timestamp}] 正在上傳到伺服器"
+
+msgid ""
+"Finish uploading, please still wait a moment because the FastFileLink "
+"server is processing your file.\n"
+msgstr "上傳完成，請稍候片刻，因為 快檔連結 伺服器正在處理您的檔案。\n"
+
+msgid "Server verification completed successfully!"
+msgstr "伺服器驗證成功完成！"
+
+msgid "Server verification failed."
+msgstr "伺服器驗證失敗。"
+
+msgid "Server verification failed"
+msgstr "伺服器驗證失敗"
+
+msgid ""
+"\n"
+"Server closes the connection, please try again.\n"
+msgstr ""
+"\n"
+"伺服器關閉連線，請重試。\n"
+
+#, python-brace-format
+msgid ""
+"UPLOAD_METHOD environment variable detected, using {mode} method to "
+"upload."
+msgstr "偵測到 UPLOAD_METHOD 環境變數，使用 {mode} 方法上傳。"
+

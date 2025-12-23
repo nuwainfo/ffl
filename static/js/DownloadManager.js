@@ -284,7 +284,7 @@ class DownloadManager {
             this.updateProgressInfo(`${totalStr} / ${totalStr}`);
         }
 
-        this.updateStatus(this.t('download.complete.title', 'Download completed!'), '');
+        this.updateStatus(this.t('Download:complete.title', 'Download completed!'), '');
         this.showCompleteBlock();
 
         // Call external callback if provided
@@ -416,15 +416,15 @@ class DownloadManager {
         
         if (this.currentPlan && this.currentPlan.mode === 'pass') {
             this.updateStatus(
-                this.t('download.progress.backgroundHeading', 'Download is processing in background'),
-                this.t('download.progress.backgroundDetailsByPass', 
+                this.t('Download:progress.backgroundHeading', 'Download is processing in background'),
+                this.t('Download:progress.backgroundDetailsByPass', 
                   'Check your browser download bar (usually at bottom/top) for progress — or confirmation that the download has already finished.')
             );
-            this.updateProgressInfo(this.t('download.progress.downloadingMightDone', 'Downloading file...It may already be done.'));            
+            this.updateProgressInfo(this.t('Download:progress.downloadingMightDone', 'Downloading file...It may already be done.'));            
         } else {
             this.updateStatus(
-                this.t('download.progress.backgroundHeading', 'Download is processing in background'),
-                this.t('download.progress.backgroundDetails', 'Check your browser download bar (usually at bottom/top) for progress')
+                this.t('Download:progress.backgroundHeading', 'Download is processing in background'),
+                this.t('Download:progress.backgroundDetails', 'Check your browser download bar (usually at bottom/top) for progress')
             );
         }
         
@@ -452,12 +452,12 @@ class DownloadManager {
         if (useSubtleStyle) {
             // Firefox pass-through mode or browsers with progress: subtle blue text link style
             retryButton.removeClass('btn retry-link-prominent').addClass('retry-link-subtle');
-            retryButton.html(this.t('download.progress.troubleSubtle', 'Having trouble? Try again in new tab'));
+            retryButton.html(this.t('Download:progress.troubleSubtle', 'Having trouble? Try again in new tab'));
             this.log('DownloadManager', 'Using subtle retry link (Firefox pass-through or progress detected)');
         } else {
             // Browsers with no progress: prominent amber button
             retryButton.removeClass('retry-link-subtle').addClass('retry-link-prominent');
-            retryButton.html(this.t('download.progress.troubleProminent', '🔄 Having trouble? Try again in new tab'));
+            retryButton.html(this.t('Download:progress.troubleProminent', '🔄 Having trouble? Try again in new tab'));
             this.log('DownloadManager', 'Using prominent retry button (no progress detected)');
         }
     }
@@ -602,8 +602,8 @@ class DownloadManager {
         }
         
         this.updateStatus(
-            this.t('download.progress.inProgressHeading', 'Download in progress...'), 
-            this.t('download.progress.inProgressDetails', 'Please wait while your file downloads')
+            this.t('Download:progress.inProgressHeading', 'Download in progress...'), 
+            this.t('Download:progress.inProgressDetails', 'Please wait while your file downloads')
         );
         
         // Check if we should use Firefox pass-through UI or normal progress UI
@@ -622,7 +622,7 @@ class DownloadManager {
                 const totalStr = this.formatBytes(resolvedTotal);
                 this.updateProgressInfo(`${transferredStr} / ${totalStr}`);
             } else {
-                this.updateProgressInfo(this.t('download.progress.starting', 'Starting download...')); // Clear the "Connecting..." message
+                this.updateProgressInfo(this.t('Download:progress.starting', 'Starting download...')); // Clear the "Connecting..." message
             }
         }
         
@@ -650,9 +650,9 @@ class DownloadManager {
         // Show file size info only in progress-info area
         if (total) {
             const totalStr = this.formatBytes(total);
-            this.updateProgressInfo(this.t('download.progress.downloadingWithSize', 'Downloading {{size}} file...', { size: totalStr }));
+            this.updateProgressInfo(this.t('Download:progress.downloadingWithSize', 'Downloading {{size}} file...', { size: totalStr }));
         } else {
-            this.updateProgressInfo(this.t('download.progress.downloading', 'Downloading file...'));
+            this.updateProgressInfo(this.t('Download:progress.downloading', 'Downloading file...'));
         }
         
         this.log('DownloadManager', 'Firefox progress bar set to animated 100% (no text)');
@@ -703,8 +703,8 @@ class DownloadManager {
         if (indeterminate) {
             // Firefox large file: indeterminate progress
             this.updateStatus(
-                this.t('download.progress.starting', 'Starting download...'),
-                this.t('download.progress.checkDownloads', 'You can check progress in the Downloads panel (Ctrl+J)')
+                this.t('Download:progress.starting', 'Starting download...'),
+                this.t('Download:progress.checkDownloads', 'You can check progress in the Downloads panel (Ctrl+J)')
             );
             
             // Set progress bar to indeterminate (striped animation)
@@ -715,14 +715,14 @@ class DownloadManager {
                           .attr('aria-valuenow', 100);
             }
             
-            this.updateProgressInfo(this.t('download.progress.preparingLarge', 'Preparing {{size}} file for direct download...', { size: sizeStr }));
+            this.updateProgressInfo(this.t('Download:progress.preparingLarge', 'Preparing {{size}} file for direct download...', { size: sizeStr }));
         } else {
             // Normal progress tracking
             this.updateStatus(
-                this.t('download.progress.starting', 'Starting download...'),
-                this.t('download.progress.pleaseWait', 'Please wait while your file downloads')
+                this.t('Download:progress.starting', 'Starting download...'),
+                this.t('Download:progress.pleaseWait', 'Please wait while your file downloads')
             );
-            this.updateProgressInfo(this.t('download.progress.preparing', 'Preparing download...'));
+            this.updateProgressInfo(this.t('Download:progress.preparing', 'Preparing download...'));
         }
         
         this.log('DownloadManager', `Starting UI shown for ${filename} (${sizeStr}), indeterminate: ${indeterminate}`);
@@ -733,16 +733,16 @@ class DownloadManager {
      */
     showIndeterminateStartedUI() {
         this.updateStatus(
-            this.t('download.progress.started', '✓ Download started in your browser (Firefox)'),
-            this.t('download.progress.checkDownloads', 'You can check progress in the Downloads panel (Ctrl+J)')
+            this.t('Download:progress.started', '✓ Download started in your browser (Firefox)'),
+            this.t('Download:progress.checkDownloads', 'You can check progress in the Downloads panel (Ctrl+J)')
         );
 
         // Add backup retry option after a delay
         setTimeout(() => {
             if (!this.downloadStarted) { // Only show if no progress detected
                 this.updateStatus(
-                    this.t('download.progress.started', '✓ Download started in your browser (Firefox)'),
-                    this.t('download.progress.havingTrouble', 'Having trouble? Try again or check your Downloads folder')
+                    this.t('Download:progress.started', '✓ Download started in your browser (Firefox)'),
+                    this.t('Download:progress.havingTrouble', 'Having trouble? Try again or check your Downloads folder')
                 );
             }
         }, 4000);
@@ -759,8 +759,8 @@ class DownloadManager {
         const limitStr = this.formatBytes(this.FF_SW_LIMIT);
 
         this.updateStatus(
-            this.t('download.e2ee.firefoxBlocked.title', '🔒 Encrypted Download Not Available'),
-            this.t('download.e2ee.firefoxBlocked.details',
+            this.t('Download:e2ee.firefoxBlocked.title', '🔒 Encrypted Download Not Available'),
+            this.t('Download:e2ee.firefoxBlocked.details',
                 'Encrypted downloads larger than {{limit}} require a Chromium-based browser for streaming decryption.',
                 { limit: limitStr })
         );
@@ -776,23 +776,23 @@ class DownloadManager {
         }
 
         this.updateProgressInfo(
-            this.t('download.e2ee.firefoxBlocked.fileSize', 'File size: {{size}}', { size: sizeStr })
+            this.t('Download:e2ee.firefoxBlocked.fileSize', 'File size: {{size}}', { size: sizeStr })
         );
 
         // Show error message with browser recommendations
         const $statusDetails = $(this.statusDetails);
         if ($statusDetails.length) {
-            const recommendedBrowsers = this.t('download.e2ee.firefoxBlocked.browsers',
+            const recommendedBrowsers = this.t('Download:e2ee.firefoxBlocked.browsers',
                 'Chrome, Edge, or Brave');
 
             $statusDetails.html(
-                `<strong>${this.t('download.e2ee.firefoxBlocked.why', 'Why?')}</strong> ` +
-                this.t('download.e2ee.firefoxBlocked.explanation',
+                `<strong>${this.t('Download:e2ee.firefoxBlocked.why', 'Why?')}</strong> ` +
+                this.t('Download:e2ee.firefoxBlocked.explanation',
                     'Large encrypted files cannot be streaming decrypted reliably in Firefox.') +
-                `<br><br><strong>${this.t('download.e2ee.firefoxBlocked.solution', 'Solution:')}</strong><br>` +
-                `• ${this.t('download.e2ee.firefoxBlocked.useBrowser', 'Use {{browsers}}', { browsers: recommendedBrowsers })}<br>` +
-                `• ${this.t('download.e2ee.firefoxBlocked.useCLI', 'Or use the <a href="https://github.com/nuwainfo/ffl" target="_blank" style="display: inline !important; padding: 0 !important; margin: 0 !important; border: none !important; background: none !important; color: #007bff !important; text-decoration: underline !important; font-size: inherit !important;">FastFileLink CLI</a>')}<br>` +
-                `• ${this.t('download.e2ee.firefoxBlocked.smallFiles', 'Small encrypted files (<{{limit}}) work on Firefox', { limit: limitStr })}`
+                `<br><br><strong>${this.t('Download:e2ee.firefoxBlocked.solution', 'Solution:')}</strong><br>` +
+                `• ${this.t('Download:e2ee.firefoxBlocked.useBrowser', 'Use {{browsers}}', { browsers: recommendedBrowsers })}<br>` +
+                `• ${this.t('Download:e2ee.firefoxBlocked.useCLI', 'Or use the <a href="https://github.com/nuwainfo/ffl" target="_blank" style="display: inline !important; padding: 0 !important; margin: 0 !important; border: none !important; background: none !important; color: #007bff !important; text-decoration: underline !important; font-size: inherit !important;">FastFileLink CLI</a>')}<br>` +
+                `• ${this.t('Download:e2ee.firefoxBlocked.smallFiles', 'Small encrypted files (<{{limit}}) work on Firefox', { limit: limitStr })}`
             );
         }
 
@@ -1254,11 +1254,11 @@ class DownloadManager {
                 }
                 
                 this.updateStatus(
-                    this.t('download.progress.newTabOpened', 'Download opened in new tab'), 
-                    this.t('download.progress.canCloseTab', 'You can close this tab if desired')
+                    this.t('Download:progress.newTabOpened', 'Download opened in new tab'), 
+                    this.t('Download:progress.canCloseTab', 'You can close this tab if desired')
                 );
                 
-                this.updateProgressInfo(this.t('download.progress.stoppedForNewTab', 'Download stopped in this tab - continuing in new tab'));
+                this.updateProgressInfo(this.t('Download:progress.stoppedForNewTab', 'Download stopped in this tab - continuing in new tab'));
             }, 100);
         });
         
@@ -1275,7 +1275,7 @@ class DownloadManager {
             // Most browsers won't allow closing, so provide fallback message
             setTimeout(() => {
                 if (!document.hidden) {
-                    $('#close-this-tab').text(this.t('download.progress.unableToClose', 'Unable to auto-close, you can manually close this tab'));
+                    $('#close-this-tab').text(this.t('Download:progress.unableToClose', 'Unable to auto-close, you can manually close this tab'));
                 }
             }, 300);
         });

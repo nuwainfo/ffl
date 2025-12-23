@@ -30,7 +30,7 @@ import requests
 
 
 from addons.Tunnels import TunnelRunnerProvider, StaticURLTunnelClient # isort:skip
-from bases.Tunnel import TunnelRunner # isort:skip
+from bases.Tunnel import TunnelRunner, TunnelUnavailableError # isort:skip
 
 from tests.BrowserTestBase import BrowserTestBase # isort:skip
 
@@ -176,7 +176,7 @@ class TestTunnelIntegration(BrowserTestBase):
                 print(f"Attempt {attempt + 1}: Testing tunnel availability...{testUrl}")
                 response = requests.get(testUrl, timeout=5)
                 if response.status_code == 200:
-                    print(f"✅ Tunnel available after {attempt + 1} attempts")
+                    print(f"[OK] Tunnel available after {attempt + 1} attempts")
                     return
                 else:
                     print(f"Tunnel responded with status {response.status_code}")
@@ -429,6 +429,125 @@ class TestTunnelIntegration(BrowserTestBase):
 
         print("✅ Test 2 passed - Core.py HTTP + E2EE download verified")
         print("✅ E2EE tunnel test passed - both browser and Core.py downloads verified")
+
+    @unittest.skipUnless(shutil.which('cloudflared'), "cloudflared binary not found in PATH")
+    @unittest.skipIf(os.getenv('SKIP_INTEGRATION_TESTS'), "Integration tests disabled")
+    def testP2PWithCloudflareWhenServerDown(self):
+        """Test that P2P with Cloudflare tunnel works even when FastFileLink server is unreachable
+
+        This test verifies:
+        1. Default tunnel (Bore) fails to get tunnel token when server is down
+        2. Cloudflare tunnel still works even when server is down (P2P resilience)
+        """
+        print("\n" + "="*70)
+        print("Test: P2P resilience when FastFileLink server is unreachable")
+        print("="*70)
+
+        # Use an unlikely port to ensure server is unreachable
+        unreachableServerUrl = 'http://localhost:9999'
+
+        # Common environment variables for all tests
+        baseEnvVars = {
+            'FFL_STORAGE_LOCATION': self.tempDir,
+            'FILESHARE_TEST': unreachableServerUrl,  # Point to unreachable server
+            # This should automatically set by API.py but in test case it set when test case run.
+            'TUNNEL_TOKEN_SERVER_URL': unreachableServerUrl, 
+            'FREE_USER_LEVEL': 'Free'  # Ensure test runs as Free user
+        }
+
+        # Part 1: Test that default tunnel fails when server is down
+        print("\n[Part 1] Testing default tunnel (Bore) failure without server...")
+        print(f"Server URL: {unreachableServerUrl} (unreachable)")
+        print(f"[Test] Attempting to start with default tunnel (should fail)...")
+
+        # Try to start FastFileLink - it will fail and we'll check the output
+        try:
+            shareLink = self._startFastFileLink(
+                p2p=True,
+                extraEnvVars=baseEnvVars,
+                extraArgs=[]  # No cloudflare, use default tunnel
+            )
+            # If we get here, the process unexpectedly succeeded
+            self.fail(f"Default tunnel should have failed, but got share link: {shareLink}")
+
+        except (AssertionError, Exception) as e:
+            # Expected to fail - now read the log file to find TunnelUnavailableError
+            print(f"[Test] Process failed as expected: {type(e).__name__}")
+
+            # Close the log file if it's still open
+            if hasattr(self, '_procLogFile') and self._procLogFile:
+                self._procLogFile.close()
+                self._procLogFile = None
+
+            # Read the process log file with encoding error handling
+            processOutput = ''
+
+            if os.path.exists(self.procLogPath):
+                try:
+                    with open(self.procLogPath, 'r', encoding='utf-8', errors='replace') as f:
+                        processOutput = f.read()
+                    print(f"[Test] Read {len(processOutput)} chars from log file")
+                except Exception as readError:
+                    print(f"[Test] Warning: Could not read log file: {readError}")
+            else:
+                print(f"[Test] Warning: Log file not found at {self.procLogPath}")
+
+            # Verify the output contains TunnelUnavailableError
+            self.assertIn('TunnelUnavailableError', processOutput,
+                         f"Process output should contain TunnelUnavailableError. Got {len(processOutput)} chars")
+            self.assertIn('tunnel token', processOutput.lower(),
+                         f"Process output should mention tunnel token")
+
+            print("[PASS] Part 1 - Default tunnel correctly fails when server is unreachable")
+            print("       Found TunnelUnavailableError in process output")
+
+        # Part 2: Test that Cloudflare tunnel succeeds even when server is down
+        print("\n[Part 2] Testing Cloudflare tunnel success despite unreachable server...")
+
+        # Create config with cloudflare enabled
+        config = createTestConfig(preferredTunnel='cloudflare', enableCloudflare=True)
+        with open(self.configPath, 'w') as f:
+            json.dump(config, f)
+
+        # Start FastFileLink with Cloudflare tunnel and keep it running
+        # Use default waitForCompletion to get share link, process stays running until tearDown
+        shareLink = self._startFastFileLink(
+            p2p=True,
+            extraEnvVars=baseEnvVars,
+            extraArgs=['--preferred-tunnel', 'cloudflare']
+        )
+
+        # Verify tunnel is used (cloudflare domain)
+        self.assertIn('trycloudflare.com', shareLink,
+                     "Share link should use cloudflare tunnel")
+
+        print(f"[PASS] Part 2.1 - Share link generated with Cloudflare tunnel: {shareLink}")
+
+        # Wait for tunnel to become available
+        print("[Part 2.2] Waiting for Cloudflare tunnel to become available...")
+        self._waitForTunnelAvailable(shareLink)
+
+        # Test actual P2P download with Core.py (WebRTC disabled to force HTTP through tunnel)
+        print("[Part 2.3] Testing actual file download through Cloudflare tunnel...")
+        expectedFilename = os.path.basename(self.testFilePath)
+        downloadPath = os.path.join(self.tempDir, "downloaded_" + expectedFilename)
+
+        downloadedFile = self._downloadWithCore(
+            shareLink,
+            downloadPath,
+            extraEnvVars={'DISABLE_WEBRTC': 'True'}  # Force HTTP through tunnel
+        )
+
+        # Verify downloaded file matches original
+        self._verifyDownloadedFile(downloadedFile)
+
+        print("[PASS] Part 2.3 - File downloaded successfully through Cloudflare tunnel")
+        print("="*70)
+        print("[PASS] FULL TEST PASSED:")
+        print("       1. Default tunnel fails without server (can't get token)")
+        print("       2. Cloudflare tunnel generates share link (server down)")
+        print("       3. File successfully downloads through tunnel (P2P resilience proven!)")
+        print("="*70)
 
 
 if __name__ == '__main__':

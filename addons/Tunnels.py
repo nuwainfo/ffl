@@ -34,6 +34,8 @@ from bases.Kernel import getLogger, FFLEvent, StorageLocator
 from bases.Tunnel import AsyncTunnelThread
 from bases.Settings import SettingsGetter
 
+from addons import _ # I18n for addons domain
+
 logger = getLogger(__name__)
 
 
@@ -569,7 +571,9 @@ class TunnelRunnerProvider:
         parser.add_argument(
             "--preferred-tunnel",
             choices=availableTunnels,
-            help=f"Set preferred tunnel for future runs. Available: {', '.join(availableTunnels)}",
+            help=_("Set preferred tunnel for future runs. Available: {tunnels}").format(
+                tunnels=', '.join(availableTunnels)
+            ),
             dest="preferredTunnel"
         )
 

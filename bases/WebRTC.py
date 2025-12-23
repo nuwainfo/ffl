@@ -44,6 +44,7 @@ from bases.Progress import Progress
 from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
 from bases.E2EE import E2EEClient
 from bases.Reader import SourceReader, FolderChangedException
+from bases.I18n import _
 
 
 # Custom exception for WebRTC connection timeout
@@ -489,7 +490,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
                             bytesSinceLastSleep = 0
 
                 # Progress logging every 5MB or every 2 seconds
-                progress.update(sent, extraText="P2P direct")
+                progress.update(sent, extraText=_("P2P direct"))
 
             # Wait for buffer to drain before sending EOF to prevent race condition
             # where EOF arrives before final chunk on receiver side
@@ -499,15 +500,15 @@ class WebRTCManager(AsyncLoopExceptionMixin):
             dc.send("EOF")
 
             # Final progress update
-            progress.update(sent, forceLog=True, extraText="P2P direct")
+            progress.update(sent, forceLog=True, extraText=_("P2P direct"))
 
             # Calculate final statistics
             totalTime = progress.getElapsedTime()
             sizeDisplay = getSizeFunc(sent) if getSizeFunc else f"{sent / (ONE_MB):.2f} MB"
-            self.loggerCallback(
-                f'Finish transfer {sizeDisplay} for [#{peerId[:5]}], '
+            self.loggerCallback(_(
+                'Finish transfer {sizeDisplay} for [#{peerId}], '
                 'please wait for the recipient to finish downloading before you close the application..\n'
-            )
+            ).format(sizeDisplay=sizeDisplay, peerId=peerId[:5]))
 
             # Wait for browser to signal completion or timeout after 30 seconds
             completionEvent = self.downloadCompleteEvents.get(peerId)
@@ -579,23 +580,23 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
     """WebRTC-based file downloader that connects to FastFileLink servers"""
 
     # Class-level constants for progress bar and retry configuration
-    _PROGRESS_BAR_FORMAT = '{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]{postfix}'
+    _PROGRESS_BAR_FORMAT = '{desc} {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]{postfix}'
     _MAX_ICE_RETRIES = 5
     _ICE_RETRY_DELAYS = (0.2, 0.4, 0.8, 1.6, 2.0)
     _ICE_IDLE_SLEEP = 0.2 # Sleep interval when no ICE candidates are available
 
     # Progress status messages
-    _STATUS_CONNECTING = "Connecting to server"
-    _STATUS_REQUESTING = "Requesting connection"
-    _STATUS_SETUP_WEBRTC = "Setting up WebRTC"
-    _STATUS_ESTABLISHING = "Establishing connection"
-    _STATUS_NEGOTIATING = "Negotiating connection"
-    _STATUS_WAITING_CHANNEL = "Waiting for data channel"
-    _STATUS_DOWNLOADING = "Downloading"
-    _STATUS_HTTP_DOWNLOAD = "HTTP download"
-    _STATUS_HTTP_FALLBACK = "HTTP fallback"
-    _STATUS_FILE_COMPLETE = "File already downloaded"
-    _STATUS_METADATA = "Getting file metadata"
+    _STATUS_CONNECTING = _("Connecting to server")
+    _STATUS_REQUESTING = _("Requesting connection")
+    _STATUS_SETUP_WEBRTC = _("Setting up WebRTC")
+    _STATUS_ESTABLISHING = _("Establishing connection")
+    _STATUS_NEGOTIATING = _("Negotiating connection")
+    _STATUS_WAITING_CHANNEL = _("Waiting for data channel")
+    _STATUS_DOWNLOADING = _("Downloading")
+    _STATUS_HTTP_DOWNLOAD = _("HTTP download")
+    _STATUS_HTTP_FALLBACK = _("HTTP fallback")
+    _STATUS_FILE_COMPLETE = _("File already downloaded")
+    _STATUS_METADATA = _("Getting file metadata")
 
     # Default connection timeout for WebRTC establishment (seconds)
     # Web uses 30s, CLI uses 60s for more tolerance on slower connections
@@ -809,24 +810,25 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                 logger.warning(f"Failed to decode key from URL fragment: {e}")
 
         # Prompt user for key
-        self.loggerCallback("\n⚠️  This file is encrypted. Please enter the encryption key:")
-        self.loggerCallback("(The key should be provided by the person who shared this file)\n")
+        self.loggerCallback(_("\n⚠️  This file is encrypted. Please enter the encryption key:"))
+        self.loggerCallback(_("(The key should be provided by the person who shared this file)\n"))
 
         try:
-            keyInput = input("Encryption key: ").strip()
+            keyInput = input(_("Encryption key: ")).strip()
             if not keyInput:
-                raise ValueError("Encryption key is required to download this file")
+                raise ValueError(_("Encryption key is required to download this file"))
 
             # Decode base64 key
             key = base64.b64decode(keyInput)
             if len(key) != 32:
-                raise ValueError(f"Invalid key length: {len(key)} bytes (expected 32 bytes for AES-256)")
+                raise ValueError(_("Invalid key length: {keyLength} bytes (expected 32 bytes for AES-256)").format(
+                    keyLength=len(key)))
 
             return key
         except KeyboardInterrupt:
-            raise RuntimeError("Download cancelled by user")
+            raise RuntimeError(_("Download cancelled by user"))
         except Exception as e:
-            raise ValueError(f"Invalid encryption key: {e}")
+            raise ValueError(_("Invalid encryption key: {error}").format(error=e))
 
     def _getRemoteMetadata(self, url: str, headers: dict, isGenericURL: bool = False) -> Tuple[int, str]:
         """Get file size and name from remote server using HEAD request
@@ -1481,7 +1483,8 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         # Resolve output path using helper
         finalOutputPath = self._resolveOutputPath(outputPath, filename)
 
-        self.loggerCallback(f"Downloading {filename} ({fileSize:,} bytes)")
+        self.loggerCallback(_("Downloading {filename} ({fileSize:,} bytes)").format(
+            filename=filename, fileSize=fileSize))
 
         # Handle resume logic
         resumePosition = self._handleResumeLogic(finalOutputPath, fileSize, resume)
@@ -1491,7 +1494,9 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             return self._finishAlreadyComplete(fileSize, resumePosition, finalOutputPath)
 
         if resumePosition > 0:
-            self.loggerCallback(f"Resuming WebRTC download from {formatSize(resumePosition)} / {formatSize(fileSize)}")
+            self.loggerCallback(_("Resuming WebRTC download from {resumePos} / {totalSize}").format(
+                resumePos=formatSize(resumePosition), totalSize=formatSize(fileSize)
+            ))
 
         # Initialize progress bar early with connection status using helper
         # Store as instance variable so it can be reused for HTTP fallback if WebRTC fails
@@ -1519,7 +1524,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             logger.debug(f"Using offer URL: {offerURL}")
 
         try:
-            offerData, _ = await asyncio.to_thread(self._sendHTTPRequest, offerURL, "GET", None, authHeaders)
+            offerData, __ = await asyncio.to_thread(self._sendHTTPRequest, offerURL, "GET", None, authHeaders)
             peerId = offerData["peerId"]
         except requests.exceptions.HTTPError as e:
             if e.response and e.response.status_code == 404:
@@ -1767,7 +1772,9 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
 
         # Show resume message if resuming (only when not using shared progress)
         if resumePosition > 0 and not sharedProgress:
-            self.loggerCallback(f"Resuming download from {formatSize(resumePosition)} / {formatSize(fileSize)}")
+            self.loggerCallback(_("Resuming download from {resumePos} / {totalSize}").format(
+                resumePos=formatSize(resumePosition), totalSize=formatSize(fileSize)
+            ))
 
         # Use shared progress or create new one
         if sharedProgress:
@@ -1933,7 +1940,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                 urlInfo = self._extractURLInfo(url)
 
             authHeaders = self._createAuthHeaders(credentials)
-            fileSize, _ = self._getRemoteMetadata(urlInfo.baseURL, authHeaders)
+            fileSize, __ = self._getRemoteMetadata(urlInfo.baseURL, authHeaders)
             sharedProgress = self._ensureProgress(fileSize, self._STATUS_HTTP_FALLBACK, 0)
 
         try:
@@ -1979,13 +1986,13 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
 
         # If this is a generic HTTP URL (not FastFileLink), show warning and download directly
         if urlInfo.isGenericURL:
-            self.loggerCallback("⚠️  This is not a FastFileLink URL, downloading directly via HTTP (like wget)...")
+            self.loggerCallback(_("⚠️  This is not a FastFileLink URL, downloading directly via HTTP (like wget)..."))
             return self._downloadViaHTTP(url, outputPath, credentials, None, resume, e2eeContext=None, urlInfo=urlInfo)
 
         # Check for E2EE encryption using FFL-Mode header
         e2eeContext = None
         if urlInfo.e2eeEnabled:
-            self.loggerCallback("🔒 End-to-end encryption detected")
+            self.loggerCallback(_("🔒 End-to-end encryption detected"))
 
             # Get encryption key for upload mode (from URL fragment or user input)
             contentKey = self._getUploadModeEncryptionKey(urlInfo.urlFragment) if urlInfo.isUploadMode else None
@@ -1995,7 +2002,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             e2eeContext = self.e2eeClient.buildE2EEContext(urlInfo.baseURL, urlInfo.isUploadMode, contentKey)
 
             if e2eeContext and urlInfo.isUploadMode:
-                self.loggerCallback("✓ Encryption key verified successfully")
+                self.loggerCallback(_("✓ Encryption key verified successfully"))
 
         webrtcDisabled = os.getenv('DISABLE_WEBRTC', None) == 'True'
 
@@ -2003,7 +2010,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         useWebRTC = urlInfo.supportsWebRTC and not webrtcDisabled
 
         if not useWebRTC:
-            self.loggerCallback("WebRTC not supported, using HTTP download...")
+            self.loggerCallback(_("WebRTC not supported, using HTTP download..."))
             return self._downloadViaHTTP(
                 url, outputPath, credentials, None, resume, e2eeContext=e2eeContext, urlInfo=urlInfo
             )
@@ -2011,7 +2018,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         future = None
         try:
             # Try WebRTC first
-            self.loggerCallback("Attempting WebRTC download...")
+            self.loggerCallback(_("Attempting WebRTC download..."))
             future = asyncio.run_coroutine_threadsafe(
                 self._downloadViaWebRTC(url, outputPath, credentials, resume, e2eeContext, urlInfo), self.loop
             )

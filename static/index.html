@@ -53,14 +53,14 @@ Licensed under Apache-2.0 license.
                     <div class="col-lg-8 offset-lg-2">
                         <div class="section-heading">
                             <h4>
-                                <span data-i18n="download.title">Downloading</span>
-                                <em><span data-i18n="download.file">File</span></em>
-                                <i id="file-info-icon" class="fas fa-info-circle" 
+                                <span data-i18n="Download:title">Downloading</span>
+                                <em><span data-i18n="Download:file">File</span></em>
+                                <i id="file-info-icon" class="fas fa-info-circle"
                                    style="margin-left: 8px; margin-right: 8px; color: #007bff; cursor: help; font-size: 0.8em;"
-                                   title="" 
-                                   data-bs-toggle="tooltip" 
+                                   title=""
+                                   data-bs-toggle="tooltip"
                                    data-bs-placement="bottom"></i>
-                                <span data-i18n="download.ellipsis">...</span>
+                                <span data-i18n="Download:ellipsis">...</span>
                             </h4>
                         </div>
                     </div>
@@ -68,18 +68,18 @@ Licensed under Apache-2.0 license.
                         <!-- InApp Browser Warning -->
                         <div id="inapp-warning" class="inapp-warning">
                             <i class="fas fa-exclamation-triangle warning-icon"></i>
-                            <div class="warning-title" data-i18n="download.warning.title">Download may not work in this browser</div>
-                            <div id="warning-text" class="warning-text" data-i18n="download.warning.text">
+                            <div class="warning-title" data-i18n="Download:warning.title">Download may not work in this browser</div>
+                            <div id="warning-text" class="warning-text" data-i18n="Download:warning.text">
                                 To download this file, please open this link in your browser.
                             </div>
                             <a id="open-browser-btn" href="#" class="open-browser-btn">
-                                <i class="fas fa-download"></i> <span data-i18n="download.warning.button">Download in Browser</span>
+                                <i class="fas fa-download"></i> <span data-i18n="Download:warning.button">Download in Browser</span>
                             </a>
                         </div>
-                        
+
                         <div class="pricing-item-pro" style="background-color: rgba(255, 255, 255, 0.5);">
                             <!-- Status Display -->
-                            <div id="statusText" style="text-align: center; font-weight: bold; margin-bottom: 15px;" data-i18n="client.status.establishing">Establishing connection...</div>
+                            <div id="statusText" style="text-align: center; font-weight: bold; margin-bottom: 15px;" data-i18n="Download:client.status.establishing">Establishing connection...</div>
                             
                             <!-- Progress Bar -->
                             <div class="progress" style="margin-bottom: 20px;">
@@ -90,44 +90,44 @@ Licensed under Apache-2.0 license.
                             <div id="connectionType" style="text-align: center; color: #007bff; font-size: 14px; margin-bottom: 10px;"></div>
 
                             <div class="border-button">
-                                <h6 id="download-message" data-i18n="client.download.startShortly">Your download will start shortly.</h6>
+                                <h6 id="download-message" data-i18n="Download:client.download.startShortly">Your download will start shortly.</h6>
                                 <div id="status-details" style="font-size: 14px; color: #666; margin-top: 5px;"></div>
                             </div>
-                                                        
+
                             <!-- Retry functionality (hidden by default) -->
                             <div class="delayed-show" style="display: none;">
-                                <a id="retry-link" href="#" class="btn btn-primary" data-i18n="client.retry.button">Retry Download</a>
+                                <a id="retry-link" href="#" class="btn btn-primary" data-i18n="Download:client.retry.button">Retry Download</a>
                                 <div id="retry-confirmation" class="retry-confirmation" style="display: none;">
-                                    <div class="retry-confirmation-title" data-i18n="client.retry.confirmationTitle">Open download in new tab?</div>
-                                    <a id="confirm-retry" href="#" target="_blank" class="confirm-retry-btn" data-i18n="download.retry.confirmButton">Yes, Open New Tab</a>
-                                    <button id="cancel-retry" class="cancel-retry-btn" data-i18n="download.retry.cancelButton">Cancel</button>
+                                    <div class="retry-confirmation-title" data-i18n="Download:client.retry.confirmationTitle">Open download in new tab?</div>
+                                    <a id="confirm-retry" href="#" target="_blank" class="confirm-retry-btn" data-i18n="Download:retry.confirmButton">Yes, Open New Tab</a>
+                                    <button id="cancel-retry" class="cancel-retry-btn" data-i18n="Download:retry.cancelButton">Cancel</button>
                                 </div>
                             </div>
 
                             <!-- E2EE Retry Blocked Warning -->
                             <div id="e2ee-retry-blocked" class="e2ee-retry-blocked">
                                 <div class="e2ee-retry-blocked-icon">🔒</div>
-                                <div class="e2ee-retry-blocked-title" data-i18n="download.e2ee.retryBlocked.title">
+                                <div class="e2ee-retry-blocked-title" data-i18n="Download:e2ee.retryBlocked.title">
                                     Encrypted Download Requires This Page
                                 </div>
-                                <div class="e2ee-retry-blocked-message" data-i18n="download.e2ee.retryBlocked.message">
+                                <div class="e2ee-retry-blocked-message" data-i18n="Download:e2ee.retryBlocked.message">
                                     Direct browser downloads cannot decrypt this file. The decryption must happen in this page with your encryption key.
                                 </div>
                                 <div class="e2ee-retry-blocked-solutions">
-                                    <div class="e2ee-retry-blocked-subtitle" data-i18n="download.e2ee.retryBlocked.solutionsTitle">
+                                    <div class="e2ee-retry-blocked-subtitle" data-i18n="Download:e2ee.retryBlocked.solutionsTitle">
                                         Try these solutions:
                                     </div>
                                     <ul class="e2ee-retry-blocked-list">
-                                        <li data-i18n="[html]download.e2ee.retryBlocked.solution1">
+                                        <li data-i18n="[html]Download:e2ee.retryBlocked.solution1">
                                             <strong>Different Browser:</strong> Try Chrome, Edge, or Brave for better compatibility
                                         </li>
                                         <li>
-                                            <strong data-i18n="download.e2ee.retryBlocked.solution2Title">Command Line Tool:</strong>
-                                            <span data-i18n="download.e2ee.retryBlocked.solution2Text">Use the</span>
+                                            <strong data-i18n="Download:e2ee.retryBlocked.solution2Title">Command Line Tool:</strong>
+                                            <span data-i18n="Download:e2ee.retryBlocked.solution2Text">Use the</span>
                                             <a href="https://github.com/nuwainfo/ffl" target="_blank" rel="noopener" class="e2ee-cli-link">FastFileLink CLI</a>
-                                            <span data-i18n="download.e2ee.retryBlocked.solution2Stable">for stable downloads of large encrypted files</span>
+                                            <span data-i18n="Download:e2ee.retryBlocked.solution2Stable">for stable downloads of large encrypted files</span>
                                         </li>
-                                        <li data-i18n="[html]download.e2ee.retryBlocked.solution3">
+                                        <li data-i18n="[html]Download:e2ee.retryBlocked.solution3">
                                             <strong>Wait:</strong> The download may still be progressing in the background
                                         </li>
                                     </ul>
@@ -136,15 +136,15 @@ Licensed under Apache-2.0 license.
 
                             <!-- Close tab option (shown after opening new tab) -->
                             <div id="close-tab-wrap" class="close-tab-wrap" style="display: none; text-align: center; margin-top: 10px;">
-                                <a id="close-this-tab" href="#" class="btn btn-secondary" style="padding: 8px 16px; border-radius: 20px;" data-i18n="download.closeTab">Close this tab</a>
-                            </div>                          
-                              
-                            <!-- Fallback Download Button - Hidden -->                            
+                                <a id="close-this-tab" href="#" class="btn btn-secondary" style="padding: 8px 16px; border-radius: 20px;" data-i18n="Download:closeTab">Close this tab</a>
+                            </div>
+
+                            <!-- Fallback Download Button - Hidden -->
                             <div id="fallback-container" style="display: none;">
                                 <!-- Visible button for manual user clicks - remains functional -->
                                 <div class="border-button">
-                                    <a id="manual-download-link" href="/uid=****/download" data-i18n="client.manualDownload">Download</a>
-                                </div>                               
+                                    <a id="manual-download-link" href="/uid=****/download" data-i18n="Download:client.manualDownload">Download</a>
+                                </div>
                             </div>
 
                             <!-- Hidden file metadata -->
@@ -291,10 +291,11 @@ Licensed under Apache-2.0 license.
         
         <!-- Initialize i18n using common initialization -->
         <script>
-            // Initialize i18n system with log function
+            // Initialize i18n system with log function and Download namespace
             initializeI18n({
                 log: log,
-                localesPath: '{{ STATIC_SERVER }}/static/locales'
+                localesPath: '{{ STATIC_SERVER }}/static/locales',
+                ns: ['Download']  // Load Download namespace for this page
             });
         </script>
                 
@@ -984,7 +985,7 @@ Licensed under Apache-2.0 license.
                 if (total) {
                     const percent = Math.round(current * 100 / total);
                     this.setStatus(
-                        this.t('client.status.downloadingPercent', 'Downloading via P2P: {{percent}}%', { percent })
+                        this.t('Download:client.status.downloadingPercent', 'Downloading via P2P: {{percent}}%', { percent })
                     );
                 }
             }
@@ -1006,7 +1007,7 @@ Licensed under Apache-2.0 license.
 
                 this.countdownSeconds = seconds;
                 this.setConnectionType(
-                    this.t('client.connection.waitingPeer', 'Waiting for peer ({{seconds}}s)', {
+                    this.t('Download:client.connection.waitingPeer', 'Waiting for peer ({{seconds}}s)', {
                         seconds: this.countdownSeconds
                     })
                 );
@@ -1021,7 +1022,7 @@ Licensed under Apache-2.0 license.
 
                     if (this.countdownSeconds >= 0) {
                         this.setConnectionType(
-                            this.t('client.connection.waitingPeer', 'Waiting for peer ({{seconds}}s)', {
+                            this.t('Download:client.connection.waitingPeer', 'Waiting for peer ({{seconds}}s)', {
                                 seconds: this.countdownSeconds
                             })
                         );
@@ -1041,7 +1042,7 @@ Licensed under Apache-2.0 license.
             // ============ Connection States ============
             showEstablishingP2P(timeoutSeconds, shouldStopCallback) {
                 this.setStatus(
-                    this.t('client.status.establishingP2p', 'Establishing P2P connection...'),
+                    this.t('Download:client.status.establishingP2p', 'Establishing P2P connection...'),
                     true
                 );
                 this.startCountdown(timeoutSeconds, shouldStopCallback);
@@ -1049,86 +1050,86 @@ Licensed under Apache-2.0 license.
 
             showP2PChecking() {
                 this.setStatus(
-                    this.t('client.status.p2pChecking', 'P2P connection...[Checking]'),
+                    this.t('Download:client.status.p2pChecking', 'P2P connection...[Checking]'),
                     true
                 );
             }
 
             showP2PConnecting() {
                 this.setStatus(
-                    this.t('client.status.p2pConnecting', 'P2P connection...[Connecting]'),
+                    this.t('Download:client.status.p2pConnecting', 'P2P connection...[Connecting]'),
                     true
                 );
             }
 
             showP2PSuccess() {
                 this.setStatus(
-                    this.t('client.status.p2pSuccess', 'P2P connection successful! Downloading...')
+                    this.t('Download:client.status.p2pSuccess', 'P2P connection successful! Downloading...')
                 );
                 this.setConnectionType(
-                    this.t('client.connection.directP2p', 'Direct P2P transfer')
+                    this.t('Download:client.connection.directP2p', 'Direct P2P transfer')
                 );
                 this.setDownloadMessage(
-                    this.t('client.download.deviceStarted', 'Device-to-Device download started.')
+                    this.t('Download:client.download.deviceStarted', 'Device-to-Device download started.')
                 );
                 this.stopCountdown();
             }
 
             showReconnecting() {
                 this.setStatus(
-                    this.t('client.status.reconnecting', 'Connection lost, attempting to reconnect...'),
+                    this.t('Download:client.status.reconnecting', 'Connection lost, attempting to reconnect...'),
                     true
                 );
             }
 
             showNetworkFluctuation() {
                 this.setStatus(
-                    this.t('client.status.networkFluctuation', 'Network fluctuation detected, continuing transfer...'),
+                    this.t('Download:client.status.networkFluctuation', 'Network fluctuation detected, continuing transfer...'),
                     true
                 );
             }
 
             showRetryingP2P() {
                 this.setStatus(
-                    this.t('client.status.retryingP2p', 'Retrying P2P connection…'),
+                    this.t('Download:client.status.retryingP2p', 'Retrying P2P connection…'),
                     true
                 );
                 this.setConnectionType(
-                    this.t('client.connection.retrying', 'Retrying P2P connection')
+                    this.t('Download:client.connection.retrying', 'Retrying P2P connection')
                 );
             }
 
             showSavingFile() {
                 this.setStatus(
-                    this.t('client.status.savingFile', 'Saving file...')
+                    this.t('Download:client.status.savingFile', 'Saving file...')
                 );
             }
 
             showSwitchingToRelay(reason) {
                 this.setStatus(
-                    this.t('client.status.switchingRelay', `Switching to relay mode: ${reason}`, { reason })
+                    this.t('Download:client.status.switchingRelay', `Switching to relay mode: ${reason}`, { reason })
                 );
                 this.setConnectionType(
-                    this.t('client.connection.serverRelay', 'Using Server Relay Download')
+                    this.t('Download:client.connection.serverRelay', 'Using Server Relay Download')
                 );
                 this.stopCountdown();
             }
 
             showRelayStarted() {
                 this.setStatus(
-                    this.t('client.status.relayStarted', 'Relayed P2P Download Started.')
+                    this.t('Download:client.status.relayStarted', 'Relayed P2P Download Started.')
                 );
             }
 
             showBrowserNotSupported() {
                 this.setStatus(
-                    this.t('client.fallback.browserNotSupported', 'Downloads not supported in this browser')
+                    this.t('Download:client.fallback.browserNotSupported', 'Downloads not supported in this browser')
                 );
             }
 
             showComplete(fileSize) {
                 this.setStatus(
-                    this.t('download.complete.title', '✅ Download complete!')
+                    this.t('Download:complete.title', '✅ Download complete!')
                 );
 
                 if (this.progressBar) {
@@ -1136,7 +1137,7 @@ Licensed under Apache-2.0 license.
                 }
 
                 this.setDownloadMessage(
-                    this.t('client.download.fileSaved', 'File saved. Please check your download folder.')
+                    this.t('Download:client.download.fileSaved', 'File saved. Please check your download folder.')
                 );
 
                 // Hide progress bar after 1 second
@@ -1147,7 +1148,7 @@ Licensed under Apache-2.0 license.
 
             updateFallbackMessage() {
                 this.setDownloadMessage(
-                    this.t('client.download.startShortly', 'Your download will start shortly.')
+                    this.t('Download:client.download.startShortly', 'Your download will start shortly.')
                 );
             }
 
@@ -1413,7 +1414,7 @@ Licensed under Apache-2.0 license.
                             clearTimeout(this.fallbackTimer);
                         }
 
-                        this.uiManager.setConnectionType(this.t('client.connection.serverRelay', 'Using Server Relay Download'));
+                        this.uiManager.setConnectionType(this.t('Download:client.connection.serverRelay', 'Using Server Relay Download'));
                         this.log("Fallback", "Successfully transitioned from P2P to HTTP download");
                     }
                 });
@@ -1641,7 +1642,7 @@ Licensed under Apache-2.0 license.
                     const reason = WriterFactory.getUnsupportedReason(fileSize);
                     log("WriterFactory", `File download not supported: ${reason}`);
                     // Skip WebRTC and go directly to HTTP fallback
-                    fallbackToHTTP(t('client.fallback.fileTooBig', 'File too large for direct download - using server relay'));
+                    fallbackToHTTP(t('Download:client.fallback.fileTooBig', 'File too large for direct download - using server relay'));
                     return;
                 }
 
@@ -1726,11 +1727,11 @@ Licensed under Apache-2.0 license.
                 if (!webrtcSupported || DISABLE_WEBRTC || SKIP_WEBRTC_DUE_TO_RESTRICTION) {
                     if (!webrtcSupported) {
                         log("WebRTC", "WebRTC not supported in this browser (RTCPeerConnection or RTCDataChannel unavailable)");
-                        fallbackToHTTP(t('client.fallback.webrtcNotSupported', 'WebRTC not supported - using server relay'));
+                        fallbackToHTTP(t('Download:client.fallback.webrtcNotSupported', 'WebRTC not supported - using server relay'));
                     } else if (SKIP_WEBRTC_DUE_TO_RESTRICTION) {
                         uiManager.showBrowserNotSupported();
                     } else {
-                        fallbackToHTTP(t('client.fallback.p2pDisabled', 'Device-to-Device P2P disabled. Use Relayed P2P.'));
+                        fallbackToHTTP(t('Download:client.fallback.p2pDisabled', 'Device-to-Device P2P disabled. Use Relayed P2P.'));
                     }
                     return;
                 }
@@ -2400,7 +2401,7 @@ Licensed under Apache-2.0 license.
                     return window.t(`errors.${error.type}`, errorDefaults[error.type]);
                 } else {
                     // Unknown error type - use server's detail message or generic fallback
-                    return error.detail || window.t('errors.unknown', 'An error occurred during transfer.');
+                    return error.detail || window.t('Download:errors.unknown', 'An error occurred during transfer.');
                 }
             }
 

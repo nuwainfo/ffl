@@ -1,0 +1,912 @@
+# English translations for PROJECT.
+# Copyright (C) 2025 ORGANIZATION
+# This file is distributed under the same license as the PROJECT project.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2025.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: PROJECT VERSION\n"
+"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
+"POT-Creation-Date: 2025-12-23 00:22+0800\n"
+"PO-Revision-Date: 2025-12-17 09:22+0800\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language: en\n"
+"Language-Team: en <LL@li.org>\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.17.0\n"
+
+msgid "Opening invite page in browser..."
+msgstr ""
+
+#, python-brace-format
+msgid "Sharing information saved to {jsonFile}"
+msgstr ""
+
+#, python-brace-format
+msgid "Failed to write JSON file: {error}"
+msgstr ""
+
+#, python-brace-format
+msgid "{file} does not exist!"
+msgstr ""
+
+msgid "Error: Upload functionality requires Upload addon (addons/Upload.py)"
+msgstr ""
+
+msgid ""
+"If a firewall notification appears, please allow the application to "
+"connect.\n"
+msgstr ""
+
+msgid ""
+"📁 Sharing folder as ZIP - please keep folder contents unchanged during "
+"transfer\n"
+msgstr ""
+
+msgid "🔐 End-to-end encryption enabled\n"
+msgstr ""
+
+msgid "You can stop the upload at any time and resume it later.\n"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Upload paused at {percentage:.1f}% ({completedChunks}/{totalChunks} "
+"chunks completed)"
+msgstr ""
+
+msgid "Use --resume to continue upload"
+msgstr ""
+
+msgid ""
+"Resume is only available for direct upload mode (without external "
+"tunnels).\n"
+"Please restart the upload without --resume to upload the file normally."
+msgstr ""
+
+msgid ""
+"Pause functionality is only available for direct upload mode (without "
+"external tunnels).\n"
+"Please restart the upload without --pause to upload the file normally."
+msgstr ""
+
+msgid ""
+"End-to-end encryption is only available for direct upload mode (without "
+"external tunnels).\n"
+"Please restart the upload without --e2ee to upload the file normally."
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Cannot resume: {parameter} mismatch.\n"
+"Original upload used \"{originalValue}\" but \"{requestedValue}\" was "
+"requested.\n"
+"Please use the same parameters as the original upload."
+msgstr ""
+
+msgid ""
+"Your user points are not enough. Please top up on our website "
+"(https://fastfilelink.com/)."
+msgstr ""
+
+msgid "Upload not allowed."
+msgstr ""
+
+msgid "Retrying...\n"
+msgstr ""
+
+msgid "Unable to create tunnel by your tunnel configuration."
+msgstr ""
+
+#, python-brace-format
+msgid "Using tunnel: {tunnelType}"
+msgstr ""
+
+#, python-brace-format
+msgid "Establishing tunnel connection via proxy {proxyInfo}...\n"
+msgstr ""
+
+msgid "Establishing tunnel connection...\n"
+msgstr ""
+
+#, python-brace-format
+msgid "Upload failed: {error}"
+msgstr ""
+
+msgid "Unknown error"
+msgstr ""
+
+msgid ""
+"Please share the link below with the person you'd like to share the file "
+"with."
+msgstr ""
+
+#, python-brace-format
+msgid "Authentication enabled - Username: {authUser}\n"
+msgstr ""
+
+msgid ""
+"Please keep the application running so the recipient can download the "
+"file."
+msgstr ""
+
+msgid "Press Ctrl+C to terminate the program when done.\n"
+msgstr ""
+
+msgid ""
+"\n"
+"Exiting on user request (Ctrl+C)..."
+msgstr ""
+
+msgid "User email address has been lost"
+msgstr ""
+
+#, python-brace-format
+msgid "Downloaded: {outputPath}"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"{serverMsg}\n"
+"\n"
+"The shared folder contents changed during the transfer.\n"
+"Please contact the person who shared the file and ask them to share it "
+"again."
+msgstr ""
+
+#, python-brace-format
+msgid "Download failed: {error}"
+msgstr ""
+
+msgid "GUI support not available. Install required dependencies or use CLI mode."
+msgstr ""
+
+msgid "Error: App has not been registered"
+msgstr ""
+
+msgid "App has not been registered"
+msgstr ""
+
+msgid ""
+"Tunnel server temporarily unavailable. See "
+"https://github.com/nuwainfo/ffl#3--using-tunnels for alternative tunnels."
+msgstr ""
+
+msgid "Failed to connect server"
+msgstr ""
+
+msgid "Server return error"
+msgstr ""
+
+#, python-brace-format
+msgid "Loading .env file from: {envFilePath}"
+msgstr ""
+
+#, python-brace-format
+msgid "Warning: .env line {lineNum}: Invalid format (missing =): {line}"
+msgstr ""
+
+#, python-brace-format
+msgid "Warning: .env line {lineNum}: Empty key"
+msgstr ""
+
+#, python-brace-format
+msgid "Loaded {loadedCount} environment variables from .env"
+msgstr ""
+
+#, python-brace-format
+msgid "Error: Unexpected error loading .env file: {error}"
+msgstr ""
+
+#, python-brace-format
+msgid "Failed to load logging config from {logLevel}: {error}"
+msgstr ""
+
+msgid "Falling back to default logging level configuration"
+msgstr ""
+
+#, python-brace-format
+msgid "FastFileLink v{version}"
+msgstr ""
+
+msgid "🔄 Update available!"
+msgstr ""
+
+#, python-brace-format
+msgid "   Your version: {version}"
+msgstr ""
+
+#, python-brace-format
+msgid "   Latest version: {serverVersion}"
+msgstr ""
+
+msgid "   Consider updating for the latest features and improvements."
+msgstr ""
+
+msgid "⚠️ VERSION INCOMPATIBLE!"
+msgstr ""
+
+#, python-brace-format
+msgid "   Server Minimum required: {minimumVersion}"
+msgstr ""
+
+msgid "   Please update to continue using the service."
+msgstr ""
+
+msgid "Enabled addons:"
+msgstr ""
+
+msgid "[OK] Loaded"
+msgstr ""
+
+msgid "[FAIL] Failed to load"
+msgstr ""
+
+msgid "[UNKNOWN] Not loaded"
+msgstr ""
+
+msgid "No addons available"
+msgstr ""
+
+#, python-brace-format
+msgid "Architecture: {system} {release} {machine} - {version} ({processor})"
+msgstr ""
+
+#, python-brace-format
+msgid "Support: {supportURL}"
+msgstr ""
+
+msgid "Choose a file or folder you want to share"
+msgstr ""
+
+msgid "Output link and settings to a JSON file"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Upload file to FastFileLink server to share it (Share duration after "
+"upload). Default: {default}"
+msgstr ""
+
+msgid ""
+"Resume a previously interrupted upload (requires previous upload session "
+"to exist)"
+msgstr ""
+
+msgid "Pause upload at specified percentage (1-99, requires --upload)"
+msgstr ""
+
+msgid ""
+"Maximum number of downloads before the server automatically shuts down "
+"(P2P mode only). 0 means unlimited."
+msgstr ""
+
+msgid ""
+"Timeout in seconds before the server automatically shuts down (P2P mode "
+"only). 0 means no timeout."
+msgstr ""
+
+msgid ""
+"Port number for local server (1024-65535, default: auto-detect available "
+"port)"
+msgstr ""
+
+#, python-brace-format
+msgid "Username for HTTP Basic Authentication (default: '{default}')"
+msgstr ""
+
+msgid "Password for HTTP Basic Authentication (enables auth protection)"
+msgstr ""
+
+msgid ""
+"Force relayed P2P mode, disable direct WebRTC connections (can be "
+"overridden by ?webrtc=on URL parameter)"
+msgstr ""
+
+msgid "Enable end-to-end encryption for file sharing (both HTTP and WebRTC)"
+msgstr ""
+
+msgid "Open invite page in browser with the sharing link"
+msgstr ""
+
+#, python-brace-format
+msgid "Invalid log level '{logLevel}'. Valid levels are: {validLevels}"
+msgstr ""
+
+msgid "Show version information and enabled addons"
+msgstr ""
+
+msgid "Run in CLI mode without GUI (optional)"
+msgstr ""
+
+msgid ""
+"Set logging level (DEBUG, INFO, WARNING, ERROR) or path to logging config"
+" JSON file (default: WARNING)"
+msgstr ""
+
+msgid ""
+"Proxy server for all outbound connections. Formats: [user:pass@]host:port"
+" (defaults to SOCKS5), socks5[h]://[user:pass@]host:port, "
+"http[s]://[user:pass@]host:port. SOCKS5 proxies work for both tunnel and "
+"HTTP requests. HTTP proxies only work for HTTP requests (not tunnel)"
+msgstr ""
+
+msgid "FastFileLink makes file sharing fast, simple, and secure."
+msgstr ""
+
+msgid "Available commands"
+msgstr ""
+
+msgid "Share a file (default command)"
+msgstr ""
+
+msgid "Download a file from FastFileLink URL"
+msgstr ""
+
+msgid "FastFileLink URL to download from"
+msgstr ""
+
+msgid "Output file path (default: use filename from server)"
+msgstr ""
+
+msgid ""
+"Resume incomplete download (like curl -C), otherwise overwrite existing "
+"file"
+msgstr ""
+
+msgid "Password for HTTP Basic Authentication"
+msgstr ""
+
+msgid "Upgrade to latest version or specified version"
+msgstr ""
+
+msgid ""
+"Target binary path to upgrade (for development mode), or version (e.g., "
+"v3.7.5)"
+msgstr ""
+
+msgid "Target version when binary path is specified (default: latest)"
+msgstr ""
+
+#, python-brace-format
+msgid "Error: Invalid proxy format: {proxy}"
+msgstr ""
+
+msgid "Error: --upload option requires Upload addon (addons/Upload.py)"
+msgstr ""
+
+msgid ""
+"Please install the Upload addon (use Standard/Plus version) or use P2P "
+"mode without --upload"
+msgstr ""
+
+msgid "Error: --pause requires --upload"
+msgstr ""
+
+msgid "Use: --upload <duration> --pause <percentage>"
+msgstr ""
+
+msgid "Error: --pause percentage must be between 1 and 99"
+msgstr ""
+
+msgid "Error: --resume flag can only be used with --upload"
+msgstr ""
+
+msgid "Error: --pause and --resume cannot be used together"
+msgstr ""
+
+msgid "Use --pause to pause a new upload, or --resume to continue a paused upload"
+msgstr ""
+
+msgid "Error: --auth-user requires --auth-password"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Use --auth-password to enable authentication (username defaults to "
+"'{defaultUser}' if not specified)"
+msgstr ""
+
+msgid "⚠️  IMPORTANT: ENCRYPTION KEY"
+msgstr ""
+
+msgid "This file has been encrypted. You MUST share the encryption key below"
+msgstr ""
+
+msgid "with recipients via a SECURE CHANNEL (not the same as the download link)."
+msgstr ""
+
+msgid "Without this key, the file CANNOT be decrypted."
+msgstr ""
+
+msgid ""
+"Note: Appending #<key> to the URL works but is less secure and not "
+"recommended."
+msgstr ""
+
+#, python-brace-format
+msgid "Encryption Key: {encryptionKey}"
+msgstr ""
+
+msgid "0/sec"
+msgstr ""
+
+#, python-brace-format
+msgid "{speed}/sec"
+msgstr ""
+
+msgid "Progress"
+msgstr ""
+
+#, python-brace-format
+msgid "Progress bar error: {e}"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Progress: {sizeDisplay}/{totalDisplay} ({percentage:.2f}%), "
+"{speedDisplay}/sec"
+msgstr ""
+
+#, python-brace-format
+msgid "[{timestamp}] Downloading by user"
+msgstr ""
+
+msgid ""
+"File sending is complete. Please wait for the recipient to finish "
+"downloading before you close the application.\n"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"\n"
+"⚠️  TRANSFER ABORTED: {errorMsg}"
+msgstr ""
+
+msgid "The shared folder contents changed during the transfer."
+msgstr ""
+
+msgid "Please ensure the folder contents remain stable and try sharing again.\n"
+msgstr ""
+
+msgid ""
+"\n"
+"Connection disconnected, wait retrying.\n"
+msgstr ""
+
+msgid ""
+"\n"
+"User closes the connection, please try again.\n"
+msgstr ""
+
+#, python-brace-format
+msgid "Timeout ({timeout} seconds) reached. Shutting down server."
+msgstr ""
+
+#, python-brace-format
+msgid "Maximum downloads ({maxDownloads}) reached. Shutting down server."
+msgstr ""
+
+#, python-brace-format
+msgid "Downloading install script from: {url}"
+msgstr ""
+
+msgid "Install script downloaded successfully"
+msgstr ""
+
+#, python-brace-format
+msgid "Failed to download install script: {error}"
+msgstr ""
+
+#, python-brace-format
+msgid "Target executable: {path}"
+msgstr ""
+
+msgid "Error: FFL_UPGRADE_VARIANT is required when upgrading a different binary"
+msgstr ""
+
+msgid "Supported formats:"
+msgstr ""
+
+msgid "  APE variants: ffl.com, fflo.com"
+msgstr ""
+
+msgid "  Windows: windows"
+msgstr ""
+
+msgid "  Linux: linux-2.39, linux-2.28 (glibc version)"
+msgstr ""
+
+msgid "  macOS: darwin"
+msgstr ""
+
+#, python-brace-format
+msgid "Example: FFL_UPGRADE_VARIANT=ffl.com python Core.py --cli upgrade {path}"
+msgstr ""
+
+#, python-brace-format
+msgid "Using FFL_UPGRADE_VARIANT: {variant}"
+msgstr ""
+
+#, python-brace-format
+msgid "Upgrading to APE variant ({ape})"
+msgstr ""
+
+msgid "Upgrading to Windows native variant"
+msgstr ""
+
+#, python-brace-format
+msgid "Upgrading to Linux native variant (glibc {version})"
+msgstr ""
+
+msgid "Upgrading to Linux native variant (glibc auto-detect)"
+msgstr ""
+
+msgid "Upgrading to macOS native variant"
+msgstr ""
+
+#, python-brace-format
+msgid "Error: Unknown variant '{variant}'"
+msgstr ""
+
+msgid ""
+"Supported formats: ffl.com, fflo.com, windows, linux-2.39, linux-2.28, "
+"darwin"
+msgstr ""
+
+#, python-brace-format
+msgid "Detected APE variant ({variant}), will replace with same variant"
+msgstr ""
+
+msgid "Failed to detect glibc version from binary"
+msgstr ""
+
+#, python-brace-format
+msgid "Detected native variant with glibc {version}"
+msgstr ""
+
+msgid "Failed to detect architecture from binary"
+msgstr ""
+
+#, python-brace-format
+msgid "Detected macOS native variant ({arch})"
+msgstr ""
+
+msgid "Detected native variant, will replace with same variant"
+msgstr ""
+
+msgid "Executing install script..."
+msgstr ""
+
+#, python-brace-format
+msgid "Install script failed with exit code {code}"
+msgstr ""
+
+#, python-brace-format
+msgid "Failed to execute install script: {error}"
+msgstr ""
+
+#, python-brace-format
+msgid "Unexpected error during installation: {error}"
+msgstr ""
+
+#, python-brace-format
+msgid "Current version: v{version}"
+msgstr ""
+
+#, python-brace-format
+msgid "Development mode: upgrading target binary {path}"
+msgstr ""
+
+msgid "Cannot upgrade when running from Python source"
+msgstr ""
+
+msgid ""
+"Tip: Use 'upgrade <binary_path>' to upgrade a specific binary in "
+"development mode"
+msgstr ""
+
+msgid "Could not determine latest version from GitHub"
+msgstr ""
+
+msgid ""
+"Could not check latest version from GitHub, proceeding with specified "
+"version"
+msgstr ""
+
+#, python-brace-format
+msgid "Latest version available: {version}"
+msgstr ""
+
+msgid "✓ You are already running the latest version!"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"✓ You are running a newer version ({current}) than the latest release "
+"({latest})!"
+msgstr ""
+
+msgid "Could not determine target version from GitHub"
+msgstr ""
+
+#, python-brace-format
+msgid "Upgrading to {version}..."
+msgstr ""
+
+msgid "Unsupported operating system"
+msgstr ""
+
+#, python-brace-format
+msgid "Platform: {os}"
+msgstr ""
+
+#, python-brace-format
+msgid "✓ Successfully upgraded to {version}!"
+msgstr ""
+
+msgid "The link has been copied to the clipboard."
+msgstr ""
+
+msgid "Please try again or try later."
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"\n"
+"If you still get the same problem, please contact us at {supportURL}."
+msgstr ""
+
+msgid "We will fix the problem as soon as possible.\n"
+msgstr ""
+
+msgid "P2P direct"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Finish transfer {sizeDisplay} for [#{peerId}], please wait for the "
+"recipient to finish downloading before you close the application..\n"
+msgstr ""
+
+msgid "Connecting to server"
+msgstr ""
+
+msgid "Requesting connection"
+msgstr ""
+
+msgid "Setting up WebRTC"
+msgstr ""
+
+msgid "Establishing connection"
+msgstr ""
+
+msgid "Negotiating connection"
+msgstr ""
+
+msgid "Waiting for data channel"
+msgstr ""
+
+msgid "Downloading"
+msgstr ""
+
+msgid "HTTP download"
+msgstr ""
+
+msgid "HTTP fallback"
+msgstr ""
+
+msgid "File already downloaded"
+msgstr ""
+
+msgid "Getting file metadata"
+msgstr ""
+
+msgid ""
+"\n"
+"⚠️  This file is encrypted. Please enter the encryption key:"
+msgstr ""
+
+msgid "(The key should be provided by the person who shared this file)\n"
+msgstr ""
+
+msgid "Encryption key: "
+msgstr ""
+
+msgid "Encryption key is required to download this file"
+msgstr ""
+
+#, python-brace-format
+msgid "Invalid key length: {keyLength} bytes (expected 32 bytes for AES-256)"
+msgstr ""
+
+msgid "Download cancelled by user"
+msgstr ""
+
+#, python-brace-format
+msgid "Invalid encryption key: {error}"
+msgstr ""
+
+#, python-brace-format
+msgid "Downloading {filename} ({fileSize:,} bytes)"
+msgstr ""
+
+#, python-brace-format
+msgid "Resuming WebRTC download from {resumePos} / {totalSize}"
+msgstr ""
+
+#, python-brace-format
+msgid "Resuming download from {resumePos} / {totalSize}"
+msgstr ""
+
+msgid ""
+"⚠️  This is not a FastFileLink URL, downloading directly via HTTP (like "
+"wget)..."
+msgstr ""
+
+msgid "🔒 End-to-end encryption detected"
+msgstr ""
+
+msgid "✓ Encryption key verified successfully"
+msgstr ""
+
+msgid "WebRTC not supported, using HTTP download..."
+msgstr ""
+
+msgid "Attempting WebRTC download..."
+msgstr ""
+
+#~ msgid "Unsupported architecture: {machine}"
+#~ msgstr ""
+
+#~ msgid "No compatible glibc archive found; using APE (ffl.com)"
+#~ msgstr ""
+
+#~ msgid "Unknown file format: {path}"
+#~ msgstr ""
+
+#~ msgid "Binary '{name}' not found in archive"
+#~ msgstr ""
+
+#~ msgid "Failed to backup current binary: {error}"
+#~ msgstr ""
+
+#~ msgid "Failed to install new binary: {error}"
+#~ msgstr ""
+
+#~ msgid "Could not delete backup file: {path}"
+#~ msgstr ""
+
+#~ msgid "Failed to fetch release assets: {error}"
+#~ msgstr ""
+
+#~ msgid "No assets found for release {tag}"
+#~ msgstr ""
+
+#~ msgid "Downloading: {percent:.1f}%"
+#~ msgstr ""
+
+#~ msgid "Failed to download asset: {error}"
+#~ msgstr ""
+
+#~ msgid "Platform: {os} {arch}"
+#~ msgstr ""
+
+#~ msgid "glibc version: {version}"
+#~ msgstr ""
+
+#~ msgid "Current binary: {path}"
+#~ msgstr ""
+
+#~ msgid "Fetching release information..."
+#~ msgstr ""
+
+#~ msgid "Found {count} assets"
+#~ msgstr ""
+
+#~ msgid "Error: No compatible asset found for your platform"
+#~ msgstr ""
+
+#~ msgid "Available assets:"
+#~ msgstr ""
+
+#~ msgid "Selected asset: {name}"
+#~ msgstr ""
+
+#~ msgid "Downloading from: {url}"
+#~ msgstr ""
+
+#~ msgid "Download complete!"
+#~ msgstr ""
+
+#~ msgid "Extracting binary..."
+#~ msgstr ""
+
+#~ msgid "Failed to extract binary from archive"
+#~ msgstr ""
+
+#~ msgid "Extracted: {name}"
+#~ msgstr ""
+
+#~ msgid "Installing new version..."
+#~ msgstr ""
+
+#~ msgid "Installation complete!"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "Cannot upgrade when running from Python"
+#~ " source. Please use: pip install "
+#~ "--upgrade fastfilelink"
+#~ msgstr ""
+
+#~ msgid "Unsupported operating system: {system}"
+#~ msgstr ""
+
+#~ msgid "Detected APE variant (fflo.com), will install same variant"
+#~ msgstr ""
+
+#~ msgid "Detected APE variant (ffl.com), will install same variant"
+#~ msgstr ""
+
+#~ msgid "Error: {error}"
+#~ msgstr ""
+
+#~ msgid "Please restart the application to use the new version."
+#~ msgstr ""
+
+#~ msgid "Upgrade to latest version or specified version (e.g., --upgrade v3.7.5)"
+#~ msgstr ""
+
+#~ msgid "Current executable: {path}"
+#~ msgstr ""
+
+#~ msgid "Target version to upgrade to (default: latest)"
+#~ msgstr ""
+
+#~ msgid "Upgrading to native variant for {os}"
+#~ msgstr ""
+
+#~ msgid "Could not determine target version from server"
+#~ msgstr ""
+
+#~ msgid "Failed to execute install script"
+#~ msgstr ""
+
+#~ msgid "Unexpected error during installation"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "LIEF library is required to detect "
+#~ "glibc version from native Linux "
+#~ "binaries. Please install LIEF: pip "
+#~ "install lief"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "LIEF library is required to detect "
+#~ "architecture from native macOS binaries. "
+#~ "Please install LIEF: pip install lief"
+#~ msgstr ""
+
+#~ msgid "Detected Linux native variant (glibc auto-detect)"
+#~ msgstr ""
+
+#~ msgid "Detected macOS native variant (architecture auto-detect)"
+#~ msgstr ""
+
+#~ msgid "Upgrading to Linux native variant (glibc 2.39)"
+#~ msgstr ""
+
+#~ msgid "Upgrading to Linux native variant (glibc 2.28)"
+#~ msgstr ""
+
+#~ msgid "Detected APE variant (fflo.com), will replace with same variant"
+#~ msgstr ""
+
+#~ msgid "Detected APE variant (ffl.com), will replace with same variant"
+#~ msgstr ""
+

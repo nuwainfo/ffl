@@ -1,0 +1,20 @@
+{
+    "home": "Home",
+    "introduction": "Introduction", 
+    "howItWorks":"How it works",
+    "pay":"Pay as you go",
+    "invite":"Invite",
+    "cli":"Open Source CLI",
+    "faq":"FAQ",
+    "technicalFaq":"Technical FAQ",
+    "features": "Features",
+    "tutorial": "Tutorial",
+    "free": "Free",
+    "pricing": "Pricing",
+    "support": "Support",
+    "language": "Language",
+    "blog": "Blog",
+    "account":"Account",
+    "clientArea": "Client Area",
+    "menu": "Menu"
+}

@@ -17,7 +17,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Initialize SettingsGetter.
+# Initialize SettingsGetter
+import sys
+import platform
 from bases.Settings import SettingsGetter
 
-settingsGetter = SettingsGetter()
+settingsGetter = SettingsGetter(platform=platform.system(), exePath=sys.executable)

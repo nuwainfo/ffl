@@ -32,6 +32,7 @@ import requests
 
 from bases.crypto import CryptoInterface
 from bases.Kernel import getLogger, Singleton
+from bases.I18n import _
 
 logger = getLogger(__name__)
 
@@ -1494,13 +1495,13 @@ class E2EEUploadHelper:
         lines = [
             "",
             "=" * E2EEUploadHelper.SEPARATE_LINE_WIDTH,
-            "⚠️  IMPORTANT: ENCRYPTION KEY",
+            _("⚠️  IMPORTANT: ENCRYPTION KEY"),
             "=" * E2EEUploadHelper.SEPARATE_LINE_WIDTH,
-            "This file has been encrypted. You MUST share the encryption key below",
-            "with recipients via a SECURE CHANNEL (not the same as the download link).",
+            _("This file has been encrypted. You MUST share the encryption key below"),
+            _("with recipients via a SECURE CHANNEL (not the same as the download link)."),
             "",
-            "Without this key, the file CANNOT be decrypted.",
-            "Note: Appending #<key> to the URL works but is less secure and not recommended.",
+            _("Without this key, the file CANNOT be decrypted."),
+            _("Note: Appending #<key> to the URL works but is less secure and not recommended."),
             "=" * E2EEUploadHelper.SEPARATE_LINE_WIDTH,
         ]
         return "\n".join(lines)
@@ -1526,7 +1527,7 @@ class E2EEUploadHelper:
             Formatted key display string
         """
         lines = [
-            f"Encryption Key: {encryptionKey}",
+            _("Encryption Key: {encryptionKey}").format(encryptionKey=encryptionKey),
             "=" * E2EEUploadHelper.SEPARATE_LINE_WIDTH,
             ""
         ]

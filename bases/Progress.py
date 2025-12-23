@@ -22,7 +22,8 @@ import logging
 
 from tqdm import tqdm
 
-from .Utils import formatSize, ONE_MB
+from bases.Utils import formatSize, ONE_MB
+from bases.I18n import _
 
 
 class BitmathTqdm(tqdm):
@@ -35,7 +36,7 @@ class BitmathTqdm(tqdm):
 
         if 'bar_format' not in kwargs:
             kwargs['bar_format'] = (
-                'Progress: {percentage:3.0f}%|{bar}| '
+                '{desc}: {percentage:3.0f}%|{bar}| '
                 '{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
             )
 
@@ -44,10 +45,10 @@ class BitmathTqdm(tqdm):
     def _formatSpeed(self, rateBytesPerSec):
         """Format speed using the same formatter as size."""
         if rateBytesPerSec <= 0:
-            return "0/sec"
+            return _("0/sec")
 
         speedFormatted = self.sizeFormatter(int(rateBytesPerSec))
-        return f"{speedFormatted}/sec"
+        return _("{speed}/sec").format(speed=speedFormatted)
 
     def _formatSizeStable(self, sizeBytes, isTotal=False):
         """Format size with stability considerations for dynamic units."""
@@ -87,8 +88,7 @@ class BitmathTqdm(tqdm):
 class Progress:
 
     def __init__(
-        self, totalSize, sizeFormatter=None, loggerCallback=print,
-        logInterval=2.0, useBar=False, barFormat=None
+        self, totalSize, sizeFormatter=None, loggerCallback=print, logInterval=2.0, useBar=False, barFormat=None
     ):
         self.totalSize = totalSize
         self.sizeFormatter = sizeFormatter or formatSize
@@ -116,18 +116,16 @@ class Progress:
 
             # Different bar format for unknown sizes
             if self.totalSize == 0:
-                defaultBarFormat = (
-                    '{desc}: {n_fmt} [{elapsed}, {rate_fmt}]{postfix}'
-                )
+                defaultBarFormat = ('{desc}: {n_fmt} [{elapsed}, {rate_fmt}]{postfix}')
             else:
                 defaultBarFormat = (
-                    'Progress: {percentage:3.0f}%|{bar}| '
+                    '{desc}: {percentage:3.0f}%|{bar}| '
                     '{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]{postfix}'
                 )
 
             self.pbar = BitmathTqdm(
                 total=total,
-                desc='Progress',
+                desc=_('Progress'),
                 sizeFormatter=self.sizeFormatter,
                 leave=True,
                 ncols=100, # Increased width to accommodate extraText
@@ -136,7 +134,7 @@ class Progress:
             )
         except Exception:
             total = None if self.totalSize == 0 else self.totalSize
-            self.pbar = tqdm(total=total, desc='Progress', unit='B', unit_scale=True, leave=True)
+            self.pbar = tqdm(total=total, desc=_('Progress'), unit='B', unit_scale=True, leave=True)
 
     def update(self, bytesTransferred, forceLog=False, extraText=""):
         """Update progress with new bytes transferred."""
@@ -173,7 +171,7 @@ class Progress:
             if self.totalSize > 0 and self.transferred >= self.totalSize:
                 self.finishBar()
         except (ValueError, AttributeError) as e:
-            self.loggerCallback(f"Progress bar error: {e}")
+            self.loggerCallback(_("Progress bar error: {e}").format(e=e))
             self.useBar = False
 
     def _shouldLog(self, forceLog, currentTime):
@@ -195,7 +193,9 @@ class Progress:
         totalDisplay = self.sizeFormatter(self.totalSize)
         percentage = (self.transferred * 100.0 / self.totalSize) if self.totalSize > 0 else 0
 
-        progressMsg = f'Progress: {sizeDisplay}/{totalDisplay} ({percentage:.2f}%), {speedDisplay}/sec'
+        progressMsg = _('Progress: {sizeDisplay}/{totalDisplay} ({percentage:.2f}%), {speedDisplay}/sec').format(
+            sizeDisplay=sizeDisplay, totalDisplay=totalDisplay, percentage=percentage, speedDisplay=speedDisplay
+        )
         if extraText:
             progressMsg += f', {extraText}'
 
@@ -256,7 +256,10 @@ class Progress:
     def getFormattedSpeed(self):
         """Get formatted speed string using sizeFormatter."""
         speed = self.getSpeed()
-        return f"{self.sizeFormatter(int(speed))}/sec" if speed > 0 else "0/sec"
+        if speed > 0:
+            return _("{speed}/sec").format(speed=self.sizeFormatter(int(speed)))
+        else:
+            return _("0/sec")
 
     def finishBar(self, complete=True):
         """Finish the progress bar if it's being used.
@@ -297,6 +300,8 @@ class Progress:
         self.finishBar()
 
 
-def createProgressBar(totalSize, description="Progress", sizeFormatter=None, **kwargs):
+def createProgressBar(totalSize, description=None, sizeFormatter=None, **kwargs):
     """Create a progress bar with consistent formatting."""
+    if description is None:
+        description = _("Progress")
     return BitmathTqdm(total=totalSize, desc=description, sizeFormatter=sizeFormatter or formatSize, **kwargs)

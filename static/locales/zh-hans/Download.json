@@ -1,0 +1,148 @@
+{
+    "title": "下载中",
+    "file": "档案",
+    "ellipsis": "...",
+    "warning": {
+        "title": "下载在此浏览器中可能无法正常运作",
+        "text": "要下载此档案，请在您的浏览器中开启此连结。",
+        "button": "在浏览器中下载"
+    },
+    "progress": {
+        "preparing": "准备下载中...",
+        "statusHeading": "正在准备您的下载...",
+        "statusDetails": "大型档案可能需要一些时间才能开始",
+        "trouble": "🔄 遇到问题？在新分页中重试",
+        "troubleSubtle": "遇到问题？在新分页中重试",
+        "troubleProminent": "🔄 遇到问题？在新分页中重试",
+        "backgroundHeading": "下载正在背景处理中",
+        "backgroundDetails": "请检查您的浏览器下载列（通常在底部或顶部）以查看进度",
+        "backgroundDetailsByPass": "请检查您的浏览器下载列（通常在底部或顶部）以查看进度 — 或确认下载是否已完成。",
+        "inProgressHeading": "下载进行中...",
+        "inProgressDetails": "请等待您的档案下载",
+        "starting": "开始下载...",
+        "downloading": "下载档案中...",
+        "downloadingMightDone": "下载档案中...可能已经完成。",
+        "downloadingWithSize": "下载中 {{size}} 档案...",
+        "newTabOpened": "已在新分页中开启下载",
+        "canCloseTab": "您可以视需要关闭此分页",
+        "unableToClose": "无法自动关闭，您可以手动关闭此分页",
+        "pleaseWait": "请等待您的档案下载",
+        "checkDownloads": "您可以在下载面板中检查进度 (Ctrl+J)",
+        "preparingLarge": "正在准备 {{size}} 档案的直接下载...",
+        "started": "✓ 下载已在您的浏览器中开始 (Firefox)",
+        "havingTrouble": "遇到问题？请重试或检查您的下载资料夹",
+        "stoppedForNewTab": "此分页的下载已停止 - 在新分页中继续"
+    },
+    "retry": {
+        "confirmationTitle": "可能已有下载正在进行中。请先检查您的浏览器下载列。",
+        "confirmationSubtitle": "开启新分页将会开始新的下载。", 
+        "confirmButton": "是的，开启新分页",
+        "cancelButton": "取消"
+    },
+    "complete": {
+        "title": "✅ 下载完成！"
+    },
+    "closeTab": "关闭此分页",
+    "e2ee": {
+        "title": "🔒 此档案已加密",
+        "description": "请输入加密金钥以解密并下载：",
+        "placeholder": "输入加密金钥 (base64)",
+        "button": "解密并下载",
+        "firefoxBlocked": {
+            "title": "🔒 加密下载无法使用",
+            "details": "大于 {{limit}} 的加密下载需要基于 Chromium 的浏览器进行串流解密。",
+            "why": "为什么？",
+            "explanation": "大型加密档案在 Firefox 中无法可靠地进行串流解密。",
+            "solution": "解决方案：",
+            "browsers": "Chrome、Edge 或 Brave",
+            "useBrowser": "使用 {{browsers}}",
+            "useCLI": "或使用 <a href=\"https://github.com/nuwainfo/ffl\" target=\"_blank\" style=\"display: inline !important; padding: 0 !important; margin: 0 !important; border: none !important; background: none !important; color: #007bff !important; text-decoration: underline !important; font-size: inherit !important;\">FastFileLink CLI</a>",
+            "smallFiles": "小型加密档案（<{{limit}}）可在 Firefox 上运作",
+            "fileSize": "档案大小：{{size}}"
+        },
+        "retryBlocked": {
+            "title": "加密下载需要此页面",
+            "message": "直接浏览器下载无法解密此档案。解密必须在此页面使用您的加密金钥进行。",
+            "solutionsTitle": "尝试以下解决方案：",
+            "solution1": "<strong>不同的浏览器：</strong>尝试 Chrome、Edge 或 Brave 以获得更好的兼容性",
+            "solution2Title": "命令行工具：",
+            "solution2Text": "使用",
+            "solution2Stable": "以稳定下载大型加密档案",
+            "solution3": "<strong>等待：</strong>下载可能仍在后台进行中"
+        }
+    },
+    "downloadFooter":{
+        "message": "附注：祝您有美好的一天！在以下网址下载您的免费档案分享应用程式",
+        "linkText": "快档连结"
+    },
+    "inappguard": {
+        "browsers": {
+            "safari": "Safari",
+            "chrome": "Chrome",
+            "yourBrowser": "您的浏览器"
+        },
+        "actions": {
+            "download": "下载"
+        },
+        "messages": {
+            "iosRestricted": "要{{action}}此档案，请在{{browser}}中开启此连结。点击分享按钮并选择「在{{browser}}中开启」。",
+            "androidRestricted": "要{{action}}此档案，请在{{browser}}中开启此连结。点击选单按钮并选择「在浏览器中开启」。",
+            "generalRestricted": "要{{action}}此档案，请在{{browser}}中开启此连结。"
+        }
+    },
+    "client": {
+        "status": {
+            "establishing": "建立连线中...",
+            "establishingP2p": "建立设备对设备(P2P)连线中...",
+            "switchingRelay": "切换至中继模式：{{reason}}",
+            "relayStarted": "中继P2P下载已开始。",
+            "p2pChecking": "P2P连线中...[检查中]",
+            "p2pConnecting": "P2P连线中...[连接中]",
+            "p2pSuccess": "P2P连线成功！下载中...",
+            "reconnecting": "连线中断，尝试重新连线...",
+            "networkFluctuation": "检测到网路波动，继续传输...",
+            "retryingP2p": "重试P2P连线...",
+            "savingFile": "储存档案中...",
+            "creatingDownload": "建立下载中...",
+            "downloadingPercent": "透过P2P下载中：{{percent}}%"
+        },
+        "connection": {
+            "serverRelay": "使用伺服器中继下载",
+            "waitingPeer": "等待对等节点 ({{seconds}}秒)",
+            "retrying": "重试P2P连线",
+            "directP2p": "直接P2P传输"
+        },
+        "download": {
+            "startShortly": "您的下载将很快开始。",
+            "deviceStarted": "设备对设备下载已开始。",
+            "fileSaved": "档案已储存。请检查您的下载资料夹。"
+        },
+        "fallback": {
+            "browserNotSupported": "此浏览器不支援下载",
+            "p2pDisabled": "设备对设备P2P已停用。使用中继P2P。",
+            "fileTooBig": "大档案需要现代浏览器支援。请考虑更换浏览器或使用伺服器中继。",
+            "webrtcNotSupported": "不支援 WebRTC - 使用伺服器中继"
+        },
+        "retry": {
+            "button": "重试下载",
+            "confirmationTitle": "在新分页中开启下载？"
+        },
+        "manualDownload": "下载",
+        "footer": {
+            "design": "设计："
+        }
+    },
+    "downloadLink": "下载连结",
+    "unavailable": "不可用",
+    "needAssistance": "如需协助，请联络我们：",
+    "pointsNotEnough":{
+        "reason": "此下载连结不可用，因为帐号的使用点数已用完。"
+    },
+    "runOutDownloadPoint":{
+        "reason": "此下载连结不可用，因为下载次数已达档案拥有者设定的上限。"
+    },
+    "errors": {
+        "folder_changed": "分享的资料夹内容在传输过程中已变更。档案拥有者需要重新分享该资料夹。",
+        "unknown": "传输过程中发生错误。"
+    }
+}

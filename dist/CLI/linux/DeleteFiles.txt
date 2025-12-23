@@ -144,6 +144,8 @@ lib/python3.12/site-packages/cffi
 lib/python3.12/site-packages/conda_pack
 lib/python3.12/site-packages/FileShare/tests
 lib/python3.12/site-packages/FileShare/setup.py
+lib/python3.12/site-packages/FileShare/locales
+lib/python3.12/site-packages/FileShare/addons/GUI.py
 lib/python3.12/site-packages/pip
 lib/python3.12/site-packages/pkg_resources
 lib/python3.12/site-packages/pycparser

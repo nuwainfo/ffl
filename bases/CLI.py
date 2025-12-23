@@ -24,9 +24,13 @@ import logging
 import logging.config
 import platform
 
-from bases.Kernel import PUBLIC_VERSION, getLogger, FFLEvent, configureGlobalLogLevel, AddonsManager, StorageLocator
+from bases.Kernel import (
+    LOG_LEVEL_MAPPING, PUBLIC_VERSION, getLogger, FFLEvent, configureGlobalLogLevel, AddonsManager, StorageLocator
+)
 from bases.Settings import DEFAULT_AUTH_USER_NAME, DEFAULT_UPLOAD_DURATION, SettingsGetter
 from bases.Utils import flushPrint, checkVersionCompatibility, getEnv, parseProxyString, setupProxyEnvironment
+from bases.Upgrade import performUpgrade
+from bases.I18n import _
 
 logger = getLogger(__name__)
 
@@ -44,7 +48,7 @@ def loadEnvFile():
         return
 
     try:
-        flushPrint(f'Loading .env file from: {envFilePath}')
+        flushPrint(_('Loading .env file from: {envFilePath}').format(envFilePath=envFilePath))
         loadedCount = 0
 
         with open(envFilePath, 'r', encoding='utf-8') as f:
@@ -57,7 +61,9 @@ def loadEnvFile():
 
                 # Parse KEY=VALUE format
                 if '=' not in line:
-                    flushPrint(f'Warning: .env line {lineNum}: Invalid format (missing =): {line}')
+                    flushPrint(_('Warning: .env line {lineNum}: Invalid format (missing =): {line}').format(
+                        lineNum=lineNum, line=line
+                    ))
                     continue
 
                 key, _, value = line.partition('=')
@@ -65,7 +71,7 @@ def loadEnvFile():
                 value = value.strip()
 
                 if not key:
-                    flushPrint(f'Warning: .env line {lineNum}: Empty key')
+                    flushPrint(_('Warning: .env line {lineNum}: Empty key').format(lineNum=lineNum))
                     continue
 
                 # Remove quotes if present (both single and double)
@@ -80,10 +86,10 @@ def loadEnvFile():
                 else:
                     logger.debug(f'.env: Skipped {key} (already set in environment)')
 
-        flushPrint(f'Loaded {loadedCount} environment variables from .env')
+        flushPrint(_('Loaded {loadedCount} environment variables from .env').format(loadedCount=loadedCount))
 
     except Exception as e:
-        flushPrint(f'Error: Unexpected error loading .env file: {e}')
+        flushPrint(_('Error: Unexpected error loading .env file: {error}').format(error=e))
         logger.error(f'Unexpected error loading .env file: {e}', exc_info=True)
 
 
@@ -128,11 +134,11 @@ def configureLogging(logLevel):
             return logLevel
 
         except (json.JSONDecodeError, FileNotFoundError, KeyError) as e:
-            flushPrint(f"Failed to load logging config from {logLevel}: {e}")
-            flushPrint("Falling back to default logging level configuration")
+            flushPrint(_('Failed to load logging config from {logLevel}: {error}').format(logLevel=logLevel, error=e))
+            flushPrint(_('Falling back to default logging level configuration'))
 
     # Map string levels to logging constants for standard level names
-    levelMapping = {'DEBUG': logging.DEBUG, 'INFO': logging.INFO, 'WARNING': logging.WARNING, 'ERROR': logging.ERROR}
+    levelMapping = LOG_LEVEL_MAPPING
 
     # Check if it's a standard logging level
     if logLevel.upper() in levelMapping:
@@ -152,52 +158,68 @@ def configureLogging(logLevel):
 
 def showVersion():
     """Display version information and enabled addons"""
-    flushPrint(f"FastFileLink v{PUBLIC_VERSION}")
+    flushPrint(_('FastFileLink v{version}').format(version=PUBLIC_VERSION))
     flushPrint("")
 
     # Check version compatibility with server
     serverIsNewer, isCompatible, serverVersion, minimumVersion = checkVersionCompatibility()
 
     if serverIsNewer and isCompatible:
-        flushPrint("🔄 Update available!")
-        flushPrint(f"   Your version: {PUBLIC_VERSION}")
-        flushPrint(f"   Latest version: {serverVersion}")
-        flushPrint("   Consider updating for the latest features and improvements.")
+        flushPrint(_('🔄 Update available!'))
+        flushPrint(_('   Your version: {version}').format(version=PUBLIC_VERSION))
+        flushPrint(_('   Latest version: {serverVersion}').format(serverVersion=serverVersion))
+        flushPrint(_('   Consider updating for the latest features and improvements.'))
         flushPrint("")
 
     if not isCompatible:
-        flushPrint("⚠️ VERSION INCOMPATIBLE!")
-        flushPrint(f"   Your version: {PUBLIC_VERSION}")
-        flushPrint(f"   Server Minimum required: {minimumVersion}")
-        flushPrint(f"   Latest version: {serverVersion}")
-        flushPrint("   Please update to continue using the service.")
+        flushPrint(_('⚠️ VERSION INCOMPATIBLE!'))
+        flushPrint(_('   Your version: {version}').format(version=PUBLIC_VERSION))
+        flushPrint(_('   Server Minimum required: {minimumVersion}').format(minimumVersion=minimumVersion))
+        flushPrint(_('   Latest version: {serverVersion}').format(serverVersion=serverVersion))
+        flushPrint(_('   Please update to continue using the service.'))
         flushPrint("")
 
     # Get addons manager and show enabled addons
     addonsManager = AddonsManager.getInstance()
     enabledAddons = addonsManager.getEnabledAddons()
+    failedAddons = {name: (error, excClass) for name, error, excClass in addonsManager.getFailedAddons()}
 
     if enabledAddons:
-        flushPrint("Enabled addons:")
+        flushPrint(_('Enabled addons:'))
         for addon in enabledAddons:
-            status = "[OK] Loaded" if addonsManager.isAddonLoaded(addon) else "[FAIL] Failed to load"
+            if addonsManager.isAddonLoaded(addon):
+                status = _('[OK] Loaded')
+            elif addon in failedAddons:
+                error, excClass = failedAddons[addon]
+                # Don't show ModuleNotFoundError failures (addon doesn't exist)
+                if excClass is not None and issubclass(excClass, ModuleNotFoundError):
+                    continue
+
+                status = _('[FAIL] Failed to load')
+            else:
+                # Addon was neither loaded nor failed (shouldn't happen, but handle it)
+                status = _('[UNKNOWN] Not loaded')
+
             flushPrint(f"  {addon:<12} {status}")
     else:
-        flushPrint("No addons available")
+        flushPrint(_('No addons available'))
 
     flushPrint("")
     uname = platform.uname()
-    flushPrint(f"Architecture: {uname.system} {uname.release} {uname.machine} - {uname.version} ({uname.processor})")
+    flushPrint(_('Architecture: {system} {release} {machine} - {version} ({processor})').format(
+        system=uname.system, release=uname.release, machine=uname.machine,
+        version=uname.version, processor=uname.processor
+    ))
 
     # Get dynamic support URL based on GUI support and user level
     settingsGetter = SettingsGetter.getInstance()
     supportURL = settingsGetter.getSupportURL()
-    flushPrint(f"Support: {supportURL}")
+    flushPrint(_('Support: {supportURL}').format(supportURL=supportURL))
 
 
 def configureCLIParser():
     """Configure the parser for CLI mode with multi-phase command support using global parent approach
-    
+
     Returns:
         tuple: (parser, globals_parent, command_names, shareSubparser)
     """
@@ -238,18 +260,17 @@ def configureCLIParser():
             return validatePositive(maxDownloadsStr, "Max downloads")
 
         parser.add_argument(
-            "file", metavar="FILE_OR_FOLDER", help="Choose a file or folder you want to share", nargs='?'
+            "file", metavar="FILE_OR_FOLDER", help=_("Choose a file or folder you want to share"), nargs='?'
         )
 
         # Upload mode - optional parameter (always available, but requires Upload addon)
         # Use FeatureManager to filter retention times or fallback to default
         times = list(featureManager.getUploadRetentionTimes().keys())
-        parser.add_argument("--json", metavar="JSON_FILE", help="Output link and settings to a JSON file")
+        parser.add_argument("--json", metavar="JSON_FILE", help=_("Output link and settings to a JSON file"))
         parser.add_argument(
             "--upload",
-            help=(
-                f"Upload file to FastFileLink server to share it (Share duration after upload). "
-                f"Default: {DEFAULT_UPLOAD_DURATION}"
+            help=_("Upload file to FastFileLink server to share it (Share duration after upload). Default: {default}").format(
+                default=DEFAULT_UPLOAD_DURATION
             ),
             choices=times if times else ['unavailable'],
             nargs='?',
@@ -260,19 +281,19 @@ def configureCLIParser():
             "--resume",
             action="store_true",
             default=False,
-            help="Resume a previously interrupted upload (requires previous upload session to exist)"
+            help=_("Resume a previously interrupted upload (requires previous upload session to exist)")
         )
         parser.add_argument(
             "--pause",
             type=int,
             metavar="PERCENTAGE",
-            help="Pause upload at specified percentage (1-99, requires --upload)"
+            help=_("Pause upload at specified percentage (1-99, requires --upload)")
         )
         parser.add_argument(
             "--max-downloads",
             type=validateMaxDownloads,
             default=0,
-            help=(
+            help=_(
                 "Maximum number of downloads before the server automatically shuts down (P2P mode only)."
                 " 0 means unlimited."
             ),
@@ -282,24 +303,24 @@ def configureCLIParser():
             "--timeout",
             type=validateTimeout,
             default=0,
-            help="Timeout in seconds before the server automatically shuts down (P2P mode only). 0 means no timeout."
+            help=_("Timeout in seconds before the server automatically shuts down (P2P mode only). 0 means no timeout.")
         )
         parser.add_argument(
             "--port",
             type=validatePort,
-            help="Port number for local server (1024-65535, default: auto-detect available port)",
+            help=_("Port number for local server (1024-65535, default: auto-detect available port)"),
             metavar="PORT"
         )
         parser.add_argument(
             "--auth-user",
-            help=f"Username for HTTP Basic Authentication (default: '{DEFAULT_AUTH_USER_NAME}')",
+            help=_("Username for HTTP Basic Authentication (default: '{default}')").format(default=DEFAULT_AUTH_USER_NAME),
             metavar="USERNAME",
             default=DEFAULT_AUTH_USER_NAME,
             dest="authUser"
         )
         parser.add_argument(
             "--auth-password",
-            help="Password for HTTP Basic Authentication (enables auth protection)",
+            help=_("Password for HTTP Basic Authentication (enables auth protection)"),
             metavar="PASSWORD",
             dest="authPassword"
         )
@@ -307,22 +328,24 @@ def configureCLIParser():
             "--force-relay",
             action="store_true",
             default=False,
-            help=
-            "Force relayed P2P mode, disable direct WebRTC connections (can be overridden by ?webrtc=on URL parameter)",
+            help=_(
+                "Force relayed P2P mode, disable direct WebRTC connections "
+                "(can be overridden by ?webrtc=on URL parameter)"
+            ),
             dest="forceRelay"
         )
         parser.add_argument(
             "--e2ee",
             action="store_true",
             default=False,
-            help="Enable end-to-end encryption for file sharing (both HTTP and WebRTC)",
+            help=_("Enable end-to-end encryption for file sharing (both HTTP and WebRTC)"),
             dest="e2ee"
         )
         parser.add_argument(
             "--invite",
             action="store_true",
             default=False,
-            help="Open invite page in browser with the sharing link",
+            help=_("Open invite page in browser with the sharing link"),
             dest="invite"
         )
 
@@ -340,24 +363,29 @@ def configureCLIParser():
         validLevels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
         if logLevel.upper() not in validLevels:
             raise argparse.ArgumentTypeError(
-                f"Invalid log level '{logLevel}'. Valid levels are: {', '.join(validLevels)}"
+                _("Invalid log level '{logLevel}'. Valid levels are: {validLevels}").format(
+                    logLevel=logLevel, validLevels=', '.join(validLevels)
+                )
             )
         return logLevel.upper()
 
     # === 1) Global parameters in a parent parser ===
     globalsParent = argparse.ArgumentParser(add_help=False, exit_on_error=False)
-    globalsParent.add_argument("--version", action="store_true", help="Show version information and enabled addons")
-    globalsParent.add_argument("--cli", action="store_true", help="Run in CLI mode without GUI (optional)")
+    globalsParent.add_argument("--version", action="store_true", help=_("Show version information and enabled addons"))
+    globalsParent.add_argument("--cli", action="store_true", help=_("Run in CLI mode without GUI (optional)"))
+
     globalsParent.add_argument(
         "--log-level",
         type=validateLogLevel,
-        help="Set logging level (DEBUG, INFO, WARNING, ERROR) or path to logging config JSON file (default: WARNING)",
+        help=_(
+            "Set logging level (DEBUG, INFO, WARNING, ERROR) or path to logging config JSON file (default: WARNING)"
+        ),
         metavar="LEVEL_OR_FILE",
         dest="logLevel"
     )
     globalsParent.add_argument(
         "--proxy",
-        help=(
+        help=_(
             "Proxy server for all outbound connections. "
             "Formats: [user:pass@]host:port (defaults to SOCKS5), "
             "socks5[h]://[user:pass@]host:port, http[s]://[user:pass@]host:port. "
@@ -373,7 +401,7 @@ def configureCLIParser():
 
     # === 2) Main parser + subparsers; all inherit from globalsParent ===
     parser = argparse.ArgumentParser(
-        description="FastFileLink makes file sharing fast, simple, and secure.",
+        description=_("FastFileLink makes file sharing fast, simple, and secure."),
         parents=[globalsParent],
         exit_on_error=False,
     )
@@ -382,36 +410,51 @@ def configureCLIParser():
     commandRegistry = {}
     FFLEvent.cliArgumentsCommandsRegister.trigger(parser=parser, commandRegistry=commandRegistry)
 
-    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    subparsers = parser.add_subparsers(dest='command', help=_('Available commands'))
 
     # Default 'share' command for file sharing
     shareSubparser = subparsers.add_parser(
-        'share', help='Share a file (default command)', parents=[globalsParent], exit_on_error=False
+        'share', help=_('Share a file (default command)'), parents=[globalsParent], exit_on_error=False
     )
     _configureShareParser(shareSubparser)
 
     # Download command for receiving files
     downloadSubparser = subparsers.add_parser(
-        'download', help='Download a file from FastFileLink URL', parents=[globalsParent], exit_on_error=False
+        'download', help=_('Download a file from FastFileLink URL'), parents=[globalsParent], exit_on_error=False
     )
-    downloadSubparser.add_argument("url", metavar="URL", help="FastFileLink URL to download from")
+    downloadSubparser.add_argument("url", metavar="URL", help=_("FastFileLink URL to download from"))
     downloadSubparser.add_argument(
-        "--output", "-o", metavar="PATH", help="Output file path (default: use filename from server)"
+        "--output", "-o", metavar="PATH", help=_("Output file path (default: use filename from server)")
     )
     downloadSubparser.add_argument(
         "--resume",
         action="store_true",
-        help="Resume incomplete download (like curl -C), otherwise overwrite existing file"
+        help=_("Resume incomplete download (like curl -C), otherwise overwrite existing file")
     )
     downloadSubparser.add_argument(
         "--auth-user",
-        help=f"Username for HTTP Basic Authentication (default: '{DEFAULT_AUTH_USER_NAME}')",
+        help=_("Username for HTTP Basic Authentication (default: '{default}')").format(default=DEFAULT_AUTH_USER_NAME),
         metavar="USERNAME",
         default=DEFAULT_AUTH_USER_NAME,
         dest="authUser"
     )
     downloadSubparser.add_argument(
-        "--auth-password", help="Password for HTTP Basic Authentication", metavar="PASSWORD", dest="authPassword"
+        "--auth-password", help=_("Password for HTTP Basic Authentication"), metavar="PASSWORD", dest="authPassword"
+    )
+
+    # Upgrade command for self-updating
+    upgradeSubparser = subparsers.add_parser(
+        'upgrade', help=_('Upgrade to latest version or specified version'), parents=[globalsParent], exit_on_error=False
+    )
+    upgradeSubparser.add_argument(
+        "target",
+        nargs='?',
+        help=_("Target binary path to upgrade (for development mode), or version (e.g., v3.7.5)")
+    )
+    upgradeSubparser.add_argument(
+        "version",
+        nargs='?',
+        help=_("Target version when binary path is specified (default: latest)")
     )
 
     # Let addons create their command parsers (same pattern - inherit globalsParent)
@@ -419,8 +462,8 @@ def configureCLIParser():
         cmdParser = subparsers.add_parser(cmdName, help=cmdConfig['help'], parents=[globalsParent], exit_on_error=False)
         cmdConfig['setupFunction'](cmdParser)
 
-    # Collect all valid subcommand names (including 'share' and 'download')
-    commandNames = {'share', 'download', *commandRegistry.keys()}
+    # Collect all valid subcommand names (including core commands)
+    commandNames = {'share', 'download', 'upgrade', *commandRegistry.keys()}
     return parser, globalsParent, commandNames, shareSubparser
 
 
@@ -444,7 +487,7 @@ def processGlobalArguments(globalArgs):
     if globalArgs.proxy:
         proxyConfig = parseProxyString(globalArgs.proxy)
         if not proxyConfig:
-            flushPrint(f"Error: Invalid proxy format: {globalArgs.proxy}")
+            flushPrint(_('Error: Invalid proxy format: {proxy}').format(proxy=globalArgs.proxy))
             result['exitCode'] = 1
             return result
 
@@ -480,6 +523,30 @@ def processArgumentsAndCommands(args):
     Returns:
         int or None: Exit code if command was handled, None if should continue to processFileSharing
     """
+    # Handle core upgrade command
+    command = getattr(args, 'command', None)
+    if command == 'upgrade':
+        # Parse arguments: support both "upgrade <version>" and "upgrade <binary_path> <version>"
+        target = getattr(args, 'target', None)
+        version = getattr(args, 'version', None)
+
+        # Determine if target is a binary path or a version
+        targetBinary = None
+        targetVersion = None
+
+        if target:
+            # Check if target looks like a file path (contains path separators)
+            if '/' in target or '\\' in target or os.path.exists(target):
+                # target is a binary path
+                targetBinary = target
+                targetVersion = version if version and version != 'latest' else None
+            else:
+                # target is a version string
+                targetVersion = target if target != 'latest' else None
+
+        success = performUpgrade(targetVersion=targetVersion, targetBinary=targetBinary, force=False)
+        return 0 if success else 1
+
     # Let addons store or handle their own arguments
     argPolicy = {'exitCode': None}
     FFLEvent.cliArgumentsStore.trigger(args=args, argPolicy=argPolicy)
@@ -490,7 +557,6 @@ def processArgumentsAndCommands(args):
     # Validate share arguments for:
     # - CLI mode: when command is 'share'
     # - GUI mode: when command attribute doesn't exist (GUI doesn't use subcommands)
-    command = getattr(args, 'command', None)
     if command == 'share' or command is None:
         return validateShareArguments(args)
 
@@ -612,45 +678,45 @@ def validateShareArguments(args):
 
     # Check if --upload was used without Upload addon
     if args.upload and not settingsGetter.hasUploadSupport():
-        flushPrint("Error: --upload option requires Upload addon (addons/Upload.py)")
-        flushPrint("Please install the Upload addon (use Standard/Plus version) or use P2P mode without --upload")
+        flushPrint(_('Error: --upload option requires Upload addon (addons/Upload.py)'))
+        flushPrint(_('Please install the Upload addon (use Standard/Plus version) or use P2P mode without --upload'))
         return 1
 
     # Validate --pause argument
     if args.pause is not None:
         # --pause requires --upload
         if not args.upload:
-            flushPrint("Error: --pause requires --upload")
-            flushPrint("Use: --upload <duration> --pause <percentage>")
+            flushPrint(_('Error: --pause requires --upload'))
+            flushPrint(_('Use: --upload <duration> --pause <percentage>'))
             return 1
 
         # Validate percentage range
         if not (1 <= args.pause <= 99):
-            flushPrint("Error: --pause percentage must be between 1 and 99")
+            flushPrint(_('Error: --pause percentage must be between 1 and 99'))
             return 1
 
     # Validate --resume argument
     if args.resume:
         # --resume requires --upload
         if not args.upload:
-            flushPrint("Error: --resume flag can only be used with --upload")
+            flushPrint(_('Error: --resume flag can only be used with --upload'))
             return 1
 
     # Validate conflicting --pause and --resume flags
     if args.pause is not None and args.resume:
-        flushPrint("Error: --pause and --resume cannot be used together")
-        flushPrint("Use --pause to pause a new upload, or --resume to continue a paused upload")
+        flushPrint(_('Error: --pause and --resume cannot be used together'))
+        flushPrint(_('Use --pause to pause a new upload, or --resume to continue a paused upload'))
         return 1
 
     # Validate auth arguments - password is required to enable auth
     # Check if user provided --auth-user but no --auth-password
     # We check if authUser is not the default value 'ffl' AND authPassword is None
     if args.authUser != DEFAULT_AUTH_USER_NAME and args.authPassword is None:
-        flushPrint("Error: --auth-user requires --auth-password")
-        flushPrint(
-            f"Use --auth-password to enable authentication "
-            f"(username defaults to '{DEFAULT_AUTH_USER_NAME}' if not specified)"
-        )
+        flushPrint(_('Error: --auth-user requires --auth-password'))
+        flushPrint(_(
+            'Use --auth-password to enable authentication '
+            '(username defaults to \'{defaultUser}\' if not specified)'
+        ).format(defaultUser=DEFAULT_AUTH_USER_NAME))
         return 1
 
     return None # Validation passed

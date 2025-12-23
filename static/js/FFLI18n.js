@@ -16,70 +16,109 @@
  * @param {string[]} config.supportedLanguages - Array of supported language codes (default: ['en', 'zh-hant'])
  * @param {boolean} config.debug - Enable debug mode (default: true)
  * @param {Function} config.log - Logging function (default: global log or no-op)
- * 
+ *
  * @example
  * // Default configuration
  * initializeI18n();
- * 
+ *
  * // Custom locales path
  * initializeI18n({ localesPath: '/static/locales' });
- * 
+ *
  * // Custom languages and path
- * initializeI18n({ 
+ * initializeI18n({
  *   localesPath: '/translations',
  *   supportedLanguages: ['en', 'es', 'fr'],
  *   debug: false,
  *   log: console.log
  * });
  */
+function applyFontByLanguage(lng) {
+    var $html = $('html');
+
+    $html.removeClass('lang-zh-hans lang-zh-hant lang-en');
+
+    if (lng === 'zh-hans' || lng === 'zh-Hans') {
+        $html.addClass('lang-zh-hans');
+    } else if (lng === 'zh-hant') {
+        $html.addClass('lang-zh-hant');
+    } else {
+        $html.addClass('lang-en');
+    }
+}
+
 function initializeI18n(config = {}) {
     // Configuration with defaults
     const localesPath = config.localesPath || '/locales';
-    const supportedLanguages = config.supportedLanguages || ['en', 'zh-hant'];
+    const supportedLanguages = config.supportedLanguages || ['en', 'zh-hant', 'zh-hans'];
+    const chineseMap = {
+        // 繁體
+        'zh-TW': 'zh-hant',
+        'zh-tw': 'zh-hant',
+        'zh-Hant': 'zh-hant',
+        'zh-hant': 'zh-hant',
+        'zh': 'zh-hant',
+        'zh-HK': 'zh-hant',
+        'zh-hk': 'zh-hant',
+
+        // 簡體
+        'zh-CN': 'zh-hans',
+        'zh-cn': 'zh-hans',
+        'zh-Hans': 'zh-hans',
+        'zh-hans': 'zh-hans',
+        'zh-SG': 'zh-hans',
+        'zh-sg': 'zh-hans'
+    };
     const debug = config.debug !== undefined ? config.debug : true;
     const version = config.version || '1.0.0';
     const log = config.log || (typeof window !== 'undefined' && typeof window.log === 'function' ? window.log : function() {});
-    
+
+    // Common and user-defined namespaces
+    const commonNamespaces = ['Nav', 'Footer', 'Modal', 'Common'];
+    const userNamespaces = Array.isArray(config.ns) ? config.ns : config.ns ? [config.ns] : [];
+    const namespaces = [...new Set([...commonNamespaces, ...userNamespaces])];
+
     // Initialize i18next with http-backend and language detection
     i18next
         .use(i18nextHttpBackend)
         .use(i18nextBrowserLanguageDetector)
         .init({
             fallbackLng: 'en',
-            supportedLngs: [...supportedLanguages, 'zh-TW', 'zh-tw', 'zh-Hant', 'zh'],
+            supportedLngs: ['en', 'zh-hant', 'zh-hans', 'zh', 'zh-TW', 'zh-HK', 'zh-CN', 'zh-SG', 'zh-Hant', 'zh-Hans'],
             debug: debug,
-            load: 'languageOnly',
+            load: 'currentOnly',
             checkForDefaultNamespace: false,
-            
+            ns: namespaces,
+
             // Backend configuration
             backend: {
                 loadPath: function(languages, namespaces) {
                     const [language] = languages;
                     const [namespace] = namespaces;
-                    
-                    // Map Chinese language variants to zh-hant file
-                    if (language === 'zh-TW' || language === 'zh-tw' || 
-                        language === 'zh-Hant' || language === 'zh-hant' || 
-                        language === 'zh') {
-                        return `${localesPath}/zh-hant/${namespace}.json?v=${version}`;
+
+                    const mappedLang = chineseMap[language];
+
+                    if (mappedLang) {
+                        return `${localesPath}/${mappedLang}/${namespace}.json?v=${version}`;
                     }
-                    
+
                     return `${localesPath}/${language}/${namespace}.json?v=${version}`;
                 }
             },
-            
+
             // Language detection configuration
             detection: {
                 order: ['querystring', 'localStorage', 'navigator'],
                 caches: ['localStorage'],
                 lookupQuerystring: 'language',
                 convertDetectedLanguage: function(lng) {
-                    log('FFLI18n', 'Detected language:', lng);
-                    // Map various Chinese language codes to zh-hant
-                    if (lng === 'zh-TW' || lng === 'zh-tw' || lng === 'zh-Hant' || lng === 'zh-hant' || lng === 'zh') {
-                        log('FFLI18n', 'Using Chinese variant, returning zh-hant');
+                    if (lng === 'zh') {
                         return 'zh-hant';
                     }
+
+                    if (chineseMap[lng]) {
+                        return chineseMap[lng];
+                    }
+                    log('FFLI18n', 'Detected language:', lng);
                     return lng;
                 },
                 checkWhitelist: false
@@ -90,38 +129,39 @@ function initializeI18n(config = {}) {
                 window.dispatchEvent(new CustomEvent('i18nReady'));
                 return;
             }
-            
+
             log('FFLI18n', 'i18next initialized with http-backend');
             log('FFLI18n', 'Final language:', i18next.language);
             log('FFLI18n', 'Resolved language:', i18next.resolvedLanguage);
             log('FFLI18n', 'Detected language from detector:', i18next.services?.languageDetector?.detectedLanguage);
             log('FFLI18n', 'Browser language:', navigator.language);
             log('FFLI18n', 'LocalStorage language:', localStorage.getItem('i18nextLng'));
-            
+
             // Check if we should switch to Chinese based on browser preference
             const browserLang = navigator.language || navigator.languages?.[0] || 'en';
             const currentLang = i18next.language;
-            
+
+            let preferredChinese = null;
+
+            if (chineseMap[browserLang]) {
+                preferredChinese = chineseMap[browserLang];
+            }
+
             // Initialize jquery-i18next first
             jqueryI18next.init(i18next, $);
-            
-            if ((browserLang.includes('zh') || browserLang.includes('TW') || browserLang.includes('Hant')) && 
-                currentLang.startsWith('en')) {
-                log('FFLI18n', 'Browser prefers Chinese but got English, switching to zh-hant...');
-                i18next.changeLanguage('zh-hant', function(switchErr) {
+            applyFontByLanguage(currentLang);
+
+            if (preferredChinese && currentLang.startsWith('en')) {
+                log('FFLI18n', 'Browser prefers Chinese, switching to:', preferredChinese);
+                i18next.changeLanguage(preferredChinese, function(switchErr) {
                     if (!switchErr) {
-                        log('FFLI18n', 'Successfully switched to Chinese:', i18next.language);
                         updatePageTranslations(log);
-                    } else {
-                        log('FFLI18n', 'Failed to switch to Chinese:', switchErr);
                     }
                 });
             } else {
-                log('FFLI18n', 'Test translation:', i18next.t('nav.home', 'Home'));
-                // Update page content with translations
                 updatePageTranslations(log);
             }
-            
+
             // Trigger custom event for application-specific initialization
             window.dispatchEvent(new CustomEvent('i18nReady'));
         });
@@ -130,7 +170,7 @@ function initializeI18n(config = {}) {
 // Safe t function - handles case when i18next is not ready yet
 function t(key, defaultValue, options = {}) {
     // Check if i18next is initialized and ready
-    if (typeof i18next === 'undefined' || !i18next.isInitialized || !i18next.hasLoadedNamespace('translation')) {
+    if (typeof i18next === 'undefined' || !i18next.isInitialized) {
         return defaultValue || key;
     }
     return i18next.t(key, { ...options, defaultValue });
@@ -141,7 +181,7 @@ function updatePageTranslations(log) {
     // Use global log or fallback to no-op
     const logger = log || (typeof window !== 'undefined' && typeof window.log === 'function' ? window.log : function() {});
     logger('FFLI18n', 'Updating page translations for language:', i18next.language);
-    
+
     // Use jquery-i18next to automatically translate all elements with data-i18n
     $('body').localize();
 }
@@ -150,8 +190,9 @@ function updatePageTranslations(log) {
 function changeLanguage(lang, log) {
     // Use global log or fallback to no-op
     const logger = log || (typeof window !== 'undefined' && typeof window.log === 'function' ? window.log : function() {});
-    
+
     i18next.changeLanguage(lang, function(err, t) {
+        applyFontByLanguage(lang);
         if (err) {
             logger('FFLI18n', 'Language change failed:', err);
             return;

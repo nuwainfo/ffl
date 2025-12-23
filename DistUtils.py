@@ -28,6 +28,8 @@ import subprocess
 import sys
 import zlib
 
+import babel
+
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -45,6 +47,9 @@ hiddenImports = ['bases.crypto.Cryptography']
 if sys.platform == 'darwin':
     hiddenImports.extend(['Foundation', 'AppKit'])
 
+babelPath = os.path.dirname(babel.__file__)
+babelLocalePath = os.path.join(babelPath, "locale-data")
+
 packageData = [
     ('static/Logo.ico', 'static'),
     ('static/Logo.png', 'static'),
@@ -52,6 +57,8 @@ packageData = [
     ('static/index.html', 'static'),
     ('static/assets/mitm.html', 'static/assets'),
     ('static/assets/sw.js', 'static/assets'),
+    ('locales', 'locales'), # i18n translation files
+    (os.path.join(babelLocalePath, "zh.dat"), "babel/locale-data"),
 ]
 
 featuresSupported = True

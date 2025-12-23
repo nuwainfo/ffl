@@ -45,7 +45,7 @@ from bases.Kernel import UIDGenerator, getLogger, FFLEvent
 from bases.Server import createServer, DownloadHandler
 from bases.Tunnel import TunnelRunner, TunnelUnavailableError
 from bases.WebRTC import WebRTCManager, WebRTCDownloader
-from bases.Settings import DEFAULT_STATIC_ROOT, ExecutionMode, SettingsGetter
+from bases.Settings import DEFAULT_STATIC_ROOT, SettingsGetter, ExecutionMode
 from bases.CLI import (
     configureCLIParser, processGlobalArguments, processArgumentsAndCommands, loadEnvFile, preprocessArguments
 )
@@ -58,6 +58,7 @@ from bases.Utils import (
     validateCompatibleWithServer,
 )
 from bases.Reader import SourceReader
+from bases.I18n import _
 
 logger = getLogger(__name__)
 
@@ -79,29 +80,51 @@ def setupGracefulShutdown():
     signal.signal(signal.SIGINT, signalHandler)
 
 
+def detectExecutionEnvironment():
+    """
+    Detect the current execution environment (Python script, PyInstaller, PyApp, Cosmopolitan).
+
+    Returns:
+        tuple: (ExecutionMode, baseDir, exePath) where:
+            - ExecutionMode: The detected execution mode
+            - baseDir: Base directory for the application
+            - exePath: Path to the actual executable (wrapper for PyApp, sys.executable for others)
+    """
+    baseDir = os.path.dirname(os.path.abspath(__file__))
+    exePath = sys.executable # Default to sys.executable
+
+    # Execute in PyInstaller .exe
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        # NSIS sets EXE_PATH environment variable
+        exePath = os.getenv('EXE_PATH', sys.executable)
+        return ExecutionMode.EXECUTABLE, sys._MEIPASS, exePath
+
+    # Execute in PyApp exe
+    elif os.getenv('PYAPP'):
+        # PyApp extracts and runs the code, so sys.executable points to the extracted Python
+        exePath = os.getenv('PYAPP', sys.executable)
+        return ExecutionMode.EXECUTABLE, baseDir, exePath
+
+    # Execute in Cosmopolitan libc
+    elif os.__file__.startswith('/zip') or 'Cosmopolitan' in platform.version():
+        # Check if running from zip
+        if bases.Stub.__file__.startswith('/zip'):
+            baseDir = '/zip'
+        return ExecutionMode.COSMOPOLITAN_LIBC, baseDir, exePath
+
+    # Pure Python execution
+    else:
+        # Go up one level from bases/ to get project root
+        return ExecutionMode.PURE_PYTHON, baseDir, exePath
+
+
 def setupSettings(logger):
 
     # Load .env file early (before any configuration or addon loading)
     loadEnvFile()
 
-    exeMode = ExecutionMode.PURE_PYTHON
-    baseDir = os.path.dirname(__file__)
-    staticRoot = DEFAULT_STATIC_ROOT
-
-    # execute in .exe
-    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-        exeMode = ExecutionMode.EXECUTABLE
-        baseDir = sys._MEIPASS
-    # execute in pyapp exe.
-    elif os.getenv('PYAPP'):
-        exeMode = ExecutionMode.EXECUTABLE
-    # execute in cosmo libc
-    elif os.__file__.startswith('/zip') or 'Cosmopolitan' in platform.version():
-        exeMode = ExecutionMode.COSMOPOLITAN_LIBC
-        if bases.Stub.__file__.startswith('/zip'):
-            baseDir = '/zip'
-    else:
-        exeMode = ExecutionMode.PURE_PYTHON
+    # Detect execution environment (PyInstaller, PyApp, Cosmopolitan, or pure Python)
+    exeMode, baseDir, exePath = detectExecutionEnvironment()
 
     if platform.system().lower() != 'windows':
         os.environ["SSL_CERT_FILE"] = certifi.where()
@@ -113,6 +136,7 @@ def setupSettings(logger):
         baseDir=baseDir,
         staticRoot=staticRoot,
         platform=platform.system(),
+        exePath=exePath,
     )
 
 
@@ -133,7 +157,7 @@ def onShareLinkCreate(args, link, filePath, fileSize, tunnelType, e2ee, **kwargs
     """Handle share link creation - invite and JSON writing"""
     # Handle --invite flag
     if args.invite:
-        flushPrint('Opening invite page in browser...')
+        flushPrint(_('Opening invite page in browser...'))
         featureManager.invite(link)
 
     # Handle --json flag
@@ -158,9 +182,9 @@ def onShareLinkCreate(args, link, filePath, fileSize, tunnelType, e2ee, **kwargs
         try:
             with open(args.json, 'w', encoding='utf-8') as f:
                 json.dump(outputData, f, indent=2)
-            flushPrint(f"Sharing information saved to {args.json}")
+            flushPrint(_('Sharing information saved to {jsonFile}').format(jsonFile=args.json))
         except Exception as e:
-            flushPrint(f"Failed to write JSON file: {e}")
+            flushPrint(_('Failed to write JSON file: {error}').format(error=e))
             sendException(logger, e)
 
     # Handle FFL_LINK_OUTPUT environment variable.
@@ -184,7 +208,7 @@ def processFileSharing(args, proxyConfig=None):
     """
     # Argument predicates.
     if not os.path.exists(args.file):
-        flushPrint(f'"{args.file}" does not exist!')
+        flushPrint(_('{file} does not exist!').format(file=f'"{args.file}"'))
         return 1
 
     # Subscribe handler for share link creation with bound args
@@ -194,7 +218,7 @@ def processFileSharing(args, proxyConfig=None):
     try:
         if args.upload:
             if not settingsGetter.hasUploadSupport():
-                flushPrint('Error: Upload functionality requires Upload addon (addons/Upload.py)')
+                flushPrint(_('Error: Upload functionality requires Upload addon (addons/Upload.py)'))
                 return 1
 
             # Use FeatureManager to check upload permission
@@ -206,7 +230,7 @@ def processFileSharing(args, proxyConfig=None):
         if featureManager.isRegisteredUser():
 
             if not isCLIMode():
-                flushPrint('If a firewall notification appears, please allow the application to connect.\n')
+                flushPrint(_('If a firewall notification appears, please allow the application to connect.\n'))
 
             # Get size using Reader abstraction (supports both files and folders)
             reader = SourceReader.build(args.file)
@@ -215,7 +239,7 @@ def processFileSharing(args, proxyConfig=None):
 
             # Hint user about folder content change detection for strict mode
             if os.path.isdir(args.file):
-                flushPrint('📁 Sharing folder as ZIP - please keep folder contents unchanged during transfer\n')
+                flushPrint(_('📁 Sharing folder as ZIP - please keep folder contents unchanged during transfer\n'))
 
             # Get UIDGenerator from FeatureManager
             uidGeneratorClass = UIDGenerator
@@ -229,7 +253,7 @@ def processFileSharing(args, proxyConfig=None):
             # Show E2EE status if enabled (first line, before establishing tunnel)
             e2eeEnabled = args.e2ee if hasattr(args, 'e2ee') else False
             if e2eeEnabled:
-                flushPrint('🔐 End-to-end encryption enabled\n')
+                flushPrint(_('🔐 End-to-end encryption enabled\n'))
 
             uploadMethod = None
             if args.upload:
@@ -240,7 +264,7 @@ def processFileSharing(args, proxyConfig=None):
 
                 # Inform GUI users about upload resumability
                 if not isCLIMode():
-                    flushPrint('You can stop the upload at any time and resume it later.\n')
+                    flushPrint(_('You can stop the upload at any time and resume it later.\n'))
 
                 class UploadAbortResult(UploadResult):
 
@@ -267,16 +291,15 @@ def processFileSharing(args, proxyConfig=None):
                             sendException(logger, message, errorPrefix="Server temporarily cannot process this file")
                     except PauseUploadError as e:
                         # Handle pause like Ctrl+C - print message and re-raise for elegant exit
-                        flushPrint(
-                            f"Upload paused at {e.percentage:.1f}% ({e.completedChunks}/{e.totalChunks} "
-                            f"chunks completed)"
-                        )
-                        flushPrint('Use --resume to continue upload')
+                        flushPrint(_(
+                            'Upload paused at {percentage:.1f}% ({completedChunks}/{totalChunks} chunks completed)'
+                        ).format(percentage=e.percentage, completedChunks=e.completedChunks, totalChunks=e.totalChunks))
+                        flushPrint(_('Use --resume to continue upload'))
                         return UploadAbortResult(exitCode=0)
                     except ResumeNotSupportedError as e:
                         # Handle resume not supported by upload strategy (e.g., PullUpload)
                         sendException(
-                            logger, (
+                            logger, _(
                                 'Resume is only available for direct upload mode (without external tunnels).\n'
                                 'Please restart the upload without --resume to upload the file normally.'
                             ),
@@ -286,7 +309,7 @@ def processFileSharing(args, proxyConfig=None):
                     except PauseNotSupportedError as e:
                         # Handle pause not supported by upload strategy (e.g., PullUpload)
                         sendException(
-                            logger, (
+                            logger, _(
                                 'Pause functionality is only available for direct upload mode '
                                 '(without external tunnels).\n'
                                 'Please restart the upload without --pause to upload the file normally.'
@@ -297,7 +320,7 @@ def processFileSharing(args, proxyConfig=None):
                     except E2EENotSupportedError as e:
                         # Handle E2EE not supported by upload strategy (e.g., PullUpload)
                         sendException(
-                            logger, (
+                            logger, _(
                                 'End-to-end encryption is only available for direct upload mode '
                                 '(without external tunnels).\n'
                                 'Please restart the upload without --e2ee to upload the file normally.'
@@ -308,11 +331,12 @@ def processFileSharing(args, proxyConfig=None):
                     except UploadParameterMismatchError as e:
                         # Handle parameter mismatch during resume
                         sendException(
-                            logger, (
-                                f'Cannot resume: {e.parameter} mismatch.\n'
-                                f'Original upload used "{e.originalValue}" but "{e.requestedValue}" was requested.\n'
+                            logger, _(
+                                'Cannot resume: {parameter} mismatch.\n'
+                                'Original upload used "{originalValue}" but "{requestedValue}" was requested.\n'
                                 'Please use the same parameters as the original upload.'
-                            ),
+                            ).format(parameter=e.parameter, originalValue=e.originalValue,
+                                     requestedValue=e.requestedValue),
                             errorPrefix=None
                         )
                         return UploadAbortResult(exitCode=1)
@@ -336,12 +360,12 @@ def processFileSharing(args, proxyConfig=None):
                 predicateResult = uploadMethod.predicate(file, size, user.points, args.upload)
                 if not predicateResult.canUpload:
                     if predicateResult.type == UploadPredicate.INVALIDATE_POINTS:
-                        flushPrint(
+                        flushPrint(_(
                             'Your user points are not enough. Please top up on our website (https://fastfilelink.com/).'
-                        )
+                        ))
                         logger.error(f'User {user.email} points not enough.')
                     else:
-                        flushPrint(predicateResult.message or 'Upload not allowed.')
+                        flushPrint(predicateResult.message or _('Upload not allowed.'))
                         sendException(logger, predicateResult.message or 'Upload predicate failed.')
                     return 1
 
@@ -372,7 +396,7 @@ def processFileSharing(args, proxyConfig=None):
                         # Regenerate UID to retry.
                         uid = generateUid()
 
-                        flushPrint('Retrying...\n')
+                        flushPrint(_('Retrying...\n'))
                     else:
                         sendException(logger, uploadResult.message if uploadResult else 'Upload failed')
                         return 1
@@ -391,20 +415,21 @@ def processFileSharing(args, proxyConfig=None):
                     provider = TunnelRunnerProvider()
                     tunnelRunnerClass = provider.getTunnelRunnerClass(tunnelRunnerClass)
                 except Exception as e:
-                    sendException(logger, 'Unable to create tunnel by your tunnel configuration.')
+                    sendException(logger, _('Unable to create tunnel by your tunnel configuration.'))
 
             # Use proxyConfig passed from global arguments processing
             with tunnelRunnerClass(size, proxyConfig=proxyConfig) as tunnelRunner:
                 tunnelType = tunnelRunner.getTunnelType()
                 if tunnelType != "default":
-                    flushPrint(f'Using tunnel: {tunnelType}')
+                    flushPrint(_('Using tunnel: {tunnelType}').format(tunnelType=tunnelType))
 
                 # Show proxy status for tunnel connections
                 proxyInfo = tunnelRunner.getProxyInfo()
                 if proxyInfo:
-                    flushPrint(f'Establishing tunnel connection via proxy {proxyInfo}...\n')
+                    flushPrint(_('Establishing tunnel connection via proxy {proxyInfo}...\n').format(
+                        proxyInfo=proxyInfo))
                 else:
-                    flushPrint('Establishing tunnel connection...\n')
+                    flushPrint(_('Establishing tunnel connection...\n'))
 
                 domain, tunnelLink = tunnelRunner.start(port)
                 link = f"{tunnelLink}{uid}"
@@ -419,14 +444,16 @@ def processFileSharing(args, proxyConfig=None):
                     if uploadResult and uploadResult.success:
                         handlerClass = uploadResult.requestHandler
                     else:
-                        flushPrint(f'Upload failed: {uploadResult.message if uploadResult else "Unknown error"}')
+                        flushPrint(_('Upload failed: {error}').format(
+                            error=uploadResult.message if uploadResult else _('Unknown error')
+                        ))
                         sendException(logger, uploadResult.message if uploadResult else 'Upload failed')
                         return 1
                 else:
                     # P2P mode
                     handlerClass = DownloadHandler
 
-                    flushPrint("Please share the link below with the person you'd like to share the file with.")
+                    flushPrint(_("Please share the link below with the person you'd like to share the file with."))
                     flushPrint(f'{link}\n')
                     copy2Clipboard(f'{link}')
 
@@ -439,11 +466,11 @@ def processFileSharing(args, proxyConfig=None):
                     authPassword = args.authPassword
                     if authPassword:
                         authUser = args.authUser
-                        flushPrint(f'Authentication enabled - Username: {authUser}\n')
+                        flushPrint(_('Authentication enabled - Username: {authUser}\n').format(authUser=authUser))
 
-                    flushPrint('Please keep the application running so the recipient can download the file.')
+                    flushPrint(_('Please keep the application running so the recipient can download the file.'))
                     if isCLIMode():
-                        flushPrint('Press Ctrl+C to terminate the program when done.\n')
+                        flushPrint(_('Press Ctrl+C to terminate the program when done.\n'))
                     else:
                         flushPrint('')
 
@@ -474,7 +501,7 @@ def processFileSharing(args, proxyConfig=None):
                     )
                     server.start()
                 except KeyboardInterrupt:
-                    flushPrint('\nExiting on user request (Ctrl+C)...')
+                    flushPrint(_('\nExiting on user request (Ctrl+C)...'))
                     # Clean exit without stack trace - context manager will handle cleanup
                     return 0
                 except Exception as e:
@@ -492,11 +519,11 @@ def processFileSharing(args, proxyConfig=None):
                     )
                     return 0
         else:
-            sendException(logger, 'User email address has been lost')
+            sendException(logger, _('User email address has been lost'))
             return 1
 
     except KeyboardInterrupt:
-        flushPrint('\nExiting on user request (Ctrl+C)...')
+        flushPrint(_('\nExiting on user request (Ctrl+C)...'))
         # Ensure clean exit
         return 0
 
@@ -526,7 +553,7 @@ def processDownload(args):
         # Don't print success message - progress bar already shows completion
         logger.debug(f"File downloaded successfully: {outputPath}")
         # Print file path for test framework to parse
-        flushPrint(f"Downloaded: {outputPath}")
+        flushPrint(_('Downloaded: {outputPath}').format(outputPath=outputPath))
         return 0
 
     except Exception as e:
@@ -535,14 +562,15 @@ def processDownload(args):
         if isinstance(e, FolderChangedException):
             # Add user-facing guidance to server error message
             serverMsg = str(e)
-            clientMsg = (
-                f"{serverMsg}\n\nThe shared folder contents changed during the transfer.\n"
-                f"Please contact the person who shared the file and ask them to share it again."
-            )
+            clientMsg = _(
+                '{serverMsg}\n\n'
+                'The shared folder contents changed during the transfer.\n'
+                'Please contact the person who shared the file and ask them to share it again.'
+            ).format(serverMsg=serverMsg)
             sendException(logger, clientMsg)
             return 1
         else:
-            sendException(logger, f"Download failed: {e}")
+            sendException(logger, _('Download failed: {error}').format(error=e))
             return 1
     finally:
         # Clean up downloader resources
@@ -624,7 +652,7 @@ def runGUIMain():
         import addons.GUI
         return addons.GUI.runGUIMain(processFileSharing)
     except ImportError:
-        flushPrint("GUI support not available. Install required dependencies or use CLI mode.")
+        flushPrint(_('GUI support not available. Install required dependencies or use CLI mode.'))
         return 1
 
 
@@ -636,11 +664,11 @@ def main():
     if not featureManager.isRegisteredUser():
         # Handle differently depending on mode
         if isCLIMode():
-            print("Error: App has not been registered")
+            print(_('Error: App has not been registered'))
             raise requests.exceptions.ConnectionError()
         else: # Must be GUI.
             import addons.GUI
-            addons.GUI.showErrorDialog("App has not been registered")
+            addons.GUI.showErrorDialog(_('App has not been registered'))
             if os.getenv("GUI_DEBUG") != "True":
                 raise requests.exceptions.ConnectionError()
 
@@ -650,7 +678,7 @@ def main():
         else:
             return runGUIMain()
     except KeyboardInterrupt:
-        flushPrint('\nExiting on user request (Ctrl+C)...')
+        flushPrint(_('\nExiting on user request (Ctrl+C)...'))
         return 0 # Return success code for clean exit
 
 
@@ -659,19 +687,21 @@ if __name__ == '__main__':
         exitCode = main()
         sys.exit(exitCode or 0)
     except KeyboardInterrupt:
-        flushPrint('\nExiting on user request (Ctrl+C)...')
+        flushPrint(_('\nExiting on user request (Ctrl+C)...'))
         sys.exit(0) # Exit with success code
     except TunnelUnavailableError as e:
         sendException(
-            logger, 'Tunnel server temporarily unavailable. '
-            'See https://github.com/nuwainfo/ffl#3--using-tunnels for alternative tunnels.'
+            logger, _(
+                'Tunnel server temporarily unavailable. '
+                'See https://github.com/nuwainfo/ffl#3--using-tunnels for alternative tunnels.'
+            )
         )
         sys.exit(1)
     except (requests.exceptions.ConnectionError, ConnectionError) as e:
-        sendException(logger, 'Failed to connect server')
+        sendException(logger, _('Failed to connect server'))
         sys.exit(1)
     except requests.exceptions.JSONDecodeError as e:
-        sendException(logger, 'Server return error')
+        sendException(logger, _('Server return error'))
         sys.exit(1)
     except PermissionError as e:
         sys.exit(1)

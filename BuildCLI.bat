@@ -122,6 +122,7 @@ $env:PYAPP_DISTRIBUTION_PYTHON_PATH = '.\ffl.exe'; ^
 $env:PYAPP_DISTRIBUTION_SITE_PACKAGES_PATH = 'Lib\site-packages'; ^
 $env:PYAPP_SKIP_INSTALL = '1'; ^
 $env:PYAPP_PROJECT_PATH = '.\%wheelFile%'; ^
+$env:PYAPP_PASS_LOCATION = '1'; ^
 cargo clean;cargo build --release;"
 
 cd ..

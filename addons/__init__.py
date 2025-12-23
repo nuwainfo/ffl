@@ -24,8 +24,16 @@
 # Each addon may have an optional load() function that will be called during initialization
 addons = [
     'API',       # API integration
-    'Features',  # User features and registration    
+    'Features',  # User features and registration
     'Upload',    # Core upload functionality
     'Tunnels',   # Network tunneling capabilities
     'GUI'        # GUI interface - loaded last as it may depend on other addons
 ]
+
+# I18n support for addons domain
+# All addon modules can import these directly: from addons import _, ngettext
+from functools import partial
+from bases.I18n import _ as _base, ngettext as ngettext_base
+
+_ = partial(_base, domain='addons')
+ngettext = partial(ngettext_base, domain='addons')
