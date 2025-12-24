@@ -565,9 +565,21 @@ ffl logout    # Logout and clear credentials
 
 `ffl` does not collect usage data, hardware stats, or “phone home” in the background.
 
-While Sentry (error tracking) is included in the binary, **error reporting is strictly disabled by default**. No crash logs or diagnostic data are sent to us unless you explicitly run with `--enable-reporting` to help debug a specific issue.
+While Sentry (error tracking) is included in the binary, **error reporting is strictly disabled by default for the CLI**. No crash logs or diagnostic data are sent to us unless you explicitly run with `--enable-reporting` to help debug a specific issue.
 
 > If you prefer a clean binary, please refer to [Open Source & Contributing](#open-source--contributing).
+
+### 🌐 Decentralized by Design
+
+By default, `ffl` uses our community relay for WebRTC signaling. **But you're not locked in.**
+
+If you use a third-party tunnel provider (Cloudflare, ngrok, bore, etc.), your connection happens entirely through that provider’s infrastructure:
+
+* No traffic is routed through FastFileLink’s servers
+* We do not log or see your usage
+* You can verify that `ffl` continues to work even if fastfilelink.com goes offline
+
+> Your overall privacy will then depend on the tunnel provider, your network/ISP, and your local system configuration.
 
 ### 🛡️ Additional Security Controls
 
