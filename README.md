@@ -112,14 +112,16 @@ curl.exe "https://github.com/nuwainfo/ffl/releases/latest/download/ffl.com" -o "
 If you prefer to build from source (requires **conda** and **cargo**):
 
 ```bash
+# Linux
+./BuildCLI.sh linux
+
+# Mac
+./BuildCLI.sh darwin
+
+# Windows
 conda create -n ffl python=3.12
 conda activate ffl
 pip install -r requirements.txt
-
-# Linux
-./BuildCLI.sh ffl
-
-# Windows
 .\BuildCLI.bat ffl
 ```
 
