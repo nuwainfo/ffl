@@ -123,6 +123,15 @@ pip install -r requirements.txt
 .\BuildCLI.bat ffl
 ```
 
+### 🆙 Keeping ffl Updated
+
+You don't need to visit GitHub to get the latest features. `ffl` handles updates automatically, respecting your current build type (Native or APE).
+
+```bash
+ffl upgrade
+```
+> Note: If you installed ffl to a system directory (like /usr/local/bin), you may need to run this with sudo: sudo ffl upgrade.
+
 ---
 
 ## Why Both APE and Native Executables Exist
