@@ -220,6 +220,7 @@ Options (most useful ones):
   --alias ALIAS            Use custom alias as UID for sharing link
   --e2ee                   Enable end-to-end encryption
   --preferred-tunnel {cloudflare,default,...} Set preferred tunnel for future runs
+  --invite                 Open invite page in browser with the sharing link
   --upload {3 hours,6 hours,12 hours,24 hours,72 hours,...} Upload to FastFileLink server and share via temporary storage
   --resume                 Resume a previously interrupted upload
   --pause PERCENTAGE       Pause upload at specific percentage (1–99, requires --upload)
