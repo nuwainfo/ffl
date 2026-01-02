@@ -306,6 +306,16 @@ ffl --proxy "socks5h://127.0.0.1:9050" --auth-user tom --auth-password secret --
 > * **However**, a knowledgeable recipient could manually append `?webrtc=on` to the URL to request a P2P connection.
 > * If you require **strict server-side enforcement** (where WebRTC signaling is completely blocked regardless of client requests), please check the **Licensed Version** features.
 
+> **🛡️ MITM Protection & Relay Trust**
+> `ffl` guarantees **Zero-Knowledge** against passive relays. regarding Active MITM resistance, this feature is already standard in our Enterprise GUI and is currently being ported to this open-source CLI.
+> * **Track progress:** [Issue #4: Port Active MITM Resistance to CLI](https://github.com/nuwainfo/ffl/issues/4)
+>
+> **Don't trust us? You don't have to.**
+> While we guarantee the strict security and integrity of our default tunnel infrastructure, `ffl` is designed to be **infrastructure-agnostic**. If you have specific compliance requirements or prefer a different trust anchor, you can switch to third-party tunnels (like Cloudflare, Ngrok, etc.) at any time.
+>
+> ```bash
+> ffl myfile.txt --preferred-tunnel cloudflare --e2ee
+> ```
 ---
 
 ### 2. 🤖 Automation Tips
