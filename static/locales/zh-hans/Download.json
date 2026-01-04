@@ -5,7 +5,8 @@
     "warning": {
         "title": "下载在此浏览器中可能无法正常运作",
         "text": "要下载此档案，请在您的浏览器中开启此连结。",
-        "button": "在浏览器中下载"
+        "button": "在浏览器中下载",
+        "copyButton": "复制连结"
     },
     "progress": {
         "preparing": "准备下载中...",
@@ -85,9 +86,13 @@
             "download": "下载"
         },
         "messages": {
-            "iosRestricted": "要{{action}}此档案，请在{{browser}}中开启此连结。点击分享按钮并选择「在{{browser}}中开启」。",
-            "androidRestricted": "要{{action}}此档案，请在{{browser}}中开启此连结。点击选单按钮并选择「在浏览器中开启」。",
+            "iosRestricted": "此应用程式限制下载。请：(1) 点击下方按钮来分享或复制连结，(2) 开启 {{browser}}，(3) 贴上并开启连结以{{action}}。",
+            "androidRestricted": "要{{action}}此档案，点击下方按钮在{{browser}}中开启。如果无法开启，请尝试选单 (⋮) 并选择「在浏览器中开启」。",
             "generalRestricted": "要{{action}}此档案，请在{{browser}}中开启此连结。"
+        },
+        "clipboard": {
+            "copied": "连结已复制！请贴到 Safari 以下载。",
+            "failed": "无法复制连结。请手动从网址栏复制 URL。"
         }
     },
     "client": {

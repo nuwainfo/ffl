@@ -493,7 +493,10 @@ def executeInstallScript(scriptPath: Path, targetVersion: str, osType: str, targ
 
 
 def performUpgrade(
-    targetVersion: Optional[str] = None, targetBinary: Optional[str] = None, force: bool = False
+    targetVersion: Optional[str] = None,
+    targetBinary: Optional[str] = None,
+    force: bool = False,
+    osType=None,
 ) -> bool:
     """
     Perform upgrade of FastFileLink CLI by downloading and executing install scripts
@@ -560,15 +563,16 @@ def performUpgrade(
     flushPrint("")
 
     # Detect platform
-    if settingsGetter.isWindows():
-        osType = "windows"
-    elif settingsGetter.isLinux():
-        osType = "linux"
-    elif settingsGetter.isDarwin():
-        osType = "darwin"
-    else:
-        sendException(logger, UpgradeError(_(f"Unsupported operating system: {platform.system()=}")))
-        return False
+    if osType is None:
+        if settingsGetter.isWindows():
+            osType = "windows"
+        elif settingsGetter.isLinux():
+            osType = "linux"
+        elif settingsGetter.isDarwin():
+            osType = "darwin"
+        else:
+            sendException(logger, UpgradeError(_(f"Unsupported operating system: {platform.system()=}")))
+            return False
 
     flushPrint(_("Platform: {os}").format(os=osType))
     flushPrint("")

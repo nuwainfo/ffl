@@ -49,20 +49,27 @@ COPYRIGHT = 'Copyright (c) 2025 FastFileLink Contributors. Licensed under Apache
 
 # Default footer message HTML for open source users (entire HTML block)
 FOOTER_MESSAGE_HTML = """<span data-i18n="Download:downloadFooter.message">
-PS: Wishing you a great day! Download your free file sharing app at</span> 
+PS: Wishing you a great day! Download your free file sharing app at</span>
 <a href="https://github.com/nuwainfo/ffl" target="_blank">GitHub</a>
 <span data-i18n="Common:period">.</span>
 """
 
+
+# Noop marker for babel extraction - allows babel to extract string literals
+def N_(s: str) -> str:
+    """Noop marker for babel extraction - marks strings for translation without translating immediately"""
+    return s
+
+
 RETENTION_TIMES = {
-    '3 hours': timedelta(hours=3),
-    '6 hours': timedelta(hours=6),
-    '12 hours': timedelta(hours=12),
-    '1 day': timedelta(days=1),
-    '3 days': timedelta(days=3),
-    '7 days': timedelta(days=7),
-    '14 days': timedelta(days=14),
-    '30 days': timedelta(days=30),
+    N_("3 hours"): timedelta(hours=3),
+    N_("6 hours"): timedelta(hours=6),
+    N_("12 hours"): timedelta(hours=12),
+    N_("1 day"): timedelta(days=1),
+    N_("3 days"): timedelta(days=3),
+    N_("7 days"): timedelta(days=7),
+    N_("14 days"): timedelta(days=14),
+    N_("30 days"): timedelta(days=30),
 }
 
 DEFAULT_AUTH_USER_NAME = 'ffl'

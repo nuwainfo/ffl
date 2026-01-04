@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-12-23 00:22+0800\n"
+"POT-Creation-Date: 2026-01-02 16:20+0800\n"
 "PO-Revision-Date: 2025-12-18 10:23+0800\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -187,7 +187,7 @@ msgstr ""
 msgid "This field is required"
 msgstr ""
 
-msgid "🎁 Invite"
+msgid "📤 Share Link"
 msgstr ""
 
 msgid ""
@@ -228,30 +228,6 @@ msgid ""
 msgstr ""
 
 msgid "Error Reporting Disabled"
-msgstr ""
-
-msgid "3 hours"
-msgstr ""
-
-msgid "6 hours"
-msgstr ""
-
-msgid "12 hours"
-msgstr ""
-
-msgid "1 day"
-msgstr ""
-
-msgid "3 days"
-msgstr ""
-
-msgid "7 days"
-msgstr ""
-
-msgid "14 days"
-msgstr ""
-
-msgid "30 days"
 msgstr ""
 
 #, python-brace-format
@@ -325,6 +301,9 @@ msgstr ""
 
 #, python-brace-format
 msgid "Help (v{version})"
+msgstr ""
+
+msgid "🏠 Home Page"
 msgstr ""
 
 msgid "🎓 Tutorial"
@@ -701,5 +680,32 @@ msgstr ""
 #~ msgstr ""
 
 #~ msgid "Progress: {percent:.1f}% completed"
+#~ msgstr ""
+
+#~ msgid "🎁 Invite"
+#~ msgstr ""
+
+#~ msgid "3 hours"
+#~ msgstr ""
+
+#~ msgid "6 hours"
+#~ msgstr ""
+
+#~ msgid "12 hours"
+#~ msgstr ""
+
+#~ msgid "1 day"
+#~ msgstr ""
+
+#~ msgid "3 days"
+#~ msgstr ""
+
+#~ msgid "7 days"
+#~ msgstr ""
+
+#~ msgid "14 days"
+#~ msgstr ""
+
+#~ msgid "30 days"
 #~ msgstr ""
 

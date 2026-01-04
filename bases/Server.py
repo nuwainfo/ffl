@@ -25,12 +25,13 @@ import sys
 import uuid
 import datetime
 import base64
+import threading
+import time
 
 import requests
 
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from time import time
 from urllib.parse import parse_qs, quote, urlparse
 
 from bases.Kernel import getLogger, PUBLIC_VERSION
@@ -39,7 +40,7 @@ from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
 from bases.WebRTC import WebRTCManager, WebRTCDisabledError
 from bases.Progress import Progress
 from bases.E2EE import E2EEManager
-from bases.Reader import SourceReader, FolderChangedException
+from bases.Reader import FolderChangedException
 from bases.I18n import _
 
 LOG_OUTPUT_DURATION = 1 # Seconds
@@ -254,16 +255,16 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         return None
 
     def _getFileInfo(self, quoteName=True):
-        path = os.path.join(self.server.directory, self.server.file)
-
-        reader = SourceReader.build(path)
+        # Reader is always available and provides file/directory information
+        reader = self.server.reader
+        path = os.path.join(self.server.directory, self.server.file) if self.server.directory else self.server.file
 
         if quoteName:
             name = quote(reader.contentName)
         else:
             name = reader.contentName
 
-        size = reader.size if reader.size is not None else 0
+        size = reader.size # None means unknown length (e.g., stdin)
         ctype = reader.contentType
 
         return path, name, size, ctype, reader
@@ -304,7 +305,10 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         path, name, size, ctype, reader = self._getFileInfo()
 
         self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Length", str(size))
+
+        if size is not None:
+            self.send_header("Content-Length", str(size))
+
         self.send_header("Content-type", ctype)
         self.send_header("Content-Disposition", f"attachment; filename={name}")
         self.end_headers()
@@ -499,6 +503,17 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         # Get file info using existing helper method
         path, name, size, ctype, reader = self._getFileInfo(quoteName=False)
 
+        # Check if reader has already been consumed (for single-use sources like stdin)
+        if reader.consumed:
+            # Single-use reader already consumed - return 410 Gone
+            self.send_response(HTTPStatus.GONE)
+            self.send_header("Content-type", "text/plain; charset=utf-8")
+            message = "This resource has already been downloaded and is no longer available (single-use only)."
+            self.send_header("Content-Length", str(len(message)))
+            self.end_headers()
+            self.wfile.write(message.encode('utf-8'))
+            return
+
         # Start to download
         try:
             self._handleStartDownloadActions(size)
@@ -519,6 +534,9 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             useBar=settingsGetter.isCLIMode(),
         )
 
+        start = None
+        end = None
+
         try:
             # Handle range requests (only for files that support it)
             if self.range and not reader.supportsRange:
@@ -531,8 +549,11 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             if self.range:
                 start, end = self.range
             else:
-                start, end = 0, size - 1
-            end = end if end else size - 1
+                # For unknown size (stdin, ZIP deflate), use None for end
+                start = 0
+
+            if size and size >= 0:
+                end = end if end else size - 1
 
             # Send appropriate response headers
             if 'Range' in self.headers:
@@ -547,8 +568,12 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                     return
             else:
                 self.send_response(HTTPStatus.OK)
-                if size > 0:
+                if size is not None:
                     self.send_header("Content-Length", str(size))
+                else:
+                    # For unknown size (stdin, etc.), signal that connection will close after response
+                    # This is required when Content-Length is not provided
+                    self.send_header("Connection", "close")
 
             self.send_header("Content-type", ctype)
             self.send_header("Content-Disposition", f"attachment; filename={quote(name)}")
@@ -572,8 +597,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             chunkSize = self.server.e2eeManager.chunkSize if self.server.e2eeEnabled else self.CHUNK_SIZE
 
             for data in reader.iterChunks(chunkSize, start=start):
-                # Ensure we don't send beyond the requested range
-                if written + len(data) > end + 1:
+                # Ensure we don't send beyond the requested range (if known)
+                if end is not None and written + len(data) > end + 1:
                     data = data[:end + 1 - written]
 
                 # Encrypt if E2EE enabled
@@ -586,7 +611,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 # Update progress periodically
                 progress.update(written)
 
-                if written > end:
+                # Break if we've reached the end (for known size)
+                if end is not None and written > end:
                     break
 
             # Final progress update
@@ -845,7 +871,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
             offer = self.server.webRTC.runAsync(
                 self.server.webRTC.createOffer(
-                    path, size, formatSize, browserHint=browserHint, offset=offset, e2eeManager=e2eeManager
+                    reader, size, formatSize, browserHint=browserHint, offset=offset, e2eeManager=e2eeManager
                 )
             )
             self._sendBytes(json.dumps(offer).encode(), "application/json; charset=utf-8")
@@ -1017,6 +1043,13 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
         self.send_header('Date', self.date_time_string())
 
+    def log_error(self, format, *args):
+        # Never show 404. FIXME: This is kinda ugly way, but currently no idea to do it better.
+        if format == "code %d, message %s" and args and args[0] == 404:
+            return
+
+        return super().log_error(format, *args)
+
     # To let shutdown request can close server correctly
     def finish(self) -> None:
         super().finish()
@@ -1032,22 +1065,26 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
     def end_headers(self) -> None:
         self.send_header("Server", f"FFL Server/{PUBLIC_VERSION}")
-        self.send_header(
-            "Last-Modified",
-            self.date_time_string(os.path.getmtime(os.path.join(self.server.directory, self.server.file)))
-        )
-        self.send_header("Accept-Ranges", 'bytes')
-        self.send_header("ETag", str(self.etag)) # To let browser can resume downloads
+
+        # Get file info first (needed for Last-Modified)
+        path, name, size, ctype, reader = self._getFileInfo(quoteName=False)
+
+        # Send Last-Modified header (use current time since reader doesn't provide mtime)
+        self.send_header("Last-Modified", self.date_time_string())
+
+        # Only advertise Range support for resources that actually support it (not stdin)
+        if reader.supportsRange and size is not None:
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("ETag", str(self.etag)) # To let browser can resume downloads
 
         # Add FFL-specific headers for share information
-        path, name, size, ctype, reader = self._getFileInfo(quoteName=False)
         self.send_header("FFL-Server", PUBLIC_VERSION)
 
         # Encode filename for HTTP header (use percent-encoding)
         # HTTP headers must be latin-1, so we URL-encode the filename
         # quote() handles both ASCII and non-ASCII filenames correctly
         self.send_header("FFL-FileName", quote(name))
-        self.send_header("FFL-FileSize", str(size))
+        self.send_header("FFL-FileSize", str(size if size is not None else -1))
 
         # Indicate mode - P2P if WebRTC is enabled, otherwise HTTP, with E2EE if encrypted
         mode = "P2P" if self.server.enableWebRTC else "HTTP"
@@ -1079,8 +1116,7 @@ class Server(ThreadingHTTPServer):
 
     def __init__(
         self,
-        directory,
-        file,
+        reader,
         uid,
         domain,
         serverAddress,
@@ -1093,8 +1129,10 @@ class Server(ThreadingHTTPServer):
         enableWebRTC=True,
         e2eeEnabled=False
     ):
-        self.directory = os.path.abspath(directory)
-        self.file = file
+        # Reader provides file and directory information
+        self.reader = reader # SourceReader instance (required)
+        self.directory = reader.directory
+        self.file = reader.file
         self.uid = uid
         self.domain = domain
         self.maxDownloads = maxDownloads
@@ -1105,7 +1143,7 @@ class Server(ThreadingHTTPServer):
         self.e2eeEnabled = e2eeEnabled
 
         self.downloadCount = 0
-        self.startTime = time()
+        self.startTime = time.time()
 
         # Initialize error tracking for status polling
         self.lastError = None
@@ -1144,8 +1182,6 @@ class Server(ThreadingHTTPServer):
 
     def serve_forever(self, pollInterval=0.5):
         """Handle one request at a time until shutdown, with timeout checking."""
-        import threading
-        import time
 
         # Create a thread to periodically check the timeout
         def timeoutChecker():
@@ -1195,9 +1231,8 @@ class Server(ThreadingHTTPServer):
 
 
 def createServer(
+    reader,
     port,
-    directory,
-    file,
     uid,
     domain,
     handlerClass=None,
@@ -1209,12 +1244,32 @@ def createServer(
     enableWebRTC=True,
     e2eeEnabled=False
 ):
-    # Factory function to create a Server instance with specified handler and WebRTC manager
+    """
+    Factory function to create a Server instance
+
+    Args:
+        reader: SourceReader instance (provides file and directory)
+        port: Server port
+        uid: Unique identifier for the server
+        domain: Domain name
+        handlerClass: Custom request handler class
+        webRTCManagerClass: Custom WebRTC manager class
+        maxDownloads: Maximum number of downloads (0 = unlimited)
+        timeout: Server timeout in seconds (0 = no timeout)
+        authUser: HTTP Basic auth username
+        authPassword: HTTP Basic auth password
+        enableWebRTC: Enable WebRTC support
+        e2eeEnabled: Enable end-to-end encryption
+
+    Returns:
+        Server: Configured server instance
+    """
     if handlerClass is None:
         handlerClass = DownloadHandler
 
     serverAddress = ('127.0.0.1', port)
+
     return Server(
-        directory, file, uid, domain, serverAddress, handlerClass, webRTCManagerClass, maxDownloads, timeout, authUser,
+        reader, uid, domain, serverAddress, handlerClass, webRTCManagerClass, maxDownloads, timeout, authUser,
         authPassword, enableWebRTC, e2eeEnabled
     )

@@ -25,6 +25,7 @@ import zlib
 import zipfile
 import hashlib
 import datetime
+import sys
 
 from enum import Enum, auto
 from typing import Iterator, Optional
@@ -287,19 +288,38 @@ class SourceReader:
     supportsRange: bool  # Whether offset/Range resume is supported (for downloads)
     supportsUploadResume: bool  # Whether upload resume is supported
 
+    @property
+    def file(self) -> str:
+        """File name for server identification"""
+        raise NotImplementedError
+
+    @property
+    def directory(self) -> str:
+        """Directory path for server identification"""
+        raise NotImplementedError
+
+    @property
+    def consumed(self) -> bool:
+        """Whether the reader has been consumed and cannot be read again"""
+        raise NotImplementedError
+
     @classmethod
     def build(cls, path: str, compression: str = None) -> 'SourceReader':
         """
         Factory method to create appropriate SourceReader
 
         Args:
-            path: File or directory path
+            path: File or directory path, or "-" for stdin
             compression: For directories - "store" (no compression) or "deflate" (compressed)
                         If None, uses FOLDER_COMPRESSION environment variable (default: "store")
 
         Returns:
             SourceReader: Appropriate reader for the path type
         """
+        # Handle stdin
+        if path == "-":
+            return StdinSourceReader()
+
         if os.path.isdir(path):
             # Use environment variable if compression not explicitly specified
             if compression is None:
@@ -371,6 +391,22 @@ class FileSourceReader(SourceReader):
         self.supportsRange = True
         self.supportsUploadResume = True
 
+    @property
+    def file(self) -> str:
+        """File name for server identification"""
+        return os.path.basename(self.path)
+
+    @property
+    def directory(self) -> str:
+        """Directory path for server identification"""
+        dirPath = os.path.dirname(self.path)
+        return os.path.abspath(dirPath) if dirPath else ""
+
+    @property
+    def consumed(self) -> bool:
+        """Files can be read multiple times"""
+        return False
+
     def iterChunks(self, chunkSize: int, start: int = 0) -> Iterator[bytes]:
         with open(self.path, "rb") as f:
             if start > 0:
@@ -435,6 +471,105 @@ class FileSourceReader(SourceReader):
                     raise RuntimeError(f"File modified: {self.path}")
                 return False
 
+        return True
+
+
+class StdinSourceReader(SourceReader):
+    """
+    SourceReader implementation for stdin streaming
+
+    Characteristics:
+    - Single-use only (stdin can only be read once)
+    - Unknown size (streaming input)
+    - No Range/resume support (stdin is not seekable)
+    - No upload resume support
+
+    Usage: python Core.py --cli -
+    """
+
+    def __init__(self):
+        self.stdin = sys.stdin.buffer  # Binary mode for file data
+        self.contentName = "stdin"
+        self.contentType = "application/octet-stream"
+        self.size = None  # Unknown size for streaming input
+        self.supportsRange = False  # stdin is not seekable
+        self.supportsUploadResume = False  # Cannot resume stdin
+        self._consumed = False  # Track if stdin has been consumed
+
+    @property
+    def file(self) -> str:
+        """File name for server identification"""
+        return "stdin"
+
+    @property
+    def directory(self) -> str:
+        """Directory path for server identification"""
+        return ""
+
+    @property
+    def consumed(self) -> bool:
+        """Stdin can only be read once"""
+        return self._consumed
+
+    def iterChunks(self, chunkSize: int, start: int = 0) -> Iterator[bytes]:
+        """
+        Iterate over stdin chunks
+
+        Args:
+            chunkSize: Size of each chunk in bytes
+            start: Starting byte offset (must be 0 for stdin)
+
+        Yields:
+            bytes: Content chunks from stdin
+
+        Raises:
+            RuntimeError: If start > 0 (stdin is not seekable)
+            RuntimeError: If stdin has already been consumed
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        if start > 0:
+            raise RuntimeError("Stdin does not support Range/offset resume (not seekable)")
+
+        if self._consumed:
+            raise RuntimeError("Stdin has already been consumed (single-use only)")
+
+        self._consumed = True
+
+        logger.debug(f"[StdinSourceReader] Starting to read stdin with chunkSize={chunkSize}")
+        totalRead = 0
+
+        while True:
+            chunk = self.stdin.read(chunkSize)
+            if not chunk:
+                logger.debug(f"[StdinSourceReader] EOF reached, total read: {totalRead} bytes")
+                break
+            totalRead += len(chunk)
+            logger.debug(f"[StdinSourceReader] Read chunk: {len(chunk)} bytes, total: {totalRead}")
+            yield chunk
+
+        logger.debug(f"[StdinSourceReader] Finished reading {totalRead} bytes from stdin")
+
+    def getMetadataHash(self) -> Optional[str]:
+        """
+        Get metadata hash for stdin (not supported)
+
+        Returns:
+            None: stdin has no stable metadata
+        """
+        return None
+
+    def validateIntegrity(
+        self, storedSize: int, storedMtime: float,
+        storedHash: str = None, raiseOnError: bool = False
+    ) -> bool:
+        """
+        Validate stdin integrity (not supported)
+
+        Returns:
+            bool: Always True (cannot validate stdin)
+        """
         return True
 
 
@@ -616,6 +751,22 @@ class ZipDirSourceReader(SourceReader):
             self._needsZip64 = False
             self.size = None
             self.supportsRange = False
+
+    @property
+    def file(self) -> str:
+        """File name for server identification (directory base name)"""
+        return os.path.basename(self.dirPath)
+
+    @property
+    def directory(self) -> str:
+        """Directory path for server identification (parent of shared directory)"""
+        dirPath = os.path.dirname(self.dirPath)
+        return os.path.abspath(dirPath) if dirPath else ""
+
+    @property
+    def consumed(self) -> bool:
+        """Directories can be read multiple times"""
+        return False
 
     def _yieldChunks(self, buffer, chunkSize):
         """

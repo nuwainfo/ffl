@@ -30,7 +30,6 @@ try:
 except ImportError:
     BABEL_AVAILABLE = False
 
-
 logger = getLogger(__name__, version=PUBLIC_VERSION)
 
 
@@ -77,13 +76,13 @@ class BabelI18nManager(Singleton):
 
     def _loadOrDetectLanguage(self):
         """Load saved language preference or detect from OS"""
-        config = self._loadConfig()
+        config = self._loadConfig(useDefault=False)
 
         if config and 'language' in config:
             # Use saved preference
             self.currentLanguage = config['language']
             logger.debug(f"Loaded language preference from config: {self.currentLanguage}")
-        elif config and config.get('auto_detect', True):
+        elif not config or (config and config.get('auto_detect', True)): # not config means no config file.
             # Auto-detect from OS
             self.currentLanguage = self._detectOSLanguage()
             logger.debug(f"Auto-detected OS language: {self.currentLanguage}")
@@ -143,11 +142,14 @@ class BabelI18nManager(Singleton):
 
         return self.DEFAULT_LANGUAGE
 
-    def _loadConfig(self):
+    def _loadConfig(self, useDefault=True):
         """Load i18n configuration from JSON file"""
         if not os.path.exists(self.configPath):
-            logger.debug(f"Config file not found, using defaults")
-            return self._getDefaultConfig()
+            if useDefault:
+                logger.debug(f"Config file not found, using defaults")
+                return self._getDefaultConfig()
+            else:
+                return None
 
         try:
             with open(self.configPath, 'r', encoding='utf-8') as f:
@@ -155,8 +157,11 @@ class BabelI18nManager(Singleton):
                 logger.debug(f"Loaded config: {config}")
                 return config
         except Exception as e:
-            logger.warning(f"Failed to load i18n config: {e}, using defaults")
-            return self._getDefaultConfig()
+            if useDefault:
+                logger.warning(f"Failed to load i18n config: {e}, using defaults")
+                return self._getDefaultConfig()
+            else:
+                return None
 
     def _saveConfig(self, config):
         """Save i18n configuration to JSON file"""

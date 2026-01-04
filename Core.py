@@ -165,7 +165,7 @@ def onShareLinkCreate(args, link, filePath, fileSize, tunnelType, e2ee, **kwargs
         user = featureManager.user
         outputData = {
             "file": filePath,
-            "file_size": fileSize,
+            "file_size": fileSize if fileSize is not None else -1,  # -1 indicates unknown size
             "upload_mode": "server" if args.upload else "p2p",
             "tunnel_type": tunnelType or "default",
             "link": link,
@@ -207,7 +207,8 @@ def processFileSharing(args, proxyConfig=None):
         int: Exit code (0 for success, 1 for error)
     """
     # Argument predicates.
-    if not os.path.exists(args.file):
+    # Allow "-" for stdin, otherwise check file existence
+    if args.file != "-" and not os.path.exists(args.file):
         flushPrint(_('{file} does not exist!').format(file=f'"{args.file}"'))
         return 1
 
@@ -234,11 +235,10 @@ def processFileSharing(args, proxyConfig=None):
 
             # Get size using Reader abstraction (supports both files and folders)
             reader = SourceReader.build(args.file)
-            size = reader.size if reader.size is not None else 0
-            directory, file = os.path.split(args.file)
+            size = reader.size  # None means unknown size (e.g., stdin)
 
             # Hint user about folder content change detection for strict mode
-            if os.path.isdir(args.file):
+            if args.file != "-" and os.path.isdir(args.file):
                 flushPrint(_('📁 Sharing folder as ZIP - please keep folder contents unchanged during transfer\n'))
 
             # Get UIDGenerator from FeatureManager
@@ -357,7 +357,7 @@ def processFileSharing(args, proxyConfig=None):
                 uploadMethod = createUploadStrategy(user.serialNumber, e2eeEnabled=e2eeEnabled)
 
                 # Check upload predicate
-                predicateResult = uploadMethod.predicate(file, size, user.points, args.upload)
+                predicateResult = uploadMethod.predicate(reader.file, size, user.points, args.upload)
                 if not predicateResult.canUpload:
                     if predicateResult.type == UploadPredicate.INVALIDATE_POINTS:
                         flushPrint(_(
@@ -491,12 +491,13 @@ def processFileSharing(args, proxyConfig=None):
                     authPassword = args.authPassword
                     authUser = args.authUser if authPassword else None
 
-                    # Get force-relay setting from args
+                    # WebRTC is disabled only by --force-relay flag
                     enableWebRTC = not args.forceRelay
 
                     # Create server with enhanced handler and WebRTC manager
+                    # Reader provides file and directory information
                     server = createServer(
-                        port, directory, file, uid, domain, handlerClass, webRTCManagerClass, maxDownloads, timeout,
+                        reader, port, uid, domain, handlerClass, webRTCManagerClass, maxDownloads, timeout,
                         authUser, authPassword, enableWebRTC, e2eeEnabled
                     )
                     server.start()

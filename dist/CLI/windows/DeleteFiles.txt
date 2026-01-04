@@ -221,6 +221,7 @@ Lib\site-packages\twine
 Lib\site-packages\wheel
 Lib\site-packages\win32ctypes
 Lib\site-packages\wx
+Lib\site-packages\babel
 Lib\site-packages\README.txt
 Lib\site-packages\distutils-precedence.pth
 Lib\site-packages\FileShare\addons\GUI.py

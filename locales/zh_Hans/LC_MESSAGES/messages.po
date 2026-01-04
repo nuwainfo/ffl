@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-12-23 00:22+0800\n"
+"POT-Creation-Date: 2026-01-02 16:20+0800\n"
 "PO-Revision-Date: 2025-12-21 08:43+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -515,6 +515,30 @@ msgstr "已达到逾时时间（{timeout} 秒）。正在关闭伺服器。"
 msgid "Maximum downloads ({maxDownloads}) reached. Shutting down server."
 msgstr "已达到最大下载次数（{maxDownloads}）。正在关闭伺服器。"
 
+msgid "3 hours"
+msgstr "3小时"
+
+msgid "6 hours"
+msgstr "6小时"
+
+msgid "12 hours"
+msgstr "12小时"
+
+msgid "1 day"
+msgstr "1天"
+
+msgid "3 days"
+msgstr "3天"
+
+msgid "7 days"
+msgstr "7天"
+
+msgid "14 days"
+msgstr "14天"
+
+msgid "30 days"
+msgstr "30天"
+
 #, python-brace-format
 msgid "Downloading install script from: {url}"
 msgstr "正在从以下位置下载安装脚本：{url}"
@@ -661,9 +685,6 @@ msgstr "无法从 GitHub 确定目标版本"
 #, python-brace-format
 msgid "Upgrading to {version}..."
 msgstr "正在升级到 {version}..."
-
-msgid "Unsupported operating system"
-msgstr "不支援的作业系统"
 
 #, python-brace-format
 msgid "Platform: {os}"
@@ -836,4 +857,7 @@ msgstr "正在尝试 WebRTC 下载..."
 
 #~ msgid "Detected APE variant (ffl.com), will replace with same variant"
 #~ msgstr ""
+
+#~ msgid "Unsupported operating system"
+#~ msgstr "不支援的作业系统"
 

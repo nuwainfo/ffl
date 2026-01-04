@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-12-23 00:22+0800\n"
+"POT-Creation-Date: 2026-01-02 16:20+0800\n"
 "PO-Revision-Date: 2025-12-21 08:43+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -515,6 +515,30 @@ msgstr "已達到逾時時間（{timeout} 秒）。正在關閉伺服器。"
 msgid "Maximum downloads ({maxDownloads}) reached. Shutting down server."
 msgstr "已達到最大下載次數（{maxDownloads}）。正在關閉伺服器。"
 
+msgid "3 hours"
+msgstr "3小時"
+
+msgid "6 hours"
+msgstr "6小時"
+
+msgid "12 hours"
+msgstr "12小時"
+
+msgid "1 day"
+msgstr "1天"
+
+msgid "3 days"
+msgstr "3天"
+
+msgid "7 days"
+msgstr "7天"
+
+msgid "14 days"
+msgstr "14天"
+
+msgid "30 days"
+msgstr "30天"
+
 #, python-brace-format
 msgid "Downloading install script from: {url}"
 msgstr "正在從以下位置下載安裝腳本：{url}"
@@ -661,9 +685,6 @@ msgstr "無法從 GitHub 確定目標版本"
 #, python-brace-format
 msgid "Upgrading to {version}..."
 msgstr "正在升級到 {version}..."
-
-msgid "Unsupported operating system"
-msgstr "不支援的作業系統"
 
 #, python-brace-format
 msgid "Platform: {os}"
@@ -823,4 +844,7 @@ msgstr "正在嘗試 WebRTC 下載..."
 
 #~ msgid "Detected APE variant (ffl.com), will replace with same variant"
 #~ msgstr "偵測到 APE 變體（ffl.com），將以相同變體替換"
+
+#~ msgid "Unsupported operating system"
+#~ msgstr "不支援的作業系統"
 

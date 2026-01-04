@@ -5,7 +5,8 @@
     "warning": {
         "title": "下載在此瀏覽器中可能無法正常運作",
         "text": "要下載此檔案，請在您的瀏覽器中開啟此連結。",
-        "button": "在瀏覽器中下載"
+        "button": "在瀏覽器中下載",
+        "copyButton": "複製連結"
     },
     "progress": {
         "preparing": "準備下載中...",
@@ -85,9 +86,13 @@
             "download": "下載"
         },
         "messages": {
-            "iosRestricted": "要{{action}}此檔案，請在{{browser}}中開啟此連結。點擊分享按鈕並選擇「在{{browser}}中開啟」。",
-            "androidRestricted": "要{{action}}此檔案，請在{{browser}}中開啟此連結。點擊選單按鈕並選擇「在瀏覽器中開啟」。",
+            "iosRestricted": "此應用程式限制下載。請：(1) 點擊下方按鈕來分享或複製連結，(2) 開啟 {{browser}}，(3) 貼上並開啟連結以{{action}}。",
+            "androidRestricted": "要{{action}}此檔案，點擊下方按鈕在{{browser}}中開啟。如果無法開啟，請嘗試選單 (⋮) 並選擇「在瀏覽器中開啟」。",
             "generalRestricted": "要{{action}}此檔案，請在{{browser}}中開啟此連結。"
+        },
+        "clipboard": {
+            "copied": "連結已複製！請貼到 Safari 以下載。",
+            "failed": "無法複製連結。請手動從網址列複製 URL。"
         }
     },
     "client": {

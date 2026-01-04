@@ -193,7 +193,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
             logger.exception(f"Error in runAsync: {e}")
             raise
 
-    async def createOffer(self, filePath, fileSize, getSizeFunc=None, browserHint=None, offset=0, e2eeManager=None):
+    async def createOffer(self, reader, fileSize, getSizeFunc=None, browserHint=None, offset=0, e2eeManager=None):
         # Generate a unique peer ID
         peerId = uuid.uuid4().hex
 
@@ -236,7 +236,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
 
         # Track sendFile task for proper cleanup
         task = asyncio.create_task(
-            self.sendFile(dc, peerId, filePath, fileSize, getSizeFunc, offset=offset, e2eeManager=e2eeManager)
+            self.sendFile(dc, peerId, reader, fileSize, getSizeFunc, offset=offset, e2eeManager=e2eeManager)
         )
         self.sendFileTasks[peerId] = task
 
@@ -390,7 +390,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         self,
         dc: RTCDataChannel,
         peerId: str,
-        filePath: str,
+        reader,
         fileSize: int,
         getSizeFunc=None,
         offset=0,
@@ -428,9 +428,6 @@ class WebRTCManager(AsyncLoopExceptionMixin):
             # File size or other validation error from enhanced handler
             logger.error(f"File transfer validation failed: {e}")
             raise
-
-        # Build source reader (compression handled internally)
-        reader = SourceReader.build(filePath)
 
         # Initialize E2EE stream encryptor if enabled
         streamEncryptor = None

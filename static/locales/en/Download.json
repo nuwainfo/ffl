@@ -5,7 +5,8 @@
     "warning": {
         "title": "Download may not work in this browser",
         "text": "To download this file, please open this link in your browser.",
-        "button": "Download in Browser"
+        "button": "Download in Browser",
+        "copyButton": "Copy Link"
     },
     "progress": {
         "preparing": "Preparing download...",
@@ -85,9 +86,13 @@
             "download": "download"
         },
         "messages": {
-            "iosRestricted": "To {{action}} this file, please open this link in {{browser}}. Tap the share button and select \"Open in {{browser}}\".",
-            "androidRestricted": "To {{action}} this file, please open this link in {{browser}}. Tap the menu button and select \"Open in browser\".",
+            "iosRestricted": "Downloads are restricted in this app. Please: (1) Tap the button below to share or copy the link, (2) Open {{browser}}, (3) Paste and open the link to {{action}}.",
+            "androidRestricted": "To {{action}} this file, tap the button below to open in {{browser}}. If that doesn't work, try the menu (⋮) and select \"Open in browser\".",
             "generalRestricted": "To {{action}} this file, please open this link in {{browser}}."
+        },
+        "clipboard": {
+            "copied": "Link copied! Please paste it in Safari to download.",
+            "failed": "Could not copy link. Please manually copy the URL from your address bar."
         }
     },
     "client": {

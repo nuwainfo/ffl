@@ -75,6 +75,9 @@ Licensed under Apache-2.0 license.
                             <a id="open-browser-btn" href="#" class="open-browser-btn">
                                 <i class="fas fa-download"></i> <span data-i18n="Download:warning.button">Download in Browser</span>
                             </a>
+                            <a id="copy-link-btn" href="#" class="open-browser-btn" style="margin-top: 8px;">
+                                <i class="fas fa-copy"></i> <span data-i18n="Download:warning.copyButton">Copy Link</span>
+                            </a>
                         </div>
 
                         <div class="pricing-item-pro" style="background-color: rgba(255, 255, 255, 0.5);">
@@ -294,6 +297,7 @@ Licensed under Apache-2.0 license.
             // Initialize i18n system with log function and Download namespace
             initializeI18n({
                 log: log,
+				getCurrentLanguageFunc: function() { null },
                 localesPath: '{{ STATIC_SERVER }}/static/locales',
                 ns: ['Download']  // Load Download namespace for this page
             });
@@ -1636,6 +1640,13 @@ Licensed under Apache-2.0 license.
                 // Set progress bar max if we know the file size
                 uiManager.setProgressMax(fileSize);
 
+                // Check for download restrictions FIRST before creating any download infrastructure
+                if (SKIP_WEBRTC_DUE_TO_RESTRICTION) {
+                    log("InAppGuard", "Download blocked due to in-app browser restrictions");
+                    uiManager.showBrowserNotSupported();
+                    return; // Exit early - do not create writer/WritePump or start any download
+                }
+
                 // Initialize writer and WritePump early (always available for both P2P and HTTP fallback)
                 // Check if file download is supported
                 if (!WriterFactory.isSupported(fileSize)) {
@@ -1721,15 +1732,13 @@ Licensed under Apache-2.0 license.
                     }
                 }
 
-                // Check if we should skip WebRTC due to browser support or download restrictions
+                // Check if we should skip WebRTC due to browser support               
                 const webrtcSupported = isWebRTCSupported();
 
-                if (!webrtcSupported || DISABLE_WEBRTC || SKIP_WEBRTC_DUE_TO_RESTRICTION) {
+                if (!webrtcSupported || DISABLE_WEBRTC) {
                     if (!webrtcSupported) {
                         log("WebRTC", "WebRTC not supported in this browser (RTCPeerConnection or RTCDataChannel unavailable)");
                         fallbackToHTTP(t('Download:client.fallback.webrtcNotSupported', 'WebRTC not supported - using server relay'));
-                    } else if (SKIP_WEBRTC_DUE_TO_RESTRICTION) {
-                        uiManager.showBrowserNotSupported();
                     } else {
                         fallbackToHTTP(t('Download:client.fallback.p2pDisabled', 'Device-to-Device P2P disabled. Use Relayed P2P.'));
                     }

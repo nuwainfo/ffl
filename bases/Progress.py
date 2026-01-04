@@ -19,11 +19,15 @@
 
 import time
 import logging
+import shutil
 
 from tqdm import tqdm
 
 from bases.Utils import formatSize, ONE_MB
 from bases.I18n import _
+
+# Terminal width threshold for switching to compact format
+PROGRESS_BAR_COMPACT_THRESHOLD = 80
 
 
 class BitmathTqdm(tqdm):
@@ -111,29 +115,41 @@ class Progress:
     def _initProgressBar(self):
         """Initialize the tqdm progress bar."""
         try:
-            # For unknown file sizes (totalSize=0), use None to show bytes downloaded without percentage
-            total = None if self.totalSize == 0 else self.totalSize
+            # For unknown file sizes (totalSize=None or <=0), use None to show bytes downloaded without percentage
+            total = None if (self.totalSize is None or self.totalSize <= 0) else self.totalSize
+
+            # Detect terminal width and switch to compact format if too narrow
+            cols = shutil.get_terminal_size(fallback=(80, 20)).columns
+            compact = cols < PROGRESS_BAR_COMPACT_THRESHOLD
 
             # Different bar format for unknown sizes
-            if self.totalSize == 0:
+            if self.totalSize is None or self.totalSize <= 0:
                 defaultBarFormat = ('{desc}: {n_fmt} [{elapsed}, {rate_fmt}]{postfix}')
             else:
-                defaultBarFormat = (
-                    '{desc}: {percentage:3.0f}%|{bar}| '
-                    '{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]{postfix}'
-                )
+                if compact:
+                    # Narrow terminal: remove bar to avoid line wrapping
+                    defaultBarFormat = (
+                        '{desc}: {percentage:3.0f}% '
+                        '{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]{postfix}'
+                    )
+                else:
+                    # Wide terminal: full format with bar
+                    defaultBarFormat = (
+                        '{desc}: {percentage:3.0f}%|{bar}| '
+                        '{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]{postfix}'
+                    )
 
             self.pbar = BitmathTqdm(
                 total=total,
                 desc=_('Progress'),
                 sizeFormatter=self.sizeFormatter,
                 leave=True,
-                ncols=100, # Increased width to accommodate extraText
+                dynamic_ncols=True,  # Auto-adjust width to terminal size
                 ascii=False,
                 bar_format=self.barFormat or defaultBarFormat
             )
         except Exception:
-            total = None if self.totalSize == 0 else self.totalSize
+            total = None if (self.totalSize is None or self.totalSize <= 0) else self.totalSize
             self.pbar = tqdm(total=total, desc=_('Progress'), unit='B', unit_scale=True, leave=True)
 
     def update(self, bytesTransferred, forceLog=False, extraText=""):
@@ -168,7 +184,7 @@ class Progress:
             # else:
             #     self.pbar.set_description("Progress")
 
-            if self.totalSize > 0 and self.transferred >= self.totalSize:
+            if self.totalSize is not None and self.totalSize > 0 and self.transferred >= self.totalSize:
                 self.finishBar()
         except (ValueError, AttributeError) as e:
             self.loggerCallback(_("Progress bar error: {e}").format(e=e))
@@ -190,8 +206,8 @@ class Progress:
         speedDisplay = self.sizeFormatter(int(speedBytesPerSec))
 
         sizeDisplay = self.sizeFormatter(self.transferred)
-        totalDisplay = self.sizeFormatter(self.totalSize)
-        percentage = (self.transferred * 100.0 / self.totalSize) if self.totalSize > 0 else 0
+        totalDisplay = self.sizeFormatter(self.totalSize) if (self.totalSize is not None and self.totalSize > 0) else "Unknown"
+        percentage = (self.transferred * 100.0 / self.totalSize) if (self.totalSize is not None and self.totalSize > 0) else 0
 
         progressMsg = _('Progress: {sizeDisplay}/{totalDisplay} ({percentage:.2f}%), {speedDisplay}/sec').format(
             sizeDisplay=sizeDisplay, totalDisplay=totalDisplay, percentage=percentage, speedDisplay=speedDisplay
@@ -223,7 +239,7 @@ class Progress:
 
     def getPercentage(self):
         """Get current completion percentage."""
-        return (self.transferred * 100.0 / self.totalSize) if self.totalSize > 0 else 0
+        return (self.transferred * 100.0 / self.totalSize) if (self.totalSize is not None and self.totalSize > 0) else 0
 
     def getSpeed(self):
         """Get current transfer speed in bytes per second."""
@@ -239,6 +255,9 @@ class Progress:
 
     def getRemainingTime(self):
         """Estimate remaining time based on current speed."""
+        if self.totalSize is None or self.totalSize <= 0:
+            return float('inf')
+
         if self.transferred <= 0:
             return float('inf')
 

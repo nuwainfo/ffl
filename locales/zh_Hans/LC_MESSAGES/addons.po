@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2025-12-23 00:22+0800\n"
+"POT-Creation-Date: 2026-01-02 16:20+0800\n"
 "PO-Revision-Date: 2025-12-21 14:22+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -194,8 +194,8 @@ msgstr "选择档案或资料夹"
 msgid "This field is required"
 msgstr "此栏位为必填"
 
-msgid "🎁 Invite"
-msgstr "🎁 邀请"
+msgid "📤 Share Link"
+msgstr "📤 分享链接"
 
 msgid ""
 "End-to-end encryption protects your files with strong encryption.\n"
@@ -257,30 +257,6 @@ msgstr ""
 
 msgid "Error Reporting Disabled"
 msgstr "错误回报已停用"
-
-msgid "3 hours"
-msgstr "3 小时"
-
-msgid "6 hours"
-msgstr "6 小时"
-
-msgid "12 hours"
-msgstr "12 小时"
-
-msgid "1 day"
-msgstr "1 天"
-
-msgid "3 days"
-msgstr "3 天"
-
-msgid "7 days"
-msgstr "7 天"
-
-msgid "14 days"
-msgstr "14 天"
-
-msgid "30 days"
-msgstr "30 天"
 
 #, python-brace-format
 msgid ""
@@ -359,6 +335,9 @@ msgstr "🌐 语言"
 #, python-brace-format
 msgid "Help (v{version})"
 msgstr "说明（v{version}）"
+
+msgid "🏠 Home Page"
+msgstr "🏠 首页"
 
 msgid "🎓 Tutorial"
 msgstr "🎓 教学"
@@ -682,4 +661,31 @@ msgid ""
 "UPLOAD_METHOD environment variable detected, using {mode} method to "
 "upload."
 msgstr "侦测到 UPLOAD_METHOD 环境变数，使用 {mode} 方法上传。"
+
+#~ msgid "🎁 Invite"
+#~ msgstr "🎁 邀请"
+
+#~ msgid "3 hours"
+#~ msgstr "3 小时"
+
+#~ msgid "6 hours"
+#~ msgstr "6 小时"
+
+#~ msgid "12 hours"
+#~ msgstr "12 小时"
+
+#~ msgid "1 day"
+#~ msgstr "1 天"
+
+#~ msgid "3 days"
+#~ msgstr "3 天"
+
+#~ msgid "7 days"
+#~ msgstr "7 天"
+
+#~ msgid "14 days"
+#~ msgstr "14 天"
+
+#~ msgid "30 days"
+#~ msgstr "30 天"
 

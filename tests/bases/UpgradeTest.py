@@ -29,6 +29,7 @@ import unittest
 import tempfile
 import subprocess
 import shutil
+import platform
 
 from pathlib import Path
 
@@ -90,6 +91,8 @@ class UpgradeTest(unittest.TestCase):
         # Set variant environment variable
         os.environ["FFL_UPGRADE_VARIANT"] = variant
 
+        osType = platform.system().lower()
+
         try:
             # Change to fixtures directory before upgrade to avoid import conflicts
             originalCwd = os.getcwd()
@@ -97,7 +100,8 @@ class UpgradeTest(unittest.TestCase):
 
             try:
                 # Perform upgrade (force=True to allow downgrade for testing)
-                success = performUpgrade(targetBinary=str(testBinary), force=True)
+                # In Jenkins, settingsGetter initialized without platform, so we pass osType to force using current os.
+                success = performUpgrade(targetBinary=str(testBinary), force=True, osType=osType)
                 self.assertTrue(success, f"Upgrade failed for variant: {variant}")
             finally:
                 # Restore original working directory
@@ -126,15 +130,17 @@ class UpgradeTest(unittest.TestCase):
         Create a check function for APE variants
 
         Runs the binary with --version to check loaded addons.
-        ffl.com (full) should have API addon loaded.
+        Both ffl.com and fflo.com should have Tunnels addon loaded.
+        Only ffl.com (full) should have API addon loaded.
         fflo.com (lite) should NOT have API addon loaded.
         """
 
         def check(binaryPath):
             try:
                 # Run binary with --version (already in fixtures directory)
+                # When shell=True, command must be a string, not a list
                 result = subprocess.run(
-                    [str(binaryPath), '--version'],
+                    f'"{binaryPath}" --version',
                     capture_output=True,
                     text=True,
                     timeout=10,
@@ -142,6 +148,13 @@ class UpgradeTest(unittest.TestCase):
                     shell=True # THIS IS REQUIRED FOR APE.
                 )
                 output = result.stdout + result.stderr
+
+                # Check if Tunnels addon is loaded (required for both variants)
+                hasTunnelsAddon = 'Tunnels' in output and '[OK] Loaded' in output.split('Tunnels')[1].split('\n')[
+                    0] if 'Tunnels' in output else False
+
+                if not hasTunnelsAddon:
+                    return False, f"Expected Tunnels addon to be loaded in both variants, but not found in: {output}"
 
                 # Check if API addon is loaded successfully
                 # Look for "API          [OK] Loaded" pattern in output

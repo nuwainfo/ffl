@@ -142,6 +142,7 @@ lib/python3.12/site-packages/av
 lib/python3.12/site-packages/av.libs
 lib/python3.12/site-packages/cffi
 lib/python3.12/site-packages/conda_pack
+lib/python3.12/site-packages/babel
 lib/python3.12/site-packages/FileShare/tests
 lib/python3.12/site-packages/FileShare/setup.py
 lib/python3.12/site-packages/FileShare/locales
