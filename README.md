@@ -656,7 +656,7 @@ To get `ffl` running as an APE:
 - The `cryptography` package depends on Rust, which is fundamentally incompatible with Cosmopolitan Libc, so I switched to an mbedTLS-based approach instead.
 - I replaced aiortc's DTLS implementation (originally based on `cryptography`) with `python-mbedtls` to ensure compatibility.
 - On Android, I ran the APE-flavored Python inside Termux and fixed a few strange networking behaviors.
-- After that, I could finally bundle the entire Python project into a single APE executable.
+- After that, I could finally bundle the entire Python project into a single APE executable, thanks to [cosmofy 0.1](https://github.com/metaist/cosmofy/tree/0.1.0) which simplified the process.
 
 PS: Building a CLI with Python on Linux turned out to be surprisingly difficult. Glibc issues made it nearly impossible to package a truly small and reliable binary. Cosmopolitan Libc (APE) solved this perfectly: fast, portable, and lightweight.
 
