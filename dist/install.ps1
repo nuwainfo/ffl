@@ -4,7 +4,7 @@ $ErrorActionPreference = "Stop"
 $repoOwner = "nuwainfo"
 $repoName  = "ffl"
 $app       = "ffl"
-$releaseTag = "v3.8.0"  # Default release version
+$releaseTag = "v3.8.1"  # Default release version
 
 # Environment variables (overridable)
 # FFL_VERSION: Version to install (e.g., v3.7.6)
