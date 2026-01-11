@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # FastFileLink CLI - Fast, no-fuss file sharing
-# Copyright (C) 2024-2025 FastFileLink contributors
+# Copyright (C) 2025-2026 FastFileLink contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
