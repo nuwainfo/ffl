@@ -6,7 +6,7 @@
  * See LICENSE file in the project root for full license information.
  */
 
-// Import E2EE decryption functions (DRY - don't duplicate code)
+// Import E2EE decryption functions
 // These functions are defined in E2EE.js and should be available in Service Worker scope
 // Note: importScripts requires same-origin, so E2EE.js must be served from the same domain as this SW
 try {
@@ -89,6 +89,26 @@ function getConfigFromUrl(url, paramName, defaultValue = 0) {
     return defaultValue;
 }
 
+// ============ Size Utility Functions  ============
+
+/**
+ * Check if size represents unknown/indeterminate size
+ * @param {number} size - File size to check
+ * @returns {boolean} True if size is unknown (-1, null, undefined, or ≤0)
+ */
+function isUnknownSize(size) {
+    return size == null || size <= 0;
+}
+
+/**
+ * Check if size is valid and known
+ * @param {number} size - File size to check
+ * @returns {boolean} True if size is a positive number
+ */
+function isValidSize(size) {
+    return typeof size === 'number' && size > 0;
+}
+
 // Helper function to get file size from Content-Length header or URL parameter
 function getFileSize(upstream, url) {
     const contentRange = parseContentRange(upstream.headers.get('Content-Range'));
@@ -99,11 +119,17 @@ function getFileSize(upstream, url) {
     let total = parseInt(upstream.headers.get('Content-Length') || '0', 10);
 
     // Fallback to URL parameter if header is missing or 0
-    if (!total || total === 0) {
+    if (isUnknownSize(total)) {
         const sizeParam = url.searchParams.get('size');
         if (sizeParam) {
-            total = parseInt(sizeParam, 10);
-            log('[ProgressSW] Using file size from URL parameter:', total, 'bytes');
+            const parsedSize = parseInt(sizeParam, 10);
+            // Only use URL param if it's a valid size (not -1, 0, or NaN)
+            if (isValidSize(parsedSize)) {
+                total = parsedSize;
+                log('[ProgressSW] Using file size from URL parameter:', total, 'bytes');
+            } else {
+                log('[ProgressSW] URL size parameter indicates unknown size:', parsedSize);
+            }
         }
     }
 
@@ -333,10 +359,20 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
         log('[ProgressSW] Parsed Content-Range:', rangeFromServer);
 
         const reportedSize = getFileSize(upstream, url);
-        log('[ProgressSW] Reported size from headers:', reportedSize);
-
         const expectedSize = resumeConfig && resumeConfig.expectedSize ? resumeConfig.expectedSize : 0;
-        const total = Math.max(reportedSize || 0, expectedSize || 0);
+
+        // Unified logic: If any size is unknown (-1), treat total as unknown (0)
+        // Don't use Math.max with negative numbers
+        let total = 0;
+        if (isValidSize(reportedSize)) {
+            total = reportedSize;
+        } else if (isValidSize(expectedSize)) {
+            total = expectedSize;
+        }
+
+        const sizeDesc = isUnknownSize(total) ? 'unknown' : `${total} bytes`;
+        log('[ProgressSW] Reported size from headers:', reportedSize, 'Expected size:', expectedSize);
+        log('[ProgressSW] Resolved download size:', sizeDesc);
 
         const baseBytes = resumeConfig ? resumeConfig.baseBytes : 0;
         let skipRemaining = resumeConfig ? resumeConfig.skipBytes || 0 : 0;
@@ -344,7 +380,7 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
         let lastReport = baseBytes;
         let lastReportTime = 0;
 
-        log('[ProgressSW] Download size (resolved):', total, 'bytes. BaseBytes:', baseBytes, 'Skip:', skipRemaining);
+        log('[ProgressSW] BaseBytes:', baseBytes, 'Skip:', skipRemaining);
         log('[ProgressSW] About to broadcast download-started with delivered:', delivered);
 
         // Only send serializable data in broadcast
@@ -473,7 +509,13 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
                 if (shouldReport) {
                     lastReport = delivered;
                     lastReportTime = now;
-                    log('[ProgressSW] Progress report:', delivered, '/', total || '(unknown)', '(' + Math.round(delivered/total*100) + '%)');
+
+                    // Progress logging (unified: handle known/unknown size)
+                    const progressDesc = isValidSize(total)
+                        ? `${delivered} / ${total} (${Math.round(delivered / total * 100)}%)`
+                        : `${delivered} / unknown`;
+                    log('[ProgressSW] Progress report:', progressDesc);
+
                     try {
                         broadcast({ type: 'download-progress', id: downloadId, sent: delivered, total });
                     } catch (broadcastError) {
@@ -510,8 +552,13 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
                     }
                 }
 
-                const resolvedTotal = total || expectedSize || delivered;
-                log('[ProgressSW] Transform stream completed, total delivered:', delivered, 'expected:', resolvedTotal);
+                // Resolve final total (use actual delivered bytes if size was unknown)
+                const resolvedTotal = isValidSize(total) ? total : (isValidSize(expectedSize) ? expectedSize : delivered);
+                const completionDesc = isValidSize(total) || isValidSize(expectedSize)
+                    ? `delivered: ${delivered}, expected: ${resolvedTotal}`
+                    : `delivered: ${delivered} (size unknown)`;
+                log('[ProgressSW] Transform stream completed,', completionDesc);
+
                 try {
                     broadcast({ type: 'download-complete', id: downloadId, sent: delivered, total: resolvedTotal });
                 } catch (broadcastError) {

@@ -24,6 +24,7 @@ import subprocess
 import json
 import tempfile
 import sys
+import shutil
 
 import requests
 
@@ -467,15 +468,202 @@ class CLITest(FastFileLinkTestBase):
         """Test --alias with hash/fragment signs (should be URL encoded)."""
         alias = "file#1"
         extraArgs = ["--alias", alias, "--timeout", "3"]
-        
+
         print(f"[Test] Testing --alias with hash: '{alias}'")
         combinedOutput = self._runCommandAndGetOutput(extraArgs)
-        
+
         print(f"[Test] Process output: {combinedOutput}")
-        
+
         # Hash should be URL encoded as %23
         expected_encoded = "file%231"
         self.assertIn(f"/{expected_encoded}", combinedOutput, f"Expected URL-encoded alias '{expected_encoded}' to appear in the sharing URL")
+
+    def testCustomNameWithFile(self):
+        """Test --name with a regular file."""
+        customName = "custom_report.pdf"
+        extraArgs = ["--name", customName, "--timeout", "5"]
+
+        print(f"[Test] Testing --name with file: '{customName}'")
+
+        # Start FastFileLink and wait for JSON output
+        shareLink = self._startFastFileLink(p2p=True, extraArgs=extraArgs)
+
+        print(f"[Test] Share link: {shareLink}")
+
+        # Read JSON output to verify the filename
+        with open(self.jsonOutputPath, 'r') as f:
+            jsonOutput = json.load(f)
+
+        print(f"[Test] JSON output: {jsonOutput}")
+
+        # Check JSON output contains custom filename in content_name field
+        self.assertIn("content_name", jsonOutput, "JSON output should contain 'content_name' field")
+        self.assertEqual(jsonOutput["content_name"], customName,
+                        f"Expected custom filename '{customName}' in JSON output")
+
+        print(f"[Test] PASS: Custom filename '{customName}' verified in JSON output")
+
+        # Verify Content-Disposition header in HTTP response
+        downloadedFilePath = self._getDownloadedFilePath("custom_name_test")
+        self.downloadFileWithRequests(shareLink, downloadedFilePath, expectedFileName=customName)
+
+        print(f"[Test] PASS: Content-Disposition header verified with filename '{customName}'")
+
+    def testCustomNameWithFileNoExtension(self):
+        """Test --name with a file without extension."""
+        customName = "mydocument"
+        extraArgs = ["--name", customName, "--timeout", "5"]
+
+        print(f"[Test] Testing --name with file (no extension): '{customName}'")
+
+        # Start FastFileLink and wait for JSON output
+        shareLink = self._startFastFileLink(p2p=True, extraArgs=extraArgs)
+
+        print(f"[Test] Share link: {shareLink}")
+
+        # Read JSON output to verify the filename
+        with open(self.jsonOutputPath, 'r') as f:
+            jsonOutput = json.load(f)
+
+        print(f"[Test] JSON output: {jsonOutput}")
+
+        # Check JSON output contains custom filename (should keep as-is for files)
+        self.assertIn("content_name", jsonOutput, "JSON output should contain 'content_name' field")
+        self.assertEqual(jsonOutput["content_name"], customName,
+                        f"Expected filename '{customName}' without added extension")
+
+        print(f"[Test] PASS: Filename '{customName}' kept as-is for file")
+
+    def testCustomNameWithFolder(self):
+        """Test --name with a folder (should add .zip extension)."""
+
+        # Create a test folder
+        testFolder = os.path.join(self.tempDir, "test_folder")
+        os.makedirs(testFolder)
+        with open(os.path.join(testFolder, "file.txt"), "w") as f:
+            f.write("test content")
+
+        customName = "myarchive.zip"
+        extraArgs = ["--name", customName, "--timeout", "5"]
+
+        print(f"[Test] Testing --name with folder: '{customName}'")
+
+        # Temporarily replace testFilePath with folder path
+        originalTestFile = self.testFilePath
+        originalFileSize = self.originalFileSize
+        self.testFilePath = testFolder
+        self.originalFileSize = -1  # Folders have dynamic size, so don't check size
+
+        try:
+            # Start FastFileLink and wait for JSON output
+            shareLink = self._startFastFileLink(p2p=True, extraArgs=extraArgs)
+
+            print(f"[Test] Share link: {shareLink}")
+
+            # Read JSON output to verify the filename
+            with open(self.jsonOutputPath, 'r') as f:
+                jsonOutput = json.load(f)
+
+            print(f"[Test] JSON output: {jsonOutput}")
+
+            # Check JSON output contains custom filename with .zip
+            self.assertIn("content_name", jsonOutput, "JSON output should contain 'content_name' field")
+            self.assertEqual(jsonOutput["content_name"], customName,
+                            f"Expected custom filename '{customName}' in JSON output")
+
+            print(f"[Test] PASS: Folder custom name '{customName}' verified")
+        finally:
+            # Restore original test file and size
+            self.testFilePath = originalTestFile
+            self.originalFileSize = originalFileSize
+
+    def testCustomNameWithFolderNoExtension(self):
+        """Test --name with folder without extension (should add .zip)."""
+
+        # Create a test folder
+        testFolder = os.path.join(self.tempDir, "test_folder2")
+        os.makedirs(testFolder)
+        with open(os.path.join(testFolder, "file.txt"), "w") as f:
+            f.write("test content")
+
+        customName = "backup"
+        expectedName = "backup.zip"
+        extraArgs = ["--name", customName, "--timeout", "5"]
+
+        print(f"[Test] Testing --name with folder (no extension): '{customName}'")
+
+        # Temporarily replace testFilePath with folder path
+        originalTestFile = self.testFilePath
+        originalFileSize = self.originalFileSize
+        self.testFilePath = testFolder
+        self.originalFileSize = -1  # Folders have dynamic size, so don't check size
+
+        try:
+            # Start FastFileLink and wait for JSON output
+            shareLink = self._startFastFileLink(p2p=True, extraArgs=extraArgs)
+
+            print(f"[Test] Share link: {shareLink}")
+
+            # Read JSON output to verify the filename
+            with open(self.jsonOutputPath, 'r') as f:
+                jsonOutput = json.load(f)
+
+            print(f"[Test] JSON output: {jsonOutput}")
+
+            # Check JSON output contains .zip extension added
+            self.assertIn("content_name", jsonOutput, "JSON output should contain 'content_name' field")
+            self.assertEqual(jsonOutput["content_name"], expectedName,
+                            f"Expected filename '{expectedName}' with .zip extension added")
+
+            print(f"[Test] PASS: Folder name '{customName}' converted to '{expectedName}'")
+        finally:
+            # Restore original test file and size
+            self.testFilePath = originalTestFile
+            self.originalFileSize = originalFileSize
+
+    def testCustomNameWithFolderNonZipExtension(self):
+        """Test --name with folder with non-zip extension (should append .zip)."""
+
+        # Create a test folder
+        testFolder = os.path.join(self.tempDir, "test_folder3")
+        os.makedirs(testFolder)
+        with open(os.path.join(testFolder, "file.txt"), "w") as f:
+            f.write("test content")
+
+        customName = "data.txt"
+        expectedName = "data.txt.zip"
+        extraArgs = ["--name", customName, "--timeout", "5"]
+
+        print(f"[Test] Testing --name with folder (non-zip extension): '{customName}'")
+
+        # Temporarily replace testFilePath with folder path
+        originalTestFile = self.testFilePath
+        originalFileSize = self.originalFileSize
+        self.testFilePath = testFolder
+        self.originalFileSize = -1  # Folders have dynamic size, so don't check size
+
+        try:
+            # Start FastFileLink and wait for JSON output
+            shareLink = self._startFastFileLink(p2p=True, extraArgs=extraArgs)
+
+            print(f"[Test] Share link: {shareLink}")
+
+            # Read JSON output to verify the filename
+            with open(self.jsonOutputPath, 'r') as f:
+                jsonOutput = json.load(f)
+
+            print(f"[Test] JSON output: {jsonOutput}")
+
+            # Check JSON output contains .zip appended
+            self.assertIn("content_name", jsonOutput, "JSON output should contain 'content_name' field")
+            self.assertEqual(jsonOutput["content_name"], expectedName,
+                            f"Expected filename '{expectedName}' with .zip appended")
+
+            print(f"[Test] PASS: Folder name '{customName}' converted to '{expectedName}'")
+        finally:
+            # Restore original test file and size
+            self.testFilePath = originalTestFile
+            self.originalFileSize = originalFileSize
 
     def testAliasWithUnicode(self):
         """Test --alias with Unicode characters (should be URL encoded)."""

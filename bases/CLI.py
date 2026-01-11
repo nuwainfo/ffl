@@ -29,6 +29,7 @@ from bases.Kernel import (
 )
 from bases.Settings import DEFAULT_AUTH_USER_NAME, DEFAULT_UPLOAD_DURATION, SettingsGetter
 from bases.Utils import flushPrint, checkVersionCompatibility, getEnv, parseProxyString, setupProxyEnvironment
+from bases.Hook import HookClient
 from bases.Upgrade import performUpgrade
 from bases.I18n import _
 
@@ -110,6 +111,7 @@ def configureLogging(logLevel):
         logging.getLogger('urllib3').setLevel(logging.INFO)
         logging.getLogger('urllib3.connectionpool').setLevel(logging.INFO)
         logging.getLogger('sentry_sdk').setLevel(logging.INFO)
+        logging.getLogger('asyncio').setLevel(logging.ERROR)
 
     # Priority: CLI argument > environment variable > None (no change)
     if logLevel is None:
@@ -260,7 +262,13 @@ def configureCLIParser():
             return validatePositive(maxDownloadsStr, "Max downloads")
 
         parser.add_argument(
-            "file", metavar="FILE_OR_FOLDER", help=_("Choose a file or folder you want to share"), nargs='?'
+            "file", metavar="FILE_OR_FOLDER", help=_("Choose a file or folder you want to share (use '-' for stdin)"), nargs='?'
+        )
+        parser.add_argument(
+            "--name", "-n",
+            metavar="FILENAME",
+            help=_("Specify custom download filename (default: original filename for files, folder.zip for folders, stdin-YYYYMMDD-HHMMSS.bin for stdin)"),
+            dest="fileName"
         )
 
         # Upload mode - optional parameter (always available, but requires Upload addon)
@@ -348,6 +356,15 @@ def configureCLIParser():
             help=_("Open invite page in browser with the sharing link"),
             dest="invite"
         )
+        parser.add_argument(
+            "--qr",
+            nargs='?',
+            const=True,
+            default=False,
+            metavar="FILE",
+            help=_("Display QR code in terminal (default) or save to FILE (e.g., qr.png)"),
+            dest="qr"
+        )
 
         # Allow addons to register additional arguments for share command
         FFLEvent.cliArgumentsShareOptionsRegister.trigger(parser=parser)
@@ -394,6 +411,16 @@ def configureCLIParser():
         ),
         metavar="PROXY",
         dest="proxy"
+    )
+    globalsParent.add_argument(
+        "--hook",
+        help=_(
+            "Webhook URL for forwarding events to parent process or external service. "
+            "Format: http://[user:pass@]host:port/path (e.g., http://app:token@127.0.0.1:12345/events). "
+            "Auth credentials are optional but recommended."
+        ),
+        metavar="WEBHOOK_URL",
+        dest="hook"
     )
 
     # Allow addons to register additional global options
@@ -467,9 +494,42 @@ def configureCLIParser():
     return parser, globalsParent, commandNames, shareSubparser
 
 
+def handleHookArgument(hook, result=None):
+    if not hook:
+        return result
+
+    hookClient = HookClient(hook)
+    logger.info(f"Hook client initialized: {hook}")
+
+    def forwardEventToHook(eventName, **eventData):
+        hookClient.sendEvent(eventName, eventData)
+
+    FFLEvent.all.subscribe(forwardEventToHook)
+
+    return result
+
+
+def handleProxyArgument(proxy, result):
+    if not proxy:
+        return result
+
+    proxyConfig = parseProxyString(proxy)
+    if not proxyConfig:
+        flushPrint(_('Error: Invalid proxy format: {proxy}').format(proxy=proxy))
+        result['exitCode'] = 1
+        return result
+
+    # Setup HTTP_PROXY/HTTPS_PROXY for requests library
+    setupProxyEnvironment(proxyConfig)
+
+    # Store proxyConfig to pass to tunnel creation flow
+    result['proxyConfig'] = proxyConfig
+    return result
+
+
 def processGlobalArguments(globalArgs):
     """
-    Process global arguments (like --log-level, --enable-reporting, --version, --proxy) before command processing.
+    Process global arguments before command processing.
     This handles global options that affect the entire application or cause early exits.
 
     Args:
@@ -483,19 +543,11 @@ def processGlobalArguments(globalArgs):
     # Configure logging level (checks --log-level argument and FFL_LOGGING_LEVEL env var)
     configureLogging(globalArgs.logLevel)
 
+    # Initialize hook client if --hook was specified
+    handleHookArgument(globalArgs.hook, result)
+
     # Handle --proxy option
-    if globalArgs.proxy:
-        proxyConfig = parseProxyString(globalArgs.proxy)
-        if not proxyConfig:
-            flushPrint(_('Error: Invalid proxy format: {proxy}').format(proxy=globalArgs.proxy))
-            result['exitCode'] = 1
-            return result
-
-        # Setup HTTP_PROXY/HTTPS_PROXY for requests library
-        setupProxyEnvironment(proxyConfig)
-
-        # Store proxyConfig to pass to tunnel creation flow
-        result['proxyConfig'] = proxyConfig
+    handleProxyArgument(globalArgs.proxy, result)
 
     # Let addons handle global options (like --enable-reporting)
     argPolicy = {'exitCode': None}
@@ -718,5 +770,7 @@ def validateShareArguments(args):
             '(username defaults to \'{defaultUser}\' if not specified)'
         ).format(defaultUser=DEFAULT_AUTH_USER_NAME))
         return 1
+
+    # No validation needed for --name (it's generic for all file types)
 
     return None # Validation passed

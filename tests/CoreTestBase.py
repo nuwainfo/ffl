@@ -195,8 +195,15 @@ class FastFileLinkTestBase(unittest.TestCase):
             else:
                 print("[Test] Process already terminated")
 
-    def downloadFileWithRequests(self, shareLink, outputPath):
-        """Download file using requests library with retry logic"""
+    def downloadFileWithRequests(self, shareLink, outputPath, expectedFileName=None):
+        """
+        Download file using requests library with retry logic
+
+        Args:
+            shareLink: URL to download from
+            outputPath: Local path to save downloaded file
+            expectedFileName: If provided, verify Content-Disposition header matches this filename
+        """
         print("[Test] Attempting to download file through share link...")
 
         # Try multiple times in case it takes a while for the link to be active
@@ -205,6 +212,31 @@ class FastFileLinkTestBase(unittest.TestCase):
                 print(f"[Test] Download attempt {attempt + 1}")
                 response = requests.get(shareLink, timeout=30)
                 if response.status_code == 200:
+                    # Verify Content-Disposition header if expectedFileName provided
+                    if expectedFileName:
+                        contentDisposition = response.headers.get('Content-Disposition', '')
+                        print(f"[Test] Content-Disposition header: {contentDisposition}")
+
+                        # Parse filename from Content-Disposition header
+                        # Format: attachment; filename="myfile.txt" or attachment; filename=myfile.txt
+                        actualFileName = None
+                        if 'filename=' in contentDisposition:
+                            # Extract filename (handle both quoted and unquoted)
+                            filenamePart = contentDisposition.split('filename=')[1].split(';')[0].strip()
+                            actualFileName = filenamePart.strip('"\'')
+
+                        if actualFileName:
+                            print(f"[Test] Extracted filename from header: {actualFileName}")
+                            if actualFileName != expectedFileName:
+                                raise AssertionError(
+                                    f"Content-Disposition filename mismatch: expected '{expectedFileName}', got '{actualFileName}'"
+                                )
+                            print(f"[Test] Content-Disposition filename matches: {expectedFileName}")
+                        else:
+                            raise AssertionError(
+                                f"Content-Disposition header missing filename (header: {contentDisposition})"
+                            )
+
                     with open(outputPath, 'wb') as f:
                         f.write(response.content)
                     print(f"[Test] File downloaded successfully to {outputPath}")
@@ -305,10 +337,24 @@ class FastFileLinkTestBase(unittest.TestCase):
 
             if downloadProcess.returncode != 0:
                 error_msg = f"Download process failed with exit code {downloadProcess.returncode}"
-                if stdout:
-                    error_msg += f"\nOutput: {stdout}"
-                if stderr:
-                    error_msg += f"\nError: {stderr}"
+
+                # Read from log file if output was captured to file
+                if logFile:
+                    logFile.close()
+                    try:
+                        with open(logPath, 'r', encoding='utf-8', errors='replace') as f:
+                            output = f.read()
+                        if output:
+                            error_msg += f"\n--- Full Client Output ---\n{output}\n--- End Output ---"
+                    except Exception as e:
+                        error_msg += f"\n(Failed to read log file: {e})"
+                else:
+                    # Read from stdout/stderr if captured directly
+                    if stdout:
+                        error_msg += f"\nOutput: {stdout}"
+                    if stderr:
+                        error_msg += f"\nError: {stderr}"
+
                 raise AssertionError(error_msg)
 
             print("[Test] Download completed successfully")
@@ -849,6 +895,115 @@ class FastFileLinkTestBase(unittest.TestCase):
             if testServerProcess:
                 self._stopTestServer(testServerProcess)
             raise
+
+    def _startStdinStreaming(self, inputFilePath, customName=None, extraArgs=None, extraEnvVars=None):
+        """
+        Start Core.py with stdin input (cat file | python Core.py --cli -)
+
+        Args:
+            inputFilePath: Path to file to pipe as stdin
+            customName: Custom filename to use with --name argument
+            extraArgs: Additional command line arguments
+            extraEnvVars: Additional environment variables
+
+        Returns:
+            str: Share link
+        """
+        # Prepare command: cat file | python Core.py --cli - --json output.json
+        coreArgs = [sys.executable, "Core.py", "--cli", "-", "--json", self.jsonOutputPath]
+
+        if customName:
+            coreArgs.extend(["--name", customName])
+
+        if extraArgs:
+            coreArgs.extend(extraArgs)
+
+        # Prepare environment
+        env = os.environ.copy()
+        if extraEnvVars:
+            env.update(extraEnvVars)
+
+        print(f"[Test] Input file: {inputFilePath}")
+        print(f"[Test] Input file exists: {os.path.exists(inputFilePath)}")
+        print(f"[Test] JSON output path: {self.jsonOutputPath}")
+        
+        # Working directory should be the project root (where Core.py is)
+        # __file__ is tests/CoreTestBase.py, so two dirname calls get us to the project root
+        workingDir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        coreScriptPath = os.path.join(workingDir, "Core.py")
+        
+        print(f"[Test] Working directory: {workingDir}")
+        print(f"[Test] Core.py exists: {os.path.exists(coreScriptPath)}")
+        print(f"[Test] Command: {' '.join(coreArgs)}")
+
+        # Open input file for piping
+        with open(inputFilePath, 'rb') as inputFile:
+            print(f"[Test] Starting stdin streaming...")
+
+            # Start Core.py with stdin from file
+            self.coreProcess = subprocess.Popen(
+                coreArgs,
+                cwd=workingDir,
+                stdin=inputFile,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env
+            )
+
+            print(f"[Test] Process started with PID: {self.coreProcess.pid}")
+
+        # Wait for JSON output file
+        maxWaitTime = 30
+        startTime = time.time()
+        checkCount = 0
+        while not os.path.exists(self.jsonOutputPath):
+            checkCount += 1
+            elapsed = time.time() - startTime
+
+            # Check if process is still running
+            processStatus = self.coreProcess.poll()
+            if processStatus is not None:
+                # Process has terminated
+                stdout, stderr = self.coreProcess.communicate()
+                print(f"[Test] Process terminated with exit code: {processStatus}")
+                print(f"[Test] Process stdout/stderr output:")
+                print("=" * 80)
+                print(stdout if stdout else "(no output)")
+                print("=" * 80)
+                raise RuntimeError(
+                    f"Core.py process terminated unexpectedly with exit code {processStatus}\n"
+                    f"Output: {stdout[:500] if stdout else '(no output)'}"
+                )
+
+            if elapsed > maxWaitTime:
+                # Capture output before raising error
+                self.coreProcess.terminate()
+                stdout, stderr = self.coreProcess.communicate(timeout=5)
+                print(f"[Test] Timeout! Process output:")
+                print("=" * 80)
+                print(stdout if stdout else "(no output)")
+                print("=" * 80)
+                raise TimeoutError(
+                    f"JSON output file not created after {maxWaitTime}s\n"
+                    f"Output: {stdout[:500] if stdout else '(no output)'}"
+                )
+
+            if checkCount % 10 == 0:
+                print(f"[Test] Still waiting for JSON file... ({elapsed:.1f}s elapsed)")
+
+            time.sleep(0.5)
+
+        print(f"[Test] JSON file created after {time.time() - startTime:.1f}s")
+
+        # Read share info
+        with open(self.jsonOutputPath, 'r') as f:
+            shareInfo = json.load(f)
+
+        shareLink = shareInfo["link"]
+        print(f"[Test] Share link: {shareLink}")
+
+        return shareLink
 
     def _verifyDownloadedFile(self, downloadedFilePath):
         """

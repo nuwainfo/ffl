@@ -30,6 +30,8 @@ import time
 
 import requests
 
+from dataclasses import dataclass
+from typing import Optional
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
@@ -85,7 +87,7 @@ class AuthMixin:
             bool: True if authentication is successful, False otherwise.
         """
         # Skip auth if not configured (password is required to enable auth)
-        if not hasattr(self.server, 'authPassword') or not self.server.authPassword:
+        if not self.server.config.authPassword:
             return True
 
         authHeader = self.headers.get('Authorization')
@@ -103,7 +105,7 @@ class AuthMixin:
             username, password = credentials.split(':', 1)
 
             # Verify credentials against server config
-            if username == self.server.authUser and password == self.server.authPassword:
+            if username == self.server.config.authUser and password == self.server.config.authPassword:
                 logger.info(f"Authentication successful for user: '{username}'")
                 return True
             else:
@@ -176,6 +178,9 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             '/complete': self._handleWebRTCComplete,
             '/e2ee/init': self._handleE2EEInit,
         }
+
+        # One request one handler, so _extraHeaders can be safely used in self.end_headers.
+        self._extraHeaders = {}
 
         if os.getenv('JS_LOG_TO_SERVER_DEBUG') == 'True':
             self.postPathMap.update({
@@ -308,6 +313,9 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
         if size is not None:
             self.send_header("Content-Length", str(size))
+        else:
+            # Unknown size - use chunked transfer encoding
+            self.send_header("Transfer-Encoding", "chunked")
 
         self.send_header("Content-type", ctype)
         self.send_header("Content-Disposition", f"attachment; filename={name}")
@@ -339,8 +347,6 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             # Default handling for other paths
             super().do_HEAD()
 
-        self.connection.close()
-
     # GET handlers
     def _handleRedirect(self, args):
         """Handle redirect by determining path and calling appropriate handler"""
@@ -354,6 +360,21 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         else:
             logger.error(f"No handler found for redirect path: {redirectPath}")
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Redirect handler not found")
+
+    def _writeChunk(self, data: bytes):
+        """
+        Write a single chunk in HTTP/1.1 chunked transfer encoding format
+
+        Args:
+            data: Chunk data to write
+        """
+        self.wfile.write(f"{len(data):X}\r\n".encode("ascii"))
+        self.wfile.write(data)
+        self.wfile.write(b"\r\n")
+
+    def _finishChunked(self):
+        """Write the final chunk marker for HTTP/1.1 chunked transfer encoding"""
+        self.wfile.write(b"0\r\n\r\n")
 
     def _handleStartDownloadActions(self, size):
         flushPrint(_('[{timestamp}] Downloading by user').format(timestamp=self.date_time_string()))
@@ -392,8 +413,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
     def _handleE2EEManifest(self, args):
         """Handle /e2ee/manifest endpoint - returns E2E encryption metadata"""
-        logger.debug(f"[E2EE] Manifest request - e2eeEnabled={self.server.e2eeEnabled}")
-        if not self.server.e2eeEnabled:
+        logger.debug(f"[E2EE] Manifest request - e2eeEnabled={self.server.config.e2eeEnabled}")
+        if not self.server.config.e2eeEnabled:
             # Return silent 404 if E2EE not enabled
             self._handle404(f"[E2EE] E2EE not enabled, returning silent 404 for /e2ee/manifest")
             return
@@ -429,7 +450,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
     def _handleE2EETags(self, args):
         """Handle /e2ee/tags endpoint - returns tags for chunk range"""
-        if not self.server.e2eeEnabled:
+        if not self.server.config.e2eeEnabled:
             # Return silent 404 if E2EE not enabled
             self._handle404(f"[E2EE] E2EE not enabled, returning silent 404 for /e2ee/tags")
             return
@@ -470,7 +491,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
     def _handleE2EEInit(self, data):
         """Handle /e2ee/init endpoint - RSA key exchange for E2E encryption"""
-        if not self.server.e2eeEnabled:
+        if not self.server.config.e2eeEnabled:
             # Return silent 404 if E2EE not enabled
             self._handle404(f"[E2EE] E2EE not enabled, returning silent 404 for /e2ee/init")
             return
@@ -555,6 +576,9 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             if size and size >= 0:
                 end = end if end else size - 1
 
+            # Determine if we should use chunked encoding
+            useChunked = (size is None) and ('Range' not in self.headers)
+
             # Send appropriate response headers
             if 'Range' in self.headers:
                 if self.range and reader.supportsRange:
@@ -571,9 +595,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 if size is not None:
                     self.send_header("Content-Length", str(size))
                 else:
-                    # For unknown size (stdin, etc.), signal that connection will close after response
-                    # This is required when Content-Length is not provided
-                    self.send_header("Connection", "close")
+                    # For unknown size (stdin, ZIP deflate), use chunked transfer encoding
+                    self.send_header("Transfer-Encoding", "chunked")
 
             self.send_header("Content-type", ctype)
             self.send_header("Content-Disposition", f"attachment; filename={quote(name)}")
@@ -583,7 +606,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
             # Initialize E2E encryptor if enabled
             encryptor = None
-            if self.server.e2eeEnabled:
+            if self.server.config.e2eeEnabled:
                 # Calculate starting chunk index for Range support
                 startChunkIndex = start // self.server.e2eeManager.chunkSize
                 # Only save tags if this is an aligned Range request (or full download)
@@ -594,7 +617,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 )
 
             # Send file/directory data in chunks
-            chunkSize = self.server.e2eeManager.chunkSize if self.server.e2eeEnabled else self.CHUNK_SIZE
+            chunkSize = self.server.e2eeManager.chunkSize if self.server.config.e2eeEnabled else self.CHUNK_SIZE
 
             for data in reader.iterChunks(chunkSize, start=start):
                 # Ensure we don't send beyond the requested range (if known)
@@ -605,7 +628,12 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 if encryptor:
                     data = encryptor.encryptChunk(data)
 
-                self.wfile.write(data)
+                # Write using chunked encoding or direct write
+                if useChunked:
+                    self._writeChunk(data)
+                else:
+                    self.wfile.write(data)
+
                 written += len(data)
 
                 # Update progress periodically
@@ -615,8 +643,15 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 if end is not None and written > end:
                     break
 
+            # Finish chunked encoding if used
+            if useChunked:
+                self._finishChunked()
+
+            # Flush the output buffer
+            self.wfile.flush()
+
             # Final progress update
-            progress.update(written, forceLog=True)
+            progress.update(written, forceLog=True, forceFinish=size is None)
 
             # Handle post-download actions
             self._handlePostDownloadActions(size)
@@ -644,7 +679,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 # Replace file_name, file_size placeholder
                 path, name, size, ctype, reader = self._getFileInfo(quoteName=False)
                 content = content.replace(b'{{ fileName }}', name.encode())
-                content = content.replace(b'{{ fileSize }}', str(size).encode())
+                content = content.replace(b'{{ fileSize }}', str(size if size is not None else -1).encode())
 
                 # Replace COPYRIGHT placeholder
                 settingsGetter = SettingsGetter.getInstance()
@@ -658,7 +693,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 # Check for debug mode from environment variable or URL parameter
                 # WebRTC priority system (highest to lowest priority), and other settings the same priority design:
                 # 1. URL parameter (?webrtc=yes/no/1/0/true/false/on/off)
-                # 2. Server enableWebRTC setting (from --force-relay CLI option)
+                # 2. Server defaultWebRTC setting (default WebRTC state from --force-relay/Tor mode)
                 # 3. DISABLE_WEBRTC environment variable
                 debugEnabled = os.getenv('JS_DEBUG', None) == 'True'
                 serverDebugEnabled = os.getenv('JS_LOG_TO_SERVER_DEBUG', None) == 'True'
@@ -696,8 +731,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
                 # Apply priority system for WebRTC
                 if not webrtcDisabledDetermined: # No URL parameter override
-                    # Priority 2: Server enableWebRTC setting
-                    if not self.server.enableWebRTC:
+                    # Priority 2: Server defaultWebRTC setting
+                    if not self.server.config.defaultWebRTC:
                         webrtcDisabled = True
 
                 # Use default from environment variable (Priority 3)
@@ -714,6 +749,12 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                     content = content.replace(b'{{ STREAMSAVER_BLOB }}', b'1')
                 else:
                     content = content.replace(b'{{ STREAMSAVER_BLOB }}', b'0')
+
+                if self.server.config.torEnabled:
+                    # Use slow polling to increase stability
+                    content = content.replace(
+                        b'const STATUS_POLLING_SECONDS = 2;', b'const STATUS_POLLING_SECONDS = 5;'
+                    )
 
             f = io.BytesIO(content)
             try:
@@ -776,7 +817,12 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             self.send_error(500, str(e))
 
     def _handleStaticScript(self, scriptPath, requestHeaders=None):
-        """Handle static script - proxy from remote or serve locally"""
+        """Handle static script - proxy from remote or serve locally
+
+        Args:
+            scriptPath: Path to the script file
+            requestHeaders: Headers to send with remote request (proxy mode) or set in response (local mode)
+        """
         settingsGetter = SettingsGetter.getInstance()
         staticServer = settingsGetter.getStaticServer()
 
@@ -784,13 +830,15 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         if staticServer.startswith('http'):
             self._proxyStaticScript(scriptPath, requestHeaders)
         else:
-            # Static server is local - use default handler to serve from local filesystem
+            # Static server is local - serve from local filesystem
+            # Store extra headers to be added by end_headers()
+            self._extraHeaders = requestHeaders
             super().do_GET()
 
     def _handleProgressServiceWorker(self, args):
         """Handle ProgressServiceWorker.js - proxy from remote or serve locally"""
         # Service worker requires special headers
-        requestHeaders = {'Service-Worker': 'script', 'Cache-Control': 'no-cache'}
+        requestHeaders = {'Service-Worker': 'script', 'Cache-Control': 'no-cache', 'Service-Worker-Allowed': '/'}
         self._handleStaticScript("/static/js/ProgressServiceWorker.js", requestHeaders)
 
     def _handleE2EEScript(self, args):
@@ -867,7 +915,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             )
 
             # Pass E2EEManager if E2EE is enabled
-            e2eeManager = self.server.e2eeManager if self.server.e2eeEnabled else None
+            e2eeManager = self.server.e2eeManager if self.server.config.e2eeEnabled else None
 
             offer = self.server.webRTC.runAsync(
                 self.server.webRTC.createOffer(
@@ -940,8 +988,6 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             except Exception as e:
                 logger.exception(e)
                 self.send_error(500, str(e))
-
-        self.connection.close()
 
     def _sendBytes(self, payload: bytes, ctype: str = "text/plain; charset=utf-8"):
         self.send_response(HTTPStatus.OK)
@@ -1032,8 +1078,6 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             logger.exception(e)
             self.send_error(500, str(e))
 
-        self.connection.close()
-
     # Override utility methods
     def send_response(self, code, message=None):
         if isinstance(message, str):
@@ -1044,8 +1088,13 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         self.send_header('Date', self.date_time_string())
 
     def log_error(self, format, *args):
-        # Never show 404. FIXME: This is kinda ugly way, but currently no idea to do it better.
-        if format == "code %d, message %s" and args and args[0] == 404:
+        skipCode = {
+            400: True,
+            404: True,
+        }
+
+        # Never show 404/400. FIXME: This is kinda ugly way, but currently no idea to do it better.
+        if format == "code %d, message %s" and args and args[0] in skipCode:
             return
 
         return super().log_error(format, *args)
@@ -1087,10 +1136,17 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         self.send_header("FFL-FileSize", str(size if size is not None else -1))
 
         # Indicate mode - P2P if WebRTC is enabled, otherwise HTTP, with E2EE if encrypted
-        mode = "P2P" if self.server.enableWebRTC else "HTTP"
-        if self.server.e2eeEnabled:
+        mode = "P2P" if self.server.config.defaultWebRTC else "HTTP"
+        if self.server.config.e2eeEnabled:
             mode += "+E2EE"
         self.send_header("FFL-Mode", mode)
+
+        # Add any extra headers if set (for static scripts like service workers)
+        if self._extraHeaders:
+            for header, value in self._extraHeaders.items():
+                self.send_header(header, value)
+            # Clear extra headers after use
+            self._extraHeaders.clear()
 
         super().end_headers()
 
@@ -1105,9 +1161,22 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 raise
 
 
+@dataclass
+class ServerConfig:
+    """Configuration for Server instance"""
+
+    maxDownloads: int = 0 # Maximum number of downloads (0 = unlimited)
+    timeout: int = 0 # Server timeout in seconds (0 = no timeout)
+    authUser: Optional[str] = None # HTTP Basic auth username
+    authPassword: Optional[str] = None # HTTP Basic auth password
+    defaultWebRTC: bool = True # Enable WebRTC support by default
+    e2eeEnabled: bool = False # Enable end-to-end encryption
+    torEnabled: bool = False # Tor privacy mode enabled.
+
+
 class Server(ThreadingHTTPServer):
 
-    request_queue_size = 5
+    request_queue_size = 128
     allow_reuse_address = True
     allow_reuse_port = True
     daemon_threads = True
@@ -1122,25 +1191,19 @@ class Server(ThreadingHTTPServer):
         serverAddress,
         requestHandlerClass=None,
         webRTCManagerClass=None,
-        maxDownloads=0,
-        timeout=0,
-        authUser=None,
-        authPassword=None,
-        enableWebRTC=True,
-        e2eeEnabled=False
+        config: ServerConfig = None
     ):
+        # Use default config if not provided
+        if config is None:
+            config = ServerConfig()
+
         # Reader provides file and directory information
         self.reader = reader # SourceReader instance (required)
         self.directory = reader.directory
         self.file = reader.file
         self.uid = uid
         self.domain = domain
-        self.maxDownloads = maxDownloads
-        self.timeout = timeout
-        self.authUser = authUser
-        self.authPassword = authPassword
-        self.enableWebRTC = enableWebRTC
-        self.e2eeEnabled = e2eeEnabled
+        self.config = config
 
         self.downloadCount = 0
         self.startTime = time.time()
@@ -1149,13 +1212,16 @@ class Server(ThreadingHTTPServer):
         self.lastError = None
 
         # Initialize E2E encryption if enabled
-        if self.e2eeEnabled:
+        if self.config.e2eeEnabled:
             # Get singleton instance (will auto-initialize keys on first call)
             self.e2eeManager = E2EEManager(WebRTCManager.CHUNK_SIZE)
-            logger.info(f"[E2EE] E2E encryption ENABLED - using singleton manager (e2eeEnabled={self.e2eeEnabled})")
+            logger.info(
+                f"[E2EE] E2E encryption ENABLED - using singleton manager "
+                f"(e2eeEnabled={self.config.e2eeEnabled})"
+            )
         else:
             self.e2eeManager = None
-            logger.debug(f"[E2EE] E2E encryption DISABLED (e2eeEnabled={self.e2eeEnabled})")
+            logger.debug(f"[E2EE] E2E encryption DISABLED (e2eeEnabled={self.config.e2eeEnabled})")
 
         if requestHandlerClass is None:
             requestHandlerClass = DownloadHandler
@@ -1186,15 +1252,15 @@ class Server(ThreadingHTTPServer):
         # Create a thread to periodically check the timeout
         def timeoutChecker():
             while not self.stop:
-                if self.timeout > 0 and (time.time() - self.startTime) >= self.timeout:
+                if self.config.timeout > 0 and (time.time() - self.startTime) >= self.config.timeout:
                     flushPrint(_('Timeout ({timeout} seconds) reached. Shutting down server.').format(
-                        timeout=self.timeout))
+                        timeout=self.config.timeout))
                     self.shutdown()
                     break
 
                 time.sleep(pollInterval)
 
-        if self.timeout > 0:
+        if self.config.timeout > 0:
             timeoutThread = threading.Thread(target=timeoutChecker, daemon=True)
             timeoutThread.start()
 
@@ -1204,9 +1270,9 @@ class Server(ThreadingHTTPServer):
     def doAfterDownload(self):
         # It increments the download count and checks for auto-shutdown conditions.
         self.downloadCount += 1
-        if self.maxDownloads > 0 and self.downloadCount >= self.maxDownloads:
+        if self.config.maxDownloads > 0 and self.downloadCount >= self.config.maxDownloads:
             flushPrint(_('Maximum downloads ({maxDownloads}) reached. Shutting down server.').format(
-                maxDownloads=self.maxDownloads))
+                maxDownloads=self.config.maxDownloads))
             self.shutdown()
 
     # Let normal shutdown not be printed
@@ -1230,20 +1296,7 @@ class Server(ThreadingHTTPServer):
         super().shutdown()
 
 
-def createServer(
-    reader,
-    port,
-    uid,
-    domain,
-    handlerClass=None,
-    webRTCManagerClass=None,
-    maxDownloads=0,
-    timeout=0,
-    authUser=None,
-    authPassword=None,
-    enableWebRTC=True,
-    e2eeEnabled=False
-):
+def createServer(reader, port, uid, domain, handlerClass=None, webRTCManagerClass=None, config: ServerConfig = None):
     """
     Factory function to create a Server instance
 
@@ -1254,22 +1307,10 @@ def createServer(
         domain: Domain name
         handlerClass: Custom request handler class
         webRTCManagerClass: Custom WebRTC manager class
-        maxDownloads: Maximum number of downloads (0 = unlimited)
-        timeout: Server timeout in seconds (0 = no timeout)
-        authUser: HTTP Basic auth username
-        authPassword: HTTP Basic auth password
-        enableWebRTC: Enable WebRTC support
-        e2eeEnabled: Enable end-to-end encryption
+        config: ServerConfig instance with server configuration
 
     Returns:
         Server: Configured server instance
     """
-    if handlerClass is None:
-        handlerClass = DownloadHandler
-
     serverAddress = ('127.0.0.1', port)
-
-    return Server(
-        reader, uid, domain, serverAddress, handlerClass, webRTCManagerClass, maxDownloads, timeout, authUser,
-        authPassword, enableWebRTC, e2eeEnabled
-    )
+    return Server(reader, uid, domain, serverAddress, handlerClass, webRTCManagerClass, config)

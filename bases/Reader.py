@@ -18,39 +18,237 @@
 # limitations under the License.
 
 import os
-import io
-import math
 import struct
 import zlib
 import zipfile
 import hashlib
 import datetime
 import sys
+import tempfile
 
 from enum import Enum, auto
 from typing import Iterator, Optional
 
-from bases.Kernel import getLogger
+from bases.Kernel import getLogger, FFLEvent
 
 logger = getLogger(__name__)
 
 
 class SegmentType(Enum):
     """ZIP segment types for SegmentIndex"""
-    LFH = auto()  # Local File Header
-    FILE_DATA = auto()  # File data content
-    DESCRIPTOR = auto()  # Data descriptor
-    CENTRAL_DIR = auto()  # Central directory header
-    ZIP64_EOCD = auto()  # Zip64 End of Central Directory
-    ZIP64_LOCATOR = auto()  # Zip64 End of Central Directory Locator
-    EOCD = auto()  # End of Central Directory
+    LFH = auto() # Local File Header
+    FILE_DATA = auto() # File data content
+    DESCRIPTOR = auto() # Data descriptor
+    CENTRAL_DIR = auto() # Central directory header
+    ZIP64_EOCD = auto() # Zip64 End of Central Directory
+    ZIP64_LOCATOR = auto() # Zip64 End of Central Directory Locator
+    EOCD = auto() # End of Central Directory
 
 
 class FolderChangedException(RuntimeError):
     """Exception raised when folder contents change during transfer"""
+
     def __init__(self, message: str, filePath: str = None):
         super().__init__(message)
         self.filePath = filePath
+
+
+class CachingMixin:
+    """
+    Mixin class for caching stream data to temp file
+
+    Provides functionality to:
+    - Stream data to client immediately
+    - Simultaneously cache to temp file for subsequent reads
+    - Allow multiple reads if caching succeeds
+    - Gracefully handle caching failures
+    - Automatic cleanup on application shutdown via event system
+    """
+
+    # Class-level registry to track all instances for cleanup
+    _instances = []
+    _shutdownSubscribed = False
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._cachedFile = None # Path to cached temp file
+        self._cacheSuccess = False # Whether caching succeeded
+        self._cacheTempFile = None # File object for writing cache
+        self._cacheEnabled = True # Can be disabled if disk space issues
+
+        # Register this instance for shutdown cleanup
+        CachingMixin._instances.append(self)
+
+        # Subscribe to shutdown event (do this only once for the class)
+        if not CachingMixin._shutdownSubscribed:
+            FFLEvent.applicationShutdown.subscribe(CachingMixin._cleanupAllInstances)
+            CachingMixin._shutdownSubscribed = True
+
+    @classmethod
+    def _cleanupAllInstances(cls, **kwargs):
+        """
+        Class method to cleanup all cached files from all instances
+
+        Called by the shutdown event to ensure all temp files are removed
+
+        Args:
+            **kwargs: Event system passes context and other parameters
+        """
+        logger.debug(f"[CachingMixin] Cleaning up {len(cls._instances)} cached file(s)")
+
+        for instance in cls._instances:
+            try:
+                instance._cleanupCacheFile()
+            except Exception as e:
+                logger.debug(f"[CachingMixin] Error cleaning up cache: {e}")
+
+        # Clear the instances list
+        cls._instances.clear()
+
+    def _createTempFile(self, prefix: str = 'cache_', suffix: str = '.bin') -> Optional[object]:
+        """
+        Create a temporary file for caching data
+
+        Args:
+            prefix: Filename prefix for temp file
+            suffix: Filename suffix for temp file
+
+        Returns:
+            File object or None if creation fails
+        """
+        try:
+            # Create temp file that will be auto-deleted when closed
+            tempFile = tempfile.NamedTemporaryFile(mode='wb', delete=False, prefix=prefix, suffix=suffix)
+            self._cachedFile = tempFile.name
+            logger.debug(f"[{self.__class__.__name__}] Created temp cache file: {self._cachedFile}")
+            return tempFile
+        except (OSError, IOError) as e:
+            logger.debug(f"[{self.__class__.__name__}] Failed to create temp file for caching: {e}")
+            return None
+
+    def _closeTempFile(self, tempFile):
+        """Close temp file with error handling (fail silently)"""
+        if tempFile:
+            try:
+                tempFile.close()
+            except Exception as e:
+                logger.debug(f"[{self.__class__.__name__}] Unable to close cached file: {str(e)}")
+
+    def _cleanupCacheFile(self):
+        """Clean up cached temp file (fail silently)"""
+        if self._cachedFile and os.path.exists(self._cachedFile):
+            try:
+                os.unlink(self._cachedFile)
+                logger.debug(f"[{self.__class__.__name__}] Cleaned up cache file: {self._cachedFile}")
+            except Exception as e:
+                logger.debug(f"[{self.__class__.__name__}] Unable to delete cached file: {str(e)}")
+            finally:
+                self._cachedFile = None
+
+    def _hasCache(self) -> bool:
+        """Check if cache is available for reading"""
+        return self._cacheSuccess and self._cachedFile and os.path.exists(self._cachedFile)
+
+    def _startCaching(self, prefix: str = 'cache_', suffix: str = '.bin') -> bool:
+        """
+        Start caching process by creating temp file
+
+        Args:
+            prefix: Filename prefix for temp file
+            suffix: Filename suffix for temp file
+
+        Returns:
+            bool: True if caching started successfully, False otherwise
+        """
+        if not self._cacheEnabled:
+            return False
+
+        self._cacheTempFile = self._createTempFile(prefix, suffix)
+        return self._cacheTempFile is not None
+
+    def _cacheChunk(self, chunk: bytes) -> bool:
+        """
+        Cache a chunk of data to temp file
+
+        Args:
+            chunk: Data chunk to cache
+
+        Returns:
+            bool: True if caching succeeded, False if caching failed
+        """
+        if not self._cacheTempFile:
+            return False
+
+        try:
+            self._cacheTempFile.write(chunk)
+            return True
+        except (OSError, IOError) as e:
+            # Caching failed - close temp file and disable caching
+            logger.debug(f"[{self.__class__.__name__}] Cache write failed: {e}")
+            self._closeTempFile(self._cacheTempFile)
+            self._cleanupCacheFile()
+            self._cacheTempFile = None
+            return False
+
+    def _finalizeCache(self) -> bool:
+        """
+        Finalize caching after all data has been written
+
+        Returns:
+            bool: True if caching finalized successfully, False otherwise
+        """
+        if not self._cacheTempFile:
+            return False
+
+        try:
+            self._closeTempFile(self._cacheTempFile)
+            self._cacheSuccess = True
+            logger.debug(f"[{self.__class__.__name__}] Successfully finalized cache: {self._cachedFile}")
+            return True
+        except (OSError, IOError) as e:
+            logger.debug(f"[{self.__class__.__name__}] Failed to finalize cache: {e}")
+            self._cleanupCacheFile()
+            return False
+        finally:
+            self._cacheTempFile = None
+
+    def _readFromCache(self, chunkSize: int, start: int = 0) -> Iterator[bytes]:
+        """
+        Read from cached temp file
+
+        Args:
+            chunkSize: Size of each chunk in bytes
+            start: Starting byte offset
+
+        Yields:
+            bytes: Content chunks from cached file
+        """
+        if not self._hasCache():
+            raise RuntimeError("Cache is not available")
+
+        try:
+            with open(self._cachedFile, 'rb') as f:
+                if start > 0:
+                    f.seek(start)
+                    logger.debug(f"[{self.__class__.__name__}] Seeking to offset {start} in cached file")
+
+                while True:
+                    chunk = f.read(chunkSize)
+                    if not chunk:
+                        break
+                    yield chunk
+        except (OSError, IOError) as e:
+            logger.error(f"[{self.__class__.__name__}] Failed to read from cached file: {e}")
+            raise RuntimeError(f"Failed to read from cached file: {e}")
+
+    def __del__(self):
+        """
+        Clean up temp file when object is destroyed (fallback)
+
+        Note: Primary cleanup is via applicationShutdown event (more reliable).
+        This __del__ serves as a fallback for edge cases.
+        """
+        self._cleanupCacheFile()
 
 
 class SegmentIndex:
@@ -90,8 +288,10 @@ class SegmentIndex:
         self.centralDirSize = centralDirSize
 
     @classmethod
-    def build(cls, rawEntries: list, makeLocalFileHeaderLength, makeDataDescriptorLength,
-              makeCentralDirHeaderLength, makeZip64Lengths) -> "SegmentIndex":
+    def build(
+        cls, rawEntries: list, makeLocalFileHeaderLength, makeDataDescriptorLength, makeCentralDirHeaderLength,
+        makeZip64Lengths
+    ) -> "SegmentIndex":
         """
         Build segment index by calculating all offsets (does NOT generate data)
 
@@ -156,7 +356,7 @@ class SegmentIndex:
                 offset += fileSize
 
                 # Calculate descriptor length (16 or 24 bytes based on file size)
-                needsZip64Descriptor = fileSize >= 0xFFFFFFFF
+                needsZip64Descriptor = ZipDirSourceReader._exceedsZip64Limit(fileSize)
                 descriptorLength = makeDataDescriptorLength(fileSize)
 
                 entry['descriptor_offset'] = offset
@@ -282,16 +482,40 @@ class SegmentIndex:
 
 class SourceReader:
     """Unified reading interface for files and folders (as ZIP streams)"""
-    contentName: str  # Display/download filename (e.g., file.bin / folder.zip)
-    contentType: str  # MIME type
-    size: Optional[int]  # Total content length (None if unknown)
-    supportsRange: bool  # Whether offset/Range resume is supported (for downloads)
-    supportsUploadResume: bool  # Whether upload resume is supported
+    contentName: str # Display/download filename (e.g., file.bin / folder.zip)
+    contentType: str # MIME type
+    size: Optional[int] # Total content length (None if unknown)
+    supportsRange: bool # Whether offset/Range resume is supported (for downloads)
+    supportsUploadResume: bool # Whether upload resume is supported
+
+    def __init__(self, path: str, fileName=None):
+        """
+        Initialize SourceReader with path and fileName handling
+
+        Args:
+            path: File/directory path, or "-" for stdin
+            fileName: Custom filename (string), callable that returns filename, or None for default
+        """
+        self.path = path
+
+        # Use default method if fileName not provided
+        if fileName is None:
+            fileName = self._getDefaultFileName
+
+        # Handle fileName: callable or string
+        if callable(fileName):
+            self.contentName = fileName()  # Call once to get deterministic name
+        else:
+            self.contentName = fileName
+
+    def _getDefaultFileName(self):
+        """Get default filename - subclasses should override this"""
+        raise NotImplementedError
 
     @property
     def file(self) -> str:
-        """File name for server identification"""
-        raise NotImplementedError
+        """File name for server identification (default: returns contentName)"""
+        return self.contentName
 
     @property
     def directory(self) -> str:
@@ -304,12 +528,14 @@ class SourceReader:
         raise NotImplementedError
 
     @classmethod
-    def build(cls, path: str, compression: str = None) -> 'SourceReader':
+    def build(cls, path: str, fileName: str = None, compression: str = None) -> 'SourceReader':
         """
         Factory method to create appropriate SourceReader
 
         Args:
             path: File or directory path, or "-" for stdin
+            fileName: Custom download filename (default: original filename for files,
+                       foldername.zip for folders, stdin-YYYYMMDD-HHMMSS.bin for stdin)
             compression: For directories - "store" (no compression) or "deflate" (compressed)
                         If None, uses FOLDER_COMPRESSION environment variable (default: "store")
 
@@ -318,15 +544,15 @@ class SourceReader:
         """
         # Handle stdin
         if path == "-":
-            return StdinSourceReader()
+            return StdinSourceReader(path, fileName=fileName)
 
         if os.path.isdir(path):
             # Use environment variable if compression not explicitly specified
             if compression is None:
                 compression = os.getenv('READER_FOLDER_COMPRESSION', 'store')
-            return ZipDirSourceReader(path, compression=compression)
+            return ZipDirSourceReader(path, fileName=fileName, compression=compression)
 
-        return FileSourceReader(path)
+        return FileSourceReader(path, fileName=fileName)
 
     def iterChunks(self, chunkSize: int, start: int = 0) -> Iterator[bytes]:
         """
@@ -345,8 +571,7 @@ class SourceReader:
         raise NotImplementedError
 
     def validateIntegrity(
-        self, storedSize: int, storedMtime: float,
-        storedHash: str = None, raiseOnError: bool = False
+        self, storedSize: int, storedMtime: float, storedHash: str = None, raiseOnError: bool = False
     ) -> bool:
         """
         Validate that content hasn't changed since the stored metadata was captured
@@ -380,21 +605,26 @@ class SourceReader:
 class FileSourceReader(SourceReader):
     """SourceReader implementation for regular files"""
 
-    def __init__(self, path: str):
+    def _getDefaultFileName(self):
+        """Get default filename (basename of path)"""
+        return os.path.basename(self.path)
+
+    def __init__(self, path: str, fileName=None):
+        """
+        Initialize FileSourceReader
+
+        Args:
+            path: File path
+            fileName: Custom filename (string), callable that returns filename, or None for default
+        """
         if not os.path.isfile(path):
             raise ValueError(f"Not a file: {path}")
 
-        self.path = path
-        self.contentName = os.path.basename(path)
+        super().__init__(path, fileName)
         self.contentType = "application/octet-stream"
         self.size = os.path.getsize(path)
         self.supportsRange = True
         self.supportsUploadResume = True
-
-    @property
-    def file(self) -> str:
-        """File name for server identification"""
-        return os.path.basename(self.path)
 
     @property
     def directory(self) -> str:
@@ -429,15 +659,14 @@ class FileSourceReader(SourceReader):
         # Create hash from filename + size + mtime
         hasher = hashlib.sha256()
         hasher.update(os.path.basename(self.path).encode('utf-8'))
-        hasher.update(struct.pack('Q', size))  # 8-byte unsigned
+        hasher.update(struct.pack('Q', size)) # 8-byte unsigned
         mtimeNs = int(mtime * 1_000_000_000)
-        hasher.update(struct.pack('q', mtimeNs))  # 8-byte signed
+        hasher.update(struct.pack('q', mtimeNs)) # 8-byte signed
 
         return hasher.hexdigest()
 
     def validateIntegrity(
-        self, storedSize: int, storedMtime: float,
-        storedHash: str = None, raiseOnError: bool = False
+        self, storedSize: int, storedMtime: float, storedHash: str = None, raiseOnError: bool = False
     ) -> bool:
         """
         Validate file hasn't changed
@@ -474,32 +703,41 @@ class FileSourceReader(SourceReader):
         return True
 
 
-class StdinSourceReader(SourceReader):
+class StdinSourceReader(CachingMixin, SourceReader):
     """
     SourceReader implementation for stdin streaming
 
     Characteristics:
-    - Single-use only (stdin can only be read once)
-    - Unknown size (streaming input)
-    - No Range/resume support (stdin is not seekable)
-    - No upload resume support
+    - First read streams directly from stdin (no delay)
+    - Simultaneously caches data to temp file for subsequent reads (via CachingMixin)
+    - If caching succeeds, allows multiple reads
+    - If caching fails, falls back to single-use behavior
+    - No Range/resume support for direct stdin
+    - Cached file supports Range/resume
 
     Usage: python Core.py --cli -
     """
 
-    def __init__(self):
+    def _getDefaultFileName(self):
+        """Generate default stdin filename with timestamp to avoid conflicts"""
+        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        return f"stdin-{timestamp}.bin"
+
+    def __init__(self, path: str, fileName=None):
+        """
+        Initialize StdinSourceReader
+
+        Args:
+            path: Path (should be "-" for stdin)
+            fileName: Custom filename (string), callable that returns filename, or None for default
+        """
+        super().__init__(path, fileName)  # CachingMixin -> SourceReader
         self.stdin = sys.stdin.buffer  # Binary mode for file data
-        self.contentName = "stdin"
         self.contentType = "application/octet-stream"
         self.size = None  # Unknown size for streaming input
-        self.supportsRange = False  # stdin is not seekable
+        self.supportsRange = False  # stdin is not seekable (direct stream)
         self.supportsUploadResume = False  # Cannot resume stdin
         self._consumed = False  # Track if stdin has been consumed
-
-    @property
-    def file(self) -> str:
-        """File name for server identification"""
-        return "stdin"
 
     @property
     def directory(self) -> str:
@@ -508,48 +746,75 @@ class StdinSourceReader(SourceReader):
 
     @property
     def consumed(self) -> bool:
-        """Stdin can only be read once"""
-        return self._consumed
+        """Check if stdin has been consumed and no cache available"""
+        return self._consumed and not self._hasCache()
 
     def iterChunks(self, chunkSize: int, start: int = 0) -> Iterator[bytes]:
         """
         Iterate over stdin chunks
 
+        First read: Streams directly from stdin while caching to temp file
+        Subsequent reads: Use cached file if available
+
         Args:
             chunkSize: Size of each chunk in bytes
-            start: Starting byte offset (must be 0 for stdin)
+            start: Starting byte offset (0 for direct stdin, >0 for cached file)
 
         Yields:
-            bytes: Content chunks from stdin
+            bytes: Content chunks
 
         Raises:
-            RuntimeError: If start > 0 (stdin is not seekable)
-            RuntimeError: If stdin has already been consumed
+            RuntimeError: If start > 0 but no cached file available
+            RuntimeError: If stdin consumed and no cache available
         """
-        import logging
-        logger = logging.getLogger(__name__)
+        # Second+ read: Use cached file if available
+        if self._consumed:
+            if self._hasCache():
+                logger.debug(f"[StdinSourceReader] Reading from cached file: {self._cachedFile}")
+                yield from self._readFromCache(chunkSize, start)
+                return
+            else:
+                raise RuntimeError("Stdin has already been consumed and caching failed")
 
+        # First read: Stream from stdin with simultaneous caching
         if start > 0:
             raise RuntimeError("Stdin does not support Range/offset resume (not seekable)")
-
-        if self._consumed:
-            raise RuntimeError("Stdin has already been consumed (single-use only)")
 
         self._consumed = True
 
         logger.debug(f"[StdinSourceReader] Starting to read stdin with chunkSize={chunkSize}")
         totalRead = 0
 
-        while True:
-            chunk = self.stdin.read(chunkSize)
-            if not chunk:
-                logger.debug(f"[StdinSourceReader] EOF reached, total read: {totalRead} bytes")
-                break
-            totalRead += len(chunk)
-            logger.debug(f"[StdinSourceReader] Read chunk: {len(chunk)} bytes, total: {totalRead}")
-            yield chunk
+        # Start caching (may fail silently)
+        self._startCaching(prefix='stdin_cache_', suffix='.bin')
 
-        logger.debug(f"[StdinSourceReader] Finished reading {totalRead} bytes from stdin")
+        try:
+            while True:
+                chunk = self.stdin.read(chunkSize)
+                if not chunk:
+                    logger.debug(f"[StdinSourceReader] EOF reached, total read: {totalRead} bytes")
+                    break
+
+                totalRead += len(chunk)
+                logger.debug(f"[StdinSourceReader] Read chunk: {len(chunk)} bytes, total: {totalRead}")
+
+                # Cache chunk (fail silently via mixin)
+                self._cacheChunk(chunk)
+
+                # Stream chunk to client immediately
+                yield chunk
+
+            logger.debug(f"[StdinSourceReader] Finished reading {totalRead} bytes from stdin")
+
+            # Finalize caching if successful
+            if self._finalizeCache():
+                self.size = totalRead # Now we know the size
+                logger.debug(f"[StdinSourceReader] Successfully cached {totalRead} bytes")
+
+        except Exception as e:
+            # Clean up temp file on error (mixin handles cleanup in __del__)
+            self._cleanupCacheFile()
+            raise
 
     def getMetadataHash(self) -> Optional[str]:
         """
@@ -561,8 +826,7 @@ class StdinSourceReader(SourceReader):
         return None
 
     def validateIntegrity(
-        self, storedSize: int, storedMtime: float,
-        storedHash: str = None, raiseOnError: bool = False
+        self, storedSize: int, storedMtime: float, storedHash: str = None, raiseOnError: bool = False
     ) -> bool:
         """
         Validate stdin integrity (not supported)
@@ -573,13 +837,14 @@ class StdinSourceReader(SourceReader):
         return True
 
 
-class ZipDirSourceReader(SourceReader):
+class ZipDirSourceReader(CachingMixin, SourceReader):
     """
     SourceReader implementation for directories (streams as ZIP file)
 
     Supports two modes:
     - store: No compression, exact Content-Length known, Windows-friendly
-    - deflate: Compression, size unknown (requires HTTP chunked), smaller files
+    - deflate: Compression, size unknown (requires HTTP chunked), smaller files,
+              caches output for subsequent reads (via CachingMixin)
 
     Notes:
     - Does not support Range/offset resume for directories
@@ -589,22 +854,114 @@ class ZipDirSourceReader(SourceReader):
 
     # ZIP format constants (from PKZIP APPNOTE.TXT specification)
     # Signature constants - these are not exposed in zipfile module, but defined in ZIP spec
-    LOCAL_FILE_HEADER_SIGNATURE = struct.unpack('<I', zipfile.stringFileHeader)[0]  # 0x04034b50
-    CENTRAL_DIR_SIGNATURE = struct.unpack('<I', zipfile.stringCentralDir)[0]  # 0x02014b50
-    END_OF_CENTRAL_DIR_SIGNATURE = struct.unpack('<I', zipfile.stringEndArchive)[0]  # 0x06054b50
-    ZIP64_END_OF_CENTRAL_DIR_SIGNATURE = 0x06064b50  # ZIP64 extension (not in zipfile module)
-    ZIP64_END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE = 0x07064b50  # ZIP64 extension (not in zipfile module)
+    LOCAL_FILE_HEADER_SIGNATURE = struct.unpack('<I', zipfile.stringFileHeader)[0] # 0x04034b50
+    CENTRAL_DIR_SIGNATURE = struct.unpack('<I', zipfile.stringCentralDir)[0] # 0x02014b50
+    END_OF_CENTRAL_DIR_SIGNATURE = struct.unpack('<I', zipfile.stringEndArchive)[0] # 0x06054b50
+    ZIP64_END_OF_CENTRAL_DIR_SIGNATURE = 0x06064b50 # ZIP64 extension (not in zipfile module)
+    ZIP64_END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE = 0x07064b50 # ZIP64 extension (not in zipfile module)
 
     # Compression methods (from zipfile module)
-    STORE = zipfile.ZIP_STORED  # 0
-    DEFLATE = zipfile.ZIP_DEFLATED  # 8
+    STORE = zipfile.ZIP_STORED # 0
+    DEFLATE = zipfile.ZIP_DEFLATED # 8
 
     # General purpose bit flags
-    DATA_DESCRIPTOR_FLAG = 0x0008  # Bit 3: sizes/CRC in data descriptor
-    UTF8_FLAG = 0x0800  # Bit 11: filename and comment UTF-8 encoded
+    DATA_DESCRIPTOR_FLAG = 0x0008 # Bit 3: sizes/CRC in data descriptor
+    UTF8_FLAG = 0x0800 # Bit 11: filename and comment UTF-8 encoded
 
     # Class-level cache for scan results (keyed by absolute path)
     _scanCache = {}
+
+    # ZIP64 threshold constants
+    ZIP64_LIMIT = 0xFFFFFFFF # 4GiB - 1
+    ZIP64_ENTRY_COUNT_LIMIT = 65535 # Maximum entries in standard ZIP
+
+    # ZIP64 detection helper methods (DRY)
+    @staticmethod
+    def _exceedsZip64Limit(value: int) -> bool:
+        """Check if a single value exceeds ZIP64 threshold (>= 4GiB)"""
+        return value >= ZipDirSourceReader.ZIP64_LIMIT
+
+    @staticmethod
+    def _exceedsEntryCountLimit(count: int) -> bool:
+        """Check if entry count exceeds ZIP64 threshold (> 65535)"""
+        return count > ZipDirSourceReader.ZIP64_ENTRY_COUNT_LIMIT
+
+    @staticmethod
+    def _needsZip64ForLocalHeader(size: int, offset: int) -> bool:
+        """
+        Check if local file header needs ZIP64
+
+        Args:
+            size: File size in bytes
+            offset: File offset in ZIP archive
+
+        Returns:
+            bool: True if ZIP64 is needed
+        """
+        return (ZipDirSourceReader._exceedsZip64Limit(size) or
+                ZipDirSourceReader._exceedsZip64Limit(offset)) # yapf: disable
+
+    @staticmethod
+    def _needsZip64ForCentralDirHeader(compressedSize: int, uncompressedSize: int, offset: int) -> bool:
+        """
+        Check if central directory header needs ZIP64 extra field
+
+        Args:
+            compressedSize: Compressed file size
+            uncompressedSize: Uncompressed file size
+            offset: File offset in ZIP archive
+
+        Returns:
+            bool: True if ZIP64 extra field is needed
+        """
+        return (ZipDirSourceReader._exceedsZip64Limit(compressedSize) or
+                ZipDirSourceReader._exceedsZip64Limit(uncompressedSize) or
+                ZipDirSourceReader._exceedsZip64Limit(offset)) # yapf: disable
+
+    @staticmethod
+    def _hasAnyLargeFiles(entries: list, sizeKey: str = 'data_length') -> bool:
+        """
+        Check if any files in entries exceed 4GiB
+
+        Args:
+            entries: List of entry dicts
+            sizeKey: Key to check for file size (default: 'data_length', can be 'size')
+
+        Returns:
+            bool: True if any file >= 4GiB
+        """
+        return any(
+            e.get(sizeKey, 0) >= ZipDirSourceReader.ZIP64_LIMIT
+            for e in entries
+            if not e.get('isDir', False)
+        ) # yapf: disable
+
+    @staticmethod
+    def _needsZip64ForArchive(
+        entries: list, centralDirSize: int, centralDirStart: int, offset: int, sizeKey: str = 'data_length'
+    ) -> bool:
+        """
+        Check if entire ZIP archive needs ZIP64 format
+
+        This is the comprehensive check for archive-level ZIP64 requirements.
+
+        Args:
+            entries: List of entry dicts
+            centralDirSize: Size of central directory
+            centralDirStart: Offset where central directory starts
+            offset: Current offset in ZIP file
+            sizeKey: Key to check for file size (default: 'data_length', can be 'size')
+
+        Returns:
+            bool: True if ZIP64 is needed for the archive
+        """
+        return (
+            ZipDirSourceReader._exceedsEntryCountLimit(len(entries)) or
+            ZipDirSourceReader._exceedsZip64Limit(centralDirSize) or
+            ZipDirSourceReader._exceedsZip64Limit(centralDirStart) or
+            ZipDirSourceReader._exceedsZip64Limit(offset) or
+            ZipDirSourceReader._hasAnyLargeFiles(entries, sizeKey)
+        ) # yapf: disable
 
     @staticmethod
     def _unixToDosTime(timestamp):
@@ -629,7 +986,7 @@ class ZipDirSourceReader(SourceReader):
         """
         if timestamp is None or timestamp <= 0:
             # Return default date: 1980-01-01 00:00:00
-            return 0, (1 << 5) | 1  # dosTime=0, dosDate=(month=1, day=1, year=1980)
+            return 0, (1 << 5) | 1 # dosTime=0, dosDate=(month=1, day=1, year=1980)
 
         try:
             dt = datetime.datetime.fromtimestamp(timestamp)
@@ -670,28 +1027,34 @@ class ZipDirSourceReader(SourceReader):
         Returns:
             dict: Cache statistics including size and paths
         """
-        return {
-            'size': len(cls._scanCache),
-            'paths': list(cls._scanCache.keys())
-        }
+        return {'size': len(cls._scanCache), 'paths': list(cls._scanCache.keys())}
 
-    def __init__(self, dirPath: str, compression: str = "store", strictMode: bool = None):
+    def _getDefaultFileName(self):
+        """Get default filename (foldername.zip)"""
+        # Get folder name from absolute path to handle current directory '.' correctly
+        folder = os.path.basename(self.path)
+        # Fallback to 'archive' if folder name is empty or invalid
+        if not folder or folder in ('.', '..'):
+            folder = 'archive'
+        return f"{folder}.zip"
+
+    def __init__(self, path: str, fileName=None, compression: str = "store", strictMode: bool = None):
         """
         Initialize ZIP directory reader
 
         Args:
-            dirPath: Path to directory
+            path: Path to directory
+            fileName: Custom download filename (string), callable that returns filename, or None for default
             compression: "store" (no compression) or "deflate" (compressed)
             strictMode: If True, abort on file size/mtime changes during streaming.
                        If None, defaults to True for store mode, False for deflate mode.
         """
-        if not os.path.isdir(dirPath):
-            raise ValueError(f"Not a directory: {dirPath}")
+        if not os.path.isdir(path):
+            raise ValueError(f"Not a directory: {path}")
 
         if compression not in ("store", "deflate"):
             raise ValueError(f"Invalid compression: {compression}")
 
-        self.dirPath = os.path.abspath(dirPath)
         self.compression = compression
 
         # Default strict mode: True for store (needs exact size), False for deflate
@@ -700,29 +1063,37 @@ class ZipDirSourceReader(SourceReader):
         else:
             self.strictMode = strictMode
 
-        # Get folder name from absolute path to handle current directory '.' correctly
-        folder = os.path.basename(self.dirPath)
-        # Fallback to 'archive' if folder name is empty or invalid
-        if not folder or folder in ('.', '..'):
-            folder = 'archive'
-        self.contentName = f"{folder}.zip"
+        super().__init__(path, fileName)  # CachingMixin -> SourceReader
+        self.path = os.path.abspath(self.path)  # Normalize to absolute path
+
+        # Ensure folder downloads always have .zip extension
+        if not self.contentName.endswith('.zip'):
+            # Check if it has any extension
+            _, ext = os.path.splitext(self.contentName)
+            if ext:
+                # Has a non-zip extension - append .zip (e.g., abc.jpg -> abc.jpg.zip)
+                self.contentName = f"{self.contentName}.zip"
+            else:
+                # No extension - add .zip (e.g., myarchive -> myarchive.zip)
+                self.contentName = f"{self.contentName}.zip"
+
         self.contentType = "application/zip"
-        self.supportsUploadResume = (compression == "store")  # Only store mode supports upload resume
-        self.supportsRange = False  # Will be set to True for store mode after index is built
-        self._segmentIndex = None  # For store mode cold-start resume (-2.5)
+        self.supportsUploadResume = (compression == "store") # Only store mode supports upload resume
+        self.supportsRange = False # Will be set to True for store mode after index is built
+        self._segmentIndex = None # For store mode cold-start resume (-2.5)
         self._entries = None
         self._needsZip64 = False
         self.size = None
 
         if compression == "store":
             # Build SegmentIndex for cold-start resume capability (-2.5)
-            cacheKey = self.dirPath
+            cacheKey = self.path
             segmentIndex = self._scanCache.get(cacheKey)
 
             if segmentIndex:
-                logger.debug(f"Using cached SegmentIndex for {self.dirPath}")
+                logger.debug(f"Using cached SegmentIndex for {self.path}")
             else:
-                logger.debug(f"Building SegmentIndex for {self.dirPath}")
+                logger.debug(f"Building SegmentIndex for {self.path}")
                 rawEntries = self._scanDirectory()
 
                 # Build index using helper functions that calculate lengths (not bytes)
@@ -738,12 +1109,14 @@ class ZipDirSourceReader(SourceReader):
             self._segmentIndex = segmentIndex
             self._entries = segmentIndex.entries
             self.size = segmentIndex.totalSize
-            self.supportsRange = True  # Store mode with index supports Range resume
+            self.supportsRange = True # Store mode with index supports Range resume
 
             # Determine if Zip64 is needed
-            self._needsZip64 = any(
-                e['data_length'] >= 0xFFFFFFFF for e in self._entries if not e['isDir']
-            ) or len(self._entries) > 65535 or segmentIndex.centralDirSize >= 0xFFFFFFFF
+            self._needsZip64 = (
+                self._hasAnyLargeFiles(self._entries) or
+                self._exceedsEntryCountLimit(len(self._entries)) or
+                self._exceedsZip64Limit(segmentIndex.centralDirSize)
+            ) # yapf: disable
         else:
             # Deflate mode - no index, size unknown
             self._segmentIndex = None
@@ -755,12 +1128,12 @@ class ZipDirSourceReader(SourceReader):
     @property
     def file(self) -> str:
         """File name for server identification (directory base name)"""
-        return os.path.basename(self.dirPath)
+        return os.path.basename(self.path)
 
     @property
     def directory(self) -> str:
         """Directory path for server identification (parent of shared directory)"""
-        dirPath = os.path.dirname(self.dirPath)
+        dirPath = os.path.dirname(self.path)
         return os.path.abspath(dirPath) if dirPath else ""
 
     @property
@@ -783,7 +1156,7 @@ class ZipDirSourceReader(SourceReader):
             yield bytes(buffer[:chunkSize])
             del buffer[:chunkSize]
 
-    def _processFileDataStore(self, entry: dict, buffer: bytearray, chunkSize: int) -> tuple:
+    def _processFileDataStore(self, entry: dict, buffer: bytearray, chunkSize: int):
         """
         Process file data in store mode (no compression)
 
@@ -823,7 +1196,7 @@ class ZipDirSourceReader(SourceReader):
 
         return crc, bytesWritten, bytesWritten
 
-    def _processFileDataDeflate(self, entry: dict, buffer: bytearray, chunkSize: int) -> tuple:
+    def _processFileDataDeflate(self, entry: dict, buffer: bytearray, chunkSize: int):
         """
         Process file data in deflate mode (with compression)
 
@@ -899,7 +1272,7 @@ class ZipDirSourceReader(SourceReader):
         Returns:
             int: 24 if file >= 4GiB (Zip64), otherwise 16
         """
-        return 24 if fileSize >= 0xFFFFFFFF else 16
+        return 24 if self._exceedsZip64Limit(fileSize) else 16
 
     def _calculateCentralDirHeaderLength(self, entry: dict) -> int:
         """
@@ -918,14 +1291,14 @@ class ZipDirSourceReader(SourceReader):
         fileSize = entry['data_length']
         offset = entry['lfh_offset']
 
-        needsZip64Extra = fileSize >= 0xFFFFFFFF or offset >= 0xFFFFFFFF
+        needsZip64Extra = self._needsZip64ForLocalHeader(fileSize, offset)
 
         if needsZip64Extra:
             # Zip64 extra field: tag(2) + size(2) + data
-            extraSize = 4  # tag + size field
-            if fileSize >= 0xFFFFFFFF:
-                extraSize += 16  # uncompressed + compressed (both 8 bytes, same for store)
-            if offset >= 0xFFFFFFFF:
+            extraSize = 4 # tag + size field
+            if self._exceedsZip64Limit(fileSize):
+                extraSize += 16 # uncompressed + compressed (both 8 bytes, same for store)
+            if self._exceedsZip64Limit(offset):
                 extraSize += 8
             cdHeaderLength += extraSize
 
@@ -945,18 +1318,12 @@ class ZipDirSourceReader(SourceReader):
             tuple: (zip64EocdLen, zip64LocatorLen, eocdLen)
         """
         # Determine if Zip64 is needed
-        needsZip64 = (
-            len(entries) > 65535 or
-            centralDirSize >= 0xFFFFFFFF or
-            centralDirStart >= 0xFFFFFFFF or
-            offset >= 0xFFFFFFFF or
-            any(e['data_length'] >= 0xFFFFFFFF for e in entries if not e['isDir'])
-        )
+        needsZip64 = self._needsZip64ForArchive(entries, centralDirSize, centralDirStart, offset)
 
         if needsZip64:
-            return (56, 20, 22)  # Zip64 EOCD, Zip64 locator, standard EOCD
+            return (56, 20, 22) # Zip64 EOCD, Zip64 locator, standard EOCD
         else:
-            return (0, 0, 22)  # Only standard EOCD
+            return (0, 0, 22) # Only standard EOCD
 
     def _scanDirectory(self):
         """
@@ -965,11 +1332,11 @@ class ZipDirSourceReader(SourceReader):
         Returns:
             list: List of entry dicts with path, arcname, isDir, size, mtime
         """
-        logger.debug(f"Scan directory START: {self.dirPath}")
+        logger.debug(f"Scan directory START: {self.path}")
         entries = []
 
-        for root, dirs, files in os.walk(self.dirPath):
-            relRoot = os.path.relpath(root, os.path.dirname(self.dirPath))
+        for root, dirs, files in os.walk(self.path):
+            relRoot = os.path.relpath(root, os.path.dirname(self.path))
 
             # Add directory entries
             for d in dirs:
@@ -988,7 +1355,7 @@ class ZipDirSourceReader(SourceReader):
                     'arcname': arcname,
                     'isDir': True,
                     'size': 0,
-                    'mtime': dirMtime
+                    'mtime': dirMtime,
                 })
 
             # Add file entries
@@ -1013,7 +1380,7 @@ class ZipDirSourceReader(SourceReader):
                         'arcname': arcname,
                         'isDir': False,
                         'size': 0,
-                        'mtime': None
+                        'mtime': None,
                     })
 
         logger.debug(f"Scan directory END: {len(entries)} entries found")
@@ -1055,7 +1422,7 @@ class ZipDirSourceReader(SourceReader):
 
                 # Data descriptor: always use Zip64 descriptor if file >= 4GiB
                 # We'll refine this later based on global needsZip64
-                descriptorSize = 24 if entry['size'] >= 0xFFFFFFFF else 16
+                descriptorSize = 24 if self._exceedsZip64Limit(entry['size']) else 16
                 offset += descriptorSize
 
             # Record for Central Directory calculation
@@ -1073,9 +1440,9 @@ class ZipDirSourceReader(SourceReader):
 
         for cdEntry in cdEntries:
             # Check if this CD entry needs Zip64 extra field
-            needsZip64Extra = (cdEntry['compressedSize'] >= 0xFFFFFFFF or
-                              cdEntry['uncompressedSize'] >= 0xFFFFFFFF or
-                              cdEntry['offset'] >= 0xFFFFFFFF)
+            needsZip64Extra = self._needsZip64ForCentralDirHeader(
+                cdEntry['compressedSize'], cdEntry['uncompressedSize'], cdEntry['offset']
+            )
 
             # Base CD header: 46 bytes + filename
             cdHeaderSize = 46 + len(cdEntry['arcnameBytes'])
@@ -1083,12 +1450,12 @@ class ZipDirSourceReader(SourceReader):
             # Add Zip64 extra field if needed
             if needsZip64Extra:
                 # Zip64 extra field: tag(2) + size(2) + data
-                extraSize = 4  # tag + size field
-                if cdEntry['uncompressedSize'] >= 0xFFFFFFFF:
+                extraSize = 4 # tag + size field
+                if self._exceedsZip64Limit(cdEntry['uncompressedSize']):
                     extraSize += 8
-                if cdEntry['compressedSize'] >= 0xFFFFFFFF:
+                if self._exceedsZip64Limit(cdEntry['compressedSize']):
                     extraSize += 8
-                if cdEntry['offset'] >= 0xFFFFFFFF:
+                if self._exceedsZip64Limit(cdEntry['offset']):
                     extraSize += 8
                 cdHeaderSize += extraSize
 
@@ -1097,17 +1464,13 @@ class ZipDirSourceReader(SourceReader):
         offset += centralDirSize
 
         # Determine if Zip64 EOCD/locator needed
-        needsZip64 = (len(entries) > 65535 or
-                     centralDirSize >= 0xFFFFFFFF or
-                     centralDirStart >= 0xFFFFFFFF or
-                     offset >= 0xFFFFFFFF or
-                     any(e['size'] >= 0xFFFFFFFF for e in entries if not e['isDir']))
+        needsZip64 = self._needsZip64ForArchive(entries, centralDirSize, centralDirStart, offset, sizeKey='size')
 
         # Add EOCD sizes
         if needsZip64:
-            offset += 56  # Zip64 EOCD
-            offset += 20  # Zip64 EOCD locator
-        offset += 22  # Standard EOCD
+            offset += 56 # Zip64 EOCD
+            offset += 20 # Zip64 EOCD locator
+        offset += 22 # Standard EOCD
 
         totalSize = offset
 
@@ -1139,12 +1502,12 @@ class ZipDirSourceReader(SourceReader):
         for entry in sorted(self._entries, key=lambda e: e['arcname']):
             # Hash: arcname + size + mtime (directories have size=0, mtime=None)
             hasher.update(entry['arcname'].encode('utf-8'))
-            hasher.update(struct.pack('Q', entry['size']))  # 8-byte unsigned
+            hasher.update(struct.pack('Q', entry['size'])) # 8-byte unsigned
 
             if entry['mtime'] is not None:
                 # Hash mtime as integer nanoseconds for precision
                 mtimeNs = int(entry['mtime'] * 1_000_000_000)
-                hasher.update(struct.pack('q', mtimeNs))  # 8-byte signed
+                hasher.update(struct.pack('q', mtimeNs)) # 8-byte signed
 
         return hasher.hexdigest()
 
@@ -1155,8 +1518,7 @@ class ZipDirSourceReader(SourceReader):
         return self.calculateMetadataHash()
 
     def validateIntegrity(
-        self, storedSize: int, storedMtime: float,
-        storedHash: str = None, raiseOnError: bool = False
+        self, storedSize: int, storedMtime: float, storedHash: str = None, raiseOnError: bool = False
     ) -> bool:
         """
         Validate folder contents haven't changed
@@ -1165,18 +1527,17 @@ class ZipDirSourceReader(SourceReader):
             bool: True if unchanged, False if changed (when raiseOnError=False)
         """
         if self.compression != 'store':
-            return True  # Deflate mode: can't validate (size unknown)
+            return True # Deflate mode: can't validate (size unknown)
 
         # Store mode: validate using metadata hash
         if not storedHash:
-            return True  # No hash provided - assume valid
+            return True # No hash provided - assume valid
 
         currentHash = self.getMetadataHash()
         if currentHash != storedHash:
             if raiseOnError:
                 raise FolderChangedException(
-                    "Folder contents have changed (files added/removed/modified)",
-                    filePath=self.dirPath
+                    "Folder contents have changed (files added/removed/modified)", filePath=self.path
                 )
             return False
 
@@ -1193,7 +1554,7 @@ class ZipDirSourceReader(SourceReader):
             RuntimeError: If file has changed and strictMode is True
         """
         if entry['isDir']:
-            return  # Skip directories
+            return # Skip directories
 
         path = entry['path']
         expectedSize = entry['size']
@@ -1217,7 +1578,7 @@ class ZipDirSourceReader(SourceReader):
                 handleValidationError(
                     f"File size changed during transfer: {path} (expected {expectedSize}, got {currentSize})"
                 )
-                return  # Only reached if not strict mode
+                return # Only reached if not strict mode
 
             if expectedMtime is not None and currentMtime != expectedMtime:
                 handleValidationError(f"File modified during transfer: {path} (mtime changed)")
@@ -1246,7 +1607,7 @@ class ZipDirSourceReader(SourceReader):
 
         logger.debug(
             f"ZIP build START: mode={self.compression}, chunkSize={chunkSize}, "
-            f"folder={self.dirPath}, start={start}"
+            f"folder={self.path}, start={start}"
         )
 
         if self.compression == "store":
@@ -1280,7 +1641,7 @@ class ZipDirSourceReader(SourceReader):
             bytes: ZIP stream chunks starting from start offset
         """
         if start >= self._segmentIndex.totalSize:
-            return  # Nothing to stream
+            return # Nothing to stream
 
         buffer = bytearray()
 
@@ -1332,10 +1693,7 @@ class ZipDirSourceReader(SourceReader):
                 # Generate descriptor on-demand (need CRC)
                 crc = self._computeCRC(entry)
                 descriptorBytes = self._makeDataDescriptor(
-                    crc,
-                    entry['data_length'],
-                    entry['needs_zip64_descriptor'],
-                    uncompressedSize=entry['data_length']
+                    crc, entry['data_length'], entry['needs_zip64_descriptor'], uncompressedSize=entry['data_length']
                 )
                 if skip > 0:
                     descriptorBytes = descriptorBytes[skip:]
@@ -1363,8 +1721,7 @@ class ZipDirSourceReader(SourceReader):
             elif segmentType == SegmentType.ZIP64_EOCD:
                 # Generate Zip64 EOCD on-demand
                 zip64EocdBytes = self._makeZip64EndOfCentralDir(
-                    len(self._segmentIndex.entries),
-                    self._segmentIndex.centralDirSize,
+                    len(self._segmentIndex.entries), self._segmentIndex.centralDirSize,
                     self._segmentIndex.centralDirStart
                 )
                 if skip > 0:
@@ -1385,8 +1742,7 @@ class ZipDirSourceReader(SourceReader):
             elif segmentType == SegmentType.EOCD:
                 # Generate EOCD on-demand
                 eocdBytes = self._makeEndOfCentralDir(
-                    len(self._segmentIndex.entries),
-                    self._segmentIndex.centralDirSize,
+                    len(self._segmentIndex.entries), self._segmentIndex.centralDirSize,
                     self._segmentIndex.centralDirStart
                 )
                 if skip > 0:
@@ -1532,7 +1888,7 @@ class ZipDirSourceReader(SourceReader):
         try:
             with open(path, 'rb') as f:
                 while True:
-                    chunk = f.read(1024 * 1024)  # 1MB chunks
+                    chunk = f.read(1024 * 1024) # 1MB chunks
                     if not chunk:
                         break
                     crc = zlib.crc32(chunk, crc)
@@ -1593,11 +1949,12 @@ class ZipDirSourceReader(SourceReader):
                     )
 
                 # Write data descriptor (use Zip64 if sizes >= 4GiB)
-                useZip64Descriptor = (compressedSize >= 0xFFFFFFFF or
-                                     (useDeflate and uncompressedSize >= 0xFFFFFFFF))
+                useZip64Descriptor = (
+                    self._exceedsZip64Limit(compressedSize) or
+                    (useDeflate and self._exceedsZip64Limit(uncompressedSize))
+                )
                 descriptor = self._makeDataDescriptor(
-                    crc, compressedSize, useZip64Descriptor,
-                    uncompressedSize if useDeflate else None
+                    crc, compressedSize, useZip64Descriptor, uncompressedSize if useDeflate else None
                 )
                 buffer.extend(descriptor)
             else:
@@ -1632,17 +1989,52 @@ class ZipDirSourceReader(SourceReader):
         centralDirSize = offset - centralDirStart
 
         # Write End of Central Directory (auto-detect Zip64 based on actual offsets/sizes)
-        self._writeEndOfCentralDirectory(buffer, centralDir, centralDirSize,
-                                        centralDirStart, offset, needsZip64=None)
+        self._writeEndOfCentralDirectory(buffer, centralDir, centralDirSize, centralDirStart, offset, needsZip64=None)
 
         # Yield final buffer
         if buffer:
             yield bytes(buffer)
 
     def _iterZipDeflate(self, chunkSize: int) -> Iterator[bytes]:
-        """Generate ZIP stream with deflate compression mode"""
-        entries = self._scanDirectory()
-        yield from self._iterZip(chunkSize, entries, useDeflate=True)
+        """
+        Generate ZIP stream with deflate compression mode
+
+        Uses caching to avoid re-compression on subsequent reads
+        """
+        # Check if we have cached deflate output from previous read
+        if self._hasCache():
+            logger.debug(f"[ZipDirSourceReader] Reading deflate ZIP from cache: {self._cachedFile}")
+            yield from self._readFromCache(chunkSize, start=0)
+            return
+
+        # First read - generate and cache
+        logger.debug(f"[ZipDirSourceReader] Generating deflate ZIP (will cache for subsequent reads)")
+
+        # Start caching
+        self._startCaching(prefix='zip_deflate_', suffix='.zip')
+
+        try:
+            # Generate ZIP stream
+            entries = self._scanDirectory()
+            totalCached = 0
+
+            for chunk in self._iterZip(chunkSize, entries, useDeflate=True):
+                # Cache chunk (fail silently via mixin)
+                if self._cacheChunk(chunk):
+                    totalCached += len(chunk)
+
+                # Stream chunk to client immediately
+                yield chunk
+
+            # Finalize caching
+            if self._finalizeCache():
+                self.size = totalCached # Now we know the compressed size
+                logger.debug(f"[ZipDirSourceReader] Successfully cached deflate ZIP: {totalCached} bytes")
+
+        except Exception:
+            # Clean up temp file on error (mixin handles cleanup in __del__)
+            self._cleanupCacheFile()
+            raise
 
     def _writeCentralDirectoryHeaders(self, centralDir, useDeflate=False):
         """
@@ -1685,16 +2077,17 @@ class ZipDirSourceReader(SourceReader):
         """
         # Auto-detect Zip64 if not specified
         if needsZip64 is None:
-            needsZip64 = (len(centralDir) > 65535 or
-                         centralDirSize >= 0xFFFFFFFF or
-                         centralDirStart >= 0xFFFFFFFF or
-                         offset >= 0xFFFFFFFF)
+            # EOCD-level check (no file size check, only counts/offsets/sizes)
+            needsZip64 = (
+                self._exceedsEntryCountLimit(len(centralDir)) or
+                self._exceedsZip64Limit(centralDirSize) or
+                self._exceedsZip64Limit(centralDirStart) or
+                self._exceedsZip64Limit(offset)
+            ) # yapf: disable
 
         # Write Zip64 EOCD and locator if needed
         if needsZip64:
-            zip64Eocd = self._makeZip64EndOfCentralDir(
-                len(centralDir), centralDirSize, centralDirStart
-            )
+            zip64Eocd = self._makeZip64EndOfCentralDir(len(centralDir), centralDirSize, centralDirStart)
             buffer.extend(zip64Eocd)
             offset += len(zip64Eocd)
 
@@ -1702,16 +2095,13 @@ class ZipDirSourceReader(SourceReader):
             buffer.extend(zip64Locator)
 
         # Write End of Central Directory
-        eocd = self._makeEndOfCentralDir(
-            len(centralDir), centralDirSize, centralDirStart
-        )
+        eocd = self._makeEndOfCentralDir(len(centralDir), centralDirSize, centralDirStart)
         buffer.extend(eocd)
 
         return offset
 
     def _makeLocalFileHeader(
-        self, arcnameBytes: bytes, size: int, isDir: bool,
-        useDeflate: bool = False, mtime=None, offset: int = 0
+        self, arcnameBytes: bytes, size: int, isDir: bool, useDeflate: bool = False, mtime=None, offset: int = 0
     ):
         """Create ZIP local file header"""
         compressionMethod = self.DEFLATE if useDeflate else self.STORE
@@ -1723,7 +2113,7 @@ class ZipDirSourceReader(SourceReader):
             flags = self.DATA_DESCRIPTOR_FLAG | self.UTF8_FLAG
 
         # For directories, use trailing slash
-        externalAttr = 0x10 if isDir else 0  # MS-DOS directory attribute
+        externalAttr = 0x10 if isDir else 0 # MS-DOS directory attribute
 
         # Convert mtime to DOS format
         dosTime, dosDate = self._unixToDosTime(mtime)
@@ -1731,51 +2121,51 @@ class ZipDirSourceReader(SourceReader):
         # Determine if Zip64 is needed for this entry
         # - File size >= 4GiB (for store mode, deflate uses data descriptor)
         # - Local header offset >= 4GiB
-        needsZip64 = (size >= 0xFFFFFFFF or offset >= 0xFFFFFFFF)
+        needsZip64 = self._needsZip64ForLocalHeader(size, offset)
         versionNeeded = 45 if needsZip64 else 20
 
         header = struct.pack(
-            '<I',  # Signature
+            '<I', # Signature
             self.LOCAL_FILE_HEADER_SIGNATURE
         )
         header += struct.pack(
-            '<H',  # Version needed to extract (2.0 or 4.5 for Zip64)
+            '<H', # Version needed to extract (2.0 or 4.5 for Zip64)
             versionNeeded
         )
         header += struct.pack(
-            '<H',  # General purpose bit flag
+            '<H', # General purpose bit flag
             flags
         )
         header += struct.pack(
-            '<H',  # Compression method
+            '<H', # Compression method
             compressionMethod
         )
         header += struct.pack(
-            '<H',  # File last modification time
+            '<H', # File last modification time
             dosTime
         )
         header += struct.pack(
-            '<H',  # File last modification date
+            '<H', # File last modification date
             dosDate
         )
         header += struct.pack(
-            '<I',  # CRC-32 (0 for data descriptor)
+            '<I', # CRC-32 (0 for data descriptor)
             0
         )
         header += struct.pack(
-            '<I',  # Compressed size (0 for data descriptor)
+            '<I', # Compressed size (0 for data descriptor)
             0
         )
         header += struct.pack(
-            '<I',  # Uncompressed size (0 for data descriptor)
+            '<I', # Uncompressed size (0 for data descriptor)
             0
         )
         header += struct.pack(
-            '<H',  # Filename length
+            '<H', # Filename length
             len(arcnameBytes)
         )
         header += struct.pack(
-            '<H',  # Extra field length
+            '<H', # Extra field length
             0
         )
         header += arcnameBytes
@@ -1789,21 +2179,30 @@ class ZipDirSourceReader(SourceReader):
 
         if useZip64:
             # Zip64 data descriptor
-            descriptor = struct.pack('<I', 0x08074b50)  # Optional signature
+            descriptor = struct.pack('<I', 0x08074b50) # Optional signature
             descriptor += struct.pack('<I', crc & 0xFFFFFFFF)
             descriptor += struct.pack('<Q', compressedSize)
             descriptor += struct.pack('<Q', uncompressedSize)
         else:
             # Standard data descriptor
-            descriptor = struct.pack('<I', 0x08074b50)  # Optional signature
+            descriptor = struct.pack('<I', 0x08074b50) # Optional signature
             descriptor += struct.pack('<I', crc & 0xFFFFFFFF)
             descriptor += struct.pack('<I', compressedSize & 0xFFFFFFFF)
             descriptor += struct.pack('<I', uncompressedSize & 0xFFFFFFFF)
 
         return descriptor
 
-    def _makeCentralDirHeader(self, arcnameBytes: bytes, crc: int, compressedSize: int,
-                             uncompressedSize: int, offset: int, isDir: bool, useDeflate: bool = False, mtime=None):
+    def _makeCentralDirHeader(
+        self,
+        arcnameBytes: bytes,
+        crc: int,
+        compressedSize: int,
+        uncompressedSize: int,
+        offset: int,
+        isDir: bool,
+        useDeflate: bool = False,
+        mtime=None
+    ):
         """Create ZIP central directory header with Zip64 support"""
         compressionMethod = self.DEFLATE if useDeflate else self.STORE
 
@@ -1813,31 +2212,29 @@ class ZipDirSourceReader(SourceReader):
         else:
             flags = self.DATA_DESCRIPTOR_FLAG | self.UTF8_FLAG
 
-        externalAttr = 0x10 if isDir else 0x20  # Directory or archive attribute
+        externalAttr = 0x10 if isDir else 0x20 # Directory or archive attribute
 
         # Convert mtime to DOS format
         dosTime, dosDate = self._unixToDosTime(mtime)
 
         # Determine if Zip64 extra field is needed
-        needsZip64 = (compressedSize >= 0xFFFFFFFF or
-                     uncompressedSize >= 0xFFFFFFFF or
-                     offset >= 0xFFFFFFFF)
+        needsZip64 = self._needsZip64ForCentralDirHeader(compressedSize, uncompressedSize, offset)
 
         # Build Zip64 extra field if needed
         extraField = b''
         if needsZip64:
-            extraField = struct.pack('<H', 0x0001)  # Zip64 extended information extra field tag
+            extraField = struct.pack('<H', 0x0001) # Zip64 extended information extra field tag
             extraData = b''
 
             # Add fields in order: uncompressed size, compressed size, relative header offset
-            if uncompressedSize >= 0xFFFFFFFF:
+            if self._exceedsZip64Limit(uncompressedSize):
                 extraData += struct.pack('<Q', uncompressedSize)
-            if compressedSize >= 0xFFFFFFFF:
+            if self._exceedsZip64Limit(compressedSize):
                 extraData += struct.pack('<Q', compressedSize)
-            if offset >= 0xFFFFFFFF:
+            if self._exceedsZip64Limit(offset):
                 extraData += struct.pack('<Q', offset)
 
-            extraField += struct.pack('<H', len(extraData))  # Size of extra block
+            extraField += struct.pack('<H', len(extraData)) # Size of extra block
             extraField += extraData
 
         # Use version 45 for Zip64
@@ -1845,70 +2242,70 @@ class ZipDirSourceReader(SourceReader):
         versionNeeded = 45 if needsZip64 else 20
 
         # Use 0xFFFFFFFF markers for Zip64 fields
-        cdCompressedSize = 0xFFFFFFFF if compressedSize >= 0xFFFFFFFF else compressedSize
-        cdUncompressedSize = 0xFFFFFFFF if uncompressedSize >= 0xFFFFFFFF else uncompressedSize
-        cdOffset = 0xFFFFFFFF if offset >= 0xFFFFFFFF else offset
+        cdCompressedSize = self.ZIP64_LIMIT if self._exceedsZip64Limit(compressedSize) else compressedSize
+        cdUncompressedSize = self.ZIP64_LIMIT if self._exceedsZip64Limit(uncompressedSize) else uncompressedSize
+        cdOffset = self.ZIP64_LIMIT if self._exceedsZip64Limit(offset) else offset
 
         header = struct.pack('<I', self.CENTRAL_DIR_SIGNATURE)
-        header += struct.pack('<H', versionMadeBy)  # Version made by
-        header += struct.pack('<H', versionNeeded)  # Version needed to extract
-        header += struct.pack('<H', flags)  # General purpose bit flag
-        header += struct.pack('<H', compressionMethod)  # Compression method
-        header += struct.pack('<H', dosTime)  # Last mod file time
-        header += struct.pack('<H', dosDate)  # Last mod file date
-        header += struct.pack('<I', crc & 0xFFFFFFFF)  # CRC-32
-        header += struct.pack('<I', cdCompressedSize)  # Compressed size
-        header += struct.pack('<I', cdUncompressedSize)  # Uncompressed size
-        header += struct.pack('<H', len(arcnameBytes))  # Filename length
-        header += struct.pack('<H', len(extraField))  # Extra field length
-        header += struct.pack('<H', 0)  # File comment length
-        header += struct.pack('<H', 0)  # Disk number start
-        header += struct.pack('<H', 0)  # Internal file attributes
-        header += struct.pack('<I', externalAttr)  # External file attributes
-        header += struct.pack('<I', cdOffset)  # Relative offset of local header
+        header += struct.pack('<H', versionMadeBy) # Version made by
+        header += struct.pack('<H', versionNeeded) # Version needed to extract
+        header += struct.pack('<H', flags) # General purpose bit flag
+        header += struct.pack('<H', compressionMethod) # Compression method
+        header += struct.pack('<H', dosTime) # Last mod file time
+        header += struct.pack('<H', dosDate) # Last mod file date
+        header += struct.pack('<I', crc & 0xFFFFFFFF) # CRC-32
+        header += struct.pack('<I', cdCompressedSize) # Compressed size
+        header += struct.pack('<I', cdUncompressedSize) # Uncompressed size
+        header += struct.pack('<H', len(arcnameBytes)) # Filename length
+        header += struct.pack('<H', len(extraField)) # Extra field length
+        header += struct.pack('<H', 0) # File comment length
+        header += struct.pack('<H', 0) # Disk number start
+        header += struct.pack('<H', 0) # Internal file attributes
+        header += struct.pack('<I', externalAttr) # External file attributes
+        header += struct.pack('<I', cdOffset) # Relative offset of local header
         header += arcnameBytes
-        header += extraField  # Append Zip64 extra field if present
+        header += extraField # Append Zip64 extra field if present
 
         return header
 
     def _makeZip64EndOfCentralDir(self, entryCount: int, centralDirSize: int, centralDirStart: int):
         """Create Zip64 end of central directory record"""
         record = struct.pack('<I', self.ZIP64_END_OF_CENTRAL_DIR_SIGNATURE)
-        record += struct.pack('<Q', 44)  # Size of zip64 end of central directory record
-        record += struct.pack('<H', 45)  # Version made by
-        record += struct.pack('<H', 45)  # Version needed to extract
-        record += struct.pack('<I', 0)  # Number of this disk
-        record += struct.pack('<I', 0)  # Disk where central directory starts
-        record += struct.pack('<Q', entryCount)  # Number of entries on this disk
-        record += struct.pack('<Q', entryCount)  # Total number of entries
-        record += struct.pack('<Q', centralDirSize)  # Size of central directory
-        record += struct.pack('<Q', centralDirStart)  # Offset of start of central directory
+        record += struct.pack('<Q', 44) # Size of zip64 end of central directory record
+        record += struct.pack('<H', 45) # Version made by
+        record += struct.pack('<H', 45) # Version needed to extract
+        record += struct.pack('<I', 0) # Number of this disk
+        record += struct.pack('<I', 0) # Disk where central directory starts
+        record += struct.pack('<Q', entryCount) # Number of entries on this disk
+        record += struct.pack('<Q', entryCount) # Total number of entries
+        record += struct.pack('<Q', centralDirSize) # Size of central directory
+        record += struct.pack('<Q', centralDirStart) # Offset of start of central directory
 
         return record
 
     def _makeZip64Locator(self, zip64EocdOffset: int):
         """Create Zip64 end of central directory locator"""
         locator = struct.pack('<I', self.ZIP64_END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE)
-        locator += struct.pack('<I', 0)  # Disk number with zip64 EOCD
-        locator += struct.pack('<Q', zip64EocdOffset)  # Offset of zip64 EOCD
-        locator += struct.pack('<I', 1)  # Total number of disks
+        locator += struct.pack('<I', 0) # Disk number with zip64 EOCD
+        locator += struct.pack('<Q', zip64EocdOffset) # Offset of zip64 EOCD
+        locator += struct.pack('<I', 1) # Total number of disks
 
         return locator
 
     def _makeEndOfCentralDir(self, entryCount: int, centralDirSize: int, centralDirStart: int):
         """Create end of central directory record"""
         # For Zip64, use 0xFFFF/0xFFFFFFFF as markers
-        maxEntries = min(entryCount, 0xFFFF)
-        maxSize = min(centralDirSize, 0xFFFFFFFF)
-        maxOffset = min(centralDirStart, 0xFFFFFFFF)
+        maxEntries = min(entryCount, self.ZIP64_ENTRY_COUNT_LIMIT)
+        maxSize = min(centralDirSize, self.ZIP64_LIMIT)
+        maxOffset = min(centralDirStart, self.ZIP64_LIMIT)
 
         eocd = struct.pack('<I', self.END_OF_CENTRAL_DIR_SIGNATURE)
-        eocd += struct.pack('<H', 0)  # Number of this disk
-        eocd += struct.pack('<H', 0)  # Disk where central directory starts
-        eocd += struct.pack('<H', maxEntries)  # Number of entries on this disk
-        eocd += struct.pack('<H', maxEntries)  # Total number of entries
-        eocd += struct.pack('<I', maxSize)  # Size of central directory
-        eocd += struct.pack('<I', maxOffset)  # Offset of start of central directory
-        eocd += struct.pack('<H', 0)  # Comment length
+        eocd += struct.pack('<H', 0) # Number of this disk
+        eocd += struct.pack('<H', 0) # Disk where central directory starts
+        eocd += struct.pack('<H', maxEntries) # Number of entries on this disk
+        eocd += struct.pack('<H', maxEntries) # Total number of entries
+        eocd += struct.pack('<I', maxSize) # Size of central directory
+        eocd += struct.pack('<I', maxOffset) # Offset of start of central directory
+        eocd += struct.pack('<H', 0) # Comment length
 
         return eocd

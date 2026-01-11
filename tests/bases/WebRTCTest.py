@@ -18,8 +18,12 @@
 # limitations under the License.
 
 import os
+import sys
+import time
+import json
 import unittest
 import zipfile
+import subprocess
 
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -795,6 +799,57 @@ class DownloadTest(FastFileLinkTestBase):
     def testFolderWebRTCWithICEFailureFallback(self):
         """Test folder download with WebRTC ICE failure falling back to HTTP Range resume"""
         self._testFolderResume(useWebRTC=True, simulateFailure='ice_failure')
+
+    def testStdinWebRTCDownload(self):
+        """
+        Test WebRTC download with unknown size (stdin streaming)
+        Uses real subprocess pipe: cat file | python Core.py --cli -
+        """
+        print("\n[Test] Testing WebRTC download with unknown size (stdin streaming)")
+
+        try:
+            # Start stdin streaming using base class method
+            shareLink = self._startStdinStreaming(self.testFilePath)
+
+            # Read share info to verify unknown size
+            with open(self.jsonOutputPath, 'r') as f:
+                shareInfo = json.load(f)
+
+            fileSize = shareInfo.get("file_size", -1)
+            print(f"[Test] File size from JSON: {fileSize} (should be -1 for unknown size)")
+
+            # Verify unknown size
+            self.assertEqual(fileSize, -1, "Stdin should report unknown size (-1)")
+
+            # Download the file using WebRTC
+            outputPath = os.path.join(self.tempDir, "stdin_webrtc_download.bin")
+            downloadOutputCapture = {}
+            downloadedPath = self._downloadWithCore(shareLink, outputPath=outputPath, captureOutputIn=downloadOutputCapture)
+
+            # Verify download messages
+            outputText = self._updateCapturedOutput(downloadOutputCapture)
+
+            # Check for unknown size message
+            self.assertIn("unknown bytes", outputText, "Should show 'unknown bytes' for stdin")
+
+            # Verify WebRTC was used (P2P message)
+            if "P2P" in outputText or "WebRTC" in outputText:
+                print("[Test] WebRTC confirmed in output")
+            else:
+                # HTTP fallback is acceptable too (on some systems WebRTC may not work)
+                print("[Test] HTTP fallback occurred (WebRTC may not be available)")
+
+            # Verify downloaded file matches original
+            self.assertTrue(os.path.exists(downloadedPath), "Downloaded file should exist")
+            downloadedHash = getFileHash(downloadedPath)
+            self.assertEqual(
+                downloadedHash, self.originalFileHash, "Downloaded file should match original (stdin streaming)"
+            )
+
+            print("[Test] Stdin WebRTC download with unknown size successful!")
+
+        finally:
+            self._terminateProcess()
 
 
 if __name__ == '__main__':

@@ -23,6 +23,7 @@ import os
 import argparse
 import signal
 import json
+import atexit
 
 if 'Cosmopolitan' in platform.version():
     if sys.prefix not in sys.path:
@@ -38,34 +39,41 @@ import bases.Stub # isort:skip
 
 import requests
 import certifi
+import segno
 
 from functools import partial
 
 from bases.Kernel import UIDGenerator, getLogger, FFLEvent
-from bases.Server import createServer, DownloadHandler
+from bases.Server import createServer, DownloadHandler, ServerConfig
 from bases.Tunnel import TunnelRunner, TunnelUnavailableError
-from bases.WebRTC import WebRTCManager, WebRTCDownloader
+from bases.WebRTC import DummyWebRTCManager, WebRTCManager, WebRTCDownloader
 from bases.Settings import DEFAULT_STATIC_ROOT, SettingsGetter, ExecutionMode
 from bases.CLI import (
     configureCLIParser, processGlobalArguments, processArgumentsAndCommands, loadEnvFile, preprocessArguments
 )
 from bases.Utils import (
-    copy2Clipboard,
-    flushPrint,
-    getLogger,
-    getAvailablePort,
-    sendException,
-    validateCompatibleWithServer,
+    copy2Clipboard, flushPrint, getLogger, getAvailablePort, sendException, validateCompatibleWithServer, ProxyConfig
 )
 from bases.Reader import SourceReader
+from bases.Tor import verifyTorProxy
 from bases.I18n import _
 
 logger = getLogger(__name__)
 
 
 def setupGracefulShutdown():
-    """Setup signal handlers for graceful shutdown on multiple Ctrl+C"""
-    context = {'shutdownInProgress': False}
+    """Setup signal handlers for graceful shutdown on multiple Ctrl+C and cleanup on exit"""
+    context = {'shutdownInProgress': False, 'shutdownEventTriggered': False}
+
+    def triggerShutdownEvent():
+        """Trigger application shutdown event for cleanup (called on exit)"""
+        if not context['shutdownEventTriggered']:
+            context['shutdownEventTriggered'] = True
+            try:
+                FFLEvent.applicationShutdown.trigger()
+            except Exception as e:
+                # Fail silently - don't prevent exit
+                logger.debug(f'Shutdown event trigger error: {str(e)}')
 
     def signalHandler(signum, frame):
         if context['shutdownInProgress']:
@@ -78,6 +86,9 @@ def setupGracefulShutdown():
 
     # Register signal handler for SIGINT (Ctrl+C)
     signal.signal(signal.SIGINT, signalHandler)
+
+    # Register shutdown event trigger on exit
+    atexit.register(triggerShutdownEvent)
 
 
 def detectExecutionEnvironment():
@@ -153,19 +164,39 @@ def isCLIMode():
     return settingsGetter.isCLIMode()
 
 
-def onShareLinkCreate(args, link, filePath, fileSize, tunnelType, e2ee, **kwargs):
-    """Handle share link creation - invite and JSON writing"""
+def onShareLinkCreate(args, link, filePath, fileSize, tunnelType, e2ee, reader, **kwargs):
+    """Handle share link creation - invite, QR code, and JSON writing"""
     # Handle --invite flag
     if args.invite:
         flushPrint(_('Opening invite page in browser...'))
         featureManager.invite(link)
+
+    # Handle --qr flag
+    if args.qr:
+        try:
+            qr = segno.make(link)
+
+            # Check if args.qr is a file path (string) or True (terminal display)
+            if isinstance(args.qr, str):
+                # Save QR code to file
+                qr.save(args.qr, scale=5)
+                flushPrint(_('QR code saved to: {filePath}').format(filePath=args.qr))
+            else:
+                # Display in terminal
+                flushPrint(_('\nQR Code:\n'))
+                qr.terminal(compact=True)
+                flushPrint('')
+        except Exception as e:
+            flushPrint(_('Error generating QR code: {error}').format(error=e))
+            # It's ok only not generate QR code.
 
     # Handle --json flag
     if args.json:
         user = featureManager.user
         outputData = {
             "file": filePath,
-            "file_size": fileSize if fileSize is not None else -1,  # -1 indicates unknown size
+            "content_name": reader.contentName, # Download filename (may be custom via --name)
+            "file_size": fileSize if fileSize is not None else -1, # -1 indicates unknown size
             "upload_mode": "server" if args.upload else "p2p",
             "tunnel_type": tunnelType or "default",
             "link": link,
@@ -187,15 +218,9 @@ def onShareLinkCreate(args, link, filePath, fileSize, tunnelType, e2ee, **kwargs
             flushPrint(_('Failed to write JSON file: {error}').format(error=e))
             sendException(logger, e)
 
-    # Handle FFL_LINK_OUTPUT environment variable.
-    linkOutputPath = os.getenv('FFL_LINK_OUTPUT')
-    if linkOutputPath:
-        with open(linkOutputPath, 'w', encoding='utf-8') as f:
-            f.write(link)
-
 
 # Main business logic - shared between CLI and GUI modes
-def processFileSharing(args, proxyConfig=None):
+def processFileSharing(args, proxyConfig: ProxyConfig = None):
     """
     Process the file sharing request with the given arguments
 
@@ -234,8 +259,9 @@ def processFileSharing(args, proxyConfig=None):
                 flushPrint(_('If a firewall notification appears, please allow the application to connect.\n'))
 
             # Get size using Reader abstraction (supports both files and folders)
-            reader = SourceReader.build(args.file)
-            size = reader.size  # None means unknown size (e.g., stdin)
+            # Reader will use its own default if args.fileName is None
+            reader = SourceReader.build(args.file, fileName=args.fileName)
+            size = reader.size # None means unknown size (e.g., stdin)
 
             # Hint user about folder content change detection for strict mode
             if args.file != "-" and os.path.isdir(args.file):
@@ -254,6 +280,24 @@ def processFileSharing(args, proxyConfig=None):
             e2eeEnabled = args.e2ee if hasattr(args, 'e2ee') else False
             if e2eeEnabled:
                 flushPrint(_('🔐 End-to-end encryption enabled\n'))
+
+            # Detect if Tor proxy is being used (robust verification)
+            torDetected = False
+            if proxyConfig:
+                try:
+                    if verifyTorProxy(proxyConfig, skipExitListCheck=True):
+                        torDetected = True
+                        args.forceRelay = True
+                        logger.info(
+                            f"Tor proxy verified ({proxyConfig['host']}:{proxyConfig['port']}) - "
+                            f"enabling --force-relay for strict WebRTC blocking"
+                        )
+                except RuntimeError as e:
+                    logger.debug(f"Tor verification failed: {e}")
+
+            # Notify user if Tor privacy mode is active
+            if torDetected:
+                flushPrint(_("🧅 Tor Privacy Mode Active"))
 
             uploadMethod = None
             if args.upload:
@@ -277,10 +321,14 @@ def processFileSharing(args, proxyConfig=None):
                     try:
                         if resume:
                             # Resume mode: use resume() instead of tell()
-                            response = uploadMethod.resume(args.file, args.upload, reader=reader)
+                            response = uploadMethod.resume(
+                                args.file, args.upload, reader=reader, fileName=args.fileName
+                            )
                         else:
                             # Normal mode: pass reader to tell() to avoid rebuilding
-                            response = uploadMethod.tell(uid, args.file, args.upload, link=link, reader=reader)
+                            response = uploadMethod.tell(
+                                uid, args.file, args.upload, link=link, reader=reader, fileName=args.fileName
+                            )
 
                         if response['success']:
                             # Pass pause percentage if specified
@@ -382,7 +430,12 @@ def processFileSharing(args, proxyConfig=None):
                 if uploadResult and uploadResult.success:
                     uploadMethod.publish(uploadResult)
                     FFLEvent.shareLinkCreate.trigger(
-                        link=uploadResult.link, filePath=args.file, fileSize=size, tunnelType=None, e2ee=e2eeEnabled
+                        link=uploadResult.link,
+                        filePath=args.file,
+                        fileSize=size,
+                        tunnelType=None,
+                        e2ee=e2eeEnabled,
+                        reader=reader
                     )
                     return 0
                 else:
@@ -459,7 +512,12 @@ def processFileSharing(args, proxyConfig=None):
 
                     # Trigger share link create event for GUI and other subscribers
                     FFLEvent.shareLinkCreate.trigger(
-                        link=link, filePath=args.file, fileSize=size, tunnelType=tunnelType, e2ee=e2eeEnabled
+                        link=link,
+                        filePath=args.file,
+                        fileSize=size,
+                        tunnelType=tunnelType,
+                        e2ee=e2eeEnabled,
+                        reader=reader
                     )
 
                     # Show auth info if enabled (password enables auth)
@@ -486,20 +544,32 @@ def processFileSharing(args, proxyConfig=None):
                         webRTCManagerClass = featureManager.getWebRTCManagerClass(
                             webRTCManagerClass, forceRelay=args.forceRelay
                         )
+                    else:
+                        if torDetected:
+                            # Tor mode without Features addon: use DummyWebRTCManager to totally block WebRTC
+                            webRTCManagerClass = DummyWebRTCManager
 
                     # Get auth credentials from args - password enables auth
                     authPassword = args.authPassword
                     authUser = args.authUser if authPassword else None
 
-                    # WebRTC is disabled only by --force-relay flag
-                    enableWebRTC = not args.forceRelay
+                    # WebRTC default state: disabled by --force-relay flag
+                    defaultWebRTC = not args.forceRelay
+
+                    # Create server configuration
+                    serverConfig = ServerConfig(
+                        maxDownloads=maxDownloads,
+                        timeout=timeout,
+                        authUser=authUser,
+                        authPassword=authPassword,
+                        defaultWebRTC=defaultWebRTC,
+                        e2eeEnabled=e2eeEnabled,
+                        torEnabled=torDetected,
+                    )
 
                     # Create server with enhanced handler and WebRTC manager
                     # Reader provides file and directory information
-                    server = createServer(
-                        reader, port, uid, domain, handlerClass, webRTCManagerClass, maxDownloads, timeout,
-                        authUser, authPassword, enableWebRTC, e2eeEnabled
-                    )
+                    server = createServer(reader, port, uid, domain, handlerClass, webRTCManagerClass, serverConfig)
                     server.start()
                 except KeyboardInterrupt:
                     flushPrint(_('\nExiting on user request (Ctrl+C)...'))
@@ -516,7 +586,8 @@ def processFileSharing(args, proxyConfig=None):
                         filePath=args.file,
                         fileSize=size,
                         tunnelType=tunnelType,
-                        e2ee=e2eeEnabled
+                        e2ee=e2eeEnabled,
+                        reader=reader
                     )
                     return 0
         else:

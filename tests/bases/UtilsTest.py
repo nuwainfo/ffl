@@ -19,7 +19,7 @@
 
 import unittest
 
-from bases.Utils import formatSize, compareVersions, parseProxyString, ONE_KB, ONE_MB, ONE_GB, ONE_TB
+from bases.Utils import formatSize, compareVersions, parseProxyString, ProxyConfig, ONE_KB, ONE_MB, ONE_GB, ONE_TB
 
 
 class TestFormatSize(unittest.TestCase):
@@ -382,6 +382,32 @@ class TestCompareVersions(unittest.TestCase):
 
 class TestParseProxyString(unittest.TestCase):
     """Test cases for the parseProxyString utility function."""
+
+    def testTypeHints(self):
+        """Test that ProxyConfig TypedDict works with type hints (backward compatible)."""
+        # Demonstrates type-safe usage with modern type hints
+        result: ProxyConfig | None = parseProxyString("127.0.0.1:9150")
+
+        # TypedDict is fully backward compatible - it's still a dict at runtime
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result, dict)
+
+        # Type checkers (like mypy, pyright) now know the structure
+        if result is not None:
+            # These keys are guaranteed to exist by ProxyConfig TypedDict
+            self.assertIn('type', result)
+            self.assertIn('url', result)
+            self.assertIn('host', result)
+            self.assertIn('port', result)
+            self.assertIn('protocol', result)
+            self.assertIn('username', result)
+            self.assertIn('password', result)
+
+            # Type checkers know the types
+            self.assertIsInstance(result['type'], str)
+            self.assertIsInstance(result['port'], int)
+
+        print(f"[OK] TypedDict is backward compatible and type-safe: {result}")
 
     def testSimpleHostPort(self):
         """Test parsing simple host:port format (defaults to socks5h)."""

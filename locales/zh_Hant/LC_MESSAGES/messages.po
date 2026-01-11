@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-01-02 16:20+0800\n"
+"POT-Creation-Date: 2026-01-11 17:55+0800\n"
 "PO-Revision-Date: 2025-12-21 08:43+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -20,6 +20,19 @@ msgstr ""
 
 msgid "Opening invite page in browser..."
 msgstr "正在瀏覽器中開啟邀請頁面..."
+
+#, python-brace-format
+msgid "QR code saved to: {filePath}"
+msgstr ""
+
+msgid ""
+"\n"
+"QR Code:\n"
+msgstr ""
+
+#, python-brace-format
+msgid "Error generating QR code: {error}"
+msgstr ""
 
 #, python-brace-format
 msgid "Sharing information saved to {jsonFile}"
@@ -48,6 +61,9 @@ msgstr "📁 以 ZIP 格式分享資料夾 - 請在傳輸過程中保持資料�
 
 msgid "🔐 End-to-end encryption enabled\n"
 msgstr "🔐 已啟用端對端加密\n"
+
+msgid "🧅 Tor Privacy Mode Active"
+msgstr ""
 
 msgid "You can stop the upload at any time and resume it later.\n"
 msgstr "您可以隨時停止上傳並稍後繼續。\n"
@@ -274,8 +290,13 @@ msgstr "架構：{system} {release} {machine} - {version} ({processor})"
 msgid "Support: {supportURL}"
 msgstr "支援：{supportURL}"
 
-msgid "Choose a file or folder you want to share"
-msgstr "選擇您想要分享的檔案或資料夾"
+msgid "Choose a file or folder you want to share (use '-' for stdin)"
+msgstr ""
+
+msgid ""
+"Specify custom download filename (default: original filename for files, "
+"folder.zip for folders, stdin-YYYYMMDD-HHMMSS.bin for stdin)"
+msgstr ""
 
 msgid "Output link and settings to a JSON file"
 msgstr "將連結和設定輸出到 JSON 檔案"
@@ -327,6 +348,9 @@ msgstr "啟用檔案分享的端對端加密（HTTP 和 WebRTC）"
 msgid "Open invite page in browser with the sharing link"
 msgstr "在瀏覽器中開啟包含分享連結的邀請頁面"
 
+msgid "Display QR code in terminal (default) or save to FILE (e.g., qr.png)"
+msgstr ""
+
 #, python-brace-format
 msgid "Invalid log level '{logLevel}'. Valid levels are: {validLevels}"
 msgstr "無效的記錄層級 '{logLevel}'。有效層級為：{validLevels}"
@@ -351,6 +375,13 @@ msgstr ""
 "所有出站連線的代理伺服器。格式：[user:pass@]host:port（預設為 "
 "SOCKS5）、socks5[h]://[user:pass@]host:port、http[s]://[user:pass@]host:port。SOCKS5"
 " 代理適用於通道和 HTTP 請求。HTTP 代理僅適用於 HTTP 請求（不適用於通道）"
+
+msgid ""
+"Webhook URL for forwarding events to parent process or external service. "
+"Format: http://[user:pass@]host:port/path (e.g., "
+"http://app:token@127.0.0.1:12345/events). Auth credentials are optional "
+"but recommended."
+msgstr ""
 
 msgid "FastFileLink makes file sharing fast, simple, and secure."
 msgstr "快檔連結 讓檔案分享快速、簡單且安全。"
@@ -711,6 +742,9 @@ msgstr ""
 msgid "We will fix the problem as soon as possible.\n"
 msgstr "我們會盡快修復問題。\n"
 
+msgid "WebRTC connections are disabled by server policy"
+msgstr ""
+
 msgid "P2P direct"
 msgstr "P2P 直連"
 
@@ -781,8 +815,8 @@ msgid "Invalid encryption key: {error}"
 msgstr "無效的加密金鑰：{error}"
 
 #, python-brace-format
-msgid "Downloading {filename} ({fileSize:,} bytes)"
-msgstr "正在下載 {filename}（{fileSize:,} 位元組）"
+msgid "Downloading {filename} ({fileSize})"
+msgstr ""
 
 #, python-brace-format
 msgid "Resuming WebRTC download from {resumePos} / {totalSize}"
@@ -847,4 +881,10 @@ msgstr "正在嘗試 WebRTC 下載..."
 
 #~ msgid "Unsupported operating system"
 #~ msgstr "不支援的作業系統"
+
+#~ msgid "Choose a file or folder you want to share"
+#~ msgstr "選擇您想要分享的檔案或資料夾"
+
+#~ msgid "Downloading {filename} ({fileSize:,} bytes)"
+#~ msgstr "正在下載 {filename}（{fileSize:,} 位元組）"
 

@@ -22,6 +22,7 @@ import sys
 import time
 import unittest
 import os
+import re
 
 from .ResumeTestBase import ResumeTestBase, ResumeBrowserTestBase
 from .CoreTestBase import FastFileLinkTestBase
@@ -232,6 +233,97 @@ class UploadResumeTest(ResumeTestBase):
 
         except Exception as e:
             print(f"[Test] Pause 100 validation test failed: {e}")
+            raise
+
+    def testFileNameMismatchValidation(self):
+        """Test that resuming with a different fileName raises UploadParameterMismatchError"""
+        try:
+            print("[Test] Testing fileName mismatch validation during resume")
+
+            originalFileName = "original-document.pdf"
+            differentFileName = "different-document.pdf"
+
+            # Phase 1: Pause at 30% with original fileName
+            print(f"[Test] Phase 1: Pausing upload with fileName '{originalFileName}'")
+            capture = {}
+            self._pauseUpload(
+                pausePercentage=30,
+                outputCapture=capture,
+                extraArgs=['--name', originalFileName]
+            )
+            print(f"[Test] Successfully paused at 30% with fileName '{originalFileName}'")
+
+            # Phase 2: Try to resume with different fileName (should fail)
+            print(f"[Test] Phase 2: Attempting resume with different fileName '{differentFileName}' (should fail)")
+
+            # Run the resume command that should fail - it will exit with error message but not create JSON
+            import subprocess
+            resumeCmd = [
+                sys.executable,
+                "Core.py",
+                "--cli", "share",
+                self.testFilePath,
+                "--upload", "3 hours",
+                "--name", differentFileName,
+                "--resume"
+            ]
+
+            result = subprocess.run(
+                resumeCmd,
+                cwd=os.path.dirname(__file__) + "/..",
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={**os.environ, "FFL_STORAGE_LOCATION": self.testConfigDir}
+            )
+
+            # Check that the error message contains fileName mismatch
+            combinedOutput = result.stdout + result.stderr
+
+            # Core.py translates parameter name, but English should contain "mismatch"
+            if "mismatch" not in combinedOutput.lower():
+                raise AssertionError(
+                    f"Expected parameter mismatch error message, but got:\n{combinedOutput}"
+                )
+
+            # Check for both original and requested values in error message
+            if originalFileName not in combinedOutput or differentFileName not in combinedOutput:
+                raise AssertionError(
+                    f"Expected error to mention both '{originalFileName}' and '{differentFileName}', "
+                    f"but got:\n{combinedOutput}"
+                )
+
+            print(f"[Test] PASS: Correctly rejected resume with different fileName")
+            print(f"[Test]   Error found in output: parameter mismatch with both fileNames mentioned")
+
+            # Phase 3: Resume with correct fileName (should succeed)
+            print(f"[Test] Phase 3: Resuming with correct fileName '{originalFileName}' (should succeed)")
+            capture = {}
+            self._resumeUpload(
+                outputCapture=capture,
+                extraArgs=['--name', originalFileName]
+            )
+
+            # Get share link from output
+            resumeLog = self._updateCapturedOutput(capture)
+
+            linkMatch = re.search(r'https?://[^\s]+', resumeLog)
+            if not linkMatch:
+                raise AssertionError(f"Could not find share link in resume output: {resumeLog}")
+            shareLink = linkMatch.group(0)
+            print(f"[Test] Resume completed, share link: {shareLink}")
+
+            # Phase 4: Verify the completed upload
+            print("[Test] Phase 4: Verifying completed upload")
+            downloadedFilePath = self._getDownloadedFilePath()
+            time.sleep(2)
+            self.downloadFileWithRequests(shareLink, downloadedFilePath)
+            self._verifyDownloadedFile(downloadedFilePath)
+
+            print("[Test] fileName mismatch validation test completed successfully!")
+
+        except Exception as e:
+            print(f"[Test] fileName mismatch validation test failed: {e}")
             raise
 
 

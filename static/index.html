@@ -439,8 +439,10 @@ Licensed under Apache-2.0 license.
                         await this.writer.close();
                         this.log('WritePump', 'Writer closed successfully');
 
-                        // Verify size matches expectation
-                        if (this.expected !== null && this.bytesWritten !== this.expected) {
+                        // Verify size matches expectation (skip if size is unknown)
+                        // Unknown size: expected === null or expected <= 0
+                        const hasKnownSize = this.expected !== null && this.expected > 0;
+                        if (hasKnownSize && this.bytesWritten !== this.expected) {
                             const reason = `Size mismatch: written=${this.bytesWritten}, expected=${this.expected}`;
                             this.log('WritePump', reason);
                             this.onFallback(reason);
@@ -576,8 +578,9 @@ Licensed under Apache-2.0 license.
                 }
                 this.closed = true;
 
-                // Size verification
-                if (this.expectedSize !== null && this.bytesWritten !== this.expectedSize) {
+                // Size verification (skip if size is unknown)
+                const hasKnownSize = this.expectedSize !== null && this.expectedSize > 0;
+                if (hasKnownSize && this.bytesWritten !== this.expectedSize) {
                     throw new Error(`Size mismatch: written=${this.bytesWritten}, expected=${this.expectedSize}`);
                 }
 
@@ -620,7 +623,11 @@ Licensed under Apache-2.0 license.
             static create(fileName, fileSize) {
                 const USE_BLOB_THRESHOLD = 10 * 1024 * 1024; // 10MB
 
-                // Check if StreamSaver is available and needed
+                // Check if size is unknown
+                const isUnknownSize = fileSize == null || fileSize <= 0;
+                const sizeDesc = isUnknownSize ? 'unknown' : `${fileSize} bytes`;
+
+                // Check if StreamSaver is available
                 const canUseSW = location.protocol === 'https:' ||
                                 location.hostname === 'localhost' ||
                                 location.hostname === '127.0.0.1';
@@ -629,20 +636,23 @@ Licensed under Apache-2.0 license.
                                         'serviceWorker' in navigator &&
                                         typeof streamSaver !== 'undefined';
 
-                // Use StreamSaver for large files if available
-                if (streamSaverReady && fileSize > USE_BLOB_THRESHOLD) {
+                // Use StreamSaver for:
+                // 1. Large files (> threshold)
+                // 2. Unknown size files (to avoid memory issues)
+                const needsStreamSaver = isUnknownSize || fileSize > USE_BLOB_THRESHOLD;
+
+                if (streamSaverReady && needsStreamSaver) {
                     try {
-                        log("WriterFactory", `Creating StreamSaver writer for ${fileName} (${fileSize} bytes)`);
+                        log("WriterFactory", `Creating StreamSaver writer for ${fileName} (${sizeDesc})`);
 
                         // Configure StreamSaver (encapsulated here)
                         if (!streamSaver.mitm) {
                             streamSaver.mitm = '/static/assets/mitm.html';
                         }
 
-                        const fileStream = streamSaver.createWriteStream(fileName, {
-                            size: fileSize || undefined
-                        });
-
+                        // For unknown size, don't specify size option (let browser handle it)
+                        const streamOptions = isUnknownSize ? {} : { size: fileSize };
+                        const fileStream = streamSaver.createWriteStream(fileName, streamOptions);
                         const writer = fileStream.getWriter();
 
                         return {
@@ -657,8 +667,8 @@ Licensed under Apache-2.0 license.
                     }
                 }
 
-                // Use Blob for small files or when StreamSaver not available
-                log("WriterFactory", `Creating Blob writer for ${fileName} (${fileSize} bytes)`);
+                // Use Blob for small files with known size
+                log("WriterFactory", `Creating Blob writer for ${fileName} (${sizeDesc})`);
                 const blobWriter = new BlobWriter(fileName, fileSize);
 
                 return {
@@ -672,10 +682,16 @@ Licensed under Apache-2.0 license.
             static getUnsupportedReason(fileSize) {
                 const USE_BLOB_THRESHOLD = 10 * 1024 * 1024;
 
-                if (fileSize <= USE_BLOB_THRESHOLD) {
-                    return null; // Small files always supported
+                // Unknown size - need StreamSaver to avoid memory issues
+                // Treat as large file (requires ServiceWorker)
+                const isUnknownSize = fileSize == null || fileSize <= 0;
+                const isSmallFile = !isUnknownSize && fileSize <= USE_BLOB_THRESHOLD;
+
+                if (isSmallFile) {
+                    return null; // Small files always supported (BlobWriter)
                 }
 
+                // Large or unknown size files require ServiceWorker + StreamSaver
                 const canUseSW = location.protocol === 'https:' ||
                                 location.hostname === 'localhost' ||
                                 location.hostname === '127.0.0.1';
@@ -982,14 +998,26 @@ Licensed under Apache-2.0 license.
             }
 
             updateProgress(current, total = null) {
-                if (this.progressBar) {
-                    this.progressBar.value = current;
+                if (!this.progressBar) {
+                    return;
                 }
 
-                if (total) {
+                // Unified logic: determinate vs indeterminate progress
+                const hasKnownTotal = total !== null && total > 0;
+
+                if (hasKnownTotal) {
+                    // Determinate progress (known size)
+                    this.progressBar.value = current;
                     const percent = Math.round(current * 100 / total);
                     this.setStatus(
                         this.t('Download:client.status.downloadingPercent', 'Downloading via P2P: {{percent}}%', { percent })
+                    );
+                } else {
+                    // Indeterminate progress (unknown size)
+                    this.progressBar.value = 100;
+                    this.progressBar.classList.add('progress-bar-striped', 'progress-bar-animated');
+                    this.setStatus(
+                        this.t('Download:client.status.downloading', 'Downloading via P2P...')
                     );
                 }
             }
@@ -1204,6 +1232,7 @@ Licensed under Apache-2.0 license.
 
                 // Runtime state
                 this.forceFallbackIssued = false;
+                this.stallSimulated = false;
 
                 // Log configuration if any debug mode is active
                 if (this.simulateStall || this.simulateICEFailure) {
@@ -1237,10 +1266,15 @@ Licensed under Apache-2.0 license.
             }
 
             simulateStallIfNeeded(bytesReceived, dataChannel) {
+                if (this.stallSimulated) {
+                    return true;
+                }
+
                 if (!this.simulateStall || bytesReceived < this.stallAfterBytes) {
                     return false;
                 }
 
+                this.stallSimulated = true;
                 this.log("Debug", `Simulating network stall - closing data channel after ${bytesReceived} bytes`);
 
                 // Simulate real network failure by closing the data channel
@@ -1538,6 +1572,7 @@ Licensed under Apache-2.0 license.
                 // Connection state tracking
                 let disconnectedTime = null;
                 let disconnectDuringTransferTimer = null;
+                let stallFallbackTimer = null;
 
                 let writePump = null;
 
@@ -2052,6 +2087,10 @@ Licensed under Apache-2.0 license.
 
                         dc.onclose = () => {
                             log("DataChannel", "Channel closed");
+                            if (stallFallbackTimer) {
+                                clearTimeout(stallFallbackTimer);
+                                stallFallbackTimer = null;
+                            }
                             const bytesWrittenSoFar = writePump.bytesWritten;
                             if (!shouldStopPeerOperations() && bytesWrittenSoFar < fileSize) {
                                 log("DataChannel", `Channel closed before completion (written: ${bytesWrittenSoFar}/${fileSize})`);
@@ -2177,6 +2216,15 @@ Licensed under Apache-2.0 license.
 
                             // Debug: Simulate stall after specified bytes
                             if (debugConfig.simulateStallIfNeeded(received, dc)) {
+                                if (!stallFallbackTimer) {
+                                    stallFallbackTimer = setTimeout(() => {
+                                        stallFallbackTimer = null;
+                                        if (!shouldStopPeerOperations()) {
+                                            log("Fallback", "Simulated stall did not close channel - forcing HTTP fallback");
+                                            fallbackToHTTP("Simulated stall did not close channel", true);
+                                        }
+                                    }, 2000);
+                                }
                                 return;
                             }
 
@@ -2339,6 +2387,7 @@ Licensed under Apache-2.0 license.
             let statusPoller = null;
             let consecutiveStatusFailures = 0;
             const MAX_STATUS_FAILURES = 2;
+            const STATUS_POLLING_SECONDS = 2;
 
             function startStatusPolling() {
                 // Poll every 2 seconds
@@ -2387,7 +2436,7 @@ Licensed under Apache-2.0 license.
                             stopStatusPolling();
                         }
                     }
-                }, 2000);
+                }, STATUS_POLLING_SECONDS * 1000);
             }
 
             function stopStatusPolling() {

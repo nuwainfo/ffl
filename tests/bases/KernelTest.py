@@ -37,8 +37,11 @@ class EventServiceTest(unittest.TestCase):
         Get the singleton instance and reset its state for test isolation.
         """
         self.e = EventService.getInstance()
-        # Call the reset method for better encapsulation.
-        self.e.reset()
+
+        # Clear all signals, don't clear registered event because it will break other tests.
+        for beforeSignal, afterSignal in self.e.signals.values():
+            beforeSignal._slots.clear()
+            afterSignal._slots.clear()
 
     def testIsSingleton(self):
         """
@@ -259,6 +262,138 @@ class EventServiceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.e.subscribe('ValidateEvent', dummy_observer, 123)
 
+    def testWildcardSubscription(self):
+        """Test subscribing to all events using '*'"""
+        receivedEvents = []
+
+        # Define wildcard handler
+        def wildcardHandler(eventName, **kwargs):
+            receivedEvents.append((eventName, kwargs))
+
+        # Subscribe to wildcard event
+        self.e.subscribe('*', wildcardHandler)
+
+        # Register events first
+        self.e.register('/test/event1')
+        self.e.register('/test/event2')
+
+        # Trigger some events
+        self.e.trigger('/test/event1', data='value1')
+        self.e.trigger('/test/event2', data='value2', number=123)
+
+        # Verify wildcard handler received both events
+        self.assertEqual(len(receivedEvents), 2)
+        self.assertEqual(receivedEvents[0][0], '/test/event1')
+        self.assertEqual(receivedEvents[0][1]['data'], 'value1')
+        self.assertEqual(receivedEvents[1][0], '/test/event2')
+        self.assertEqual(receivedEvents[1][1]['data'], 'value2')
+        self.assertEqual(receivedEvents[1][1]['number'], 123)
+
+        # Cleanup
+        self.e.unsubscribe('*', wildcardHandler)
+
+    def testWildcardWithNormalSubscribers(self):
+        """Test wildcard doesn't interfere with normal subscribers"""
+        normalEvents = []
+        wildcardEvents = []
+
+        def normalHandler(**kwargs):
+            normalEvents.append(kwargs)
+
+        def wildcardHandler(eventName, **kwargs):
+            wildcardEvents.append((eventName, kwargs))
+
+        # Register event first
+        self.e.register('/test/event1')
+
+        # Subscribe both normal and wildcard handlers
+        self.e.subscribe('/test/event1', normalHandler)
+        self.e.subscribe('*', wildcardHandler)
+
+        # Trigger event
+        self.e.trigger('/test/event1', key='value')
+
+        # Verify both handlers received the event
+        self.assertEqual(len(normalEvents), 1)
+        self.assertEqual(normalEvents[0]['key'], 'value')
+
+        self.assertEqual(len(wildcardEvents), 1)
+        self.assertEqual(wildcardEvents[0][0], '/test/event1')
+        self.assertEqual(wildcardEvents[0][1]['key'], 'value')
+
+        # Cleanup
+        self.e.unsubscribe('/test/event1', normalHandler)
+        self.e.unsubscribe('*', wildcardHandler)
+
+    def testWildcardDoesNotTriggerItself(self):
+        """Test that triggering '*' doesn't cause infinite loop"""
+        wildcardEvents = []
+
+        def wildcardHandler(eventName, **kwargs):
+            wildcardEvents.append(eventName)
+
+        # Subscribe to wildcard
+        self.e.subscribe('*', wildcardHandler)
+
+        # Trigger wildcard event directly (should not trigger handler)
+        self.e.trigger('*', data='test')
+
+        # Verify wildcard handler was NOT called (no infinite loop)
+        self.assertEqual(len(wildcardEvents), 0)
+
+        # Cleanup
+        self.e.unsubscribe('*', wildcardHandler)
+
+    def testMultipleWildcardSubscribers(self):
+        """Test multiple wildcard subscribers work correctly"""
+        events1 = []
+        events2 = []
+
+        def handler1(eventName, **kwargs):
+            events1.append(eventName)
+
+        def handler2(eventName, **kwargs):
+            events2.append(eventName)
+
+        # Subscribe multiple wildcard handlers
+        self.e.subscribe('*', handler1)
+        self.e.subscribe('*', handler2)
+
+        # Register and trigger event
+        self.e.register('/test/event1')
+        self.e.trigger('/test/event1')
+
+        # Verify both handlers received the event
+        self.assertEqual(len(events1), 1)
+        self.assertEqual(events1[0], '/test/event1')
+        self.assertEqual(len(events2), 1)
+        self.assertEqual(events2[0], '/test/event1')
+
+        # Cleanup
+        self.e.unsubscribe('*', handler1)
+        self.e.unsubscribe('*', handler2)
+
+    def testWildcardUnsubscribe(self):
+        """Test unsubscribing from wildcard event"""
+        events = []
+
+        def handler(eventName, **kwargs):
+            events.append(eventName)
+
+        # Subscribe and trigger
+        self.e.subscribe('*', handler)
+        self.e.register('/test/event1')
+        self.e.trigger('/test/event1')
+
+        self.assertEqual(len(events), 1)
+
+        # Unsubscribe and trigger again
+        self.e.unsubscribe('*', handler)
+        self.e.trigger('/test/event1')
+
+        # Verify handler was not called after unsubscribe
+        self.assertEqual(len(events), 1)
+
 
 class AddonsManagerTest(unittest.TestCase):
     """
@@ -286,9 +421,7 @@ class AddonsManagerTest(unittest.TestCase):
         Test reading disabled addons from addons.json config file.
         """
         # Create test addons.json file
-        addonsConfig = {
-            "disabled": ["GUI", "Tunnels", "Features"]
-        }
+        addonsConfig = {"disabled": ["GUI", "Tunnels", "Features"]}
         addonsJsonPath = os.path.join(self.tempDir, 'addons.json')
         with open(addonsJsonPath, 'w', encoding='utf-8') as f:
             json.dump(addonsConfig, f)
@@ -319,9 +452,7 @@ class AddonsManagerTest(unittest.TestCase):
         Test that addons.json config file has higher priority than DISABLE_ADDONS environment variable.
         """
         # Create addons.json with some disabled addons
-        addonsConfig = {
-            "disabled": ["GUI", "Tunnels"]
-        }
+        addonsConfig = {"disabled": ["GUI", "Tunnels"]}
         addonsJsonPath = os.path.join(self.tempDir, 'addons.json')
         with open(addonsJsonPath, 'w', encoding='utf-8') as f:
             json.dump(addonsConfig, f)
@@ -354,7 +485,7 @@ class AddonsManagerTest(unittest.TestCase):
         # Create invalid JSON file
         addonsJsonPath = os.path.join(self.tempDir, 'invalid.json')
         with open(addonsJsonPath, 'w', encoding='utf-8') as f:
-            f.write('{"disabled": ["GUI",}')  # Invalid JSON (trailing comma)
+            f.write('{"disabled": ["GUI",}') # Invalid JSON (trailing comma)
 
         with patch.object(self.storageLocator, 'findConfig', return_value=addonsJsonPath):
             disabledAddons = self.addonsManager._getDisabledAddons()
@@ -368,7 +499,7 @@ class AddonsManagerTest(unittest.TestCase):
         """
         # Create JSON with wrong structure
         addonsConfig = {
-            "disabled": "GUI,Tunnels"  # Should be array, not string
+            "disabled": "GUI,Tunnels" # Should be array, not string
         }
         addonsJsonPath = os.path.join(self.tempDir, 'wrong_format.json')
         with open(addonsJsonPath, 'w', encoding='utf-8') as f:
@@ -384,9 +515,7 @@ class AddonsManagerTest(unittest.TestCase):
         """
         Test handling of empty and whitespace-only values in disabled list.
         """
-        addonsConfig = {
-            "disabled": ["GUI", "", "  ", "Tunnels", "   Features   "]
-        }
+        addonsConfig = {"disabled": ["GUI", "", "  ", "Tunnels", "   Features   "]}
         addonsJsonPath = os.path.join(self.tempDir, 'empty_values.json')
         with open(addonsJsonPath, 'w', encoding='utf-8') as f:
             json.dump(addonsConfig, f)
@@ -409,9 +538,7 @@ class AddonsManagerTest(unittest.TestCase):
         mockImportModule.return_value = mockAddonsModule
 
         # Create addons.json with some disabled addons
-        addonsConfig = {
-            "disabled": ["GUI", "Features"]
-        }
+        addonsConfig = {"disabled": ["GUI", "Features"]}
         addonsJsonPath = os.path.join(self.tempDir, 'filter_test.json')
         with open(addonsJsonPath, 'w', encoding='utf-8') as f:
             json.dump(addonsConfig, f)
@@ -466,9 +593,7 @@ class AddonsManagerTest(unittest.TestCase):
         mockImportModule.return_value = mockAddonsModule
 
         # Create addons.json
-        addonsConfig = {
-            "disabled": ["GUI", "Features"]
-        }
+        addonsConfig = {"disabled": ["GUI", "Features"]}
         addonsJsonPath = os.path.join(self.tempDir, 'priority_test.json')
         with open(addonsJsonPath, 'w', encoding='utf-8') as f:
             json.dump(addonsConfig, f)
@@ -479,16 +604,14 @@ class AddonsManagerTest(unittest.TestCase):
                 enabledAddons = self.addonsManager.getEnabledAddons()
 
         # Should only disable addons from config file, ignore environment variable
-        expectedEnabled = ["Upload", "Tunnels", "API"]  # GUI and Features disabled by config
+        expectedEnabled = ["Upload", "Tunnels", "API"] # GUI and Features disabled by config
         self.assertEqual(enabledAddons, expectedEnabled)
 
     def testGetDisabledAddonsWithNonStringValues(self):
         """
         Test handling of non-string values in disabled array.
         """
-        addonsConfig = {
-            "disabled": ["GUI", 123, None, "Tunnels", {"invalid": "object"}]
-        }
+        addonsConfig = {"disabled": ["GUI", 123, None, "Tunnels", {"invalid": "object"}]}
         addonsJsonPath = os.path.join(self.tempDir, 'non_string.json')
         with open(addonsJsonPath, 'w', encoding='utf-8') as f:
             json.dump(addonsConfig, f)

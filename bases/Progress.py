@@ -90,6 +90,16 @@ class BitmathTqdm(tqdm):
 
 
 class Progress:
+    # Progress bar format strings
+    BAR_FORMAT_UNKNOWN_SIZE = '{desc}: {n_fmt} [{elapsed}, {rate_fmt}]{postfix}'
+    BAR_FORMAT_COMPACT = (
+        '{desc}: {percentage:3.0f}% '
+        '{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]{postfix}'
+    )
+    BAR_FORMAT_FULL = (
+        '{desc}: {percentage:3.0f}%|{bar}| '
+        '{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]{postfix}'
+    )
 
     def __init__(
         self, totalSize, sizeFormatter=None, loggerCallback=print, logInterval=2.0, useBar=False, barFormat=None
@@ -124,48 +134,45 @@ class Progress:
 
             # Different bar format for unknown sizes
             if self.totalSize is None or self.totalSize <= 0:
-                defaultBarFormat = ('{desc}: {n_fmt} [{elapsed}, {rate_fmt}]{postfix}')
+                defaultBarFormat = Progress.BAR_FORMAT_UNKNOWN_SIZE
             else:
                 if compact:
                     # Narrow terminal: remove bar to avoid line wrapping
-                    defaultBarFormat = (
-                        '{desc}: {percentage:3.0f}% '
-                        '{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]{postfix}'
-                    )
+                    defaultBarFormat = Progress.BAR_FORMAT_COMPACT
                 else:
                     # Wide terminal: full format with bar
-                    defaultBarFormat = (
-                        '{desc}: {percentage:3.0f}%|{bar}| '
-                        '{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]{postfix}'
-                    )
+                    defaultBarFormat = Progress.BAR_FORMAT_FULL
+
+            if not self.barFormat:
+                self.barFormat = defaultBarFormat
 
             self.pbar = BitmathTqdm(
                 total=total,
                 desc=_('Progress'),
                 sizeFormatter=self.sizeFormatter,
                 leave=True,
-                dynamic_ncols=True,  # Auto-adjust width to terminal size
+                dynamic_ncols=True, # Auto-adjust width to terminal size
                 ascii=False,
-                bar_format=self.barFormat or defaultBarFormat
+                bar_format=self.barFormat
             )
         except Exception:
             total = None if (self.totalSize is None or self.totalSize <= 0) else self.totalSize
             self.pbar = tqdm(total=total, desc=_('Progress'), unit='B', unit_scale=True, leave=True)
 
-    def update(self, bytesTransferred, forceLog=False, extraText=""):
+    def update(self, bytesTransferred, forceLog=False, extraText="", forceFinish=False):
         """Update progress with new bytes transferred."""
         previousTransferred = self.transferred
         self.transferred = bytesTransferred
         currentTime = time.monotonic()
 
         if self.useBar and self.pbar:
-            self._updateProgressBar(previousTransferred, extraText)
+            self._updateProgressBar(previousTransferred, extraText, forceFinish=forceFinish)
 
         shouldLog = self._shouldLog(forceLog, currentTime)
         if shouldLog and not self.useBar:
             self._logProgress(currentTime, extraText)
 
-    def _updateProgressBar(self, previousTransferred, extraText):
+    def _updateProgressBar(self, previousTransferred, extraText, forceFinish=False):
         """Update the progress bar display."""
         try:
             increment = self.transferred - previousTransferred
@@ -184,7 +191,9 @@ class Progress:
             # else:
             #     self.pbar.set_description("Progress")
 
-            if self.totalSize is not None and self.totalSize > 0 and self.transferred >= self.totalSize:
+            if forceFinish or (
+                self.totalSize is not None and self.totalSize > 0 and self.transferred >= self.totalSize
+            ):
                 self.finishBar()
         except (ValueError, AttributeError) as e:
             self.loggerCallback(_("Progress bar error: {e}").format(e=e))
@@ -206,8 +215,10 @@ class Progress:
         speedDisplay = self.sizeFormatter(int(speedBytesPerSec))
 
         sizeDisplay = self.sizeFormatter(self.transferred)
-        totalDisplay = self.sizeFormatter(self.totalSize) if (self.totalSize is not None and self.totalSize > 0) else "Unknown"
-        percentage = (self.transferred * 100.0 / self.totalSize) if (self.totalSize is not None and self.totalSize > 0) else 0
+        totalDisplay = self.sizeFormatter(self.totalSize
+                                         ) if (self.totalSize is not None and self.totalSize > 0) else "Unknown"
+        percentage = (self.transferred * 100.0 /
+                      self.totalSize) if (self.totalSize is not None and self.totalSize > 0) else 0
 
         progressMsg = _('Progress: {sizeDisplay}/{totalDisplay} ({percentage:.2f}%), {speedDisplay}/sec').format(
             sizeDisplay=sizeDisplay, totalDisplay=totalDisplay, percentage=percentage, speedDisplay=speedDisplay
@@ -288,14 +299,13 @@ class Progress:
         """
         if self.useBar and self.pbar:
             try:
-                if complete and hasattr(self.pbar, 'total') and self.pbar.total:
+                if complete and self.pbar.total:
                     remaining = self.pbar.total - self.pbar.n
                     if remaining > 0:
                         self.pbar.update(remaining)
 
                 # Always refresh to show final state before closing
-                if hasattr(self.pbar, 'refresh'):
-                    self.pbar.refresh()
+                self.pbar.refresh()
 
                 # Close the progress bar
                 # Note: For cancelled downloads (complete=False), the bar will show at current position

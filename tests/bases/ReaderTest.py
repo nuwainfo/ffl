@@ -18,16 +18,23 @@
 # limitations under the License.
 
 import os
+import sys
 import time
+import json
 import unittest
 import zipfile
 import hashlib
 import tempfile
 import shutil
+import subprocess
+import io
+
 from unittest.mock import patch
 
-from tests.CoreTestBase import FastFileLinkTestBase
-from bases.Reader import ZipDirSourceReader, FolderChangedException
+from tests.CoreTestBase import FastFileLinkTestBase, getFileHash
+
+from bases.Kernel import FFLEvent
+from bases.Reader import SourceReader, ZipDirSourceReader, FolderChangedException, StdinSourceReader, CachingMixin
 
 
 def calculateFolderHash(folderPath):
@@ -128,15 +135,15 @@ class FolderTransferTest(FastFileLinkTestBase):
         # Create some test files with different sizes
         self.testFiles = {
             "file1.txt": b"Hello, World! This is the first file.",
-            "file2.bin": os.urandom(1024 * 10),  # 10KB random data
-            "file3.dat": os.urandom(1024 * 50),  # 50KB random data
+            "file2.bin": os.urandom(1024 * 10), # 10KB random data
+            "file3.dat": os.urandom(1024 * 50), # 50KB random data
         }
 
         # Create a subfolder with nested files
         subfolderPath = os.path.join(self.testFolderPath, "subfolder")
         os.makedirs(subfolderPath)
         self.testFiles["subfolder/nested.txt"] = b"This is a nested file in a subfolder."
-        self.testFiles["subfolder/data.bin"] = os.urandom(1024 * 5)  # 5KB
+        self.testFiles["subfolder/data.bin"] = os.urandom(1024 * 5) # 5KB
 
         # Write all test files
         for relativePath, content in self.testFiles.items():
@@ -196,7 +203,9 @@ class FolderTransferTest(FastFileLinkTestBase):
             found = False
             for extractedPath in extractedFiles:
                 # Handle both direct match and folder-prefixed match
-                if extractedPath == originalRelativePath or extractedPath.endswith(os.sep + originalRelativePath.replace('/', os.sep)):
+                if extractedPath == originalRelativePath or extractedPath.endswith(
+                    os.sep + originalRelativePath.replace('/', os.sep)
+                ):
                     found = True
                     break
 
@@ -274,7 +283,9 @@ class FolderTransferTest(FastFileLinkTestBase):
             print(f"[Test] Deflate mode: size is unknown (set to 0)")
 
             # Start FastFileLink with folder and deflate compression
-            shareLink, testServerProcess = self._startFastFileLink(p2p=True, extraEnvVars=extraEnvVars, useTestServer=True)
+            shareLink, testServerProcess = self._startFastFileLink(
+                p2p=True, extraEnvVars=extraEnvVars, useTestServer=True
+            )
 
             try:
                 # Download the ZIP file - use longer timeout for deflate compression
@@ -418,34 +429,61 @@ class FolderTransferTest(FastFileLinkTestBase):
         """Test that client receives folder change error notification via status polling"""
         print("\n[Test] Testing folder change notification to client during download")
 
-        # Use current folder - create [FolderName].zip first, then download will overwrite it
-        currentFolder = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-        folderName = os.path.basename(currentFolder)
+        # Create a smaller test folder for more reliable timing
+        testFolder = os.path.join(self.tempDir, "test_folder_change")
+        os.makedirs(testFolder)
 
-        # Create empty [FolderName].zip file in the folder being shared
-        # This file will be in the snapshot and will be modified during download
-        placeholderZipPath = os.path.join(currentFolder, f"{folderName}.zip")
-        with open(placeholderZipPath, 'wb') as f:
-            f.write(b"PK\x03\x04")  # ZIP magic bytes placeholder
+        # Create multiple files (total ~10MB) to ensure download takes a few seconds
+        print("[Test] Creating test folder with files...")
+        for i in range(20):
+            filePath = os.path.join(testFolder, f"file{i:03d}.bin")
+            with open(filePath, 'wb') as f:
+                f.write(os.urandom(500 * 1024)) # 500KB per file = 10MB total
 
-        print(f"[Test] Created placeholder ZIP: {placeholderZipPath}")
+        # Create a file that will be modified during download
+        targetFilePath = os.path.join(testFolder, "target_file.txt")
+        with open(targetFilePath, 'w') as f:
+            f.write("Original content\n" * 1000)
 
-        self.testFilePath = currentFolder
+        print(f"[Test] Created test folder: {testFolder}")
+        print(f"[Test] Target file for modification: {targetFilePath}")
 
-        from bases.Reader import SourceReader
-        reader = SourceReader.build(currentFolder, compression='store')
+        self.testFilePath = testFolder
+
+        reader = SourceReader.build(testFolder, compression='store')
         self.originalFileSize = reader.size
-        print(f"[Test] Sharing current folder: {self.originalFileSize} bytes")
+        print(f"[Test] Folder ZIP size: {self.originalFileSize} bytes")
+
+        import threading
+        modificationDone = threading.Event()
+
+        def modifyFileDuringDownload():
+            """Modify file after a delay to trigger change detection mid-download"""
+            print("[Test] Modification thread: Waiting 2 seconds before modifying file...")
+            time.sleep(2) # Wait 2 seconds for download to start
+            try:
+                print(f"[Test] Modification thread: Modifying {targetFilePath}...")
+                with open(targetFilePath, 'w') as f:
+                    f.write("MODIFIED CONTENT - This change should be detected!\n" * 2000)
+                print("[Test] Modification thread: File modified successfully")
+            except Exception as e:
+                print(f"[Test] Modification thread: Error modifying file: {e}")
+            finally:
+                modificationDone.set()
 
         try:
-            # Start FastFileLink with current folder in P2P mode
+            # Start FastFileLink with test folder in P2P mode
             serverOutputCapture = {}
             shareLink = self._startFastFileLink(p2p=True, captureOutputIn=serverOutputCapture)
 
-            # Download into current folder with same name as placeholder
-            # This will overwrite the existing [FolderName].zip file, triggering change detection
+            # Start modification thread
+            modThread = threading.Thread(target=modifyFileDuringDownload, daemon=True)
+            modThread.start()
+            print("[Test] Started background thread to modify file during download")
+
+            # Download the folder
             downloadOutputCapture = {}
-            downloadedZipPath = placeholderZipPath  # Same file that's in the snapshot
+            downloadedZipPath = os.path.join(self.tempDir, "downloaded_folder.zip")
 
             # Download should FAIL due to folder change - don't raise assertion
             try:
@@ -454,10 +492,30 @@ class FolderTransferTest(FastFileLinkTestBase):
             except AssertionError as e:
                 # Expected - download should fail
                 downloadFailed = True
-                print(f"[Test] Download failed as expected: {e}")
+                print(f"[Test] Download failed as expected")
+                # Print exception details for debugging
+                exceptionStr = str(e)
+                if len(exceptionStr) > 5000:
+                    print(f"[Test] Exception details (first 2500 chars):\n{exceptionStr[:2500]}")
+                    print(f"[Test] Exception details (last 2500 chars):\n{exceptionStr[-2500:]}")
+                else:
+                    print(f"[Test] Exception details:\n{exceptionStr}")
+
+            # Wait for modification thread to complete
+            modThread.join(timeout=5)
+            if modificationDone.is_set():
+                print("[Test] Modification thread completed successfully")
+            else:
+                print("[Test] WARNING: Modification thread did not complete in time")
 
             # Verify download failed
             if not downloadFailed:
+                # Print FULL captured output for debugging
+                clientOutput = self._updateCapturedOutput(downloadOutputCapture)
+                print(f"[Test] ERROR: Download succeeded when it should have failed!")
+                print(f"[Test] ===== FULL CLIENT OUTPUT ({len(clientOutput)} chars) =====")
+                print(clientOutput)
+                print(f"[Test] ===== END FULL CLIENT OUTPUT =====")
                 self.fail("Download should have failed due to folder change, but succeeded")
 
             print("[Test] Download correctly failed [OK]")
@@ -468,7 +526,9 @@ class FolderTransferTest(FastFileLinkTestBase):
             print(f"[Test] Server detected folder change: {serverDetected}")
 
             if not serverDetected:
-                print(f"[Test] Server output length: {len(serverOutput)} chars")
+                print(f"[Test] ===== FULL SERVER OUTPUT ({len(serverOutput)} chars) =====")
+                print(serverOutput)
+                print(f"[Test] ===== END FULL SERVER OUTPUT =====")
                 self.fail("Server did not detect folder change")
 
             print("[Test] Server correctly detected folder change [OK]")
@@ -484,23 +544,22 @@ class FolderTransferTest(FastFileLinkTestBase):
             print(f"[Test] Client got guidance message: {clientGotGuidance}")
 
             if not clientReceivedError:
-                print(f"[Test] Client output length: {len(clientOutput)} chars")
+                print(f"[Test] ===== FULL CLIENT OUTPUT ({len(clientOutput)} chars) =====")
+                print(clientOutput)
+                print(f"[Test] ===== END FULL CLIENT OUTPUT =====")
                 self.fail("Client did not receive folder change error notification")
 
             if not clientGotGuidance:
+                print(f"[Test] ===== FULL CLIENT OUTPUT ({len(clientOutput)} chars) =====")
+                print(clientOutput)
+                print(f"[Test] ===== END FULL CLIENT OUTPUT =====")
                 self.fail("Client error message should include guidance to contact sharer")
 
             print("[Test] Client correctly received FolderChangedException with guidance [OK]")
 
         finally:
             self._terminateProcess()
-            # Clean up placeholder/downloaded ZIP file
-            if 'placeholderZipPath' in locals() and os.path.exists(placeholderZipPath):
-                print(f"[Test] Cleaning up ZIP file: {placeholderZipPath}")
-                try:
-                    os.remove(placeholderZipPath)
-                except Exception as e:
-                    print(f"[Test] Failed to remove ZIP: {e}")
+            # Cleanup handled by tempDir (test folder and downloaded ZIP are in tempDir)
 
 
 class FolderChangeDetectionTest(unittest.TestCase):
@@ -569,9 +628,9 @@ class FolderChangeDetectionTest(unittest.TestCase):
         def validateWithChange(entry):
             if not entry['isDir'] and entry['path'] == self.file1:
                 # Modify file to change mtime (same size to test mtime detection)
-                time.sleep(0.02)  # Ensure time passes
+                time.sleep(0.02) # Ensure time passes
                 with open(self.file1, 'w') as f:
-                    f.write("Modified content!")  # Same length as original
+                    f.write("Modified content!") # Same length as original
             return originalValidate(entry)
 
         reader._validateFileUnchanged = validateWithChange
@@ -751,8 +810,7 @@ class FolderChangeDetectionTest(unittest.TestCase):
             except FolderChangedException as e:
                 # Accept both CRC and File read errors since they both indicate I/O failure
                 self.assertTrue(
-                    "CRC computation failed in strict mode" in str(e) or
-                    "File read failed in strict mode" in str(e),
+                    "CRC computation failed in strict mode" in str(e) or "File read failed in strict mode" in str(e),
                     f"Expected I/O error in strict mode, got: {e}"
                 )
                 print(f"[Test] Strict mode correctly raised FolderChangedException on I/O error: {e}")
@@ -785,6 +843,441 @@ class FolderChangeDetectionTest(unittest.TestCase):
                 print("[Test] Lenient mode continued despite I/O error (streamed zeros)")
             except FolderChangedException:
                 self.fail("Lenient mode should not raise FolderChangedException on I/O errors")
+
+
+class StdinStreamingTest(FastFileLinkTestBase):
+    """Test stdin streaming with chunked transfer encoding (functional tests)"""
+
+    def testStdinStreamingBasic(self):
+        """Test basic stdin streaming: `cat file | python Core.py --cli -`"""
+        print("\n[Test] Testing stdin streaming with chunked encoding")
+
+        try:
+            # Start stdin streaming
+            shareLink = self._startStdinStreaming(self.testFilePath)
+
+            # Download the file
+            downloadedFilePath = self._getDownloadedFilePath("stdin")
+            self.downloadFileWithRequests(shareLink, downloadedFilePath)
+
+            # Verify downloaded file matches original
+            downloadedHash = getFileHash(downloadedFilePath)
+            self.assertEqual(downloadedHash, self.originalFileHash, "Downloaded file hash should match original")
+
+            print("[Test] Stdin streaming successful - file verified")
+
+        finally:
+            self._terminateProcess()
+
+    def testStdinStreamingWithCustomName(self):
+        """Test stdin streaming with custom filename: `cat file | python Core.py --cli - --name custom.bin`"""
+        print("\n[Test] Testing stdin streaming with custom filename")
+
+        customName = "my-custom-file.bin"
+
+        try:
+            # Start stdin streaming with custom name
+            shareLink = self._startStdinStreaming(self.testFilePath, customName=customName)
+
+            # Verify content_name in JSON output
+            with open(self.jsonOutputPath, 'r', encoding='utf-8') as f:
+                jsonOutput = json.load(f)
+
+            self.assertEqual(
+                jsonOutput['content_name'], customName, f"content_name should be '{customName}' in JSON output"
+            )
+            print(f"[Test] Verified content_name in JSON: {jsonOutput['content_name']}")
+
+            # Download the file and verify Content-Disposition header
+            downloadedFilePath = self._getDownloadedFilePath("stdin_custom")
+            self.downloadFileWithRequests(shareLink, downloadedFilePath, expectedFileName=customName)
+
+            # Verify downloaded file matches original
+            downloadedHash = getFileHash(downloadedFilePath)
+            self.assertEqual(downloadedHash, self.originalFileHash, "Downloaded file hash should match original")
+
+            print(f"[Test] Stdin streaming with custom name '{customName}' successful")
+
+        finally:
+            self._terminateProcess()
+
+    def testStdinStreamingWithCurl(self):
+        """Test stdin streaming download with curl (simulates real usage)"""
+        print("\n[Test] Testing stdin streaming download with curl")
+
+        try:
+            # Start stdin streaming
+            shareLink = self._startStdinStreaming(self.testFilePath)
+
+            # Download with curl
+            downloadedFilePath = self._getDownloadedFilePath("stdin_curl")
+
+            curlCmd = ["curl", "-L", "-o", downloadedFilePath, shareLink]
+            print(f"[Test] Running: {' '.join(curlCmd)}")
+
+            result = subprocess.run(curlCmd, capture_output=True, text=True, timeout=30)
+
+            if result.returncode != 0:
+                print(f"[Test] curl stderr: {result.stderr}")
+                raise AssertionError(f"curl failed with exit code {result.returncode}")
+
+            # Verify file was downloaded
+            if not os.path.exists(downloadedFilePath):
+                raise AssertionError("curl did not create output file")
+
+            # Verify downloaded file matches original
+            downloadedHash = getFileHash(downloadedFilePath)
+            self.assertEqual(downloadedHash, self.originalFileHash, "Downloaded file hash should match original")
+
+            print("[Test] curl download successful - no HTTP/2 stream errors")
+
+        finally:
+            self._terminateProcess()
+
+    def testStdinStreamingLargeFile(self):
+        """Test stdin streaming with larger file (multiple chunks)"""
+        print("\n[Test] Testing stdin streaming with large file")
+
+        # Create larger test file (10MB)
+        largeFilePath = os.path.join(self.tempDir, "large_testfile.bin")
+        print("[Test] Generating 10MB test file...")
+        from tests.CoreTestBase import generateRandomFile
+        generateRandomFile(largeFilePath, 10 * 1024 * 1024)
+        largeFileHash = getFileHash(largeFilePath)
+
+        try:
+            # Start stdin streaming with large file
+            shareLink = self._startStdinStreaming(largeFilePath)
+
+            # Download the file
+            downloadedFilePath = self._getDownloadedFilePath("stdin_large")
+            self.downloadFileWithRequests(shareLink, downloadedFilePath)
+
+            # Verify downloaded file matches original
+            downloadedHash = getFileHash(downloadedFilePath)
+            self.assertEqual(downloadedHash, largeFileHash, "Large file hash should match original")
+
+            print("[Test] Large file stdin streaming successful")
+
+        finally:
+            self._terminateProcess()
+
+    def testStdinStreamingMultipleReads(self):
+        """Test that stdin caching allows multiple reads"""
+        print("\n[Test] Testing stdin caching for multiple reads")
+
+        try:
+            # Start stdin streaming
+            shareLink = self._startStdinStreaming(self.testFilePath)
+
+            # First download should succeed and cache the data
+            downloadedFilePath1 = self._getDownloadedFilePath("stdin_first")
+            self.downloadFileWithRequests(shareLink, downloadedFilePath1)
+            downloadedHash1 = getFileHash(downloadedFilePath1)
+            print("[Test] First download successful")
+
+            # Second download should succeed using cached data
+            downloadedFilePath2 = self._getDownloadedFilePath("stdin_second")
+            self.downloadFileWithRequests(shareLink, downloadedFilePath2)
+            downloadedHash2 = getFileHash(downloadedFilePath2)
+            print("[Test] Second download successful (from cache)")
+
+            # Verify both downloads match
+            self.assertEqual(downloadedHash1, downloadedHash2, "Second download should match first download")
+            self.assertEqual(downloadedHash1, self.originalFileHash, "Both downloads should match original file")
+
+            print("[Test] Multiple reads successful with caching")
+
+        finally:
+            self._terminateProcess()
+
+
+class DeflateModeStreamingTest(FastFileLinkTestBase):
+    """Test deflate compression mode with chunked transfer encoding"""
+
+    def setUp(self):
+        """Set up test folder instead of test file"""
+        super().setUp()
+
+        # Create test folder with files
+        self.testFolderPath = os.path.join(self.tempDir, "test_folder")
+        os.makedirs(self.testFolderPath)
+
+        # Create test files
+        for i in range(5):
+            filePath = os.path.join(self.testFolderPath, f"file{i}.txt")
+            with open(filePath, 'w') as f:
+                f.write(f"Test content {i}\n" * 100)
+
+        # Override testFilePath to point to folder
+        self.testFilePath = self.testFolderPath
+
+        # Update originalFileSize to -1 for deflate mode (size unknown until compressed)
+        # This is used by _startFastFileLink to validate the JSON output
+        self.originalFileSize = -1
+
+    def testDeflateModeDownload(self):
+        """Test folder download with deflate compression (chunked encoding)"""
+        print("\n[Test] Testing deflate mode with chunked encoding")
+
+        try:
+            # Set deflate compression mode
+            extraEnvVars = {'READER_FOLDER_COMPRESSION': 'deflate'}
+
+            # Start FastFileLink with folder (P2P mode)
+            shareLink = self._startFastFileLink(p2p=True, extraEnvVars=extraEnvVars)
+
+            # Download the ZIP file
+            downloadedZipPath = self._getDownloadedFilePath("test_folder.zip")
+            self.downloadFileWithRequests(shareLink, downloadedZipPath)
+
+            # Verify it's a valid ZIP
+            with zipfile.ZipFile(downloadedZipPath, 'r') as zipf:
+                fileList = zipf.namelist()
+                self.assertGreater(len(fileList), 0, "ZIP should contain files")
+
+                # Verify files are in the ZIP
+                for i in range(5):
+                    expectedFile = f"test_folder/file{i}.txt"
+                    self.assertIn(expectedFile, fileList, f"{expectedFile} should be in ZIP")
+
+            print("[Test] Deflate mode download successful with chunked encoding")
+
+        finally:
+            self._terminateProcess()
+
+
+class StdinCachingTest(unittest.TestCase):
+    """Test StdinSourceReader caching functionality for multiple reads"""
+
+    def testStdinTwiceRead(self):
+        """Test that stdin can be read twice using cache"""
+
+        # Create mock stdin data
+        testData = b"Hello World from stdin! " * 1000 # ~24KB of data
+        mockStdin = io.BytesIO(testData)
+
+        # Create reader and replace stdin
+        reader = StdinSourceReader('-')
+        reader.stdin = mockStdin
+
+        # First read - should stream from stdin and cache
+        firstReadData = b''.join(reader.iterChunks(chunkSize=1024))
+        self.assertEqual(firstReadData, testData, "First read should return all stdin data")
+        self.assertTrue(reader._consumed, "Stdin should be marked as consumed")
+        self.assertTrue(reader._hasCache(), "Cache should be available after first read")
+        self.assertIsNotNone(reader.size, "Size should be known after first read")
+        self.assertEqual(reader.size, len(testData), "Size should match data length")
+
+        # Second read - should read from cache
+        secondReadData = b''.join(reader.iterChunks(chunkSize=1024))
+        self.assertEqual(secondReadData, testData, "Second read should return same data from cache")
+        self.assertEqual(firstReadData, secondReadData, "Both reads should return identical data")
+
+        # Verify cache file exists
+        self.assertTrue(os.path.exists(reader._cachedFile), "Cache file should exist")
+
+        # Cleanup
+        cacheFilePath = reader._cachedFile # Save path before cleanup
+        reader._cleanupCacheFile()
+        if cacheFilePath:
+            self.assertFalse(os.path.exists(cacheFilePath), "Cache file should be cleaned up")
+
+        print("[Test] StdinSourceReader twice read successful with caching")
+
+    def testStdinTwiceReadWithOffset(self):
+        """Test that cached stdin supports Range/offset reads"""
+
+        # Create mock stdin data
+        testData = b"0123456789" * 100 # 1000 bytes
+        mockStdin = io.BytesIO(testData)
+
+        # Create reader and replace stdin
+        reader = StdinSourceReader('-')
+        reader.stdin = mockStdin
+
+        # First read - cache all data
+        firstReadData = b''.join(reader.iterChunks(chunkSize=256))
+        self.assertEqual(firstReadData, testData)
+        self.assertTrue(reader._hasCache())
+
+        # Second read with offset - should read from cache starting at offset 500
+        secondReadData = b''.join(reader.iterChunks(chunkSize=256, start=500))
+        self.assertEqual(secondReadData, testData[500:], "Should read from offset 500")
+
+        # Third read with different offset
+        thirdReadData = b''.join(reader.iterChunks(chunkSize=256, start=100))
+        self.assertEqual(thirdReadData, testData[100:], "Should read from offset 100")
+
+        # Cleanup
+        reader._cleanupCacheFile()
+
+        print("[Test] StdinSourceReader Range/offset read from cache successful")
+
+
+class DeflateCachingTest(unittest.TestCase):
+    """Test ZipDirSourceReader deflate mode caching functionality"""
+
+    def testDeflateTwiceRead(self):
+        """Test that deflate ZIP can be read twice using cache (avoids re-compression)"""
+        # Create test folder
+        tmpdir = tempfile.mkdtemp()
+        try:
+            testFolder = os.path.join(tmpdir, 'test_folder')
+            os.makedirs(testFolder)
+
+            # Add test files
+            for i in range(10):
+                filePath = os.path.join(testFolder, f'file{i}.txt')
+                with open(filePath, 'w') as f:
+                    f.write(f'Test content {i}\n' * 1000) # ~17KB per file
+
+            # Create reader with deflate compression
+            reader = ZipDirSourceReader(testFolder, compression='deflate')
+
+            # Verify initial state
+            self.assertIsNone(reader.size, "Deflate mode should have unknown size initially")
+            self.assertFalse(reader._hasCache(), "Should not have cache initially")
+
+            # First read - should compress and cache
+            firstReadData = b''.join(reader.iterChunks(chunkSize=8192))
+            self.assertGreater(len(firstReadData), 0, "Should generate compressed ZIP data")
+            self.assertTrue(reader._hasCache(), "Cache should be available after first read")
+            self.assertIsNotNone(reader.size, "Size should be known after compression")
+            self.assertEqual(reader.size, len(firstReadData), "Size should match compressed data length")
+
+            # Verify it's a valid ZIP
+            zipPath = os.path.join(tmpdir, 'test1.zip')
+            with open(zipPath, 'wb') as f:
+                f.write(firstReadData)
+            with zipfile.ZipFile(zipPath, 'r') as zipf:
+                fileList = zipf.namelist()
+                self.assertEqual(len(fileList), 10, "ZIP should contain 10 files")
+
+            # Second read - should read from cache (no re-compression)
+            secondReadData = b''.join(reader.iterChunks(chunkSize=8192))
+            self.assertEqual(len(secondReadData), len(firstReadData), "Second read should return same size data")
+            self.assertEqual(firstReadData, secondReadData, "Both reads should return identical compressed data")
+
+            # Verify second read is also valid ZIP
+            zipPath2 = os.path.join(tmpdir, 'test2.zip')
+            with open(zipPath2, 'wb') as f:
+                f.write(secondReadData)
+            with zipfile.ZipFile(zipPath2, 'r') as zipf:
+                fileList = zipf.namelist()
+                self.assertEqual(len(fileList), 10, "Second ZIP should also contain 10 files")
+
+            # Verify cache file exists
+            self.assertTrue(os.path.exists(reader._cachedFile), "Cache file should exist")
+
+            print(f"[Test] Deflate ZIP twice read successful (size: {reader.size} bytes, "
+                  f"compressed from ~170KB)")
+
+        finally:
+            shutil.rmtree(tmpdir)
+
+    def testDeflateCachePersistence(self):
+        """Test that deflate cache persists across multiple reads"""
+
+        # Create test folder
+        tmpdir = tempfile.mkdtemp()
+        try:
+            testFolder = os.path.join(tmpdir, 'test_folder')
+            os.makedirs(testFolder)
+
+            # Add test file
+            with open(os.path.join(testFolder, 'file.txt'), 'w') as f:
+                f.write('Test content\n' * 100)
+
+            # Create reader
+            reader = ZipDirSourceReader(testFolder, compression='deflate')
+
+            # First read - cache
+            data1 = b''.join(reader.iterChunks(chunkSize=1024))
+            cacheFile1 = reader._cachedFile
+
+            # Multiple subsequent reads - all from cache
+            for i in range(5):
+                dataN = b''.join(reader.iterChunks(chunkSize=1024))
+                self.assertEqual(dataN, data1, f"Read {i+2} should match first read")
+                self.assertEqual(reader._cachedFile, cacheFile1, "Cache file should remain same")
+
+            print("[Test] Deflate cache persistence verified across 6 reads")
+
+        finally:
+            shutil.rmtree(tmpdir)
+
+
+class ShutdownCleanupTest(unittest.TestCase):
+    """Test CachingMixin shutdown event cleanup"""
+
+    def testShutdownEventCleanup(self):
+        """Test that shutdown event triggers cleanup of all cached files"""
+
+        # Create test folder for ZipDirSourceReader
+        tmpdir = tempfile.mkdtemp()
+        try:
+            testFolder = os.path.join(tmpdir, 'test_folder')
+            os.makedirs(testFolder)
+            with open(os.path.join(testFolder, 'file.txt'), 'w') as f:
+                f.write('Test content\n' * 100)
+
+            # Clear existing instances from previous tests
+            CachingMixin._instances.clear()
+
+            # Create multiple readers that will cache data
+            readers = []
+
+            # Reader 1: Stdin
+            stdinReader = StdinSourceReader('-')
+            stdinReader.stdin = io.BytesIO(b"Test data from stdin" * 100)
+            list(stdinReader.iterChunks(1024)) # Trigger caching
+            readers.append(stdinReader)
+            self.assertTrue(stdinReader._hasCache(), "Stdin should have cache")
+
+            # Reader 2: Deflate ZIP
+            deflateReader = ZipDirSourceReader(testFolder, compression='deflate')
+            list(deflateReader.iterChunks(1024)) # Trigger caching
+            readers.append(deflateReader)
+            self.assertTrue(deflateReader._hasCache(), "Deflate should have cache")
+
+            # Reader 3: Another stdin
+            stdinReader2 = StdinSourceReader('-')
+            stdinReader2.stdin = io.BytesIO(b"More test data" * 100)
+            list(stdinReader2.iterChunks(1024)) # Trigger caching
+            readers.append(stdinReader2)
+            self.assertTrue(stdinReader2._hasCache(), "Stdin2 should have cache")
+
+            # Verify all readers have cache files
+            self.assertEqual(len(CachingMixin._instances), 3, "Should have 3 cached instances")
+            cacheFiles = [r._cachedFile for r in readers]
+            for cacheFile in cacheFiles:
+                self.assertTrue(os.path.exists(cacheFile), f"Cache file {cacheFile} should exist")
+
+            # Trigger shutdown event
+            FFLEvent.applicationShutdown.trigger()
+
+            # Verify all cache files are cleaned up
+            for cacheFile in cacheFiles:
+                self.assertFalse(os.path.exists(cacheFile), f"Cache file {cacheFile} should be removed")
+
+            # Verify instances list is cleared
+            self.assertEqual(len(CachingMixin._instances), 0, "Instances list should be cleared")
+
+            print(f"[Test] Shutdown event cleanup successful (cleaned up 3 cache files)")
+
+        finally:
+            shutil.rmtree(tmpdir)
+
+    def testShutdownEventIdempotent(self):
+        """Test that shutdown event can be triggered multiple times safely"""
+
+        # Trigger shutdown multiple times - should not crash
+        FFLEvent.applicationShutdown.trigger()
+        FFLEvent.applicationShutdown.trigger()
+        FFLEvent.applicationShutdown.trigger()
+
+        print("[Test] Shutdown event is idempotent (multiple triggers work)")
 
 
 if __name__ == '__main__':

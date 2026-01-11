@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-01-02 16:20+0800\n"
+"POT-Creation-Date: 2026-01-11 17:55+0800\n"
 "PO-Revision-Date: 2025-12-17 09:22+0800\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -19,6 +19,19 @@ msgstr ""
 "Generated-By: Babel 2.17.0\n"
 
 msgid "Opening invite page in browser..."
+msgstr ""
+
+#, python-brace-format
+msgid "QR code saved to: {filePath}"
+msgstr ""
+
+msgid ""
+"\n"
+"QR Code:\n"
+msgstr ""
+
+#, python-brace-format
+msgid "Error generating QR code: {error}"
 msgstr ""
 
 #, python-brace-format
@@ -47,6 +60,9 @@ msgid ""
 msgstr ""
 
 msgid "🔐 End-to-end encryption enabled\n"
+msgstr ""
+
+msgid "🧅 Tor Privacy Mode Active"
 msgstr ""
 
 msgid "You can stop the upload at any time and resume it later.\n"
@@ -259,7 +275,12 @@ msgstr ""
 msgid "Support: {supportURL}"
 msgstr ""
 
-msgid "Choose a file or folder you want to share"
+msgid "Choose a file or folder you want to share (use '-' for stdin)"
+msgstr ""
+
+msgid ""
+"Specify custom download filename (default: original filename for files, "
+"folder.zip for folders, stdin-YYYYMMDD-HHMMSS.bin for stdin)"
 msgstr ""
 
 msgid "Output link and settings to a JSON file"
@@ -312,6 +333,9 @@ msgstr ""
 msgid "Open invite page in browser with the sharing link"
 msgstr ""
 
+msgid "Display QR code in terminal (default) or save to FILE (e.g., qr.png)"
+msgstr ""
+
 #, python-brace-format
 msgid "Invalid log level '{logLevel}'. Valid levels are: {validLevels}"
 msgstr ""
@@ -332,6 +356,13 @@ msgid ""
 " (defaults to SOCKS5), socks5[h]://[user:pass@]host:port, "
 "http[s]://[user:pass@]host:port. SOCKS5 proxies work for both tunnel and "
 "HTTP requests. HTTP proxies only work for HTTP requests (not tunnel)"
+msgstr ""
+
+msgid ""
+"Webhook URL for forwarding events to parent process or external service. "
+"Format: http://[user:pass@]host:port/path (e.g., "
+"http://app:token@127.0.0.1:12345/events). Auth credentials are optional "
+"but recommended."
 msgstr ""
 
 msgid "FastFileLink makes file sharing fast, simple, and secure."
@@ -684,6 +715,9 @@ msgstr ""
 msgid "We will fix the problem as soon as possible.\n"
 msgstr ""
 
+msgid "WebRTC connections are disabled by server policy"
+msgstr ""
+
 msgid "P2P direct"
 msgstr ""
 
@@ -752,7 +786,7 @@ msgid "Invalid encryption key: {error}"
 msgstr ""
 
 #, python-brace-format
-msgid "Downloading {filename} ({fileSize:,} bytes)"
+msgid "Downloading {filename} ({fileSize})"
 msgstr ""
 
 #, python-brace-format
@@ -932,5 +966,11 @@ msgstr ""
 #~ msgstr ""
 
 #~ msgid "Unsupported operating system"
+#~ msgstr ""
+
+#~ msgid "Choose a file or folder you want to share"
+#~ msgstr ""
+
+#~ msgid "Downloading {filename} ({fileSize:,} bytes)"
 #~ msgstr ""
 

@@ -24,6 +24,8 @@ import ssl
 import sys
 import webbrowser
 
+from typing import Optional, TypedDict
+
 import bitmath
 import chardet
 
@@ -118,7 +120,7 @@ def _unicode(s, strict=False, encodings=None, throw=True, confidence=0.8):
     return None
 
 
-def copy2Clipboard(text):
+def copy2Clipboard(text, silent=False):
     if not text:
         return
 
@@ -138,7 +140,9 @@ def copy2Clipboard(text):
             xclipBefore = list(filter(lambda p: p.name() == "xclip", psutil.process_iter(['pid'])))
 
         pyperclip.copy(text)
-        flushPrint(_('The link has been copied to the clipboard.'))
+
+        if not silent:
+            flushPrint(_('The link has been copied to the clipboard.'))
 
         if isLinux:
             xclipAfter = list(filter(lambda p: p.name() == "xclip", psutil.process_iter(['pid'])))
@@ -291,7 +295,28 @@ def getEnv(envVar, default):
         return default
 
 
-def parseProxyString(proxyString):
+class ProxyConfig(TypedDict):
+    """Type definition for proxy configuration dictionary
+
+    Attributes:
+        type: Proxy type ('socks5' or 'http')
+        url: Normalized proxy URL (e.g., 'socks5h://host:port')
+        host: Proxy server hostname or IP
+        port: Proxy server port number
+        protocol: Full protocol string ('socks5', 'socks5h', 'http', 'https')
+        username: Username for proxy authentication (None if not using auth)
+        password: Password for proxy authentication (None if not using auth)
+    """
+    type: str
+    url: str
+    host: str
+    port: int
+    protocol: str
+    username: Optional[str]
+    password: Optional[str]
+
+
+def parseProxyString(proxyString: Optional[str]) -> Optional[ProxyConfig]:
     """
     Parse proxy string and return normalized proxy configuration.
 
@@ -306,17 +331,13 @@ def parseProxyString(proxyString):
       - http://user:pass@host:port
       - https://user:pass@host:port
 
+    Args:
+        proxyString: Proxy server string in one of the accepted formats
+
     Returns:
-        dict: {
-            'type': 'socks5' | 'http',
-            'url': 'protocol://[user:pass@]host:port',
-            'host': 'host',
-            'port': port (int),
-            'protocol': 'socks5' | 'socks5h' | 'http' | 'https',
-            'username': 'user' or None,
-            'password': 'pass' or None
-        }
-        or None if invalid
+        ProxyConfig: Normalized proxy configuration with type, url, host, port,
+                     protocol, username, and password fields
+        None: If proxyString is empty/invalid or parsing fails
     """
     if not proxyString:
         return None
@@ -392,12 +413,12 @@ def parseProxyString(proxyString):
     }
 
 
-def setupProxyEnvironment(proxyConfig):
+def setupProxyEnvironment(proxyConfig: Optional[ProxyConfig]) -> None:
     """
     Setup HTTP_PROXY and HTTPS_PROXY environment variables for requests library.
 
     Args:
-        proxyConfig: dict returned from parseProxyString()
+        proxyConfig: ProxyConfig returned from parseProxyString(), or None
     """
     if not proxyConfig:
         return

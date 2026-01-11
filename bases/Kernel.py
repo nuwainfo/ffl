@@ -44,7 +44,7 @@ from signalslot import Signal
 from sentry_sdk.integrations.logging import SentryHandler, LoggingIntegration
 from sentry_sdk.integrations import atexit as sentryAtexit
 
-PUBLIC_VERSION = '3.8.1'
+PUBLIC_VERSION = '3.8.2'
 
 # Map string levels to logging constants for standard level names
 LOG_LEVEL_MAPPING = {'DEBUG': logging.DEBUG, 'INFO': logging.INFO, 'WARNING': logging.WARNING, 'ERROR': logging.ERROR}
@@ -253,13 +253,8 @@ class EventService(Singleton):
         Initialize the EventService with signal storage.
         """
         self.signals = {}
-
-    def reset(self):
-        """
-        Clears all registered signals. Should only be used in test suites
-        to ensure test isolation.
-        """
-        self.signals.clear()
+        # Auto-register wildcard event '*' for subscribing to all events
+        self.register('*')
 
     def _getSignalObjects(self, event):
         """
@@ -288,21 +283,32 @@ class EventService(Singleton):
     def trigger(self, event, *args, **kwargs):
         """
         Trigger an event, calling all connected observers (slots).
+
+        Also triggers wildcard ('*') subscribers with the event name as first parameter.
+        Note: '*' is a special wildcard event for subscription only and cannot be triggered.
         """
+        # Wildcard '*' is subscription-only, not triggerable
+        if event == '*':
+            return
+
         timing = kwargs.pop('timing', None)
         normalizedTiming = self._normalizeTiming(timing)
 
-        signalObjects = self._getSignalObjects(event)
-        if not signalObjects:
-            return
+        def _exec(event, *args, **kwargs):
+            signalObjects = self._getSignalObjects(event)
+            if not signalObjects: # Invalid event.
+                return
 
-        beforeSignal, afterSignal = signalObjects
+            beforeSignal, afterSignal = signalObjects
 
-        if normalizedTiming in (EventTiming.BEFORE, None):
-            beforeSignal.emit(*args, **kwargs)
+            if normalizedTiming in (EventTiming.BEFORE, None):
+                beforeSignal.emit(*args, **kwargs)
 
-        if normalizedTiming in (EventTiming.AFTER, None):
-            afterSignal.emit(*args, **kwargs)
+            if normalizedTiming in (EventTiming.AFTER, None):
+                afterSignal.emit(*args, **kwargs)
+
+        _exec(event, *args, **kwargs)
+        _exec('*', *args, **{**{'eventName': event}, **kwargs})
 
     def isRegistered(self, event):
         """
@@ -316,6 +322,7 @@ class EventService(Singleton):
         """
         if self.isRegistered(event):
             return False
+
         self.signals[event] = (Signal(), Signal())
         return True
 
@@ -327,8 +334,8 @@ class EventService(Singleton):
             return False
 
         beforeSignal, afterSignal = self.signals[event]
-        beforeSignal.disconnect_all()
-        afterSignal.disconnect_all()
+        beforeSignal._slots.clear()
+        afterSignal._slots.clear()
         del self.signals[event]
         return True
 
@@ -336,6 +343,9 @@ class EventService(Singleton):
         """
         Attach an event to a function or method.
         """
+        if event == '*':
+            raise KeyError(f"* attach is not supported.")
+
         if not self.isRegistered(event):
             raise KeyError(f"Event '{event}' is not registered yet!")
 
@@ -417,6 +427,9 @@ class EventService(Singleton):
     def subscribe(self, event, observer, timing=EventTiming.AFTER, index=-1):
         """
         Subscribe an observer to an event, with full control over execution order.
+
+        Special event '*' (wildcard) subscribes to ALL events. Wildcard subscribers
+        receive (eventName, **kwargs) as parameters.
         """
         if not self.isRegistered(event):
             raise KeyError(f"You must register event '{event}' first.")
@@ -482,6 +495,16 @@ class Event:
 
     def trigger(self, *args, **kwargs):
         return self.eventService.trigger(self.key, *args, **kwargs)
+
+    def __eq__(self, other):
+        if isinstance(other, Event):
+            return self.key == other.key
+
+        return False
+
+    def __hash__(self):
+        # Optional: allows Event to be used in sets or as dict keys
+        return hash(self.key)
 
 
 class AddonsManager(Singleton):
@@ -1084,6 +1107,8 @@ class UIDGenerator:
 
 # Event pattern: RESTful + /[action] (create, update, get, delete, others...)
 class FFLEvent:
+    all = Event('*')
+
     cliArgumentsGlobalOptionsRegister = Event('/cli/arguments/global/options/create')
     cliArgumentsGlobalOptionsStore = Event('/cli/arguments/global/options/get')
     cliArgumentsCommandsRegister = Event('/cli/arguments/commands/create')
@@ -1091,6 +1116,9 @@ class FFLEvent:
     cliArgumentsStore = Event('/cli/arguments/get')
 
     shareLinkCreate = Event('/share/link/create')
+
+    # Application lifecycle events
+    applicationShutdown = Event('/application/shutdown')
 
 
 eventService = EventService.getInstance()
@@ -1101,3 +1129,4 @@ eventService.register(FFLEvent.cliArgumentsCommandsRegister.key)
 eventService.register(FFLEvent.cliArgumentsShareOptionsRegister.key)
 eventService.register(FFLEvent.cliArgumentsStore.key)
 eventService.register(FFLEvent.shareLinkCreate.key)
+eventService.register(FFLEvent.applicationShutdown.key)

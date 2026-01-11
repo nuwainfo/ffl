@@ -51,6 +51,8 @@ packageData = [
     ('static/Logo.ico', 'static'),
     ('static/Logo.png', 'static'),
     ('static/assets/gooey/program_icon.png', 'static/assets/gooey'), # gooey program icon
+    ('static/assets/gooey/config_icon.png', 'static/assets/gooey'), # gooey config icon    
+    ('static/assets/gooey/running_icon.png', 'static/assets/gooey'), # gooey running icon
     ('static/index.html', 'static'),
     ('static/assets/mitm.html', 'static/assets'),
     ('static/assets/sw.js', 'static/assets'),

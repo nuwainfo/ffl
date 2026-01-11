@@ -145,7 +145,48 @@ class DownloadManager {
     t(key, defaultValue, options = {}) {
         return dmT(key, defaultValue, options);
     }
-    
+
+    // ============ Size Utility Functions ============
+
+    /**
+     * Check if size represents unknown/indeterminate size
+     * @param {number} size - File size to check
+     * @returns {boolean} True if size is unknown (-1, null, undefined, or ≤0)
+     */
+    isUnknownSize(size) {
+        return size == null || size <= 0;
+    }
+
+    /**
+     * Check if size is valid and known
+     * @param {number} size - File size to check
+     * @returns {boolean} True if size is a positive number
+     */
+    isValidSize(size) {
+        return typeof size === 'number' && size > 0;
+    }
+
+    /**
+     * Check if we should show determinate (percentage-based) progress
+     * @param {number} size - File size
+     * @param {string} mode - Download mode ('sw' or 'pass')
+     * @returns {boolean} True if we can show percentage progress
+     */
+    shouldShowDeterminateProgress(size, mode) {
+        // Unknown size → always indeterminate
+        if (this.isUnknownSize(size)) {
+            return false;
+        }
+
+        // Pass-through mode → indeterminate (browser handles download)
+        if (mode === 'pass') {
+            return false;
+        }
+
+        // SW mode with known size → determinate
+        return true;
+    }
+
     /**
      * Get the planned download mode based on browser and file size
      * @param {Object} options - Options object with uid and filename
@@ -158,22 +199,27 @@ class DownloadManager {
         if (fileSizeElement) {
             const sizeText = fileSizeElement.textContent || fileSizeElement.innerText || '0';
             size = parseInt(sizeText.trim(), 10);
-            if (isNaN(size))
+            if (isNaN(size)) {
                 size = 0;
+            }
         }
-        
-        this.log('DownloadManager', `File size detected from metadata: ${size} bytes (${this.formatBytes(size)})`);
-        
-        // Decision logic
+
+        const sizeDesc = this.isUnknownSize(size) ? 'unknown' : this.formatBytes(size);
+        this.log('DownloadManager', `File size detected from metadata: ${size} bytes (${sizeDesc})`);
+
+        // Decision logic (unified)
         if (!this.isFirefox) {
-            return { browser: 'chromium', size, mode: 'sw' }; // Chromium: SW + Transform
+            // Chromium: Always use SW + Transform (handles unknown size via indeterminate progress)
+            return { browser: 'chromium', size, mode: 'sw' };
         }
-        
-        if (size && size <= this.FF_SW_LIMIT) {
-            return { browser: 'firefox', size, mode: 'sw' }; // FF small file: SW
+
+        // Firefox: Use SW for small files, pass-through for large/unknown
+        if (this.isValidSize(size) && size <= this.FF_SW_LIMIT) {
+            return { browser: 'firefox', size, mode: 'sw' };
         }
-        
-        return { browser: 'firefox', size, mode: 'pass' }; // FF large/unknown: pass-through
+
+        // Firefox large/unknown: pass-through (browser handles download directly)
+        return { browser: 'firefox', size, mode: 'pass' };
     }
     
     parsePositiveNumber(value) {
@@ -245,26 +291,34 @@ class DownloadManager {
     }
 
     handleDownloadProgress(sent, total) {
-        // Skip progress updates only for Firefox pass-through mode (large files)
-        // Firefox small files using SW should show normal progress like Chromium
-        const shouldShowProgress = !this.currentPlan || this.currentPlan.mode !== 'pass';
+        // Early return: Skip progress updates for pass-through mode
+        if (this.currentPlan && this.currentPlan.mode === 'pass') {
+            this.log('DownloadManager', 'Skipping progress update for pass-through mode');
+            return;
+        }
 
-        if (shouldShowProgress) {
-            const resolvedTotal = this.resolveTotalBytes(total);
-            const safeSent = typeof sent === 'number' ? sent : 0;
-            const clampedSent = resolvedTotal ? Math.min(safeSent, resolvedTotal) : safeSent;
-            const percent = resolvedTotal ? (clampedSent / resolvedTotal) * 100 : 0;
+        const resolvedTotal = this.resolveTotalBytes(total);
+        const safeSent = typeof sent === 'number' ? sent : 0;
+        const baseBytes = this.resumeConfig ? (this.resumeConfig.baseBytes || 0) : 0;
+        const httpSent = Math.max(0, safeSent - baseBytes);
+        const speed = this.calculateSpeed(httpSent, this.startTime);
+
+        // Unified progress display based on whether we know the total size
+        if (this.isValidSize(resolvedTotal)) {
+            // Determinate progress (known size)
+            const clampedSent = Math.min(safeSent, resolvedTotal);
+            const percent = (clampedSent / resolvedTotal) * 100;
             this.updateProgressBar(percent);
 
-            const baseBytes = this.resumeConfig ? (this.resumeConfig.baseBytes || 0) : 0;
-            const httpSent = Math.max(0, safeSent - baseBytes);
-            const speed = this.calculateSpeed(httpSent, this.startTime);
             const transferredStr = this.formatBytes(clampedSent);
-            const totalStr = resolvedTotal ? this.formatBytes(resolvedTotal) : '?';
-
+            const totalStr = this.formatBytes(resolvedTotal);
             this.updateProgressInfo(`${transferredStr} / ${totalStr}${speed ? ' (' + speed + ')' : ''}`);
         } else {
-            this.log('DownloadManager', 'Skipping progress update for Firefox pass-through mode');
+            // Indeterminate progress (unknown size)
+            this.showIndeterminateProgress();
+
+            const transferredStr = this.formatBytes(safeSent);
+            this.updateProgressInfo(`${transferredStr}${speed ? ' (' + speed + ')' : ''}`);
         }
     }
 
@@ -630,32 +684,41 @@ class DownloadManager {
         this.scheduleAdaptiveUnlock();
     }
     
-    showFirefoxDownloadProgress(total) {
-        // Set progress bar to 100% with animation for Firefox
+    /**
+     * Show indeterminate progress (striped animated bar, no percentage)
+     */
+    showIndeterminateProgress() {
         const progressBar = $(this.progressBar);
-        
-        // Ensure we have the animation classes first
-        progressBar.addClass('progress-bar-striped progress-bar-animated');
-        
-        // Set full width and no text
+
+        // Only add animation classes if not already present (avoid redundant DOM updates)
+        if (!progressBar.hasClass('progress-bar-animated')) {
+            progressBar.addClass('progress-bar-striped progress-bar-animated');
+        }
+
+        // Set full width with no text
         progressBar.css({
             'width': '100%',
             'text-align': '',  // Clear any text alignment
             'line-height': '',  // Clear any line height overrides
             'position': ''      // Clear any position overrides
-        }).attr('aria-valuenow', '100');
-        
-        progressBar.text(''); // No text in progress bar for Firefox
-        
-        // Show file size info only in progress-info area
-        if (total) {
+        }).attr('aria-valuenow', 100);
+
+        progressBar.text(''); // No percentage text for indeterminate progress
+    }
+
+    showFirefoxDownloadProgress(total) {
+        // Set progress bar to animated indeterminate mode
+        this.showIndeterminateProgress();
+
+        // Show file size info in progress-info area
+        if (this.isValidSize(total)) {
             const totalStr = this.formatBytes(total);
             this.updateProgressInfo(this.t('Download:progress.downloadingWithSize', 'Downloading {{size}} file...', { size: totalStr }));
         } else {
             this.updateProgressInfo(this.t('Download:progress.downloading', 'Downloading file...'));
         }
-        
-        this.log('DownloadManager', 'Firefox progress bar set to animated 100% (no text)');
+
+        this.log('DownloadManager', 'Firefox progress bar set to animated indeterminate mode');
     }
     
     updateProgressBar(percent) {
@@ -698,34 +761,37 @@ class DownloadManager {
      * @param {Object} options - Options with filename, size, and indeterminate flag
      */
     showStartingUI({ filename, size, indeterminate }) {
-        const sizeStr = size ? this.formatBytes(size) : 'unknown size';
-        
-        if (indeterminate) {
-            // Firefox large file: indeterminate progress
+        // Determine if progress is indeterminate (unified logic)
+        const isIndeterminate = indeterminate || this.isUnknownSize(size);
+        const sizeStr = this.isValidSize(size) ? this.formatBytes(size) : 'unknown size';
+
+        if (isIndeterminate) {
+            // Indeterminate progress (unknown size or pass-through mode)
             this.updateStatus(
                 this.t('Download:progress.starting', 'Starting download...'),
                 this.t('Download:progress.checkDownloads', 'You can check progress in the Downloads panel (Ctrl+J)')
             );
-            
-            // Set progress bar to indeterminate (striped animation)
-            const progressBar = $(this.progressBar);
-            if (progressBar.length) {
-                progressBar.addClass('progress-bar-striped progress-bar-animated')
-                          .css('width', '100%')
-                          .attr('aria-valuenow', 100);
-            }
-            
-            this.updateProgressInfo(this.t('Download:progress.preparingLarge', 'Preparing {{size}} file for direct download...', { size: sizeStr }));
+
+            this.showIndeterminateProgress();
+
+            const messageKey = this.isUnknownSize(size)
+                ? 'Download:progress.preparingUnknownSize'
+                : 'Download:progress.preparingLarge';
+            const messageDefault = this.isUnknownSize(size)
+                ? 'Preparing download (size unknown)...'
+                : 'Preparing {{size}} file for direct download...';
+
+            this.updateProgressInfo(this.t(messageKey, messageDefault, { size: sizeStr }));
         } else {
-            // Normal progress tracking
+            // Determinate progress (known size)
             this.updateStatus(
                 this.t('Download:progress.starting', 'Starting download...'),
                 this.t('Download:progress.pleaseWait', 'Please wait while your file downloads')
             );
             this.updateProgressInfo(this.t('Download:progress.preparing', 'Preparing download...'));
         }
-        
-        this.log('DownloadManager', `Starting UI shown for ${filename} (${sizeStr}), indeterminate: ${indeterminate}`);
+
+        this.log('DownloadManager', `Starting UI shown for ${filename} (${sizeStr}), indeterminate: ${isIndeterminate}`);
     }
     
     /**

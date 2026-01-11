@@ -43,7 +43,7 @@ from bases.Utils import ONE_MB, formatSize, getEnv, StallResilientAdapter
 from bases.Progress import Progress
 from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
 from bases.E2EE import E2EEClient
-from bases.Reader import SourceReader, FolderChangedException
+from bases.Reader import FolderChangedException
 from bases.I18n import _
 
 
@@ -107,6 +107,54 @@ if sys.platform == "win32":
 
 # Setup logging
 logger = getLogger(__name__)
+
+
+class DummyWebRTCManager:
+    """
+    Lightweight WebRTC Manager that blocks all WebRTC operations.
+
+    Used when WebRTC should be completely disabled (e.g., Tor privacy mode,
+    server policy enforcement). Does not inherit from WebRTCManager to avoid
+    unnecessary event loop and WebRTC infrastructure overhead.
+    """
+
+    def __init__(self, reason=None, *args, **kwargs):
+        """
+        Initialize DummyWebRTCManager.
+
+        Args:
+            reason: Custom error message (optional)
+            *args, **kwargs: Ignored (for compatibility with WebRTCManager signature)
+        """
+        self.reason = reason or _("WebRTC connections are disabled by server policy")
+
+    async def createOffer(self, *args, **kwargs):
+        """Block WebRTC offer creation"""
+        raise WebRTCDisabledError(self.reason)
+
+    async def setAnswer(self, *args, **kwargs):
+        """Block WebRTC answer handling"""
+        raise WebRTCDisabledError(self.reason)
+
+    async def addCandidate(self, *args, **kwargs):
+        """Block ICE candidate handling"""
+        raise WebRTCDisabledError(self.reason)
+
+    async def notifyDownloadComplete(self, *args, **kwargs):
+        """Block download completion notification"""
+        raise WebRTCDisabledError(self.reason)
+
+    async def sendFile(self, *args, **kwargs):
+        """Block file sending"""
+        raise WebRTCDisabledError(self.reason)
+
+    async def shutdownWebRTC(self):
+        """No-op shutdown (nothing to clean up)"""
+        pass
+
+    def close(self):
+        """No-op close (no resources to cleanup)"""
+        pass
 
 
 class AsyncLoopExceptionMixin:
@@ -391,7 +439,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         dc: RTCDataChannel,
         peerId: str,
         reader,
-        fileSize: int,
+        fileSize: Optional[int],
         getSizeFunc=None,
         offset=0,
         e2eeManager=None
@@ -497,10 +545,9 @@ class WebRTCManager(AsyncLoopExceptionMixin):
             dc.send("EOF")
 
             # Final progress update
-            progress.update(sent, forceLog=True, extraText=_("P2P direct"))
+            progress.update(sent, forceLog=True, extraText=_("P2P direct"), forceFinish=fileSize is None)
 
             # Calculate final statistics
-            totalTime = progress.getElapsedTime()
             sizeDisplay = getSizeFunc(sent) if getSizeFunc else f"{sent / (ONE_MB):.2f} MB"
             self.loggerCallback(_(
                 'Finish transfer {sizeDisplay} for [#{peerId}], '
@@ -599,6 +646,16 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
     # Web uses 30s, CLI uses 60s for more tolerance on slower connections
     CONNECTION_TIMEOUT_DEFAULT = 60
 
+    @staticmethod
+    def _isKnownSize(fileSize: int) -> bool:
+        """Check if file size is known (not None or negative)"""
+        return fileSize is not None and fileSize >= 0
+
+    @staticmethod
+    def _isPositiveSize(fileSize: int) -> bool:
+        """Check if file size is known and positive (> 0)"""
+        return fileSize is not None and fileSize > 0
+
     def __init__(self, loggerCallback: Callable = print, progressCallback: Optional[Callable] = None):
         self.loggerCallback = loggerCallback
         self.progressCallback = progressCallback
@@ -657,9 +714,9 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             return self._currentProgress
 
         # Create new progress bar
-        # For unknown sizes (fileSize=0), use None to let Progress class choose appropriate format
+        # For unknown sizes, use None to let Progress class choose appropriate format
         settingsGetter = SettingsGetter.getInstance()
-        barFormat = None if fileSize == 0 else self._PROGRESS_BAR_FORMAT
+        barFormat = None if not self._isKnownSize(fileSize) else self._PROGRESS_BAR_FORMAT
 
         self._currentProgress = Progress(
             fileSize,
@@ -948,7 +1005,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
 
         Args:
             filePath: Path to output file
-            fileSize: Total size of file to download
+            fileSize: Total size of file to download (None or -1 for unknown)
             allowResume: Whether to resume (True) or overwrite (False)
 
         Returns:
@@ -959,20 +1016,28 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
 
         currentSize = os.path.getsize(filePath)
 
-        # Resume or overwrite based on flag
-        if allowResume:
-            # File already complete - no need to download
-            if currentSize >= fileSize:
-                return currentSize
-
+        # Handle unknown file size (None or -1) - cannot determine completion, always overwrite
+        if not self._isKnownSize(fileSize):
             if currentSize > 0:
-                logger.debug(f"Resuming from {formatSize(currentSize)} / {formatSize(fileSize)}")
+                logger.info(f"Unknown size file - overwriting existing {formatSize(currentSize)} file: {filePath}")
+            os.remove(filePath)
+            return 0
+
+        # Known file size - handle resume or overwrite
+        if not allowResume:
+            # Overwrite existing file
+            logger.debug(f"Overwriting existing file: {filePath}")
+            os.remove(filePath)
+            return 0
+
+        # Resume mode - check if already complete
+        if currentSize >= fileSize:
             return currentSize
 
-        # Without --resume flag, always overwrite
-        logger.debug(f"Overwriting existing file: {filePath}")
-        os.remove(filePath)
-        return 0
+        # Resume from current position
+        if currentSize > 0:
+            logger.debug(f"Resuming from {formatSize(currentSize)} / {formatSize(fileSize)}")
+        return currentSize
 
     def _failDownload(self, context: dict, error: Exception, errorEvent: asyncio.Event):
         """Unified helper to handle download failure: close file and set error"""
@@ -1275,13 +1340,15 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         authHeaders: dict,
         progress,
         resumePosition: int = 0,
-        e2eeContext: Optional[dict] = None
+        e2eeContext: Optional[dict] = None,
+        statusErrorQueue: Optional[deque] = None
     ):
         """Setup data channel for file reception
 
         Args:
             resumePosition: Byte offset to resume from (0 for new download)
             e2eeContext: E2EE encryption context (contentKey, nonceBase, filename, filesize, chunkSize)
+            statusErrorQueue: Optional deque to check for server-reported errors before raising generic errors
         """
         downloadComplete = asyncio.Event()
         errorEvent = asyncio.Event()
@@ -1311,9 +1378,16 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
 
             # If connection fails/closes before download completes, trigger error
             if state in ("failed", "closed", "disconnected") and not downloadComplete.is_set():
-                errorMsg = f"WebRTC connection {state} before download completed"
-                logger.warning(errorMsg)
-                self._failDownload(context, RuntimeError(errorMsg), errorEvent)
+                # Check if server reported a specific error (e.g., FolderChangedException)
+                # before raising a generic connection error
+                if statusErrorQueue and statusErrorQueue:
+                    serverError = statusErrorQueue[0]
+                    logger.debug(f"[WebRTC] Connection {state}, using server error: {serverError}")
+                    self._failDownload(context, serverError, errorEvent)
+                else:
+                    errorMsg = f"WebRTC connection {state} before download completed"
+                    logger.warning(errorMsg)
+                    self._failDownload(context, RuntimeError(errorMsg), errorEvent)
 
         @pc.on("datachannel")
         def onDataChannel(channel):
@@ -1480,17 +1554,19 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         # Resolve output path using helper
         finalOutputPath = self._resolveOutputPath(outputPath, filename)
 
-        self.loggerCallback(_("Downloading {filename} ({fileSize:,} bytes)").format(
-            filename=filename, fileSize=fileSize))
+        # Display file info
+        fileSizeDisplay = f"{fileSize:,} bytes" if self._isKnownSize(fileSize) else "unknown bytes"
+        self.loggerCallback(_("Downloading {filename} ({fileSize})").format(
+            filename=filename, fileSize=fileSizeDisplay))
 
         # Handle resume logic
         resumePosition = self._handleResumeLogic(finalOutputPath, fileSize, resume)
 
-        # File already complete
-        if resumePosition >= fileSize:
+        # File already complete (skip check for unknown size)
+        if self._isKnownSize(fileSize) and resumePosition >= fileSize:
             return self._finishAlreadyComplete(fileSize, resumePosition, finalOutputPath)
 
-        if resumePosition > 0:
+        if resumePosition > 0 and self._isPositiveSize(fileSize):
             self.loggerCallback(_("Resuming WebRTC download from {resumePos} / {totalSize}").format(
                 resumePos=formatSize(resumePosition), totalSize=formatSize(fileSize)
             ))
@@ -1546,11 +1622,15 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         context = None
         completionTask = None
 
+        # Create status error queue early so it can be passed to data channel handler
+        # This allows connection state changes to check for specific server errors
+        statusErrorQueue = deque()
+
         try:
-            # Setup data channel handling
+            # Setup data channel handling (pass statusErrorQueue for error prioritization)
             downloadComplete, errorEvent, context = await self._setupDataChannelHandling(
                 pc, finalOutputPath, fileSize, urlInfo.baseURL, peerId, authHeaders, progress, resumePosition,
-                e2eeContext
+                e2eeContext, statusErrorQueue
             )
 
             # Setup ICE candidate handling
@@ -1588,9 +1668,8 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             # Start ICE candidate polling and wait for completion
             self._updateProgressStatus(progress, self._STATUS_WAITING_CHANNEL)
 
-            # Start background thread for status polling
+            # Start background thread for status polling 
             statusStopEvent = threading.Event()
-            statusErrorQueue = deque()
             self._startStatusPollingThread(urlInfo.baseURL, authHeaders, statusStopEvent, statusErrorQueue)
 
             # Debug: Simulate connection hang by creating a task that never completes
@@ -1762,13 +1841,13 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         # Handle resume logic (forceResume takes precedence for WebRTC fallback)
         resumePosition = self._handleResumeLogic(finalOutputPath, fileSize, forceResume or resume)
 
-        # File already complete - early return (skip check if fileSize is 0 for generic URLs with 
-        # unreliable Content-Length)
-        if resumePosition >= fileSize and not (urlInfo.isGenericURL and fileSize == 0):
+        # File already complete - early return (skip check for unknown/unreliable sizes)
+        if (self._isPositiveSize(fileSize) and resumePosition >= fileSize and
+            not (urlInfo.isGenericURL and fileSize == 0)):
             return self._finishAlreadyComplete(fileSize, resumePosition, finalOutputPath, sharedProgress)
 
-        # Show resume message if resuming (only when not using shared progress)
-        if resumePosition > 0 and not sharedProgress:
+        # Show resume message if resuming (only when not using shared progress and size is known)
+        if resumePosition > 0 and not sharedProgress and self._isPositiveSize(fileSize):
             self.loggerCallback(_("Resuming download from {resumePos} / {totalSize}").format(
                 resumePos=formatSize(resumePosition), totalSize=formatSize(fileSize)
             ))
@@ -1821,15 +1900,17 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                 if resumePosition > 0 and response.status_code != 206:
                     raise RuntimeError("Server does not support resume")
 
-                # For generic URLs with unknown size, get actual Content-Length from GET response
-                if urlInfo.isGenericURL and fileSize == 0:
+                # For unknown size (generic URLs or stdin), try to get actual Content-Length from GET response
+                if not self._isKnownSize(fileSize):
                     actualContentLength = response.headers.get('Content-Length')
                     if actualContentLength:
-                        fileSize = int(actualContentLength)
-                        # Recreate progress bar with actual size
-                        if not sharedProgress:
-                            self._finishProgress(complete=False)
-                            progress = self._ensureProgress(fileSize, self._STATUS_HTTP_DOWNLOAD, resumePosition)
+                        actualSize = int(actualContentLength)
+                        if actualSize > 0:
+                            fileSize = actualSize
+                            # Recreate progress bar with actual size
+                            if not sharedProgress:
+                                self._finishProgress(complete=False)
+                                progress = self._ensureProgress(fileSize, self._STATUS_HTTP_DOWNLOAD, resumePosition)
 
                 # Open file for writing (append mode if resuming)
                 mode = 'ab' if resumePosition > 0 else 'wb'
@@ -1888,9 +1969,9 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             statusStopEvent.set()
             session.close()  # Clean up session resources
 
-        # Verify final file size (skip for generic URLs as HEAD/GET may return different content lengths)
+        # Verify final file size (skip for generic URLs and unknown sizes)
         finalSize = os.path.getsize(finalOutputPath)
-        if not urlInfo.isGenericURL and finalSize != fileSize:
+        if not urlInfo.isGenericURL and self._isPositiveSize(fileSize) and finalSize != fileSize:
             raise RuntimeError(f"Download incomplete: {finalSize} != {fileSize} bytes")
 
         # Final progress update on success
@@ -2056,3 +2137,4 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             self.loop.call_soon_threadsafe(self.loop.stop)
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=1)
+
