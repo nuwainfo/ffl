@@ -11,7 +11,7 @@ AFAIK, `ffl` is the only CLI file-transfer tool that does all of the following:
 - 🔁 **Automatic fallback to secure relay tunnels** when NAT traversal fails — guarantees delivery
 - 🧑‍💻 **Recipient doesn’t need to install anything** — they can download via browser, `curl`, `ffl`, etc.
 - 🔐 **End-to-end encryption (AES-256-GCM)** — relay/storage is zero-knowledge
-- 📁 **Folder & multi-file support** — streaming, no need to zip/encrypt first, works even for TB-scale data
+- 📁 **Folder & stdin support** — streaming, no need to zip/encrypt first, works even for TB-scale data
 - ⏯️ **Resume interrupted transfers**
 - 🧱 **Actually Portable Executable (APE)** + native builds for **Windows, Linux, macOS**
 - 🧰 **Built-in & pluggable tunnels** (Cloudflare, ngrok, localtunnel, etc.) — supports proxies like Tor
@@ -153,12 +153,17 @@ Don't worry too much about speed. In most cases, APE and native builds run almos
 
 ## Quickstart
 
-### 🔁 Share a file or folder
+### 🔁 Share a file, folder, or stream
 
 ```bash
+# Share a local file
 ffl myfile.zip
-# or
+
+# Share a folder
 ffl /path/to/folder
+
+# Pipe data from stdin, --name is optional
+mysqldump my_db | ffl - --name "db_backup.sql"
 ```
 
 You’ll get a shareable link like:
