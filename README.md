@@ -298,14 +298,14 @@ You can chain options to achieve a **Zero-Knowledge, Zero-Trust** transfer profi
 ffl --proxy "socks5h://127.0.0.1:9050" --auth-user tom --auth-password secret --e2ee myfile.bin
 ```
 
-**What this achieves: (🧅Tor Mode)**
+**What this achieves (🧅 Tor Mode):**
 
 * **Relay Server is Blind:**
     * **No Data Access:** Thanks to `--e2ee`, the server only sees encrypted blobs.
     * **No IP Access:** Thanks to `--proxy` (Tor), the server only sees the Tor exit node's IP, not yours.
 * **Recipient is Blind:**
-    * **No IP Access:** The app automatically disables local P2P initiation (--force-relay is implied), the transfer happens via the relay tunnel, hiding your real IP address from the recipient.
-    * **Full WebRTC Block**: WebRTC signaling is completely blocked at the application level. Even if the recipient manually appends ?webrtc=on to the URL, the connection will never upgrade to P2P. Your real IP is strictly hidden.
+    * **No IP Access:** The app automatically disables local P2P initiation (`--force-relay` is implied), **so** the transfer happens via the relay tunnel, hiding your real IP address from the recipient.
+    * **Full WebRTC Block:** WebRTC signaling is **completely blocked** at the application level. Even if the recipient manually appends `?webrtc=on` to the URL, the connection will **never** upgrade to P2P. Your real IP is strictly hidden.
     * **No Unauthorized Access:** Protected by HTTP Basic Auth.
 
 > **ℹ️ Note for Standard (Non-Tor) Proxies:**
@@ -313,7 +313,7 @@ ffl --proxy "socks5h://127.0.0.1:9050" --auth-user tom --auth-password secret --
 > * **Hide IP by default:** You can add `--force-relay` to route traffic via the relay. This effectively hides your IP for a normal session.
 > * **The Caveat:** This is a "soft" privacy preference. The P2P capability remains active in the background, so a knowledgeable recipient could manually force a P2P connection (`?webrtc=on`).
 > * **Need Tor-level strictness?** If you require **absolute server-side blocking** of WebRTC on standard networks (making P2P impossible regardless of recipient actions), please check the **Licensed Version**.
-> *(Note: We provide this strict blocking for **free** specifically for **Tor** connections to ensure user safety.)*
+> *(We provide this strict blocking for **free** specifically for **Tor** connections to ensure user safety.)*
 
 > **🛡️ MITM Protection & Relay Trust**
 > `ffl` guarantees **Zero-Knowledge** against passive relays. regarding Active MITM resistance, this feature is already standard in our Enterprise GUI and is currently being ported to this open-source CLI.
