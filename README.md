@@ -226,6 +226,8 @@ Options (most useful ones):
   --e2ee                   Enable end-to-end encryption
   --preferred-tunnel {cloudflare,default,...} Set preferred tunnel for future runs
   --invite                 Open invite page in browser with the sharing link
+  --qr [FILE]              Display QR code in terminal (default) or save to FILE (e.g., qr.png)
+  --name FILENAME          Specify custom download filename 
   --upload {3 hours,6 hours,12 hours,24 hours,72 hours,...} Upload to FastFileLink server and share via temporary storage
   --resume                 Resume a previously interrupted upload
   --pause PERCENTAGE       Pause upload at specific percentage (1–99, requires --upload)
