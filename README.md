@@ -295,23 +295,25 @@ This prevents anonymous downloads even if the link leaks.
 You can chain options to achieve a **Zero-Knowledge, Zero-Trust** transfer profile. This ensures that neither the relay server nor the recipient can trace your identity or access your data.
 
 ```
-ffl --proxy "socks5h://127.0.0.1:9050" --auth-user tom --auth-password secret --e2ee --force-relay myfile.bin
+ffl --proxy "socks5h://127.0.0.1:9050" --auth-user tom --auth-password secret --e2ee myfile.bin
 ```
 
-**What this achieves:**
+**What this achieves: (🧅Tor Mode)**
 
 * **Relay Server is Blind:**
     * **No Data Access:** Thanks to `--e2ee`, the server only sees encrypted blobs.
     * **No IP Access:** Thanks to `--proxy` (Tor), the server only sees the Tor exit node's IP, not yours.
-* **Recipient Limitations:**
-    * **No IP Access:** Thanks to `--force-relay`, the transfer happens via the relay tunnel, hiding your real IP address from the recipient.
+* **Recipient is Blind:**
+    * **No IP Access:** The app automatically disables local P2P initiation (--force-relay is implied), the transfer happens via the relay tunnel, hiding your real IP address from the recipient.
+    * **Full WebRTC Block**: WebRTC signaling is completely blocked at the application level. Even if the recipient manually appends ?webrtc=on to the URL, the connection will never upgrade to P2P. Your real IP is strictly hidden.
     * **No Unauthorized Access:** Protected by HTTP Basic Auth.
 
-> **⚠️ Important Note on WebRTC & IP Leaks:**
-> By default, direct P2P (WebRTC) connections **will reveal your IP address** to the recipient to establish the link.
-> * Using `--force-relay` disables P2P initiation from your side to protect your IP.
-> * **However**, a knowledgeable recipient could manually append `?webrtc=on` to the URL to request a P2P connection.
-> * If you require **strict server-side enforcement** (where WebRTC signaling is completely blocked regardless of client requests), please check the **Licensed Version** features.
+> **ℹ️ Note for Standard (Non-Tor) Proxies:**
+> When using a standard proxy (e.g., corporate VPN), `ffl` prioritizes WebRTC for maximum transfer speed.
+> * **Hide IP by default:** You can add `--force-relay` to route traffic via the relay. This effectively hides your IP for a normal session.
+> * **The Caveat:** This is a "soft" privacy preference. The P2P capability remains active in the background, so a knowledgeable recipient could manually force a P2P connection (`?webrtc=on`).
+> * **Need Tor-level strictness?** If you require **absolute server-side blocking** of WebRTC on standard networks (making P2P impossible regardless of recipient actions), please check the **Licensed Version**.
+> *(Note: We provide this strict blocking for **free** specifically for **Tor** connections to ensure user safety.)*
 
 > **🛡️ MITM Protection & Relay Trust**
 > `ffl` guarantees **Zero-Knowledge** against passive relays. regarding Active MITM resistance, this feature is already standard in our Enterprise GUI and is currently being ported to this open-source CLI.
