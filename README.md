@@ -304,7 +304,7 @@ ffl --proxy "socks5h://127.0.0.1:9050" --auth-user tom --auth-password secret --
     * **No Data Access:** Thanks to `--e2ee`, the server only sees encrypted blobs.
     * **No IP Access:** Thanks to `--proxy` (Tor), the server only sees the Tor exit node's IP, not yours.
 * **Recipient is Blind:**
-    * **No IP Access:** The app automatically disables local P2P initiation (`--force-relay` is implied), **so** the transfer happens via the relay tunnel, hiding your real IP address from the recipient.
+    * **No IP Access:** The app automatically disables local P2P initiation (`--force-relay` is implied), so the transfer happens via the relay tunnel, hiding your real IP address from the recipient.
     * **Full WebRTC Block:** WebRTC signaling is **completely blocked** at the application level. Even if the recipient manually appends `?webrtc=on` to the URL, the connection will **never** upgrade to P2P. Your real IP is strictly hidden.
     * **No Unauthorized Access:** Protected by HTTP Basic Auth.
 
