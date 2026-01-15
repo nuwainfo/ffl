@@ -1,0 +1,103 @@
+name: Release SHA256SUMS + sig
+permissions:
+  contents: write
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to patch (e.g. v3.8.2). Leave empty to use latest."
+        required: false
+        default: ""
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if [ -n "${{ github.event.release.tag_name }}" ]; then
+            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          TAG="$(gh release view --json tagName -q .tagName)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download release assets
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf release_assets
+          mkdir -p release_assets
+          gh release download "${{ steps.tag.outputs.tag }}" -D release_assets
+
+          # rerun-safe cleanup
+          rm -f release_assets/SHA256SUMS release_assets/SHA256SUMS.sig || true
+
+          ls -lah release_assets
+
+      - name: Generate SHA256SUMS
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd release_assets
+          find . -maxdepth 1 -type f -printf "%P\n" \
+            | sort \
+            | xargs -r sha256sum \
+            > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Import GPG key
+        shell: bash
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          set -euxo pipefail
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --list-secret-keys --keyid-format=long
+
+      - name: Sign SHA256SUMS (detached, armored)
+        shell: bash
+        env:
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euxo pipefail
+          cd release_assets
+
+          if [ -n "${GPG_PASSPHRASE:-}" ]; then
+            gpg --batch --yes --pinentry-mode loopback \
+              --passphrase "$GPG_PASSPHRASE" \
+              ${GPG_KEY_ID:+--local-user "$GPG_KEY_ID"} \
+              --armor --detach-sign -o SHA256SUMS.sig SHA256SUMS
+          else
+            gpg --batch --yes \
+              ${GPG_KEY_ID:+--local-user "$GPG_KEY_ID"} \
+              --armor --detach-sign -o SHA256SUMS.sig SHA256SUMS
+          fi
+
+          gpg --verify SHA256SUMS.sig SHA256SUMS
+          ls -lah SHA256SUMS SHA256SUMS.sig
+
+      - name: Upload SHA256SUMS + sig back to release
+        shell: bash
+        run: |
+          set -euxo pipefail
+          gh release upload "${{ steps.tag.outputs.tag }}" \
+            release_assets/SHA256SUMS \
+            release_assets/SHA256SUMS.sig \
+            --clobber
