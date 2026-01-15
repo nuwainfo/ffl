@@ -622,6 +622,7 @@ Every time I needed to move files in and out of a container, it was painful:
 - The container usually has almost nothing installed.
 - It sits behind the host’s NAT and other layers of isolation.
 - I don't always have convenient shared volumes, and SFTP is typically only available on the server side, not inside the container.
+- Even `docker/podman cp` is a hassle, it requires host access and multiple steps just to get a file to my local machine.
 
 The most practical trick I kept using (without extra infrastructure) was:
 
