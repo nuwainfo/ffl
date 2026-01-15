@@ -134,6 +134,39 @@ pip install -r requirements.txt
 .\BuildCLI.bat ffl
 ```
 
+### 🔐 Verifying Integrity (Optional)
+
+For security-conscious users, we provide GPG signatures and checksums for all release artifacts.
+
+<details>
+<summary><strong>Verifying Integrity (GPG)</strong></summary>
+  
+These steps verify that the downloaded binary (e.g., ffl.com) matches the official release signed by our GPG key.
+
+```bash
+# 1. Import the public key
+curl -sL https://raw.githubusercontent.com/nuwainfo/ffl/refs/heads/main/dist/ffl-release.signing.pub | gpg --import
+
+# 2. Download checksums and signature
+curl -LO https://github.com/nuwainfo/ffl/releases/latest/download/SHA256SUMS
+curl -LO https://github.com/nuwainfo/ffl/releases/latest/download/SHA256SUMS.sig
+
+# 3. Verify the checksum file itself
+gpg --verify SHA256SUMS.sig SHA256SUMS
+
+# 4. Verify the binary
+# (Replace 'ffl.com' with your filename if you downloaded a native build)
+
+# Linux:
+grep "ffl.com" SHA256SUMS | sha256sum -c -
+
+# macOS:
+grep "ffl.com" SHA256SUMS | shasum -a 256 -c -
+```
+
+</details>
+
+
 ### 🆙 Keeping ffl Updated
 
 You don't need to visit GitHub to get the latest features. `ffl` handles updates automatically, respecting your current build type (Native or APE).
