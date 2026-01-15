@@ -116,6 +116,21 @@ curl.exe "https://github.com/nuwainfo/ffl/releases/latest/download/ffl.com" -o "
 # Tip: Move to a folder in your PATH to run from anywhere
 ```
 
+<details> <summary>🔐 <strong>Verifying Integrity (GPG) - Optional</strong></summary>
+To verify the integrity of the downloaded files (Native or APE), you can import our signing key and check the signatures:
+```bash
+# 1. Import the public key
+curl -sL [https://raw.githubusercontent.com/nuwainfo/ffl/refs/heads/main/dist/ffl-release.signing.pub](https://raw.githubusercontent.com/nuwainfo/ffl/refs/heads/main/dist/ffl-release.signing.pub) | gpg --import
+
+# 2. Download checksums and signature
+curl -LO [https://github.com/nuwainfo/ffl/releases/latest/download/SHA256SUMS](https://github.com/nuwainfo/ffl/releases/latest/download/SHA256SUMS)
+curl -LO [https://github.com/nuwainfo/ffl/releases/latest/download/SHA256SUMS.sig](https://github.com/nuwainfo/ffl/releases/latest/download/SHA256SUMS.sig)
+
+# 3. Verify
+gpg --verify SHA256SUMS.sig SHA256SUMS
+```
+</details>
+
 ### Option 3: Build from source
 
 If you prefer to build from source (requires **conda** and **cargo**):
