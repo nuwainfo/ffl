@@ -61,6 +61,15 @@ Workflows like this also pair naturally with tools such as [llamafile](https://g
 
 You can download the [latest release](https://github.com/nuwainfo/ffl/releases/) for your system, or install a release from the command-line:
 
+> ⚡ **Short URLs for convenience**
+>
+> We provide short domains for easier typing (or copy-pasting).
+> * **Linux/macOS Install:** `curl -fsSL https://fastfilelink.com/install.sh | bash`
+> * **Windows Install:** `iwr -useb https://fastfilelink.com/install.ps1 | iex`
+> * **APE Binary:** `curl -fL https://fastfilelink.com/ffl.com -o ffl.com && chmod +x ffl.com`
+>
+> 🔒 **Security Note:** `fastfilelink.com/*` is only a redirect to GitHub. If you prefer, use the direct GitHub URLs below (checksums & GPG signatures available at the bottom).
+
 ### Option 1: Native Installs
 
 > **Note:** Native builds are currently **x86_64 only** for Windows and Linux.
