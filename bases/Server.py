@@ -36,13 +36,13 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
 
-from bases.Kernel import getLogger, PUBLIC_VERSION
+from bases.Kernel import getLogger, PUBLIC_VERSION, FFLEvent, Throttler
 from bases.Utils import flushPrint, utf8, formatSize
 from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
 from bases.WebRTC import WebRTCManager, WebRTCDisabledError
 from bases.Progress import Progress
 from bases.E2EE import E2EEManager
-from bases.Reader import FolderChangedException
+from bases.Readers import FolderChangedException
 from bases.I18n import _
 
 LOG_OUTPUT_DURATION = 1 # Seconds
@@ -72,22 +72,38 @@ except ImportError:
     logger.debug("Unable to optimize event loop in platform")
 
 
+@dataclass
+class HTTPAuth:
+    """HTTP Basic Authentication credentials."""
+    user: Optional[str] = None
+    password: Optional[str] = None
+
+    def isEnabled(self) -> bool:
+        """Check if authentication is enabled (password is required)."""
+        return bool(self.password)
+
+
 class AuthMixin:
     """
     A mixin to handle Basic Authentication for BaseHTTPRequestHandler.
     Provides authentication functionality for protecting HTTP resources.
+
+    Child classes must implement:
+        @property
+        def auth(self) -> HTTPAuth:
+            return HTTPAuth(user=..., password=...)
     """
     REALM = 'FastFileLink Protected Resource'
 
     def handleAuthentication(self):
         """
         Checks the 'Authorization' header and validates user credentials.
-        
+
         Returns:
             bool: True if authentication is successful, False otherwise.
         """
         # Skip auth if not configured (password is required to enable auth)
-        if not self.server.config.authPassword:
+        if not self.auth.isEnabled():
             return True
 
         authHeader = self.headers.get('Authorization')
@@ -104,12 +120,28 @@ class AuthMixin:
             credentials = decodedBytes.decode('utf-8')
             username, password = credentials.split(':', 1)
 
-            # Verify credentials against server config
-            if username == self.server.config.authUser and password == self.server.config.authPassword:
+            # Verify credentials against auth property
+            if username == self.auth.user and password == self.auth.password:
                 logger.info(f"Authentication successful for user: '{username}'")
+
+                # Trigger authSuccess event
+                FFLEvent.authSuccess.trigger(
+                    username=username,
+                    timestamp=datetime.datetime.now().isoformat(),
+                    clientIp=self.client_address[0] if self.client_address else None
+                )
+
                 return True
             else:
                 logger.warning(f"Authentication failed: Invalid credentials for user '{username}'")
+
+                # Trigger authFailed event
+                FFLEvent.authFailed.trigger(
+                    username=username,
+                    clientIp=self.client_address[0] if self.client_address else None,
+                    timestamp=datetime.datetime.now().isoformat()
+                )
+
                 self.sendAuthChallenge()
                 return False
         except (base64.binascii.Error, UnicodeDecodeError, ValueError) as e:
@@ -121,6 +153,9 @@ class AuthMixin:
         """
         Sends a 401 Unauthorized response to the client, prompting for credentials.
         """
+        # Trigger authRequired event
+        FFLEvent.authRequired.trigger(realm=self.REALM, timestamp=datetime.datetime.now().isoformat())
+
         html = b'<h1>401 Unauthorized</h1><p>Authentication required to access this resource.</p>'
 
         self.send_response(HTTPStatus.UNAUTHORIZED)
@@ -141,6 +176,39 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
     # To let browser can resume downloads
     protocol_version = 'HTTP/1.1'
     etag = uuid.uuid4()
+
+    UA_RULES = {
+        # Direct download (non-browsers or explicitly excluded from index)
+        "DIRECT_DOWNLOAD": [["windowspowershell"],],
+
+        # In-app browser whitelist (only explicitly listed are considered)
+        # Each item requires all tokens to match (AND)
+        "IN_APP": [
+            ["micromessenger"], # WeChat
+            ["line/", "iab"], # LINE (conservative)
+            ["telegram-android/"], # Telegram Android
+            ["mqqbrowser", " qq"], # QQ (common pattern)
+            ["qqtheme"], # QQ (alternative signal)
+            ["whatsapp"], # WhatsApp (may include bots)
+        ],
+
+        # General browser whitelist (avoid treating unknown clients as browsers)
+        "BROWSER": [
+            ["chrome/"],
+            ["crios/"],
+            ["safari/"],
+            ["firefox/"],
+            ["fxios"],
+            ["edg/"],
+            ["mozilla"],
+        ],
+
+        # Preview/crawlers (currently also redirected to index)
+        "PREVIEW_BOTS": [
+            ["facebookexternalhit"],
+            ["line-"],
+        ],
+    }
 
     def __init__(self, *args, **kwargs):
         # Define path handlers for HEAD, GET, and POST methods
@@ -179,17 +247,26 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             '/e2ee/init': self._handleE2EEInit,
         }
 
-        # One request one handler, so _extraHeaders can be safely used in self.end_headers.
-        self._extraHeaders = {}
-
         if os.getenv('JS_LOG_TO_SERVER_DEBUG') == 'True':
             self.postPathMap.update({
                 '/debug/log': self._handleDebugLog,
             })
 
+        # One request one handler, so _extraHeaders can be safely used in self.end_headers.
+        self._extraHeaders = {}
+
+        # Generate unique download ID for tracking
+        self._downloadId = str(uuid.uuid4())
+        self._downloadStartTime = None
+
         settingsGetter = SettingsGetter.getInstance()
 
         super().__init__(directory=settingsGetter.baseDir, *args, **kwargs)
+
+    @property
+    def auth(self) -> HTTPAuth:
+        """Return HTTPAuth from server config for AuthMixin."""
+        return HTTPAuth(user=self.server.config.authUser, password=self.server.config.authPassword)
 
     def _normalizeRequestPath(self):
         pasedURL = urlparse(self.path)
@@ -283,15 +360,35 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         super().do_HEAD()
 
     def _determineRedirectPath(self):
-        """Determine redirect path based on User-Agent"""
-        if 'User-Agent' not in self.headers:
-            return '/download'
-        elif 'Mozilla' not in self.headers['User-Agent']:
-            return '/download'
-        elif 'WindowsPowerShell' in self.headers['User-Agent']:
-            return '/download'
-        else:
-            return '/static/index.html'
+        userAgent = self.headers.get("User-Agent", "")
+        if not userAgent:
+            return "/download"
+
+        userAgentLower = userAgent.lower()
+
+        def matchAll(tokens):
+            # Convert tokens to lowercase as well, to avoid issues if rules contain uppercase
+            return all(t.lower() in userAgentLower for t in tokens)
+
+        def matchAny(listOfTokenGroups):
+            return any(matchAll(group) for group in listOfTokenGroups)
+
+        # 1) Direct download
+        if matchAny(self.UA_RULES["DIRECT_DOWNLOAD"]):
+            return "/download"
+
+        # 2) In-app whitelist
+        if matchAny(self.UA_RULES["IN_APP"]):
+            return "/static/index.html"
+
+        # 3) Preview bots (decide whether to treat as index; currently follows original behavior: go to index)
+        if matchAny(self.UA_RULES["PREVIEW_BOTS"]):
+            return "/static/index.html"
+
+        # 4) General browsers
+        isBrowser = matchAny(self.UA_RULES["BROWSER"])
+
+        return "/static/index.html" if isBrowser else "/download"
 
     def _handleHeadRedirect(self):
         """Handle redirect by determining path and calling appropriate handler"""
@@ -379,18 +476,60 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
     def _handleStartDownloadActions(self, size):
         flushPrint(_('[{timestamp}] Downloading by user').format(timestamp=self.date_time_string()))
 
+        # Get client information
+        userAgent = self.headers.get('User-Agent', 'Unknown')
+        host = self.headers.get('Host', 'Unknown')
+
+        # Trigger downloadStarted event
+        FFLEvent.downloadStarted.trigger(
+            timestamp=self.date_time_string(),
+            downloadId=self._downloadId,
+            connectionType='http',
+            clientInfo={
+                'userAgent': userAgent,
+                'domain': host
+            },
+            resumeOffset=self.range[0] if self.range else 0,
+            fileSize=size,
+            fileName=self.server.reader.contentName
+        )
+
     def _handlePostDownloadActions(self, size):
         flushPrint(_(
             'File sending is complete. '
             'Please wait for the recipient to finish downloading before you close the application.\n'
         ))
+
+        # Calculate download duration and average speed
+        duration = time.time() - self._downloadStartTime
+        averageSpeed = int(size / duration) if (size and duration > 0) else 0
+
+        # Get client information
+        userAgent = self.headers.get('User-Agent', 'Unknown')
+        host = self.headers.get('Host', 'Unknown')
+
+        # Trigger downloadCompleted event
+        FFLEvent.downloadCompleted.trigger(
+            downloadId=self._downloadId,
+            bytesTransferred=size if size else 0,
+            duration=duration,
+            averageSpeed=averageSpeed,
+            connectionType='http',
+            clientInfo={
+                'userAgent': userAgent,
+                'domain': host
+            }
+        )
+
         self.server.doAfterDownload()
 
     def _handleDownloadExceptionActions(self, exception):
+        # Determine failure reason
         if isinstance(exception, FolderChangedException):
             # Folder content changed during transfer
             errorMsg = str(exception)
             filePath = getattr(exception, 'filePath', None)
+            reason = 'folder-changed'
 
             # Notify sharer
             flushPrint(_('\n⚠️  TRANSFER ABORTED: {errorMsg}').format(errorMsg=errorMsg))
@@ -406,10 +545,26 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             }
         elif isinstance(exception, (ConnectionResetError, ConnectionAbortedError, ConnectionError, BrokenPipeError)):
             flushPrint(_('\nConnection disconnected, wait retrying.\n'))
+            reason = 'connection-lost'
+            errorMsg = 'Connection lost'
         elif isinstance(exception, OSError):
             flushPrint(_('\nUser closes the connection, please try again.\n'))
+            reason = 'connection-closed'
+            errorMsg = 'User closed connection'
         else:
             logger.debug(f'_handleDownloadExceptionActions: {exception}')
+            reason = 'unknown'
+            errorMsg = str(exception)
+
+        # Trigger downloadFailed event
+        FFLEvent.downloadFailed.trigger(
+            downloadId=self._downloadId,
+            reason=reason,
+            error=errorMsg,
+            bytesTransferred=0, # We don't track this in exception handler
+            totalBytes=None,
+            duration=time.time() - self._downloadStartTime
+        )
 
     def _handleE2EEManifest(self, args):
         """Handle /e2ee/manifest endpoint - returns E2E encryption metadata"""
@@ -536,6 +691,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             return
 
         # Start to download
+        self._downloadStartTime = time.time()
         try:
             self._handleStartDownloadActions(size)
         except PermissionError as e:
@@ -618,6 +774,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
             # Send file/directory data in chunks
             chunkSize = self.server.e2eeManager.chunkSize if self.server.config.e2eeEnabled else self.CHUNK_SIZE
+            progressThrottler = Throttler(interval=1.0)
 
             for data in reader.iterChunks(chunkSize, start=start):
                 # Ensure we don't send beyond the requested range (if known)
@@ -638,6 +795,24 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
                 # Update progress periodically
                 progress.update(written)
+
+                # Trigger downloadProgress event (throttled)
+                if progressThrottler.shouldTrigger():
+                    currentTime = time.time()
+                    percentage = (written * 100.0 / size) if size and size > 0 else 0
+                    duration = currentTime - self._downloadStartTime
+                    speed = int(written / duration) if duration > 0 else 0
+
+                    FFLEvent.downloadProgress.trigger(
+                        downloadId=self._downloadId,
+                        bytesTransferred=written,
+                        totalBytes=size,
+                        percentage=percentage,
+                        speed=speed,
+                        connectionType='http',
+                        elapsedTime=duration,
+                        estimatedRemaining=((size - written) / speed) if (speed > 0 and size) else None
+                    )
 
                 # Break if we've reached the end (for known size)
                 if end is not None and written > end:
@@ -922,6 +1097,14 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                     reader, size, formatSize, browserHint=browserHint, offset=offset, e2eeManager=e2eeManager
                 )
             )
+
+            # Trigger webrtcOfferReceived event
+            FFLEvent.webrtcOfferReceived.trigger(
+                peerId=offer.get('peerId'),
+                sessionId=offer.get('sessionId'),
+                timestamp=datetime.datetime.now().isoformat()
+            )
+
             self._sendBytes(json.dumps(offer).encode(), "application/json; charset=utf-8")
 
         except WebRTCDisabledError as e:
@@ -1002,13 +1185,15 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         self._sendBytes(result.encode())
 
     def _handleWebRTCCandidate(self, data):
-        result = self.server.webRTC.runAsync(self.server.webRTC.addCandidate(data))
-        self._sendBytes(result.encode())
+        result = self.server.webRTC.runAsync(self.server.webRTC.addCandidate(data), wait=False, name="addCandidate")
+        self._sendBytes(b"OK")
 
     def _handleWebRTCComplete(self, data):
         """Handle browser notification that file download is complete"""
-        result = self.server.webRTC.runAsync(self.server.webRTC.notifyDownloadComplete(data))
-        self._sendBytes(result.encode())
+        self.server.webRTC.runAsync(
+            self.server.webRTC.notifyDownloadComplete(data), wait=False, name="notifyDownloadComplete"
+        )
+        self._sendBytes(b"OK")
 
     def _handleDebugLog(self, data):
         """
@@ -1095,7 +1280,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
         # Never show 404/400. FIXME: This is kinda ugly way, but currently no idea to do it better.
         if format == "code %d, message %s" and args and args[0] in skipCode:
-            return
+            return None
 
         return super().log_error(format, *args)
 
@@ -1219,6 +1404,11 @@ class Server(ThreadingHTTPServer):
                 f"[E2EE] E2E encryption ENABLED - using singleton manager "
                 f"(e2eeEnabled={self.config.e2eeEnabled})"
             )
+
+            # Trigger e2eeInitialized event
+            FFLEvent.e2eeInitialized.trigger(
+                e2eeEnabled=True, mode='p2p', algorithm='AES-256-GCM', chunkSize=WebRTCManager.CHUNK_SIZE
+            )
         else:
             self.e2eeManager = None
             logger.debug(f"[E2EE] E2E encryption DISABLED (e2eeEnabled={self.config.e2eeEnabled})")
@@ -1236,12 +1426,26 @@ class Server(ThreadingHTTPServer):
 
                 def __init__(self, server):
                     self.server = server
+                    self._downloadId = str(uuid.uuid4())
+                    self._downloadStartTime = time.time()
 
             handler = ExceptionHandler(self)
             handler._handleDownloadExceptionActions(exception)
 
         self.webRTC = webRTCManagerClass(
             loggerCallback=flushPrint, downloadCallback=self.doAfterDownload, exceptionCallback=handleWebRTCException
+        )
+
+        # Trigger serverStarting event
+        FFLEvent.serverStarting.trigger(
+            port=serverAddress[1],
+            domain=domain,
+            maxDownloads=config.maxDownloads,
+            timeout=config.timeout,
+            authEnabled=config.authPassword is not None,
+            e2eeEnabled=config.e2eeEnabled,
+            torEnabled=config.torEnabled,
+            webrtcEnabled=config.defaultWebRTC
         )
 
         super().__init__(serverAddress, requestHandlerClass)
@@ -1255,6 +1459,10 @@ class Server(ThreadingHTTPServer):
                 if self.config.timeout > 0 and (time.time() - self.startTime) >= self.config.timeout:
                     flushPrint(_('Timeout ({timeout} seconds) reached. Shutting down server.').format(
                         timeout=self.config.timeout))
+
+                    # Trigger serverTimeout event
+                    FFLEvent.serverTimeout.trigger(timeout=self.config.timeout, downloadCount=self.downloadCount)
+
                     self.shutdown()
                     break
 
@@ -1273,6 +1481,12 @@ class Server(ThreadingHTTPServer):
         if self.config.maxDownloads > 0 and self.downloadCount >= self.config.maxDownloads:
             flushPrint(_('Maximum downloads ({maxDownloads}) reached. Shutting down server.').format(
                 maxDownloads=self.config.maxDownloads))
+
+            # Trigger maxDownloadsReached event
+            FFLEvent.maxDownloadsReached.trigger(
+                maxDownloads=self.config.maxDownloads, downloadCount=self.downloadCount
+            )
+
             self.shutdown()
 
     # Let normal shutdown not be printed
@@ -1294,6 +1508,11 @@ class Server(ThreadingHTTPServer):
         self.stop = True
         self.webRTC.closeWebRTC()
         super().shutdown()
+
+        # Server has shut down - trigger serverShutdown event
+        FFLEvent.serverShutdown.trigger(
+            reason='normal', downloadCount=self.downloadCount, uptime=time.time() - self.startTime
+        )
 
 
 def createServer(reader, port, uid, domain, handlerClass=None, webRTCManagerClass=None, config: ServerConfig = None):

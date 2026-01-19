@@ -109,7 +109,8 @@
             "retryingP2p": "重试P2P连线...",
             "savingFile": "储存档案中...",
             "creatingDownload": "建立下载中...",
-            "downloadingPercent": "透过P2P下载中：{{percent}}%"
+            "downloadingPercent": "透过P2P下载中：{{percent}}%",
+            "downloading": "透过P2P下载中..."
         },
         "connection": {
             "serverRelay": "使用伺服器中继下载",

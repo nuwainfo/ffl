@@ -192,8 +192,6 @@ class IsolationRef:
 # ---------------------------------------------------------------------------
 installAs("av")
 
-import os
-import sys
 import platform
 
 if 'Cosmopolitan' in platform.version():
@@ -204,11 +202,11 @@ if 'Cosmopolitan' in platform.version():
         sys.path.insert(0, os.path.dirname(lib))
 
     del sys.modules['sitecustomize']
-    import sitecustomize  # pylint: disable=import-error  # Reimport sitecustomize to apply cosmos patches.
+    import sitecustomize # pylint: disable=import-error  # Reimport sitecustomize to apply cosmos patches.
 
     installAs("ifaddr")
 
-    import _ifaddr_c  # pylint: disable=import-error
+    import _ifaddr_c # pylint: disable=import-error
     from aioice import ice
     ice.ifaddr = _ifaddr_c
 
@@ -221,6 +219,6 @@ if 'Cosmopolitan' in platform.version():
     installAs("google_crc32c")
 
     from aiortc import rtcsctptransport
-    from crc32c import crc32c  # pylint: disable=import-error
+    from crc32c import crc32c # pylint: disable=import-error
 
     rtcsctptransport.crc32c = crc32c

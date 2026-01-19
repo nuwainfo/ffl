@@ -22,14 +22,13 @@ import time
 import unittest
 import subprocess
 import json
-import tempfile
 import sys
-import shutil
 
 import requests
 
 from urllib.parse import urlparse
 
+from bases.CLI import DEFAULT_AUTH_USER_NAME
 from ..CoreTestBase import FastFileLinkTestBase
 
 
@@ -128,7 +127,7 @@ class CLITest(FastFileLinkTestBase):
         combinedOutput = ""
         if hasattr(self, 'outputCapture') and self.outputCapture:
             combinedOutput = self._updateCapturedOutput(self.outputCapture)
-        
+
         # Fallback to direct log file reading for backwards compatibility
         if not combinedOutput and self.procLogPath and os.path.exists(self.procLogPath):
             try:
@@ -150,30 +149,26 @@ class CLITest(FastFileLinkTestBase):
             os.path.join(os.path.dirname(__file__), "..", "..", "Core.py"), "--cli", "share", self.testFilePath
         ]
         command.extend(extraArgs)
-        
+
         print(f"[Test] Running command: {' '.join(command)}")
-        
+
         # Use file-based output capture to avoid pipe buffer issues
         self._procLogFile = open(self.procLogPath, "w+", encoding="utf-8", buffering=1)
-        
+
         # Pass current environment to subprocess (including any test environment variables)
         env = os.environ.copy()
-        
+
         self.coreProcess = subprocess.Popen(
-            command,
-            stdout=self._procLogFile,
-            stderr=subprocess.STDOUT,
-            text=True,
-            env=env
+            command, stdout=self._procLogFile, stderr=subprocess.STDOUT, text=True, env=env
         )
-        
+
         # Setup output capture context (use keys expected by CoreTestBase._updateCapturedOutput)
         outputCapture['logPath'] = self.procLogPath
         outputCapture['logFile'] = self._procLogFile
-        
+
         # Give the process a moment to start and check what happens
         print("[Test] Waiting for process to start...")
-        time.sleep(2)  # Let the process start and handle arguments
+        time.sleep(2) # Let the process start and handle arguments
 
         # Check if process has already terminated (e.g., due to argument validation error)
         pollResult = self.coreProcess.poll()
@@ -202,7 +197,7 @@ class CLITest(FastFileLinkTestBase):
         # For auth tests, the process should terminate quickly due to timeout or error
         # Wait for process to complete, but force terminate if needed
         try:
-            self._assertProcessTerminated(timeout=15)  # Increased timeout for auth tests
+            self._assertProcessTerminated(timeout=15) # Increased timeout for auth tests
         except AssertionError:
             # Process didn't terminate naturally, force terminate it
             print("[Test] Process didn't terminate naturally, forcing termination...")
@@ -230,38 +225,38 @@ class CLITest(FastFileLinkTestBase):
     def testCLIAuthPasswordOnly(self):
         """Test --auth-password enables auth with default username 'ffl'."""
         extraArgs = ["--auth-password", "secret123", "--timeout", "5"]
-        
+
         print(f"[Test] Testing auth with password only")
         combinedOutput = self._runCommandAndGetOutput(extraArgs)
-        
+
         print(f"[Test] Process output: {combinedOutput}")
-        
+
         # Should show auth enabled with username 'ffl' but NOT show password
-        self.assertIn("Authentication enabled - Username: ffl", combinedOutput)
-        self.assertNotIn("secret123", combinedOutput)  # Password should not be shown
+        self.assertIn(f"Authentication enabled - Username: {DEFAULT_AUTH_USER_NAME}", combinedOutput)
+        self.assertNotIn("secret123", combinedOutput) # Password should not be shown
 
     def testCLIAuthUserAndPassword(self):
         """Test --auth-user and --auth-password work together."""
         extraArgs = ["--auth-user", "admin", "--auth-password", "mypass", "--timeout", "5"]
-        
+
         print(f"[Test] Testing auth with user and password")
         combinedOutput = self._runCommandAndGetOutput(extraArgs)
-        
+
         print(f"[Test] Process output: {combinedOutput}")
-        
+
         # Should show auth enabled with custom username but NOT show password
         self.assertIn("Authentication enabled - Username: admin", combinedOutput)
-        self.assertNotIn("mypass", combinedOutput)  # Password should not be shown
+        self.assertNotIn("mypass", combinedOutput) # Password should not be shown
 
     def testCLIAuthUserOnlyError(self):
         """Test --auth-user without --auth-password shows error."""
         extraArgs = ["--auth-user", "admin"]
-        
+
         print(f"[Test] Testing auth user only (should fail)")
         combinedOutput = self._runCommandAndGetOutput(extraArgs)
-        
+
         print(f"[Test] Process output: {combinedOutput}")
-        
+
         # Should show error message
         self.assertIn("Error: --auth-user requires --auth-password", combinedOutput)
         self.assertIn("Use --auth-password to enable authentication", combinedOutput)
@@ -269,14 +264,91 @@ class CLITest(FastFileLinkTestBase):
     def testCLINoAuthNormal(self):
         """Test no auth arguments work normally without auth messages."""
         extraArgs = ["--timeout", "5"]
-        
+
         print(f"[Test] Testing no auth (normal operation)")
         combinedOutput = self._runCommandAndGetOutput(extraArgs)
-        
+
         print(f"[Test] Process output: {combinedOutput}")
-        
+
         # Should NOT show any auth messages
         self.assertNotIn("Authentication enabled", combinedOutput)
+
+    def testCLIEnvPasswordOnly(self):
+        """Test FFL_AUTH_PASSWORD environment variable enables auth with default username."""
+        extraArgs = ["--timeout", "5"]
+
+        # Set environment variable
+        originalEnvVar = self._setTestEnvVar("FFL_AUTH_PASSWORD", "envpass123")
+
+        try:
+            print(f"[Test] Testing auth with FFL_AUTH_PASSWORD environment variable only")
+            combinedOutput = self._runCommandAndGetOutput(extraArgs)
+
+            print(f"[Test] Process output: {combinedOutput}")
+
+            # Should show auth enabled with default username but NOT show password
+            self.assertIn(f"Authentication enabled - Username: {DEFAULT_AUTH_USER_NAME}", combinedOutput)
+            self.assertNotIn("envpass123", combinedOutput) # Password should not be shown
+        finally:
+            self._restoreTestEnvVar("FFL_AUTH_PASSWORD", originalEnvVar)
+
+    def testCLIEnvPasswordWithAuthUser(self):
+        """Test FFL_AUTH_PASSWORD environment variable with --auth-user flag."""
+        extraArgs = ["--auth-user", "customuser", "--timeout", "5"]
+
+        # Set environment variable
+        originalEnvVar = self._setTestEnvVar("FFL_AUTH_PASSWORD", "envpass456")
+
+        try:
+            print(f"[Test] Testing auth with FFL_AUTH_PASSWORD env var and --auth-user")
+            combinedOutput = self._runCommandAndGetOutput(extraArgs)
+
+            print(f"[Test] Process output: {combinedOutput}")
+
+            # Should show auth enabled with custom username but NOT show password
+            self.assertIn("Authentication enabled - Username: customuser", combinedOutput)
+            self.assertNotIn("envpass456", combinedOutput) # Password should not be shown
+        finally:
+            self._restoreTestEnvVar("FFL_AUTH_PASSWORD", originalEnvVar)
+
+    def testCLICLIPasswordOverridesEnvVar(self):
+        """Test that --auth-password CLI flag overrides FFL_AUTH_PASSWORD environment variable."""
+        extraArgs = ["--auth-password", "clipass789", "--timeout", "5"]
+
+        # Set environment variable (should be ignored when CLI flag is present)
+        originalEnvVar = self._setTestEnvVar("FFL_AUTH_PASSWORD", "envpass999")
+
+        try:
+            print(f"[Test] Testing CLI password overrides environment variable")
+            combinedOutput = self._runCommandAndGetOutput(extraArgs)
+
+            print(f"[Test] Process output: {combinedOutput}")
+
+            # Should show auth enabled (CLI password takes precedence)
+            self.assertIn(f"Authentication enabled - Username: {DEFAULT_AUTH_USER_NAME}", combinedOutput)
+            # Neither password should appear in output
+            self.assertNotIn("clipass789", combinedOutput)
+            self.assertNotIn("envpass999", combinedOutput)
+        finally:
+            self._restoreTestEnvVar("FFL_AUTH_PASSWORD", originalEnvVar)
+
+    def testCLIEnvPasswordWithEmptyValue(self):
+        """Test that empty FFL_AUTH_PASSWORD environment variable doesn't enable auth."""
+        extraArgs = ["--timeout", "5"]
+
+        # Set empty environment variable
+        originalEnvVar = self._setTestEnvVar("FFL_AUTH_PASSWORD", "")
+
+        try:
+            print(f"[Test] Testing empty FFL_AUTH_PASSWORD environment variable")
+            combinedOutput = self._runCommandAndGetOutput(extraArgs)
+
+            print(f"[Test] Process output: {combinedOutput}")
+
+            # Should NOT show any auth messages (empty password doesn't enable auth)
+            self.assertNotIn("Authentication enabled", combinedOutput)
+        finally:
+            self._restoreTestEnvVar("FFL_AUTH_PASSWORD", originalEnvVar)
 
     def testForceRelayFreeUserDisablesWebRTC(self):
         """Test --force-relay for free users disables WebRTC via JavaScript (soft disable)."""
@@ -298,9 +370,7 @@ class CLITest(FastFileLinkTestBase):
             # Request the HTML page like a browser would - use User-Agent header
             # This prevents redirect to /download and gets us the actual HTML page
             htmlUrl = f"{baseUrl}/{uid}/static/index.html"
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 
             print(f"[Test] Requesting HTML from: {htmlUrl}")
             response = requests.get(htmlUrl, headers=headers)
@@ -310,8 +380,10 @@ class CLITest(FastFileLinkTestBase):
 
             # For free users with --force-relay, the HTML should contain DISABLE_WEBRTC = true
             # This is a soft disable - browser won't attempt WebRTC
-            self.assertIn("const DISABLE_WEBRTC = true;", htmlContent,
-                         "Expected DISABLE_WEBRTC = true in HTML for free user with --force-relay")
+            self.assertIn(
+                "const DISABLE_WEBRTC = true;", htmlContent,
+                "Expected DISABLE_WEBRTC = true in HTML for free user with --force-relay"
+            )
 
             print("[Test] PASS: Free user with --force-relay: DISABLE_WEBRTC = true in HTML")
 
@@ -331,7 +403,7 @@ class CLITest(FastFileLinkTestBase):
             print(f"[Test] Share link: {shareLink}")
 
             # Extract base URL and UID from share link
-            # Example: https://domain.com/uid -> base: https://domain.com, uid: uid            
+            # Example: https://domain.com/uid -> base: https://domain.com, uid: uid
             parsed = urlparse(shareLink)
             baseUrl = f"{parsed.scheme}://{parsed.netloc}"
             uid = parsed.path.lstrip('/')
@@ -344,13 +416,16 @@ class CLITest(FastFileLinkTestBase):
 
             # For licensed users with --force-relay, server should return 403 Forbidden
             # This is hard enforcement - server blocks WebRTC offer creation
-            self.assertEqual(response.status_code, 403,
-                           f"Expected 403 Forbidden for /offer endpoint with --force-relay, got {response.status_code}")
+            self.assertEqual(
+                response.status_code, 403,
+                f"Expected 403 Forbidden for /offer endpoint with --force-relay, got {response.status_code}"
+            )
 
             # Check error message contains policy information
             errorText = response.text
-            self.assertIn("disabled by server policy", errorText.lower(),
-                         "Expected error message to mention server policy")
+            self.assertIn(
+                "disabled by server policy", errorText.lower(), "Expected error message to mention server policy"
+            )
 
             print("[Test] PASS: Standard user with --force-relay: /offer returns 403 Forbidden")
 
@@ -361,15 +436,15 @@ class CLITest(FastFileLinkTestBase):
         """Test --alias creates a link with the specified alias."""
         alias = "cooltest"
         extraArgs = ["--alias", alias, "--timeout", "3"]
-        
+
         print(f"[Test] Testing --alias {alias}")
         combinedOutput = self._runCommandAndGetOutput(extraArgs)
-        
+
         print(f"[Test] Process output: {combinedOutput}")
-        
+
         # Check that the alias appears in the generated URL
         self.assertIn(f"/{alias}", combinedOutput, f"Expected alias '{alias}' to appear in the sharing URL")
-        
+
         # Should not contain auth messages since no auth is configured
         self.assertNotIn("HTTP Basic Auth", combinedOutput)
 
@@ -378,17 +453,17 @@ class CLITest(FastFileLinkTestBase):
         alias = "testdownloads"
         extraArgs = ["--alias", alias, "--max-downloads", "1"]
         shareLink = self._startAndGetShareLink(extraArgs=extraArgs)
-        
+
         print(f"[Test] Testing --alias {alias} with --max-downloads")
-        
+
         # Verify alias is in the share link
         self.assertIn(f"/{alias}", shareLink, f"Expected alias '{alias}' to appear in the sharing URL")
-        
+
         # Download the file once to verify functionality still works
         downloadedFilePath = self._getDownloadedFilePath("alias_max_downloads_test.bin")
         self.downloadFileWithRequests(shareLink, downloadedFilePath)
         self._verifyDownloadedFile(downloadedFilePath)
-        
+
         # The server should shut down after one download
         self._assertProcessTerminated(timeout=15)
         self._assertTerminationMessage("Maximum downloads (1) reached. Shutting down server.")
@@ -397,15 +472,15 @@ class CLITest(FastFileLinkTestBase):
         """Test --alias works with authentication arguments."""
         alias = "securetest"
         extraArgs = ["--alias", alias, "--auth-password", "testpass123", "--timeout", "5"]
-        
+
         print(f"[Test] Testing --alias {alias} with authentication")
         combinedOutput = self._runCommandAndGetOutput(extraArgs)
-        
+
         print(f"[Test] Process output: {combinedOutput}")
-        
+
         # Check that the alias appears in the generated URL
         self.assertIn(f"/{alias}", combinedOutput, f"Expected alias '{alias}' to appear in the sharing URL")
-        
+
         # Should contain auth messages since auth is configured
         self.assertIn("Authentication enabled", combinedOutput)
 
@@ -413,12 +488,12 @@ class CLITest(FastFileLinkTestBase):
         """Test --alias with various characters (letters, numbers, common symbols)."""
         alias = "test123-cool_alias"
         extraArgs = ["--alias", alias, "--timeout", "3"]
-        
+
         print(f"[Test] Testing --alias with special characters: {alias}")
         combinedOutput = self._runCommandAndGetOutput(extraArgs)
-        
+
         print(f"[Test] Process output: {combinedOutput}")
-        
+
         # Check that the alias appears in the generated URL
         self.assertIn(f"/{alias}", combinedOutput, f"Expected alias '{alias}' to appear in the sharing URL")
 
@@ -426,43 +501,52 @@ class CLITest(FastFileLinkTestBase):
         """Test --alias with spaces (should be URL encoded)."""
         alias = "my cool file"
         extraArgs = ["--alias", alias, "--timeout", "3"]
-        
+
         print(f"[Test] Testing --alias with spaces: '{alias}'")
         combinedOutput = self._runCommandAndGetOutput(extraArgs)
-        
+
         print(f"[Test] Process output: {combinedOutput}")
-        
+
         # Spaces should be URL encoded as %20
         expected_encoded = "my%20cool%20file"
-        self.assertIn(f"/{expected_encoded}", combinedOutput, f"Expected URL-encoded alias '{expected_encoded}' to appear in the sharing URL")
+        self.assertIn(
+            f"/{expected_encoded}", combinedOutput,
+            f"Expected URL-encoded alias '{expected_encoded}' to appear in the sharing URL"
+        )
 
     def testAliasWithPercent(self):
         """Test --alias with percent signs (should be URL encoded)."""
         alias = "test%file"
         extraArgs = ["--alias", alias, "--timeout", "3"]
-        
+
         print(f"[Test] Testing --alias with percent: '{alias}'")
         combinedOutput = self._runCommandAndGetOutput(extraArgs)
-        
+
         print(f"[Test] Process output: {combinedOutput}")
-        
+
         # Percent should be URL encoded as %25
         expected_encoded = "test%25file"
-        self.assertIn(f"/{expected_encoded}", combinedOutput, f"Expected URL-encoded alias '{expected_encoded}' to appear in the sharing URL")
+        self.assertIn(
+            f"/{expected_encoded}", combinedOutput,
+            f"Expected URL-encoded alias '{expected_encoded}' to appear in the sharing URL"
+        )
 
     def testAliasWithQuestion(self):
         """Test --alias with question marks (should be URL encoded)."""
         alias = "what?why"
         extraArgs = ["--alias", alias, "--timeout", "3"]
-        
+
         print(f"[Test] Testing --alias with question mark: '{alias}'")
         combinedOutput = self._runCommandAndGetOutput(extraArgs)
-        
+
         print(f"[Test] Process output: {combinedOutput}")
-        
+
         # Question mark should be URL encoded as %3F
         expected_encoded = "what%3Fwhy"
-        self.assertIn(f"/{expected_encoded}", combinedOutput, f"Expected URL-encoded alias '{expected_encoded}' to appear in the sharing URL")
+        self.assertIn(
+            f"/{expected_encoded}", combinedOutput,
+            f"Expected URL-encoded alias '{expected_encoded}' to appear in the sharing URL"
+        )
 
     def testAliasWithHash(self):
         """Test --alias with hash/fragment signs (should be URL encoded)."""
@@ -476,7 +560,10 @@ class CLITest(FastFileLinkTestBase):
 
         # Hash should be URL encoded as %23
         expected_encoded = "file%231"
-        self.assertIn(f"/{expected_encoded}", combinedOutput, f"Expected URL-encoded alias '{expected_encoded}' to appear in the sharing URL")
+        self.assertIn(
+            f"/{expected_encoded}", combinedOutput,
+            f"Expected URL-encoded alias '{expected_encoded}' to appear in the sharing URL"
+        )
 
     def testCustomNameWithFile(self):
         """Test --name with a regular file."""
@@ -498,8 +585,9 @@ class CLITest(FastFileLinkTestBase):
 
         # Check JSON output contains custom filename in content_name field
         self.assertIn("content_name", jsonOutput, "JSON output should contain 'content_name' field")
-        self.assertEqual(jsonOutput["content_name"], customName,
-                        f"Expected custom filename '{customName}' in JSON output")
+        self.assertEqual(
+            jsonOutput["content_name"], customName, f"Expected custom filename '{customName}' in JSON output"
+        )
 
         print(f"[Test] PASS: Custom filename '{customName}' verified in JSON output")
 
@@ -529,8 +617,9 @@ class CLITest(FastFileLinkTestBase):
 
         # Check JSON output contains custom filename (should keep as-is for files)
         self.assertIn("content_name", jsonOutput, "JSON output should contain 'content_name' field")
-        self.assertEqual(jsonOutput["content_name"], customName,
-                        f"Expected filename '{customName}' without added extension")
+        self.assertEqual(
+            jsonOutput["content_name"], customName, f"Expected filename '{customName}' without added extension"
+        )
 
         print(f"[Test] PASS: Filename '{customName}' kept as-is for file")
 
@@ -552,7 +641,7 @@ class CLITest(FastFileLinkTestBase):
         originalTestFile = self.testFilePath
         originalFileSize = self.originalFileSize
         self.testFilePath = testFolder
-        self.originalFileSize = -1  # Folders have dynamic size, so don't check size
+        self.originalFileSize = -1 # Folders have dynamic size, so don't check size
 
         try:
             # Start FastFileLink and wait for JSON output
@@ -568,8 +657,9 @@ class CLITest(FastFileLinkTestBase):
 
             # Check JSON output contains custom filename with .zip
             self.assertIn("content_name", jsonOutput, "JSON output should contain 'content_name' field")
-            self.assertEqual(jsonOutput["content_name"], customName,
-                            f"Expected custom filename '{customName}' in JSON output")
+            self.assertEqual(
+                jsonOutput["content_name"], customName, f"Expected custom filename '{customName}' in JSON output"
+            )
 
             print(f"[Test] PASS: Folder custom name '{customName}' verified")
         finally:
@@ -596,7 +686,7 @@ class CLITest(FastFileLinkTestBase):
         originalTestFile = self.testFilePath
         originalFileSize = self.originalFileSize
         self.testFilePath = testFolder
-        self.originalFileSize = -1  # Folders have dynamic size, so don't check size
+        self.originalFileSize = -1 # Folders have dynamic size, so don't check size
 
         try:
             # Start FastFileLink and wait for JSON output
@@ -612,8 +702,10 @@ class CLITest(FastFileLinkTestBase):
 
             # Check JSON output contains .zip extension added
             self.assertIn("content_name", jsonOutput, "JSON output should contain 'content_name' field")
-            self.assertEqual(jsonOutput["content_name"], expectedName,
-                            f"Expected filename '{expectedName}' with .zip extension added")
+            self.assertEqual(
+                jsonOutput["content_name"], expectedName,
+                f"Expected filename '{expectedName}' with .zip extension added"
+            )
 
             print(f"[Test] PASS: Folder name '{customName}' converted to '{expectedName}'")
         finally:
@@ -640,7 +732,7 @@ class CLITest(FastFileLinkTestBase):
         originalTestFile = self.testFilePath
         originalFileSize = self.originalFileSize
         self.testFilePath = testFolder
-        self.originalFileSize = -1  # Folders have dynamic size, so don't check size
+        self.originalFileSize = -1 # Folders have dynamic size, so don't check size
 
         try:
             # Start FastFileLink and wait for JSON output
@@ -656,8 +748,9 @@ class CLITest(FastFileLinkTestBase):
 
             # Check JSON output contains .zip appended
             self.assertIn("content_name", jsonOutput, "JSON output should contain 'content_name' field")
-            self.assertEqual(jsonOutput["content_name"], expectedName,
-                            f"Expected filename '{expectedName}' with .zip appended")
+            self.assertEqual(
+                jsonOutput["content_name"], expectedName, f"Expected filename '{expectedName}' with .zip appended"
+            )
 
             print(f"[Test] PASS: Folder name '{customName}' converted to '{expectedName}'")
         finally:
@@ -667,18 +760,21 @@ class CLITest(FastFileLinkTestBase):
 
     def testAliasWithUnicode(self):
         """Test --alias with Unicode characters (should be URL encoded)."""
-        alias = "测试文件"  # Chinese characters meaning "test file"
+        alias = "测试文件" # Chinese characters meaning "test file"
         extraArgs = ["--alias", alias, "--timeout", "3"]
-        
+
         print(f"[Test] Testing --alias with Unicode: '{alias}'")
         combinedOutput = self._runCommandAndGetOutput(extraArgs)
-        
+
         print(f"[Test] Process output: {combinedOutput}")
-        
+
         # Unicode should be URL encoded
         import urllib.parse
         expected_encoded = urllib.parse.quote(alias, safe='')
-        self.assertIn(f"/{expected_encoded}", combinedOutput, f"Expected URL-encoded alias '{expected_encoded}' to appear in the sharing URL")
+        self.assertIn(
+            f"/{expected_encoded}", combinedOutput,
+            f"Expected URL-encoded alias '{expected_encoded}' to appear in the sharing URL"
+        )
 
 
 class CLIArgumentParsingTest(unittest.TestCase):
@@ -688,19 +784,13 @@ class CLIArgumentParsingTest(unittest.TestCase):
         """Helper to run Core.py with specific arguments and capture output"""
         command = [sys.executable, os.path.join(os.path.dirname(__file__), "..", "..", "Core.py")]
         command.extend(args)
-        
+
         # Set up environment to disable GUI addon for CLI testing
         env = os.environ.copy()
         env['DISABLE_ADDONS'] = 'GUI'
-        
+
         try:
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=10,
-                env=env
-            )
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10, env=env)
             return result.stdout + result.stderr, result.returncode
         except subprocess.TimeoutExpired:
             return "Process timed out", 1
@@ -710,50 +800,51 @@ class CLIArgumentParsingTest(unittest.TestCase):
         testCases = [
             # Only --cli should show help
             (["--cli"], "help", "Only --cli should show help"),
-            
+
             # No arguments should show help (handled by main())
             ([], "help", "No arguments should show help"),
-            
+
             # --log-level without other required args should show help
             (["--log-level", "info"], "help", "--log-level info alone should show help"),
             (["--log-level", "debug"], "help", "--log-level debug alone should show help"),
-            
+
             # --cli with --log-level should show help
             (["--cli", "--log-level", "info"], "help", "--cli --log-level info should show help"),
             (["--cli", "--log-level", "debug"], "help", "--cli --log-level debug should show help"),
             (["--log-level", "debug", "--cli"], "help", "--log-level debug --cli should show help"),
-            
+
             # Various other incomplete combinations should show help
             (["--timeout", "30"], "help", "--timeout alone should show help"),
             (["--max-downloads", "5"], "help", "--max-downloads alone should show help"),
             (["--port", "8080"], "help", "--port alone should show help"),
             (["--preferred-tunnel", "cloudflare"], "help", "--preferred-tunnel alone should show help"),
-            
+
             # Multiple incomplete args should still show help
             (["--cli", "--timeout", "30"], "help", "--cli --timeout should show help"),
             (["--log-level", "info", "--timeout", "30"], "help", "--log-level --timeout should show help"),
-            (["--cli", "--max-downloads", "5", "--log-level", "debug"], "help", "Multiple incomplete args should show help"),
+            (["--cli", "--max-downloads", "5", "--log-level",
+              "debug"], "help", "Multiple incomplete args should show help"),
         ]
-        
+
         for args, expectedBehavior, description in testCases:
             with self.subTest(args=args, description=description):
                 output, returnCode = self._runCoreWithArgs(args)
-                
+
                 if expectedBehavior == "help":
                     # Should show help text
                     helpIndicators = [
-                        "usage:",  # argparse help format
-                        "A software that make you share file easier",  # description
-                        "positional arguments:",  # sections of help
+                        "usage:", # argparse help format
+                        "A software that make you share file easier", # description
+                        "positional arguments:", # sections of help
                         "optional arguments:",
-                        "options:",  # newer argparse versions use "options"
+                        "options:", # newer argparse versions use "options"
                     ]
-                    
+
                     foundHelpIndicator = any(indicator in output.lower() for indicator in helpIndicators)
-                    
+
                     if not foundHelpIndicator:
                         self.fail(f"Expected help output for {args}, but got: {output}")
-                    
+
                     print(f"✓ {description}: Found help output")
 
     def testCLIArgumentsVersionBehavior(self):
@@ -761,33 +852,33 @@ class CLIArgumentParsingTest(unittest.TestCase):
         testCases = [
             # --version alone should show version
             (["--version"], "version", "--version should show version"),
-            
+
             # --version with other args should still show version (and exit early)
             (["--version", "--cli"], "version", "--version --cli should show version"),
             (["--cli", "--version"], "version", "--cli --version should show version"),
             (["--version", "--log-level", "debug"], "version", "--version --log-level should show version"),
             (["--log-level", "info", "--version"], "version", "--log-level --version should show version"),
         ]
-        
+
         for args, expectedBehavior, description in testCases:
             with self.subTest(args=args, description=description):
                 output, returnCode = self._runCoreWithArgs(args)
-                
+
                 if expectedBehavior == "version":
                     # Should show version information
                     versionIndicators = [
-                        "fastfilelink v",  # Version string
-                        "enabled addons:",  # Addons list
+                        "fastfilelink v", # Version string
+                        "enabled addons:", # Addons list
                     ]
-                    
+
                     foundVersionIndicator = any(indicator in output.lower() for indicator in versionIndicators)
-                    
+
                     if not foundVersionIndicator:
                         self.fail(f"Expected version output for {args}, but got: {output}")
-                    
+
                     # Should exit with code 0 for version
                     self.assertEqual(returnCode, 0, f"Version command should exit with code 0, got {returnCode}")
-                    
+
                     print(f"✓ {description}: Found version output")
 
     def testCLIArgumentsValidCombinations(self):
@@ -797,57 +888,58 @@ class CLIArgumentParsingTest(unittest.TestCase):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
             f.write("test content")
             tempFileName = f.name
-        
+
         try:
             validCases = [
                 # Valid sharing commands (should not show help, but start sharing)
                 ([tempFileName], "start_sharing", "File alone should start sharing"),
                 (["--cli", "share", tempFileName], "start_sharing", "--cli share file should start sharing"),
                 ([tempFileName, "--timeout", "3"], "start_sharing", "File with timeout should start sharing"),
-                (["--cli", "share", tempFileName, "--log-level", "debug"], "start_sharing", "--cli share file --log-level should start sharing"),
+                (["--cli", "share", tempFileName, "--log-level",
+                  "debug"], "start_sharing", "--cli share file --log-level should start sharing"),
                 ([tempFileName, "--alias", "testAlias"], "start_sharing", "File with --alias should start sharing"),
-                (["--cli", "share", tempFileName, "--alias", "cliTest"], "start_sharing", "--cli share file --alias should start sharing"),
-                ([tempFileName, "--alias", "test123", "--timeout", "3"], "start_sharing", "File with --alias and --timeout should start sharing"),
+                (["--cli", "share", tempFileName, "--alias",
+                  "cliTest"], "start_sharing", "--cli share file --alias should start sharing"),
+                ([tempFileName, "--alias", "test123", "--timeout",
+                  "3"], "start_sharing", "File with --alias and --timeout should start sharing"),
 
                 # Test global option after file argument
-                (["--cli", tempFileName, "--log-level", "INFO"], "start_sharing", "--cli file --log-level INFO should start sharing (global option after argument)"),
+                (["--cli", tempFileName, "--log-level", "INFO"], "start_sharing",
+                 "--cli file --log-level INFO should start sharing (global option after argument)"),
 
                 # Test --upload without duration value (should auto-insert default duration)
-                (["--cli", "--e2ee", "--upload", tempFileName], "start_sharing", "--cli --e2ee --upload file should start sharing (upload before file without value)"),
+                (["--cli", "--e2ee", "--upload", tempFileName], "start_sharing",
+                 "--cli --e2ee --upload file should start sharing (upload before file without value)"),
             ]
-            
+
             for args, expectedBehavior, description in validCases:
                 with self.subTest(args=args, description=description):
                     # For valid cases, we expect the process to start but we'll terminate it quickly
                     command = [sys.executable, os.path.join(os.path.dirname(__file__), "..", "..", "Core.py")]
                     command.extend(args)
-                    
+
                     # Set up environment to disable GUI addon for CLI testing
                     env = os.environ.copy()
                     env['DISABLE_ADDONS'] = 'GUI'
-                    
+
                     try:
                         # Start the process
                         proc = subprocess.Popen(
-                            command,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT,
-                            text=True,
-                            env=env
+                            command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env
                         )
-                        
+
                         # Give it a moment to start
                         time.sleep(2)
-                        
+
                         # Terminate it before it does anything significant
                         proc.terminate()
-                        
+
                         try:
                             output, _ = proc.communicate(timeout=5)
                         except subprocess.TimeoutExpired:
                             proc.kill()
                             output, _ = proc.communicate()
-                        
+
                         # Should NOT show help output for valid commands
                         helpIndicators = [
                             "usage:",
@@ -855,18 +947,18 @@ class CLIArgumentParsingTest(unittest.TestCase):
                             "optional arguments:",
                             "options:",
                         ]
-                        
+
                         foundHelpIndicator = any(indicator in output.lower() for indicator in helpIndicators)
-                        
+
                         if foundHelpIndicator:
                             self.fail(f"Expected valid sharing start for {args}, but got help output: {output}")
-                        
+
                         print(f"✓ {description}: Did not show help (started normally)")
-                        
+
                     except Exception as e:
                         print(f"⚠ {description}: Exception during test: {e}")
                         # Don't fail the test for process management issues
-                        
+
         finally:
             # Clean up temp file
             try:
@@ -882,34 +974,36 @@ class CLIArgumentParsingTest(unittest.TestCase):
             (["--timeout", "-5"], "error", "--timeout with negative value should show error"),
             (["--max-downloads", "-1"], "error", "--max-downloads with negative value should show error"),
             (["--log-level", "invalid"], "error", "--log-level with invalid value should show error"),
-            
+
             # Missing required values
             (["--port"], "error", "--port without value should show error"),
             (["--timeout"], "error", "--timeout without value should show error"),
             (["--max-downloads"], "error", "--max-downloads without value should show error"),
             (["--log-level"], "error", "--log-level without value should show error"),
         ]
-        
+
         for args, expectedBehavior, description in errorCases:
             with self.subTest(args=args, description=description):
                 output, returnCode = self._runCoreWithArgs(args)
-                
+
                 if expectedBehavior == "error":
                     # Should show error and non-zero exit code
                     errorIndicators = [
                         "error:",
                         "invalid",
-                        "usage:",  # argparse shows usage on errors
+                        "usage:", # argparse shows usage on errors
                     ]
-                    
+
                     foundErrorIndicator = any(indicator in output.lower() for indicator in errorIndicators)
-                    
+
                     if not foundErrorIndicator:
                         self.fail(f"Expected error output for {args}, but got: {output}")
-                    
+
                     # Should exit with non-zero code for errors
-                    self.assertNotEqual(returnCode, 0, f"Error command should exit with non-zero code, got {returnCode}")
-                    
+                    self.assertNotEqual(
+                        returnCode, 0, f"Error command should exit with non-zero code, got {returnCode}"
+                    )
+
                     print(f"✓ {description}: Found error output with code {returnCode}")
 
 

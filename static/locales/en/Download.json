@@ -109,7 +109,8 @@
             "retryingP2p": "Retrying P2P connection…",
             "savingFile": "Saving file...",
             "creatingDownload": "Creating download...",
-            "downloadingPercent": "Downloading via P2P: {{percent}}%"
+            "downloadingPercent": "Downloading via P2P: {{percent}}%",
+            "downloading": "Downloading via P2P..."
         },
         "connection": {
             "serverRelay": "Using Server Relay Download",

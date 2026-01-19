@@ -38,12 +38,12 @@ import requests
 from aiortc import (RTCConfiguration, RTCDataChannel, RTCIceServer, RTCPeerConnection, RTCSessionDescription)
 from aiortc.sdp import candidate_from_sdp
 
-from bases.Kernel import getLogger
+from bases.Kernel import getLogger, FFLEvent, Throttler
 from bases.Utils import ONE_MB, formatSize, getEnv, StallResilientAdapter
 from bases.Progress import Progress
 from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
 from bases.E2EE import E2EEClient
-from bases.Reader import FolderChangedException
+from bases.Readers import FolderChangedException
 from bases.I18n import _
 
 
@@ -232,14 +232,37 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         if self.downloadCallback:
             self.downloadCallback()
 
-    def runAsync(self, coro, timeout=15):
-        # Execute coroutine in a synchronous environment and return the result (blocking)
+    def runAsync(self, coro, *, wait: bool = True, timeout: float = 15, name: str = "task"):
+        """
+         Execute coroutine in a synchronous environment and return the result
+
+        - wait=True: block until coroutine finishes, return its result (old behavior)
+        - wait=False: schedule coroutine on WebRTC loop, return "OK" immediately
+        """
         fut = asyncio.run_coroutine_threadsafe(coro, self.loop)
+
+        if not wait:
+            def _done(f):
+                try:
+                    f.result()
+                except Exception as e:
+                    logger.exception("runAsync(wait=False) task failed (%s): %s", name, e)
+                    cb = getattr(self, "exceptionCallback", None)
+                    if cb:
+                        try:
+                            cb(e)
+                        except Exception as cbE:
+                            logger.exception("exceptionCallback failed: %s", cbE)
+
+            fut.add_done_callback(_done)
+            return fut
+
         try:
             return fut.result(timeout=timeout)
         except Exception as e:
             logger.exception(f"Error in runAsync: {e}")
             raise
+
 
     async def createOffer(self, reader, fileSize, getSizeFunc=None, browserHint=None, offset=0, e2eeManager=None):
         # Generate a unique peer ID
@@ -322,6 +345,17 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         self.peers[peerId] = (pc, clientInfo, q)
         connectionType = "Local" if clientInfo.isLocalConnection else "Remote"
         logger.info(f"Client info for peer {peerId}: {clientInfo.browser} on {clientInfo.domain} ({connectionType})")
+
+        # Trigger webrtcConnected event
+        FFLEvent.webrtcConnected.trigger(
+            peerId=peerId,
+            connectionType=connectionType.lower(),
+            clientInfo={
+                'browser': clientInfo.browser,
+                'domain': clientInfo.domain,
+                'platform': clientInfo.userAgent
+            }
+        )
 
         desc = RTCSessionDescription(sdp=data["sdp"], type=data["type"])
         await pc.setRemoteDescription(desc)
@@ -470,6 +504,15 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         else:
             raise RuntimeError(f'Invalid peer: {peerId}')
 
+        # Trigger webrtcTransferStarted event
+        FFLEvent.webrtcTransferStarted.trigger(
+            peerId=peerId,
+            fileName=reader.contentName,
+            fileSize=fileSize,
+            resumeOffset=offset,
+            e2eeEnabled=e2eeManager is not None
+        )
+
         try:
             self._handleStartDownloadActions(fileSize)
         except PermissionError as e:
@@ -506,10 +549,22 @@ class WebRTCManager(AsyncLoopExceptionMixin):
 
         # Track bytes sent since last sleep for Chrome/Edge optimization
         bytesSinceLastSleep = 0
+        progressThrottler = Throttler(interval=1.0)
+        transferStartTime = time.time()
+
+        # Avoid blocking event loop
+        loop = asyncio.get_running_loop()
+        chunkIter = iter(reader.iterChunks(self.CHUNK_SIZE, start=offset))
+
+        def _iterNextChunk(it):
+            return next(it, None)
 
         try:
-            # Use reader.iterChunks() instead of open()
-            for chunk in reader.iterChunks(self.CHUNK_SIZE, start=offset):
+            while True:
+                chunk = await loop.run_in_executor(None, _iterNextChunk, chunkIter)
+                if chunk is None:
+                    break
+
                 # Wait until buffer is acceptable for next packet
                 await bufferFlushed.wait()
 
@@ -537,6 +592,21 @@ class WebRTCManager(AsyncLoopExceptionMixin):
                 # Progress logging every 5MB or every 2 seconds
                 progress.update(sent, extraText=_("P2P direct"))
 
+                # Trigger webrtcTransferProgress event (throttled)
+                if progressThrottler.shouldTrigger():
+                    currentTime = time.time()
+                    percentage = (sent * 100.0 / fileSize) if fileSize and fileSize > 0 else 0
+                    duration = currentTime - transferStartTime
+                    speed = int(sent / duration) if duration > 0 else 0
+
+                    FFLEvent.webrtcTransferProgress.trigger(
+                        peerId=peerId,
+                        bytesTransferred=sent,
+                        totalBytes=fileSize,
+                        percentage=percentage,
+                        speed=speed
+                    )
+
             # Wait for buffer to drain before sending EOF to prevent race condition
             # where EOF arrives before final chunk on receiver side
             await bufferFlushed.wait()
@@ -546,6 +616,16 @@ class WebRTCManager(AsyncLoopExceptionMixin):
 
             # Final progress update
             progress.update(sent, forceLog=True, extraText=_("P2P direct"), forceFinish=fileSize is None)
+
+            # Trigger webrtcTransferCompleted event
+            duration = time.time() - transferStartTime
+            averageSpeed = int(sent / duration) if duration > 0 else 0
+            FFLEvent.webrtcTransferCompleted.trigger(
+                peerId=peerId,
+                bytesTransferred=sent,
+                duration=duration,
+                averageSpeed=averageSpeed
+            )
 
             # Calculate final statistics
             sizeDisplay = getSizeFunc(sent) if getSizeFunc else f"{sent / (ONE_MB):.2f} MB"

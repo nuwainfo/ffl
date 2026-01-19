@@ -26,7 +26,7 @@ import os
 import requests
 
 from bases.Bore import BoreClient
-from bases.Kernel import getLogger
+from bases.Kernel import getLogger, FFLEvent
 
 BUILTIN_TUNNEL = os.getenv('BUILTIN_TUNNEL', '33.fastfilelink.com')
 TUNNEL_TOKEN_SERVER_URL = os.getenv('TUNNEL_TOKEN_SERVER_URL', 'https://fastfilelink.com')
@@ -69,7 +69,15 @@ class AsyncTunnelThread(threading.Thread):
         self.resultQueue = resultQueue
         self.e = None
         self.loop = asyncio.new_event_loop()
+        self.loop.set_exception_handler(self._silencePendingTask)
         super().__init__()
+
+    def _silencePendingTask(self, loop, context):
+        msg = context.get("message", "")
+        if msg == "Task was destroyed but it is pending!":
+            return
+
+        self.loop.default_exception_handler(context)
 
     def run(self):
         try:
@@ -139,11 +147,14 @@ class TunnelRunner:
         # Check proxyConfig from --proxy argument (highest priority)
         if self.proxyConfig and self.proxyConfig['type'] == 'socks5':
             username = self.proxyConfig.get('username')
+            protocol = self.proxyConfig['protocol']
             if username:
                 # Don't show password in output
-                return f"{self.proxyConfig['protocol']}://{username}@{self.proxyConfig['host']}:{self.proxyConfig['port']}"
+                host = self.proxyConfig['host']
+                port = self.proxyConfig['port']
+                return f"{protocol}://{username}@{host}:{port}"
             else:
-                return f"{self.proxyConfig['protocol']}://{self.proxyConfig['host']}:{self.proxyConfig['port']}"
+                return f"{protocol}://{self.proxyConfig['host']}:{self.proxyConfig['port']}"
 
         # Check FFL_TUNNEL_SOCKS5 environment variable (fallback)
         socks5Env = os.environ.get('FFL_TUNNEL_SOCKS5')
@@ -224,6 +235,11 @@ class TunnelRunner:
             if self.tunnelThread:
                 raise RuntimeError("Tunnel already started")
 
+        # Trigger tunnelStarting event
+        tunnelType = self.getTunnelType()
+        proxyInfo = self.getProxyInfo()
+        FFLEvent.tunnelStarting.trigger(tunnelType=tunnelType, proxyInfo=proxyInfo)
+
         try:
             # Create client and tunnel thread
             client = self.createClient(port)
@@ -236,6 +252,10 @@ class TunnelRunner:
                 if not success:
                     ex = self.tunnelThread.e
                     self._cleanup()
+
+                    # Trigger tunnelFailed event
+                    errorMsg = str(ex) if ex else "Tunnel connection failed"
+                    FFLEvent.tunnelFailed.trigger(tunnelType=tunnelType, error=errorMsg, willRetry=False, retryCount=0)
 
                     if ex:
                         raise ex
@@ -250,14 +270,30 @@ class TunnelRunner:
                 domain = parsed.netloc
 
                 logger.info(f"Tunnel connected: {link}")
+
+                # Trigger tunnelCreated event
+                FFLEvent.tunnelCreated.trigger(
+                    tunnelType=tunnelType, domain=domain, tunnelLink=link, proxyInfo=proxyInfo
+                )
+
                 return domain, link
 
             except queue.Empty:
                 self._cleanup()
+
+                # Trigger tunnelFailed event for timeout
+                FFLEvent.tunnelFailed.trigger(
+                    tunnelType=tunnelType, error="Tunnel server timeout", willRetry=False, retryCount=0
+                )
+
                 raise TunnelUnavailableError('Tunnel server timeout')
 
         except Exception as e:
             self._cleanup()
+
+            # Trigger tunnelFailed event for unexpected errors
+            FFLEvent.tunnelFailed.trigger(tunnelType=tunnelType, error=str(e), willRetry=False, retryCount=0)
+
             raise e
 
     def stop(self):

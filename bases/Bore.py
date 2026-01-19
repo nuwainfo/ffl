@@ -82,11 +82,11 @@ class DelimitedStream:
         try:
             jsonData = json.dumps(message)
             data = jsonData.encode() + b'\0'
-            logger.debug(f"Sending: {jsonData}")
+            logger.debug("Sending: %s", jsonData)
             self.writer.write(data)
             await self.writer.drain()
         except Exception as e:
-            logger.error(f"Error sending message: {e}")
+            logger.error("Error sending message: %s", e)
             raise
 
     async def _readFrame(self):
@@ -106,7 +106,7 @@ class DelimitedStream:
                 # Extract the frame
                 idx = self.readBuffer.find(b'\0')
                 if idx > MAX_FRAME_LENGTH:
-                    logger.error(f"Frame too large: {idx} bytes")
+                    logger.error("Frame too large: %s bytes", idx)
                     raise ValueError(f"Frame exceeded MAX_FRAME_LENGTH: {idx}")
 
                 frame = bytes(self.readBuffer[:idx])
@@ -114,7 +114,7 @@ class DelimitedStream:
                 # logger.debug(f"Extracted frame of {len(frame)} bytes")
                 return frame
         except Exception as e:
-            logger.error(f"Error reading frame: {e}")
+            logger.error("Error reading frame: %s", e)
             raise
 
     async def recv(self):
@@ -132,12 +132,12 @@ class DelimitedStream:
                 # logger.debug(f"Parsed message: {parsed}")
                 return parsed
             except json.JSONDecodeError as e:
-                logger.error(f"JSON decode error: {e}")
-                logger.error(f"Raw frame: {frame}")
+                logger.error("JSON decode error: %s", e)
+                logger.error("Raw frame: %s", frame)
                 raise
 
         except Exception as e:
-            logger.error(f"Error receiving message: {e}")
+            logger.error("Error receiving message: %s", e)
             logger.error(traceback.format_exc())
             raise
 
@@ -146,7 +146,7 @@ class DelimitedStream:
         try:
             return await asyncio.wait_for(self.recv(), timeout)
         except asyncio.TimeoutError:
-            logger.error(f"Timeout after {timeout} seconds waiting for response")
+            logger.error("Timeout after %s seconds waiting for response", timeout)
             raise TimeoutError(f"Timed out waiting for response after {timeout} seconds")
 
 
@@ -203,7 +203,7 @@ class BoreClient:
             self.runningTasks.remove(task)
         except KeyError as e:
             # Task was already removed or set was cleared during shutdown
-            logger.debug(f"Task already removed from running tasks: {e}")
+            logger.debug("Task already removed from running tasks: %s", e)
 
     @staticmethod
     def _parseSocks5Env():
@@ -313,7 +313,7 @@ class BoreClient:
             # 5. SOCKS5 handshake complete - switch to non-blocking for asyncio
             sock.settimeout(None)
             sock.setblocking(False)
-            logger.debug(f"SOCKS5 connection established to {destHost}:{destPort}")
+            logger.debug("SOCKS5 connection established to %s:%s", destHost, destPort)
             return sock
 
         except Exception:
@@ -339,13 +339,13 @@ class BoreClient:
             # Use proxy from --proxy argument (highest priority)
             proxyHost = self.proxyConfig['host']
             proxyPort = self.proxyConfig['port']
-            logger.debug(f"Using SOCKS5 proxy from --proxy: {proxyHost}:{proxyPort}")
+            logger.debug("Using SOCKS5 proxy from --proxy: %s:%s", proxyHost, proxyPort)
         else:
             # Fall back to FFL_TUNNEL_SOCKS5 environment variable
             envProxy = self._parseSocks5Env()
             if envProxy:
                 proxyHost, proxyPort = envProxy
-                logger.debug(f"Using SOCKS5 proxy from FFL_TUNNEL_SOCKS5: {proxyHost}:{proxyPort}")
+                logger.debug("Using SOCKS5 proxy from FFL_TUNNEL_SOCKS5: %s:%s", proxyHost, proxyPort)
 
         if not proxyHost:
             # No proxy configured - use standard asyncio connection
@@ -449,7 +449,7 @@ class BoreClient:
             # Wait for the challenge
             logger.debug("Waiting for authentication challenge...")
             response = await stream.recvWithTimeout()
-            logger.debug(f"Received response for auth: {response}")
+            logger.debug("Received response for auth: %s", response)
 
             if not response:
                 logger.error("No response received when expecting challenge")
@@ -461,17 +461,17 @@ class BoreClient:
 
             # Get the challenge UUID
             challengeUuidStr = response["Challenge"]
-            logger.debug(f"Received challenge UUID: {challengeUuidStr}")
+            logger.debug("Received challenge UUID: %s", challengeUuidStr)
 
             try:
                 challenge_uuid = uuid.UUID(challengeUuidStr)
             except ValueError as e:
-                logger.error(f"Invalid UUID format: {challengeUuidStr}")
+                logger.error("Invalid UUID format: %s", challengeUuidStr)
                 raise ConnectionError(f"Invalid UUID format in challenge: {e}")
 
             # Calculate the response
             authResponse = self.authenticator.answer(challenge_uuid)
-            logger.debug(f"Generated authentication response (length {len(authResponse)})")
+            logger.debug("Generated authentication response (length %s)", len(authResponse))
 
             # Build authentication message with token
             authMessage = {"Authenticate": authResponse, "token": self.secret, "role": role}
@@ -562,23 +562,23 @@ class BoreClient:
                 while True:
                     data = await reader.read(self.bufferSize)
                     if not data:
-                        logger.debug(f"{name} pipe closed by peer")
+                        logger.debug("%s pipe closed by peer", name)
                         break
                     totalBytes += len(data)
                     writer.write(data)
                     await writer.drain()
-                logger.debug(f"{name} pipe closed after transferring {totalBytes} bytes")
+                logger.debug("%s pipe closed after transferring %s bytes", name, totalBytes)
             except Exception as e:
-                logger.debug(f"{name} pipe error: {type(e).__name__}: {e}")
+                logger.debug("%s pipe error: %s: %s", name, type(e).__name__, e)
             finally:
                 try:
                     writer.close()
                     await writer.wait_closed()
                 except Exception as e:
-                    logger.debug(f"Exception during connection cleanup: {e}")
+                    logger.debug("Exception during connection cleanup: %s", e)
 
         # Start two tasks for bidirectional proxying
-        logger.debug(f"Starting bidirectional proxy for connection {connectionId}")
+        logger.debug("Starting bidirectional proxy for connection %s", connectionId)
         remoteToLocal = asyncio.create_task(pipe(remoteReader, localWriter, f"remote→local-{connectionId}"))
         localToRemote = asyncio.create_task(pipe(localReader, remoteWriter, f"local→remote-{connectionId}"))
 
@@ -588,9 +588,9 @@ class BoreClient:
         try:
             await asyncio.gather(remoteToLocal, localToRemote)
         except Exception as e:
-            logger.debug(f"Proxy error for connection {connectionId}: {type(e).__name__}: {e}")
+            logger.debug("Proxy error for connection %s: %s: %s", connectionId, type(e).__name__, e)
 
-        logger.debug(f"Connection {connectionId} closed")
+        logger.debug("Connection %s closed", connectionId)
 
     async def listen(self):
         """Start listening for connections from the server."""
@@ -642,7 +642,7 @@ class BoreClient:
                     self.controlConnection.writer.close()
                     await self.controlConnection.writer.wait_closed()
                 except Exception as e:
-                    logger.debug(f"Error closing control connection: {e}")
+                    logger.debug("Error closing control connection: %s", e)
             logger.debug("Client stopped")
 
     def stop(self):
@@ -663,7 +663,7 @@ class BoreClient:
             return
 
         # 2. Cancel all running tasks.
-        logger.debug(f"Cancelling {len(tasksToCancel)} running tasks...")
+        logger.debug("Cancelling %s running tasks...", len(tasksToCancel))
         for task in tasksToCancel:
             task.cancel()
 

@@ -24,6 +24,7 @@ import argparse
 import signal
 import json
 import atexit
+import time
 
 if 'Cosmopolitan' in platform.version():
     if sys.prefix not in sys.path:
@@ -54,8 +55,9 @@ from bases.CLI import (
 from bases.Utils import (
     copy2Clipboard, flushPrint, getLogger, getAvailablePort, sendException, validateCompatibleWithServer, ProxyConfig
 )
-from bases.Reader import SourceReader
+from bases.Readers import SourceReader, FolderChangedException
 from bases.Tor import verifyTorProxy
+from bases.VFS import VFSServer
 from bases.I18n import _
 
 logger = getLogger(__name__)
@@ -193,9 +195,13 @@ def onShareLinkCreate(args, link, filePath, fileSize, tunnelType, e2ee, reader, 
     # Handle --json flag
     if args.json:
         user = featureManager.user
+
+        # Get content name (VFS mode has reader=None, use basename)
+        contentName = reader.contentName if reader else os.path.basename(filePath)
+
         outputData = {
             "file": filePath,
-            "content_name": reader.contentName, # Download filename (may be custom via --name)
+            "content_name": contentName, # Download filename (may be custom via --name)
             "file_size": fileSize if fileSize is not None else -1, # -1 indicates unknown size
             "upload_mode": "server" if args.upload else "p2p",
             "tunnel_type": tunnelType or "default",
@@ -219,8 +225,282 @@ def onShareLinkCreate(args, link, filePath, fileSize, tunnelType, e2ee, reader, 
             sendException(logger, e)
 
 
+def generateUid():
+    # Get UIDGenerator from FeatureManager
+    uidGeneratorClass = UIDGenerator
+    if settingsGetter.hasFeaturesSupport():
+        uidGeneratorClass = featureManager.getUIDGeneratorClass(uidGeneratorClass)
+
+    uidGenerator = uidGeneratorClass()
+    return uidGenerator.generate()
+
+
+def processUpload(args, reader, proxyConfig: ProxyConfig):
+    from addons.Upload import (
+        createUploadStrategy,
+        UploadPredicate,
+        UploadResult,
+        PauseUploadError,
+        ResumeNotSupportedError,
+        PauseNotSupportedError,
+        E2EENotSupportedError,
+        UploadParameterMismatchError,
+        ResumeValidationError,
+    )
+
+    # Inform GUI users about upload resumability
+    if not isCLIMode():
+        flushPrint(_('You can stop the upload at any time and resume it later.\n'))
+
+    class UploadAbortResult(UploadResult):
+
+        def __init__(self, exitCode=0, *args, **kws):
+            super().__init__(*args, **kws)
+            self.exitCode = exitCode
+
+    def doUpload(uploadMethod, uid, link=None, resume=False):
+        uploadResult = None
+        try:
+            if resume:
+                # Resume mode: use resume() instead of tell()
+                response = uploadMethod.resume(args.file, args.upload, reader=reader, fileName=args.fileName)
+            else:
+                # Normal mode: pass reader to tell() to avoid rebuilding
+                response = uploadMethod.tell(
+                    uid, args.file, args.upload, link=link, reader=reader, fileName=args.fileName
+                )
+
+            if response['success']:
+                # Pass pause percentage if specified
+                pausePercentage = args.pause
+                uploadResult = uploadMethod.execute(response, args.file, pausePercentage=pausePercentage)
+            else:
+                message = response['message']
+                sendException(logger, message, errorPrefix="Server temporarily cannot process this file")
+        except PauseUploadError as e:
+            # Handle pause like Ctrl+C - print message and re-raise for elegant exit
+            flushPrint(_(
+                'Upload paused at {percentage:.1f}% ({completedChunks}/{totalChunks} chunks completed)'
+            ).format(percentage=e.percentage, completedChunks=e.completedChunks, totalChunks=e.totalChunks))
+            flushPrint(_('Use --resume to continue upload'))
+            return UploadAbortResult(exitCode=0)
+        except ResumeNotSupportedError as e:
+            # Handle resume not supported by upload strategy (e.g., PullUpload)
+            sendException(
+                logger, _(
+                    'Resume is only available for direct upload mode (without external tunnels).\n'
+                    'Please restart the upload without --resume to upload the file normally.'
+                ),
+                errorPrefix=None
+            )
+            return UploadAbortResult(exitCode=1)
+        except PauseNotSupportedError as e:
+            # Handle pause not supported by upload strategy (e.g., PullUpload)
+            sendException(
+                logger, _(
+                    'Pause functionality is only available for direct upload mode '
+                    '(without external tunnels).\n'
+                    'Please restart the upload without --pause to upload the file normally.'
+                ),
+                errorPrefix=None
+            )
+            return UploadAbortResult(exitCode=1)
+        except E2EENotSupportedError as e:
+            # Handle E2EE not supported by upload strategy (e.g., PullUpload)
+            sendException(
+                logger, _(
+                    'End-to-end encryption is only available for direct upload mode '
+                    '(without external tunnels).\n'
+                    'Please restart the upload without --e2ee to upload the file normally.'
+                ),
+                errorPrefix=None
+            )
+            return UploadAbortResult(exitCode=1)
+        except UploadParameterMismatchError as e:
+            # Handle parameter mismatch during resume
+            sendException(
+                logger, _(
+                    'Cannot resume: {parameter} mismatch.\n'
+                    'Original upload used "{originalValue}" but "{requestedValue}" was requested.\n'
+                    'Please use the same parameters as the original upload.'
+                ).format(parameter=e.parameter, originalValue=e.originalValue,
+                         requestedValue=e.requestedValue),
+                errorPrefix=None
+            )
+            return UploadAbortResult(exitCode=1)
+        except ResumeValidationError as e:
+            # Handle resume validation failures (file changed, expired, corrupted)
+            sendException(logger, e, action=e.action, errorPrefix=None)
+            return UploadAbortResult(exitCode=1)
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            sendException(logger, e, errorPrefix="Server temporarily cannot process this file")
+            return UploadAbortResult(exitCode=1)
+
+        return uploadResult
+
+    class UploadProcessor:
+
+        def __init__(self, uploadMethod, uid, exitCode=None):
+            self.uploadMethod = uploadMethod
+            self.uid = uid
+            self.exitCode = exitCode
+            self.uploadResult = None
+
+        def isDone(self):
+            return self.exitCode is not None
+
+        def getDownloadHandlerClass(self, link, uid):
+            self.uploadResult = doUpload(self.uploadMethod, uid, link, resume=args.resume)
+
+            if self.uploadResult and isinstance(self.uploadResult, UploadAbortResult):
+                return self.uploadResult.exitCode
+
+            if self.uploadResult and self.uploadResult.success:
+                return self.uploadResult.requestHandler
+            else:
+                raise RuntimeError(self.uploadResult.message if self.uploadResult else _('Unknown error'))
+
+        def publish(self):
+            if self.uploadResult and self.uploadResult.success:
+                self.uploadMethod.publish(self.uploadResult)
+                return self.uploadResult.link
+            return None
+
+    e2eeEnabled = args.e2ee
+    size = reader.size # None means unknown size (e.g., stdin)
+    # Regenerate UID for upload.
+    uid = generateUid()
+
+    # Create upload strategy (only if Upload addon is available)
+    user = featureManager.user
+    uploadMethod = createUploadStrategy(user.serialNumber, e2eeEnabled=e2eeEnabled)
+
+    # Check upload predicate
+    predicateResult = uploadMethod.predicate(reader.file, size, user.points, args.upload)
+    if not predicateResult.canUpload:
+        if predicateResult.type == UploadPredicate.INVALIDATE_POINTS:
+            flushPrint(_(
+                'Your user points are not enough. Please top up on our website (https://fastfilelink.com/).'
+            ))
+            logger.error(f'User {user.email} points not enough.')
+        else:
+            flushPrint(predicateResult.message or _('Upload not allowed.'))
+            sendException(logger, predicateResult.message or 'Upload predicate failed.')
+
+        return UploadProcessor(uploadMethod=None, uid=uid, exitCode=1)
+
+    while uploadMethod:
+        if uploadMethod.requireServer():
+            return UploadProcessor(uploadMethod=uploadMethod, uid=uid)
+
+        # Try upload with current strategy
+        uploadResult = doUpload(uploadMethod, uid, resume=args.resume)
+
+        if uploadResult and isinstance(uploadResult, UploadAbortResult):
+            return UploadProcessor(uploadMethod=uploadMethod, uid=uid, exitCode=uploadResult.exitCode)
+
+        if uploadResult and uploadResult.success:
+            uploadMethod.publish(uploadResult)
+            FFLEvent.shareLinkCreate.trigger(
+                link=uploadResult.link,
+                filePath=args.file,
+                fileSize=size,
+                tunnelType=None,
+                e2ee=e2eeEnabled,
+                reader=reader
+            )
+            return UploadProcessor(uploadMethod=uploadMethod, uid=uid, exitCode=0)
+        else:
+            # Try fallback strategy if available
+            uploadMethod = uploadMethod.createFallbackStrategy()
+            noRetry = os.environ.get('UPLOAD_NO_RETRY') == 'True'
+
+            # Resume can't retry, it only can be done with original upload method.
+            # TODO: We can design a ResumeUploadMismatchError to make sure using right method to resume.
+            if uploadMethod and not noRetry and not args.resume:
+                flushPrint(_('Retrying...\n'))
+                return UploadProcessor(uploadMethod=uploadMethod, uid=None) # no uid to regenerate
+            else:
+                sendException(logger, uploadResult.message if uploadResult else 'Upload failed')
+                return UploadProcessor(uploadMethod=uploadMethod, uid=uid, exitCode=1)
+
+
+def processVFS(args):
+    # VFS mode requires file or folder (already validated in CLI.py)
+    if not os.path.isfile(args.file) and not os.path.isdir(args.file):
+        flushPrint(_('Error: VFS mode requires a file or folder path'))
+        return 1
+
+    # Get port (VFS server uses specified port or random)
+    vfsPort = args.port if args.port else 0
+
+    # Get auth credentials from args or environment variable
+    authUser = args.authUser if hasattr(args, 'authUser') else None
+    authPassword = args.authPassword if hasattr(args, 'authPassword') else None
+
+    # Fallback to FFL_AUTH_PASSWORD environment variable if not provided via CLI
+    # This prevents password exposure in command line/process list
+    if not authPassword:
+        authPassword = os.getenv('FFL_AUTH_PASSWORD')
+
+    # If password is set but user is not, use default user
+    if authPassword and not authUser:
+        authUser = 'user'
+
+    # Start VFS server (supports both files and folders)
+    vfsServer = VFSServer(args.file, host="127.0.0.1", port=vfsPort, authUser=authUser, authPassword=authPassword)
+    vfsServer.start()
+
+    vfsUri = vfsServer.clientUri
+    flushPrint(_("VFS server started successfully!\n"))
+
+    # Show appropriate message based on file or folder
+    shareType = 'file' if os.path.isfile(args.file) else 'folder'
+    flushPrint(_("Please share the URI below to access the {type} remotely:\n").format(type=shareType))
+
+    # Show auth status WITHOUT exposing password (security)
+    if authPassword:
+        flushPrint(_('🔐 Authentication enabled - Username: {authUser}\n').format(authUser=authUser))
+
+    # Never include password in URI (security issue)
+    flushPrint(f"{vfsUri}\n")
+    copy2Clipboard(vfsUri)
+
+    flushPrint(_('VFS server is running on loopback (127.0.0.1) - only accessible from this machine.'))
+    flushPrint(_('Please keep the application running for remote access.'))
+    if isCLIMode():
+        flushPrint(_('Press Ctrl+C to stop the server.\n'))
+    else:
+        flushPrint('')
+
+    # Trigger event for GUI
+    FFLEvent.shareLinkCreate.trigger(
+        link=vfsUri,
+        filePath=args.file,
+        fileSize=None, # VFS TAR size unknown
+        tunnelType="vfs",
+        e2ee=False, # VFS doesn't support E2EE yet
+        reader=None
+    )
+
+    try:
+        # Keep server running until interrupted
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        flushPrint(_('\nShutting down VFS server...'))
+        FFLEvent.applicationInterrupted.trigger(reason='user-interrupt')
+    finally:
+        vfsServer.stop()
+        flushPrint(_('VFS server stopped.'))
+
+    return 0
+
+
 # Main business logic - shared between CLI and GUI modes
-def processFileSharing(args, proxyConfig: ProxyConfig = None):
+def processSharing(args, proxyConfig: ProxyConfig = None):
     """
     Process the file sharing request with the given arguments
 
@@ -232,8 +512,8 @@ def processFileSharing(args, proxyConfig: ProxyConfig = None):
         int: Exit code (0 for success, 1 for error)
     """
     # Argument predicates.
-    # Allow "-" for stdin, otherwise check file existence
-    if args.file != "-" and not os.path.exists(args.file):
+    # Allow "-" for stdin and vfs:// URIs, otherwise check file existence
+    if args.file != "-" and not args.file.startswith("vfs://") and not os.path.exists(args.file):
         flushPrint(_('{file} does not exist!').format(file=f'"{args.file}"'))
         return 1
 
@@ -253,349 +533,200 @@ def processFileSharing(args, proxyConfig: ProxyConfig = None):
                 return 1
 
         # registered or for testing
-        if featureManager.isRegisteredUser():
-
-            if not isCLIMode():
-                flushPrint(_('If a firewall notification appears, please allow the application to connect.\n'))
-
-            # Get size using Reader abstraction (supports both files and folders)
-            # Reader will use its own default if args.fileName is None
-            reader = SourceReader.build(args.file, fileName=args.fileName)
-            size = reader.size # None means unknown size (e.g., stdin)
-
-            # Hint user about folder content change detection for strict mode
-            if args.file != "-" and os.path.isdir(args.file):
-                flushPrint(_('📁 Sharing folder as ZIP - please keep folder contents unchanged during transfer\n'))
-
-            # Get UIDGenerator from FeatureManager
-            uidGeneratorClass = UIDGenerator
-            if settingsGetter.hasFeaturesSupport():
-                uidGeneratorClass = featureManager.getUIDGeneratorClass(uidGeneratorClass)
-
-            uidGenerator = uidGeneratorClass()
-            generateUid = lambda: uidGenerator.generate()
-            uid = generateUid()
-
-            # Show E2EE status if enabled (first line, before establishing tunnel)
-            e2eeEnabled = args.e2ee if hasattr(args, 'e2ee') else False
-            if e2eeEnabled:
-                flushPrint(_('🔐 End-to-end encryption enabled\n'))
-
-            # Detect if Tor proxy is being used (robust verification)
-            torDetected = False
-            if proxyConfig:
-                try:
-                    if verifyTorProxy(proxyConfig, skipExitListCheck=True):
-                        torDetected = True
-                        args.forceRelay = True
-                        logger.info(
-                            f"Tor proxy verified ({proxyConfig['host']}:{proxyConfig['port']}) - "
-                            f"enabling --force-relay for strict WebRTC blocking"
-                        )
-                except RuntimeError as e:
-                    logger.debug(f"Tor verification failed: {e}")
-
-            # Notify user if Tor privacy mode is active
-            if torDetected:
-                flushPrint(_("🧅 Tor Privacy Mode Active"))
-
-            uploadMethod = None
-            if args.upload:
-                from addons.Upload import (
-                    createUploadStrategy, UploadPredicate, UploadResult, PauseUploadError, ResumeNotSupportedError,
-                    PauseNotSupportedError, E2EENotSupportedError, UploadParameterMismatchError, ResumeValidationError
-                )
-
-                # Inform GUI users about upload resumability
-                if not isCLIMode():
-                    flushPrint(_('You can stop the upload at any time and resume it later.\n'))
-
-                class UploadAbortResult(UploadResult):
-
-                    def __init__(self, exitCode=0, *args, **kws):
-                        super().__init__(*args, **kws)
-                        self.exitCode = exitCode
-
-                def doUpload(uploadMethod, uid, link=None, resume=False):
-                    uploadResult = None
-                    try:
-                        if resume:
-                            # Resume mode: use resume() instead of tell()
-                            response = uploadMethod.resume(
-                                args.file, args.upload, reader=reader, fileName=args.fileName
-                            )
-                        else:
-                            # Normal mode: pass reader to tell() to avoid rebuilding
-                            response = uploadMethod.tell(
-                                uid, args.file, args.upload, link=link, reader=reader, fileName=args.fileName
-                            )
-
-                        if response['success']:
-                            # Pass pause percentage if specified
-                            pausePercentage = args.pause
-                            uploadResult = uploadMethod.execute(response, args.file, pausePercentage=pausePercentage)
-                        else:
-                            message = response['message']
-                            sendException(logger, message, errorPrefix="Server temporarily cannot process this file")
-                    except PauseUploadError as e:
-                        # Handle pause like Ctrl+C - print message and re-raise for elegant exit
-                        flushPrint(_(
-                            'Upload paused at {percentage:.1f}% ({completedChunks}/{totalChunks} chunks completed)'
-                        ).format(percentage=e.percentage, completedChunks=e.completedChunks, totalChunks=e.totalChunks))
-                        flushPrint(_('Use --resume to continue upload'))
-                        return UploadAbortResult(exitCode=0)
-                    except ResumeNotSupportedError as e:
-                        # Handle resume not supported by upload strategy (e.g., PullUpload)
-                        sendException(
-                            logger, _(
-                                'Resume is only available for direct upload mode (without external tunnels).\n'
-                                'Please restart the upload without --resume to upload the file normally.'
-                            ),
-                            errorPrefix=None
-                        )
-                        return UploadAbortResult(exitCode=1)
-                    except PauseNotSupportedError as e:
-                        # Handle pause not supported by upload strategy (e.g., PullUpload)
-                        sendException(
-                            logger, _(
-                                'Pause functionality is only available for direct upload mode '
-                                '(without external tunnels).\n'
-                                'Please restart the upload without --pause to upload the file normally.'
-                            ),
-                            errorPrefix=None
-                        )
-                        return UploadAbortResult(exitCode=1)
-                    except E2EENotSupportedError as e:
-                        # Handle E2EE not supported by upload strategy (e.g., PullUpload)
-                        sendException(
-                            logger, _(
-                                'End-to-end encryption is only available for direct upload mode '
-                                '(without external tunnels).\n'
-                                'Please restart the upload without --e2ee to upload the file normally.'
-                            ),
-                            errorPrefix=None
-                        )
-                        return UploadAbortResult(exitCode=1)
-                    except UploadParameterMismatchError as e:
-                        # Handle parameter mismatch during resume
-                        sendException(
-                            logger, _(
-                                'Cannot resume: {parameter} mismatch.\n'
-                                'Original upload used "{originalValue}" but "{requestedValue}" was requested.\n'
-                                'Please use the same parameters as the original upload.'
-                            ).format(parameter=e.parameter, originalValue=e.originalValue,
-                                     requestedValue=e.requestedValue),
-                            errorPrefix=None
-                        )
-                        return UploadAbortResult(exitCode=1)
-                    except ResumeValidationError as e:
-                        # Handle resume validation failures (file changed, expired, corrupted)
-                        sendException(logger, e, action=e.action, errorPrefix=None)
-                        return UploadAbortResult(exitCode=1)
-                    except KeyboardInterrupt:
-                        raise
-                    except Exception as e:
-                        sendException(logger, e, errorPrefix="Server temporarily cannot process this file")
-                        return UploadAbortResult(exitCode=1)
-
-                    return uploadResult
-
-                # Create upload strategy (only if Upload addon is available)
-                user = featureManager.user
-                uploadMethod = createUploadStrategy(user.serialNumber, e2eeEnabled=e2eeEnabled)
-
-                # Check upload predicate
-                predicateResult = uploadMethod.predicate(reader.file, size, user.points, args.upload)
-                if not predicateResult.canUpload:
-                    if predicateResult.type == UploadPredicate.INVALIDATE_POINTS:
-                        flushPrint(_(
-                            'Your user points are not enough. Please top up on our website (https://fastfilelink.com/).'
-                        ))
-                        logger.error(f'User {user.email} points not enough.')
-                    else:
-                        flushPrint(predicateResult.message or _('Upload not allowed.'))
-                        sendException(logger, predicateResult.message or 'Upload predicate failed.')
-                    return 1
-
-            while uploadMethod:
-                if uploadMethod.requireServer():
-                    break
-
-                # Try upload with current strategy
-                uploadResult = doUpload(uploadMethod, uid, resume=args.resume)
-
-                if uploadResult and isinstance(uploadResult, UploadAbortResult):
-                    return uploadResult.exitCode
-
-                if uploadResult and uploadResult.success:
-                    uploadMethod.publish(uploadResult)
-                    FFLEvent.shareLinkCreate.trigger(
-                        link=uploadResult.link,
-                        filePath=args.file,
-                        fileSize=size,
-                        tunnelType=None,
-                        e2ee=e2eeEnabled,
-                        reader=reader
-                    )
-                    return 0
-                else:
-                    # Try fallback strategy if available
-                    uploadMethod = uploadMethod.createFallbackStrategy()
-                    noRetry = os.environ.get('UPLOAD_NO_RETRY') == 'True'
-
-                    # Resume can't retry, it only can be done with original upload method.
-                    # TODO: We can design a ResumeUploadMismatchError to make sure using right method to resume.
-                    if uploadMethod and not noRetry and not args.resume:
-                        # Regenerate UID to retry.
-                        uid = generateUid()
-
-                        flushPrint(_('Retrying...\n'))
-                    else:
-                        sendException(logger, uploadResult.message if uploadResult else 'Upload failed')
-                        return 1
-
-            # If we reach here, we need to start local server (either P2P or Pull upload)
-            userPort = args.port
-            port = getAvailablePort(userPort)
-
-            # Get enhanced TunnelRunner from FeatureManager if Features or Tunnels addon is available
-            tunnelRunnerClass = TunnelRunner
-            if settingsGetter.hasFeaturesSupport():
-                tunnelRunnerClass = featureManager.getTunnelRunnerClass(tunnelRunnerClass)
-            if settingsGetter.hasTunnelsSupport():
-                try:
-                    from addons.Tunnels import TunnelRunnerProvider
-                    provider = TunnelRunnerProvider()
-                    tunnelRunnerClass = provider.getTunnelRunnerClass(tunnelRunnerClass)
-                except Exception as e:
-                    sendException(logger, _('Unable to create tunnel by your tunnel configuration.'))
-
-            # Use proxyConfig passed from global arguments processing
-            with tunnelRunnerClass(size, proxyConfig=proxyConfig) as tunnelRunner:
-                tunnelType = tunnelRunner.getTunnelType()
-                if tunnelType != "default":
-                    flushPrint(_('Using tunnel: {tunnelType}').format(tunnelType=tunnelType))
-
-                # Show proxy status for tunnel connections
-                proxyInfo = tunnelRunner.getProxyInfo()
-                if proxyInfo:
-                    flushPrint(_('Establishing tunnel connection via proxy {proxyInfo}...\n').format(
-                        proxyInfo=proxyInfo))
-                else:
-                    flushPrint(_('Establishing tunnel connection...\n'))
-
-                domain, tunnelLink = tunnelRunner.start(port)
-                link = f"{tunnelLink}{uid}"
-
-                # Determine handler class and setup link
-                if uploadMethod:
-                    uploadResult = doUpload(uploadMethod, uid, link, resume=args.resume)
-
-                    if uploadResult and isinstance(uploadResult, UploadAbortResult):
-                        return uploadResult.exitCode
-
-                    if uploadResult and uploadResult.success:
-                        handlerClass = uploadResult.requestHandler
-                    else:
-                        flushPrint(_('Upload failed: {error}').format(
-                            error=uploadResult.message if uploadResult else _('Unknown error')
-                        ))
-                        sendException(logger, uploadResult.message if uploadResult else 'Upload failed')
-                        return 1
-                else:
-                    # P2P mode
-                    handlerClass = DownloadHandler
-
-                    flushPrint(_("Please share the link below with the person you'd like to share the file with."))
-                    flushPrint(f'{link}\n')
-                    copy2Clipboard(f'{link}')
-
-                    # Trigger share link create event for GUI and other subscribers
-                    FFLEvent.shareLinkCreate.trigger(
-                        link=link,
-                        filePath=args.file,
-                        fileSize=size,
-                        tunnelType=tunnelType,
-                        e2ee=e2eeEnabled,
-                        reader=reader
-                    )
-
-                    # Show auth info if enabled (password enables auth)
-                    authPassword = args.authPassword
-                    if authPassword:
-                        authUser = args.authUser
-                        flushPrint(_('Authentication enabled - Username: {authUser}\n').format(authUser=authUser))
-
-                    flushPrint(_('Please keep the application running so the recipient can download the file.'))
-                    if isCLIMode():
-                        flushPrint(_('Press Ctrl+C to terminate the program when done.\n'))
-                    else:
-                        flushPrint('')
-
-                try:
-                    # Get maxDownloads and timeout values
-                    maxDownloads = args.maxDownloads
-                    timeout = args.timeout
-
-                    # Get enhanced handlers from FeatureManager if Features addon is available
-                    webRTCManagerClass = WebRTCManager
-                    if settingsGetter.hasFeaturesSupport():
-                        handlerClass = featureManager.getDownloadHandlerClass(handlerClass)
-                        webRTCManagerClass = featureManager.getWebRTCManagerClass(
-                            webRTCManagerClass, forceRelay=args.forceRelay
-                        )
-                    else:
-                        if torDetected:
-                            # Tor mode without Features addon: use DummyWebRTCManager to totally block WebRTC
-                            webRTCManagerClass = DummyWebRTCManager
-
-                    # Get auth credentials from args - password enables auth
-                    authPassword = args.authPassword
-                    authUser = args.authUser if authPassword else None
-
-                    # WebRTC default state: disabled by --force-relay flag
-                    defaultWebRTC = not args.forceRelay
-
-                    # Create server configuration
-                    serverConfig = ServerConfig(
-                        maxDownloads=maxDownloads,
-                        timeout=timeout,
-                        authUser=authUser,
-                        authPassword=authPassword,
-                        defaultWebRTC=defaultWebRTC,
-                        e2eeEnabled=e2eeEnabled,
-                        torEnabled=torDetected,
-                    )
-
-                    # Create server with enhanced handler and WebRTC manager
-                    # Reader provides file and directory information
-                    server = createServer(reader, port, uid, domain, handlerClass, webRTCManagerClass, serverConfig)
-                    server.start()
-                except KeyboardInterrupt:
-                    flushPrint(_('\nExiting on user request (Ctrl+C)...'))
-                    # Clean exit without stack trace - context manager will handle cleanup
-                    return 0
-                except Exception as e:
-                    raise e
-
-                # If we used pull upload, publish the link after server ends
-                if uploadMethod and uploadResult and uploadResult.success:
-                    uploadMethod.publish(uploadResult)
-                    FFLEvent.shareLinkCreate.trigger(
-                        link=uploadResult.link,
-                        filePath=args.file,
-                        fileSize=size,
-                        tunnelType=tunnelType,
-                        e2ee=e2eeEnabled,
-                        reader=reader
-                    )
-                    return 0
-        else:
+        if not featureManager.isRegisteredUser():
             sendException(logger, _('User email address has been lost'))
             return 1
 
+        # Handle VFS mode (--vfs): Start VFSServer instead of tunnelRunner
+        if args.vfs:
+            return processVFS(args)
+
+        if not isCLIMode():
+            flushPrint(_('If a firewall notification appears, please allow the application to connect.\n'))
+
+        # Get size using Reader abstraction (supports both files and folders)
+        # Reader will use its own default if args.fileName is None
+        reader = SourceReader.build(args.file, fileName=args.fileName)
+        size = reader.size # None means unknown size (e.g., stdin)
+
+        # Hint user about folder content change detection for strict mode
+        if args.file != "-" and os.path.isdir(args.file):
+            flushPrint(_('📁 Sharing folder as ZIP - please keep folder contents unchanged during transfer\n'))
+
+        # Show E2EE status if enabled (first line, before establishing tunnel)
+        e2eeEnabled = args.e2ee
+        if e2eeEnabled:
+            flushPrint(_('🔐 End-to-end encryption enabled\n'))
+
+        # Detect if Tor proxy is being used (robust verification)
+        torDetected = False
+        if proxyConfig:
+            try:
+                if verifyTorProxy(proxyConfig, skipExitListCheck=True):
+                    torDetected = True
+                    args.forceRelay = True
+                    logger.info(
+                        f"Tor proxy verified ({proxyConfig['host']}:{proxyConfig['port']}) - "
+                        f"enabling --force-relay for strict WebRTC blocking"
+                    )
+            except RuntimeError as e:
+                logger.debug(f"Tor verification failed: {e}")
+
+        # Notify user if Tor privacy mode is active
+        if torDetected:
+            flushPrint(_("🧅 Tor Privacy Mode Active"))
+
+        uploadProcessor = None
+        uid = None
+        if args.upload:
+            uploadProcessor = processUpload(args, reader, proxyConfig=proxyConfig)
+            if uploadProcessor.isDone():
+                return uploadProcessor.exitCode
+            uid = uploadProcessor.uid
+
+        # If we reach here, we need to start local server (either P2P or Pull upload)
+        if not uid:
+            uid = generateUid()
+
+        userPort = args.port
+        # Fallback to FFL_AUTH_PASSWORD environment variable if not provided via CLI
+        authPassword = args.authPassword or os.getenv('FFL_AUTH_PASSWORD')
+        authUser = args.authUser if authPassword else None
+
+        port = getAvailablePort(userPort)
+
+        # Get enhanced TunnelRunner from FeatureManager if Features or Tunnels addon is available
+        tunnelRunnerClass = TunnelRunner
+        if settingsGetter.hasFeaturesSupport():
+            tunnelRunnerClass = featureManager.getTunnelRunnerClass(tunnelRunnerClass)
+        if settingsGetter.hasTunnelsSupport():
+            try:
+                from addons.Tunnels import TunnelRunnerProvider
+                provider = TunnelRunnerProvider()
+                tunnelRunnerClass = provider.getTunnelRunnerClass(tunnelRunnerClass)
+            except Exception as e:
+                sendException(logger, _('Unable to create tunnel by your tunnel configuration.'))
+
+        # Use proxyConfig passed from global arguments processing
+        with tunnelRunnerClass(size, proxyConfig=proxyConfig) as tunnelRunner:
+            tunnelType = tunnelRunner.getTunnelType()
+            if tunnelType != "default":
+                flushPrint(_('Using tunnel: {tunnelType}').format(tunnelType=tunnelType))
+
+            # Show proxy status for tunnel connections
+            proxyInfo = tunnelRunner.getProxyInfo()
+            if proxyInfo:
+                flushPrint(_('Establishing tunnel connection via proxy {proxyInfo}...\n').format(
+                    proxyInfo=proxyInfo))
+            else:
+                flushPrint(_('Establishing tunnel connection...\n'))
+
+            domain, tunnelLink = tunnelRunner.start(port)
+            link = f"{tunnelLink}{uid}"
+
+            # Determine handler class and setup link
+            if uploadProcessor:
+                try:
+                    handlerClass = uploadProcessor.getDownloadHandlerClass(link, uid)
+                except RuntimeError as uploadError:
+                    flushPrint(_('Upload failed: {error}').format(error=uploadError.message))
+                    sendException(logger, uploadError.message)
+                    return 1
+            else:
+                # P2P mode
+                handlerClass = DownloadHandler
+
+                flushPrint(_("Please share the link below with the person you'd like to share the file with."))
+                flushPrint(f'{link}\n')
+                copy2Clipboard(f'{link}')
+
+                # Trigger share link create event for GUI and other subscribers
+                FFLEvent.shareLinkCreate.trigger(
+                    link=link,
+                    filePath=args.file,
+                    fileSize=size,
+                    tunnelType=tunnelType,
+                    e2ee=e2eeEnabled,
+                    reader=reader
+                )
+
+                # Show auth info if enabled (password enables auth)
+                if authPassword:
+                    flushPrint(_('Authentication enabled - Username: {authUser}\n').format(authUser=authUser))
+
+                flushPrint(_('Please keep the application running so the recipient can download the file.'))
+                if isCLIMode():
+                    flushPrint(_('Press Ctrl+C to terminate the program when done.\n'))
+                else:
+                    flushPrint('')
+
+            try:
+                # Get maxDownloads and timeout values
+                maxDownloads = args.maxDownloads
+                timeout = args.timeout
+
+                # Get enhanced handlers from FeatureManager if Features addon is available
+                webRTCManagerClass = WebRTCManager
+                if settingsGetter.hasFeaturesSupport():
+                    handlerClass = featureManager.getDownloadHandlerClass(handlerClass)
+                    webRTCManagerClass = featureManager.getWebRTCManagerClass(
+                        webRTCManagerClass, forceRelay=args.forceRelay
+                    )
+                else:
+                    if torDetected:
+                        # Tor mode without Features addon: use DummyWebRTCManager to totally block WebRTC
+                        webRTCManagerClass = DummyWebRTCManager
+
+                # WebRTC default state: disabled by --force-relay flag
+                defaultWebRTC = not args.forceRelay
+
+                # Create server configuration
+                serverConfig = ServerConfig(
+                    maxDownloads=maxDownloads,
+                    timeout=timeout,
+                    authUser=authUser,
+                    authPassword=authPassword,
+                    defaultWebRTC=defaultWebRTC,
+                    e2eeEnabled=e2eeEnabled,
+                    torEnabled=torDetected,
+                )
+
+                # Create server with enhanced handler and WebRTC manager
+                # Reader provides file and directory information
+                server = createServer(reader, port, uid, domain, handlerClass, webRTCManagerClass, serverConfig)
+
+                server.start()
+            except KeyboardInterrupt:
+                flushPrint(_('\nExiting on user request (Ctrl+C)...'))
+
+                # Trigger applicationInterrupted event
+                FFLEvent.applicationInterrupted.trigger(reason='user-interrupt')
+
+                # Clean exit without stack trace - context manager will handle cleanup
+                return 0
+            except Exception as e:
+                raise e
+
+            # If we used pull upload, publish the link after server ends
+            if uploadProcessor:
+                link = uploadProcessor.publish()
+                if not link: # !?
+                    sendException(logger, _('Unable to get uploaded link'))
+                    return 1
+
+                FFLEvent.shareLinkCreate.trigger(
+                    link=link,
+                    filePath=args.file,
+                    fileSize=size,
+                    tunnelType=tunnelType,
+                    e2ee=e2eeEnabled,
+                    reader=reader
+                )
+                return 0
+
     except KeyboardInterrupt:
         flushPrint(_('\nExiting on user request (Ctrl+C)...'))
+        FFLEvent.applicationInterrupted.trigger(reason='user-interrupt')
         # Ensure clean exit
         return 0
 
@@ -630,7 +761,6 @@ def processDownload(args):
 
     except Exception as e:
         # Check if this is a FolderChangedException
-        from bases.Reader import FolderChangedException
         if isinstance(e, FolderChangedException):
             # Add user-facing guidance to server error message
             serverMsg = str(e)
@@ -714,7 +844,7 @@ def runCLIMain():
     if not validateCompatibleWithServer():
         return 1
 
-    return processFileSharing(args, proxyConfig=proxyConfig)
+    return processSharing(args, proxyConfig=proxyConfig)
 
 
 # GUI mode implementation - delegated to addons.GUI plugin
@@ -722,7 +852,7 @@ def runGUIMain():
     """Run the program in GUI mode using addons.GUI plugin"""
     try:
         import addons.GUI
-        return addons.GUI.runGUIMain(processFileSharing)
+        return addons.GUI.runGUIMain(processSharing)
     except ImportError:
         flushPrint(_('GUI support not available. Install required dependencies or use CLI mode.'))
         return 1
@@ -751,6 +881,7 @@ def main():
             return runGUIMain()
     except KeyboardInterrupt:
         flushPrint(_('\nExiting on user request (Ctrl+C)...'))
+        FFLEvent.applicationInterrupted.trigger(reason='user-interrupt')
         return 0 # Return success code for clean exit
 
 
@@ -760,6 +891,7 @@ if __name__ == '__main__':
         sys.exit(exitCode or 0)
     except KeyboardInterrupt:
         flushPrint(_('\nExiting on user request (Ctrl+C)...'))
+        FFLEvent.applicationInterrupted.trigger(reason='user-interrupt')
         sys.exit(0) # Exit with success code
     except TunnelUnavailableError as e:
         sendException(

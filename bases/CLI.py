@@ -29,7 +29,7 @@ from bases.Kernel import (
 )
 from bases.Settings import DEFAULT_AUTH_USER_NAME, DEFAULT_UPLOAD_DURATION, SettingsGetter
 from bases.Utils import flushPrint, checkVersionCompatibility, getEnv, parseProxyString, setupProxyEnvironment
-from bases.Hook import HookClient
+from bases.Hook import HookClient, HookFileWriter
 from bases.Upgrade import performUpgrade
 from bases.I18n import _
 
@@ -67,7 +67,7 @@ def loadEnvFile():
                     ))
                     continue
 
-                key, _, value = line.partition('=')
+                key, _sep, value = line.partition('=')
                 key = key.strip()
                 value = value.strip()
 
@@ -262,12 +262,16 @@ def configureCLIParser():
             return validatePositive(maxDownloadsStr, "Max downloads")
 
         parser.add_argument(
-            "file", metavar="FILE_OR_FOLDER", help=_("Choose a file or folder you want to share (use '-' for stdin)"), nargs='?'
+            "file",
+            metavar="FILE_OR_FOLDER",
+            help=_("Choose a file or folder you want to share (use '-' for stdin)"),
+            nargs='?'
         )
         parser.add_argument(
             "--name", "-n",
             metavar="FILENAME",
-            help=_("Specify custom download filename (default: original filename for files, folder.zip for folders, stdin-YYYYMMDD-HHMMSS.bin for stdin)"),
+            help=_("Specify custom download filename (default: original filename for files, "
+                   "folder.zip for folders, stdin-YYYYMMDD-HHMMSS.bin for stdin)"),
             dest="fileName"
         )
 
@@ -277,7 +281,8 @@ def configureCLIParser():
         parser.add_argument("--json", metavar="JSON_FILE", help=_("Output link and settings to a JSON file"))
         parser.add_argument(
             "--upload",
-            help=_("Upload file to FastFileLink server to share it (Share duration after upload). Default: {default}").format(
+            help=_("Upload file to FastFileLink server to share it "
+                   "(Share duration after upload). Default: {default}").format(
                 default=DEFAULT_UPLOAD_DURATION
             ),
             choices=times if times else ['unavailable'],
@@ -321,7 +326,8 @@ def configureCLIParser():
         )
         parser.add_argument(
             "--auth-user",
-            help=_("Username for HTTP Basic Authentication (default: '{default}')").format(default=DEFAULT_AUTH_USER_NAME),
+            help=_("Username for HTTP Basic Authentication (default: '{default}')").format(
+                default=DEFAULT_AUTH_USER_NAME),
             metavar="USERNAME",
             default=DEFAULT_AUTH_USER_NAME,
             dest="authUser"
@@ -364,6 +370,13 @@ def configureCLIParser():
             metavar="FILE",
             help=_("Display QR code in terminal (default) or save to FILE (e.g., qr.png)"),
             dest="qr"
+        )
+        parser.add_argument(
+            "--vfs",
+            action="store_true",
+            default=False,
+            help=_("Start VFS server and provide vfs:// URI instead of HTTPS link (P2P mode only, works with --port)"),
+            dest="vfs"
         )
 
         # Allow addons to register additional arguments for share command
@@ -441,17 +454,29 @@ def configureCLIParser():
 
     # Default 'share' command for file sharing
     shareSubparser = subparsers.add_parser(
-        'share', help=_('Share a file (default command)'), parents=[globalsParent], exit_on_error=False
+        'share',
+        help=_('Share a file (default command)'),
+        parents=[globalsParent],
+        exit_on_error=False
     )
     _configureShareParser(shareSubparser)
 
     # Download command for receiving files
     downloadSubparser = subparsers.add_parser(
-        'download', help=_('Download a file from FastFileLink URL'), parents=[globalsParent], exit_on_error=False
+        'download',
+        help=_('Download a file from FastFileLink URL'),
+        parents=[globalsParent],
+        exit_on_error=False
     )
-    downloadSubparser.add_argument("url", metavar="URL", help=_("FastFileLink URL to download from"))
     downloadSubparser.add_argument(
-        "--output", "-o", metavar="PATH", help=_("Output file path (default: use filename from server)")
+        "url",
+        metavar="URL",
+        help=_("FastFileLink URL to download from")
+    )
+    downloadSubparser.add_argument(
+        "--output", "-o",
+        metavar="PATH",
+        help=_("Output file path (default: use filename from server)")
     )
     downloadSubparser.add_argument(
         "--resume",
@@ -460,18 +485,25 @@ def configureCLIParser():
     )
     downloadSubparser.add_argument(
         "--auth-user",
-        help=_("Username for HTTP Basic Authentication (default: '{default}')").format(default=DEFAULT_AUTH_USER_NAME),
+        help=_("Username for HTTP Basic Authentication (default: '{default}')").format(
+            default=DEFAULT_AUTH_USER_NAME),
         metavar="USERNAME",
         default=DEFAULT_AUTH_USER_NAME,
         dest="authUser"
     )
     downloadSubparser.add_argument(
-        "--auth-password", help=_("Password for HTTP Basic Authentication"), metavar="PASSWORD", dest="authPassword"
+        "--auth-password",
+        help=_("Password for HTTP Basic Authentication"),
+        metavar="PASSWORD",
+        dest="authPassword"
     )
 
     # Upgrade command for self-updating
     upgradeSubparser = subparsers.add_parser(
-        'upgrade', help=_('Upgrade to latest version or specified version'), parents=[globalsParent], exit_on_error=False
+        'upgrade',
+        help=_('Upgrade to latest version or specified version'),
+        parents=[globalsParent],
+        exit_on_error=False
     )
     upgradeSubparser.add_argument(
         "target",
@@ -498,13 +530,27 @@ def handleHookArgument(hook, result=None):
     if not hook:
         return result
 
-    hookClient = HookClient(hook)
+    jsonl = False
+    sender = None
+
+    if hook.startswith('http://') or hook.startswith('https://'):
+        sender = HookClient(hook)
+    else:
+        sender = HookFileWriter(hook)
+        jsonl = True
+
     logger.info(f"Hook client initialized: {hook}")
 
     def forwardEventToHook(eventName, **eventData):
-        hookClient.sendEvent(eventName, eventData)
+        sender.sendEvent(eventName, eventData)
 
     FFLEvent.all.subscribe(forwardEventToHook)
+
+    if jsonl:
+        # HookFileWriter requires close on shutdown or interrupt (Ctrl+C)
+        closeHandler = lambda *args, **kwargs: sender.close()
+        FFLEvent.applicationShutdown.subscribe(closeHandler)
+        FFLEvent.applicationInterrupted.subscribe(closeHandler)
 
     return result
 
@@ -761,9 +807,10 @@ def validateShareArguments(args):
         return 1
 
     # Validate auth arguments - password is required to enable auth
-    # Check if user provided --auth-user but no --auth-password
-    # We check if authUser is not the default value 'ffl' AND authPassword is None
-    if args.authUser != DEFAULT_AUTH_USER_NAME and args.authPassword is None:
+    # Check if user provided --auth-user but no --auth-password (CLI or env var)
+    # We check if authUser is not the default value 'ffl' AND authPassword is not set
+    authPasswordProvided = args.authPassword is not None or os.getenv('FFL_AUTH_PASSWORD')
+    if args.authUser != DEFAULT_AUTH_USER_NAME and not authPasswordProvided:
         flushPrint(_('Error: --auth-user requires --auth-password'))
         flushPrint(_(
             'Use --auth-password to enable authentication '
@@ -771,6 +818,18 @@ def validateShareArguments(args):
         ).format(defaultUser=DEFAULT_AUTH_USER_NAME))
         return 1
 
-    # No validation needed for --name (it's generic for all file types)
+    # Validate --vfs argument
+    if args.vfs:
+        # --vfs cannot be used with --upload
+        if args.upload:
+            flushPrint(_('Error: --vfs cannot be used with --upload'))
+            flushPrint(_('VFS mode is only for P2P sharing. Remove --upload to use --vfs'))
+            return 1
+
+        # --vfs requires a file or folder (not stdin)
+        if args.file == "-":
+            flushPrint(_('Error: --vfs does not support stdin input'))
+            flushPrint(_('Please specify a file or folder path instead of "-"'))
+            return 1
 
     return None # Validation passed

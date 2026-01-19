@@ -33,6 +33,7 @@
  * });
  */
 
+window.currentLanguage = null;
 function applyFontByLanguage(lng) {
   var $html = $("html");
 
@@ -62,10 +63,11 @@ async function fetchSettingLanguage() {
 
 async function initializeI18n(config = {}) {
   // Configuration with defaults
-  let _fetchSettingLanguage = config.getCurrentLanguageFunc || fetchSettingLanguage;
+  let _fetchSettingLanguage =
+    config.getCurrentLanguageFunc || fetchSettingLanguage;
   let currentLanguage = null;
-  if(_fetchSettingLanguage) { 
-     currentLanguage = await _fetchSettingLanguage();
+  if (_fetchSettingLanguage) {
+    currentLanguage = await _fetchSettingLanguage();
   }
 
   const localesPath = config.localesPath || "/locales";
@@ -213,6 +215,7 @@ async function initializeI18n(config = {}) {
         // Initialize jquery-i18next first
         jqueryI18next.init(i18next, $);
         if (currentLang) {
+          window.currentLanguage = currentLang;
           applyFontByLanguage(currentLang);
           i18next.changeLanguage(currentLang, function (switchErr) {
             if (!switchErr) {
@@ -264,6 +267,7 @@ function changeLanguage(lang, log) {
       : function () {});
 
   i18next.changeLanguage(lang, function (err, t) {
+    window.currentLanguage = lang;
     applyFontByLanguage(lang);
     if (err) {
       logger("FFLI18n", "Language change failed:", err);

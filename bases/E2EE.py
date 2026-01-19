@@ -1321,6 +1321,9 @@ class UploadStreamEncryptor:
         self.crypto = CryptoInterface()
         self.aesgcm = self.crypto.createAESGCM(contentKey)
 
+    def getKeyCommitment(self) -> str:
+        return hashlib.sha256(self.contentKey).hexdigest()
+
     def encryptChunk(self, plaintext: bytes, explicitChunkIndex: int = None) -> bytes:
         """Encrypt chunk and store tag in memory
 
@@ -1472,6 +1475,10 @@ class E2EEUploadHelper:
         contentKey = os.urandom(32) # AES-256 key
         nonceBase = os.urandom(12) # GCM nonce base
         return contentKey, nonceBase
+
+    @staticmethod
+    def getKeyCommitment(contentKey) -> str:
+        return hashlib.sha256(contentKey).hexdigest()
 
     @staticmethod
     def formatKeyForDisplay(contentKey: bytes) -> str:

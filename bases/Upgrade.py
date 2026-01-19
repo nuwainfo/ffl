@@ -27,7 +27,6 @@ import os
 import subprocess
 import tempfile
 import logging
-import tempfile
 import shutil
 import re
 import platform
@@ -119,7 +118,8 @@ def detectGlibcVersion(binaryPath: Path) -> Optional[str]:
                                 major, minor = int(parts[0]), int(parts[1])
                                 if maxGlibcVersion is None or (major, minor) > maxGlibcVersion:
                                     maxGlibcVersion = (major, minor)
-                        except (ValueError, IndexError):
+                        except (ValueError, IndexError) as e:
+                            logger.debug(f"Failed to parse GLIBC version '{aux.name}': {e}")
                             continue
 
         if maxGlibcVersion:
@@ -298,7 +298,8 @@ def executeInstallScript(scriptPath: Path, targetVersion: str, osType: str, targ
                 flushPrint(_("  Linux: linux-2.39, linux-2.28 (glibc version)"))
                 flushPrint(_("  macOS: darwin"))
                 flushPrint("")
-                flushPrint(_("Example: FFL_UPGRADE_VARIANT=ffl.com python Core.py --cli upgrade {path}").format(path=targetBinary))
+                flushPrint(_("Example: FFL_UPGRADE_VARIANT=ffl.com "
+                             "python Core.py --cli upgrade {path}").format(path=targetBinary))
                 return False
 
             flushPrint(_("Using FFL_UPGRADE_VARIANT: {variant}").format(variant=upgradeVariant))
@@ -347,7 +348,8 @@ def executeInstallScript(scriptPath: Path, targetVersion: str, osType: str, targ
                 # Detect specific APE variant based on available addons
                 apeVariant = detectAPEVariant()
                 env["FFL_APE"] = apeVariant
-                flushPrint(_("Detected APE variant ({variant}), will replace with same variant").format(variant=apeVariant))
+                flushPrint(_("Detected APE variant ({variant}), will replace with same variant"
+                             ).format(variant=apeVariant))
             else:
                 # Native variant - detect platform-specific details
                 env["FFL_VARIANT"] = "native"
@@ -357,6 +359,7 @@ def executeInstallScript(scriptPath: Path, targetVersion: str, osType: str, targ
                     glibcVersion = detectGlibcVersion(currentExecutable)
                     if not glibcVersion:
                         raise UpgradeError(_("Failed to detect glibc version from binary"))
+
                     env["FFL_GLIBC"] = glibcVersion
                     flushPrint(_("Detected native variant with glibc {version}").format(version=glibcVersion))
                 elif settingsGetter.isDarwin():
@@ -364,6 +367,7 @@ def executeInstallScript(scriptPath: Path, targetVersion: str, osType: str, targ
                     arch = detectDarwinArch(currentExecutable)
                     if not arch:
                         raise UpgradeError(_("Failed to detect architecture from binary"))
+
                     env["FFL_ARCH"] = arch
                     flushPrint(_("Detected macOS native variant ({arch})").format(arch=arch))
                 else:

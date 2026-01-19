@@ -63,7 +63,7 @@ msgid "🔐 End-to-end encryption enabled\n"
 msgstr "🔐 已启用端对端加密\n"
 
 msgid "🧅 Tor Privacy Mode Active"
-msgstr ""
+msgstr "🧅 Tor 隐私模式已启用"
 
 msgid "You can stop the upload at any time and resume it later.\n"
 msgstr "您可以随时停止上传并稍后继续。\n"

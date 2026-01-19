@@ -1013,9 +1013,9 @@ Licensed under Apache-2.0 license.
                         this.t('Download:client.status.downloadingPercent', 'Downloading via P2P: {{percent}}%', { percent })
                     );
                 } else {
-                    // Indeterminate progress (unknown size)
-                    this.progressBar.value = 100;
-                    this.progressBar.classList.add('progress-bar-striped', 'progress-bar-animated');
+                    // Indeterminate progress (unknown size) - remove value attribute
+                    // Native <progress> elements show animated indeterminate state when value is absent
+                    this.progressBar.removeAttribute('value');
                     this.setStatus(
                         this.t('Download:client.status.downloading', 'Downloading via P2P...')
                     );

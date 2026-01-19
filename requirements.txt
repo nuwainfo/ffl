@@ -1,4 +1,5 @@
 requests
+requests[socks]
 pyperclip>=1.8, <1.9
 bitmath
 sentry_sdk>=1.41, <2.0

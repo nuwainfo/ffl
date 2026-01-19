@@ -428,6 +428,10 @@ def setupProxyEnvironment(proxyConfig: Optional[ProxyConfig]) -> None:
     # Set HTTP/HTTPS proxy for requests library (works for both SOCKS5 and HTTP proxies)
     os.environ['HTTP_PROXY'] = proxyUrl
     os.environ['HTTPS_PROXY'] = proxyUrl
+
+    # loopback must be bypass
+    os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1"
+
     logger.info(f"Proxy configured for HTTP requests: {proxyUrl}")
 
 

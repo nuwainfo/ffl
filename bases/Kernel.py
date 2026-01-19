@@ -28,6 +28,7 @@ import inspect
 import functools
 import secrets
 import string
+import time
 
 # While Sentry (error tracking) is included, error reporting is strictly disabled by default.
 # No crash logs or diagnostic data are sent to us unless you explicitly
@@ -44,7 +45,7 @@ from signalslot import Signal
 from sentry_sdk.integrations.logging import SentryHandler, LoggingIntegration
 from sentry_sdk.integrations import atexit as sentryAtexit
 
-PUBLIC_VERSION = '3.8.2'
+PUBLIC_VERSION = '3.8.3'
 
 # Map string levels to logging constants for standard level names
 LOG_LEVEL_MAPPING = {'DEBUG': logging.DEBUG, 'INFO': logging.INFO, 'WARNING': logging.WARNING, 'ERROR': logging.ERROR}
@@ -1105,28 +1106,119 @@ class UIDGenerator:
         return ''.join(secrets.choice(alphabet) for _ in range(self.UID_LEN))
 
 
+class Throttler:
+    """
+    Simple throttler for rate-limiting operations like progress events.
+
+    Usage:
+        throttler = Throttler(interval=1.0)
+        for chunk in data:
+            if throttler.shouldTrigger():
+                # Execute throttled operation
+                sendProgressEvent()
+    """
+
+    def __init__(self, interval=1.0):
+        """
+        Args:
+            interval: Minimum seconds between triggers (default: 1.0)
+        """
+        self.interval = interval
+        self.lastTriggerTime = 0
+
+    def shouldTrigger(self):
+        """
+        Check if enough time has passed since last trigger.
+        Automatically updates the last trigger time if True.
+
+        Returns:
+            bool: True if operation should proceed, False if throttled
+        """
+        currentTime = time.time()
+        if currentTime - self.lastTriggerTime >= self.interval:
+            self.lastTriggerTime = currentTime
+            return True
+        return False
+
+    def reset(self):
+        """Reset the throttler to allow immediate trigger."""
+        self.lastTriggerTime = 0
+
+
 # Event pattern: RESTful + /[action] (create, update, get, delete, others...)
 class FFLEvent:
     all = Event('*')
 
+    # CLI argument events (internal use)
     cliArgumentsGlobalOptionsRegister = Event('/cli/arguments/global/options/create')
     cliArgumentsGlobalOptionsStore = Event('/cli/arguments/global/options/get')
     cliArgumentsCommandsRegister = Event('/cli/arguments/commands/create')
     cliArgumentsShareOptionsRegister = Event('/cli/arguments/share/options/create')
     cliArgumentsStore = Event('/cli/arguments/get')
 
-    shareLinkCreate = Event('/share/link/create')
-
     # Application lifecycle events
+    applicationStarted = Event('/application/start')
+    shareLinkCreate = Event('/share/link/create')
     applicationShutdown = Event('/application/shutdown')
+    applicationInterrupted = Event('/application/interrupt')
+
+    # Tunnel events
+    tunnelStarting = Event('/tunnel/start')
+    tunnelCreated = Event('/tunnel/create')
+    tunnelFailed = Event('/tunnel/fail')
+    tunnelFallback = Event('/tunnel/fallback')
+
+    # Server lifecycle events
+    serverStarting = Event('/server/create')
+    serverShutdown = Event('/server/shutdown')
+    serverTimeout = Event('/server/timeout')
+
+    # Download events (P2P server side)
+    downloadStarted = Event('/download/create')
+    downloadProgress = Event('/download/progress')
+    downloadCompleted = Event('/download/complete')
+    downloadFailed = Event('/download/fail')
+    maxDownloadsReached = Event('/download/limit/reach')
+
+    # Upload events
+    uploadStarting = Event('/upload/start')
+    uploadStarted = Event('/upload/create')
+    uploadProgress = Event('/upload/progress')
+    uploadPaused = Event('/upload/pause')
+    uploadResumed = Event('/upload/resume')
+    uploadCompleted = Event('/upload/complete')
+    uploadFailed = Event('/upload/fail')
+    uploadCancelled = Event('/upload/cancel')
+
+    # WebRTC events
+    webrtcOfferReceived = Event('/webrtc/offer/create')
+    webrtcConnecting = Event('/webrtc/connect')
+    webrtcConnected = Event('/webrtc/connect/complete')
+    webrtcTransferStarted = Event('/webrtc/transfer/create')
+    webrtcTransferProgress = Event('/webrtc/transfer/progress')
+    webrtcTransferCompleted = Event('/webrtc/transfer/complete')
+    webrtcFailed = Event('/webrtc/fail')
+    webrtcDisconnected = Event('/webrtc/disconnect')
+
+    # E2EE events
+    e2eeKeyGenerated = Event('/e2ee/key/create')
+    e2eeInitialized = Event('/e2ee/create')
+    e2eeEncryptionStarted = Event('/e2ee/encryption/create')
+    e2eeDecryptionStarted = Event('/e2ee/decryption/create')
+
+    # Authentication events
+    authRequired = Event('/auth/require')
+    authSuccess = Event('/auth/success')
+    authFailed = Event('/auth/fail')
+
+    # Error events
+    errorOccurred = Event('/error/occur')
 
 
 eventService = EventService.getInstance()
 
-eventService.register(FFLEvent.cliArgumentsGlobalOptionsRegister.key)
-eventService.register(FFLEvent.cliArgumentsGlobalOptionsStore.key)
-eventService.register(FFLEvent.cliArgumentsCommandsRegister.key)
-eventService.register(FFLEvent.cliArgumentsShareOptionsRegister.key)
-eventService.register(FFLEvent.cliArgumentsStore.key)
-eventService.register(FFLEvent.shareLinkCreate.key)
-eventService.register(FFLEvent.applicationShutdown.key)
+# Register all FFLEvent events dynamically
+for name in dir(FFLEvent):
+    attr = getattr(FFLEvent, name)
+    if isinstance(attr, Event) and name != 'all':
+        eventService.register(attr.key)

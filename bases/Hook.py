@@ -1,19 +1,21 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# $Id$
+# SPDX-License-Identifier: Apache-2.0
 #
-# Copyright (c) 2026 Nuwa Information Co., Ltd, All Rights Reserved.
+# FastFileLink CLI - Fast, no-fuss file sharing
+# Copyright (C) 2025-2026 FastFileLink contributors
 #
-# Licensed under the Proprietary License,
+# Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at our web site.
+# You may obtain a copy of the License at
 #
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
-# $Author: Bear $
-# $Date: 2026-01-10 23:42:45 +0800 (週六, 10 一月 2026) $
-# $Revision: 18427 $
 """
 Hook IPC mechanism for forwarding events between processes using HTTP webhooks.
 
@@ -42,7 +44,6 @@ Usage (Client side - CLI):
     client.sendEvent('/server/ready', {'url': 'http://...'})
 """
 
-import base64
 import json
 import secrets
 import threading
@@ -59,6 +60,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import requests
 
 from bases.Kernel import getLogger, FFLEvent, Event
+from bases.Server import AuthMixin, HTTPAuth
 
 logger = getLogger(__name__)
 
@@ -73,25 +75,25 @@ class HookAuthError(HookError):
     pass
 
 
-class HookRequestHandler(BaseHTTPRequestHandler):
+class HookRequestHandler(AuthMixin, BaseHTTPRequestHandler):
     """HTTP request handler for webhook server."""
+
+    REALM = 'Hook Server'
 
     def log_message(self, format, *args):
         """Override to use our logger instead of stderr."""
         logger.debug(f"Hook request: {format % args}")
 
+    @property
+    def auth(self) -> HTTPAuth:
+        """Return HTTPAuth from server for AuthMixin."""
+        return HTTPAuth(user=self.server.username, password=self.server.password)
+
     def do_POST(self):
         """Handle POST request with event data."""
-        # Check if authentication is required
-        if self.server.username and self.server.password:
-            # Verify HTTP Basic Auth
-            authHeader = self.headers.get('Authorization')
-            if not authHeader or not self._checkAuth(authHeader):
-                self.send_response(401)
-                self.send_header('WWW-Authenticate', 'Basic realm="Hook Server"')
-                self.end_headers()
-                logger.warning(f"Unauthorized hook request from {self.client_address[0]}")
-                return
+        # Check authentication using AuthMixin
+        if not self.handleAuthentication():
+            return
 
         # Check path
         if self.server.path and self.path != self.server.path:
@@ -145,30 +147,6 @@ class HookRequestHandler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
         self.wfile.write(b'{"status": "ok"}')
-
-    def _checkAuth(self, authHeader: str) -> bool:
-        """
-        Check HTTP Basic Auth header.
-
-        Args:
-            authHeader: Authorization header value
-
-        Returns:
-            bool: True if authentication is valid
-        """
-        if not authHeader.startswith('Basic '):
-            return False
-
-        try:
-            # Decode base64 credentials
-            encodedCredentials = authHeader[6:] # Remove 'Basic '
-            decodedCredentials = base64.b64decode(encodedCredentials).decode('utf-8')
-            username, password = decodedCredentials.split(':', 1)
-
-            return (username == self.server.username and password == self.server.password)
-        except Exception as e:
-            logger.debug(f'_checkAuth error: {str(e)}')
-            return False
 
 
 class HookServer(ThreadingHTTPServer):
@@ -262,11 +240,188 @@ class HookServer(ThreadingHTTPServer):
         return urlunparse(('http', netloc, self.path, '', '', ''))
 
 
-HOOK_EXTRACTORS = {
-    FFLEvent.shareLinkCreate: lambda e: {
-        k: v for k, v in e.items() if k not in ('args', 'reader')
-    },
-}
+class HookEventSerializer:
+    """
+    Serializes events into JSON-safe payloads for Hook IPC.
+
+    Handles:
+    - Extracting/filtering non-serializable objects via HOOK_EXTRACTORS
+    - Converting values to JSON-safe format via makeJsonSafe
+    """
+
+    EXTRACTORS = {
+        # Remove non-serializable objects from events
+        FFLEvent.shareLinkCreate:
+            lambda e: {
+                k: v for k, v in e.items() if k not in ('args', 'reader')
+            },
+        FFLEvent.downloadStarted:
+            lambda e: {
+                k: v for k, v in e.items() if k not in ('request', 'handler', 'server')
+            },
+        FFLEvent.downloadProgress:
+            lambda e: {
+                k: v for k, v in e.items() if k not in ('progressObj', 'handler')
+            },
+        FFLEvent.downloadCompleted:
+            lambda e: {
+                k: v for k, v in e.items() if k not in ('handler', 'server')
+            },
+        FFLEvent.downloadFailed:
+            lambda e: {
+                k: v for k, v in e.items() if k not in ('exception', 'handler')
+            },
+        FFLEvent.uploadStarting:
+            lambda e: {
+                k: v for k, v in e.items() if k not in ('reader', 'uploadMethod')
+            },
+        FFLEvent.uploadStarted:
+            lambda e: {
+                k: v for k, v in e.items() if k not in ('reader', 'uploadMethod')
+            },
+        FFLEvent.uploadProgress:
+            lambda e: {
+                k: v for k, v in e.items() if k not in ('progressObj', 'uploadMethod', 'reader')
+            },
+        FFLEvent.uploadCompleted:
+            lambda e: {
+                k: v for k, v in e.items() if k not in ('uploadMethod', 'reader', 'response')
+            },
+        FFLEvent.uploadFailed:
+            lambda e: {
+                k: v for k, v in e.items() if k not in ('exception', 'uploadMethod')
+            },
+        FFLEvent.webrtcConnected:
+            lambda e: {
+                k: v for k, v in e.items() if k not in ('peerConnection', 'dataChannel')
+            },
+        FFLEvent.webrtcTransferProgress:
+            lambda e: {
+                k: v for k, v in e.items() if k not in ('progressObj', 'dataChannel')
+            },
+        FFLEvent.webrtcTransferCompleted:
+            lambda e: {
+                k: v for k, v in e.items() if k not in ('peerConnection', 'dataChannel')
+            },
+        FFLEvent.errorOccurred:
+            lambda e: {
+                k: v for k, v in e.items() if k not in ('exception', 'stack')
+            },
+    }
+
+    @staticmethod
+    def makeJsonSafe(value):
+        """
+        Convert value into JSON serializable data.
+        Any non-serializable value will be converted to repr().
+        """
+        try:
+            json.dumps(value)
+            return value
+        except (TypeError, ValueError) as e:
+            logger.debug(f"Value not directly JSON-serializable, converting: {type(value).__name__} - {e}")
+
+        if is_dataclass(value):
+            return HookEventSerializer.makeJsonSafe(asdict(value))
+
+        if isinstance(value, Enum):
+            return HookEventSerializer.makeJsonSafe(value.value)
+
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+
+        if isinstance(value, Path):
+            return str(value)
+
+        if isinstance(value, dict):
+            return {str(k): HookEventSerializer.makeJsonSafe(v) for k, v in value.items()}
+
+        if isinstance(value, (list, tuple, set)):
+            return [HookEventSerializer.makeJsonSafe(v) for v in value]
+
+        return repr(value)
+
+    @staticmethod
+    def serialize(eventName: str, eventData: dict = None) -> dict:
+        """
+        Serialize event into JSON-safe payload.
+
+        Args:
+            eventName: Event name (e.g., '/server/ready')
+            eventData: Event data dictionary
+
+        Returns:
+            dict: {'event': eventName, 'timestamp': ISO8601, 'data': {...}}
+        """
+        eventData = eventData or {}
+
+        extractor = HookEventSerializer.EXTRACTORS.get(Event(eventName))
+        if extractor:
+            extracted = extractor(eventData)
+            if extracted is not None:
+                eventData = extracted
+            else:
+                eventData = {}
+
+        return {
+            'event': eventName,
+            'timestamp': datetime.now().isoformat(),
+            'data': HookEventSerializer.makeJsonSafe(eventData)
+        }
+
+
+class HookFileWriter:
+    """
+    Writes Hook events to a JSONL file.
+
+    Example:
+        writer = HookFileWriter('/path/to/events.jsonl')
+        writer.sendEvent('/server/ready', {'url': 'http://...'})
+        writer.close()
+    """
+
+    def __init__(self, filePath: str):
+        """
+        Initialize file writer.
+
+        Args:
+            filePath: Path to JSONL output file
+        """
+        self.filePath = filePath
+        self._file = open(filePath, 'a', encoding='utf-8')
+        self._lock = threading.Lock()
+
+    def sendEvent(self, eventName: str, eventData: dict = None):
+        """
+        Write event to JSONL file.
+
+        Args:
+            eventName: Event name (e.g., '/server/ready')
+            eventData: Event data dictionary
+        """
+        payload = HookEventSerializer.serialize(eventName, eventData)
+
+        with self._lock:
+            if self._file is None:
+                return
+
+            self._file.write(json.dumps(payload) + '\n')
+            self._file.flush()
+
+        logger.debug(f"Wrote event to file: {eventName}")
+
+    def close(self):
+        """Close the file."""
+        if self._file:
+            self._file.close()
+            self._file = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
 
 
 class HookClient:
@@ -274,8 +429,8 @@ class HookClient:
     HTTP webhook client for sending events.
 
     Example:
-        client = HookClient('http://app:token@127.0.0.1:12345/events')
-        client.sendEvent('/server/ready', {'url': 'http://...'})
+        with HookClient('http://app:token@127.0.0.1:12345/events') as client:
+            client.sendEvent('/server/ready', {'url': 'http://...'})
     """
 
     @staticmethod
@@ -332,38 +487,6 @@ class HookClient:
             'password': parsed.password
         }
 
-    @staticmethod
-    def makeJsonSafe(value):
-        """
-        Convert value into JSON serializable data.
-        Any non-serializable value will be converted to repr().
-        """
-        try:
-            json.dumps(value)
-            return value
-        except (TypeError, ValueError):
-            logger.debug('Unable to json.dumps {value=} skip')
-
-        if is_dataclass(value):
-            return HookClient.makeJsonSafe(asdict(value))
-
-        if isinstance(value, Enum):
-            return HookClient.makeJsonSafe(value.value)
-
-        if isinstance(value, (datetime, date)):
-            return value.isoformat()
-
-        if isinstance(value, Path):
-            return str(value)
-
-        if isinstance(value, dict):
-            return {str(k): HookClient.makeJsonSafe(v) for k, v in value.items()}
-
-        if isinstance(value, (list, tuple, set)):
-            return [HookClient.makeJsonSafe(v) for v in value]
-
-        return repr(value)
-
     def __init__(self, hookURL: str):
         """
         Initialize webhook client.
@@ -385,17 +508,7 @@ class HookClient:
         Raises:
             HookError: If request fails
         """
-        eventData = eventData or {}
-
-        extractor = HOOK_EXTRACTORS.get(Event(eventName))
-        if extractor:
-            extracted = extractor(eventData)
-            if extracted is not None:
-                eventData = extracted
-            else:
-                eventData = {}
-
-        payload = {'event': eventName, 'data': HookClient.makeJsonSafe(eventData)}
+        payload = HookEventSerializer.serialize(eventName, eventData)
 
         try:
             # Prepare auth if credentials provided
