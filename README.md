@@ -174,7 +174,7 @@ You don't need to visit GitHub to get the latest features. `ffl` handles updates
 ```bash
 ffl upgrade
 ```
-> Note: If you installed ffl to a system directory (like /usr/local/bin), you may need to run this with sudo: sudo ffl upgrade.
+> Note: If you installed ffl to a system directory (like /usr/local/bin), you may need to run this with sudo
 
 ---
 
