@@ -165,6 +165,8 @@ class HookServer(ThreadingHTTPServer):
         server.onEvent = onEvent
     """
 
+    daemon_threads = True
+
     @staticmethod
     def generateToken() -> str:
         """

@@ -710,6 +710,13 @@ class FastFileLinkTestBase(unittest.TestCase):
 
             print(f"[Test] Process PID: {self.coreProcess.pid}")
 
+            # Setup output capture context immediately after process start
+            # This ensures captureOutputIn is populated even if JSON wait fails
+            if captureOutputIn is not None:
+                captureOutputIn['_process'] = self.coreProcess
+                captureOutputIn['_logPath'] = self.procLogPath
+                captureOutputIn['_logFile'] = self._procLogFile
+
             # Early return if not waiting for completion
             if not waitForCompletion:
                 print("[Test] Process started, not waiting for completion")
@@ -867,12 +874,8 @@ class FastFileLinkTestBase(unittest.TestCase):
             elif output and showOutput:
                 print(f"[Test] Note: Process output was already shown in real-time")
 
-            # Setup output capture context if requested
+            # Update captured output with latest content (captureOutputIn was set up earlier)
             if captureOutputIn is not None:
-                captureOutputIn['_process'] = self.coreProcess
-                captureOutputIn['_logPath'] = self.procLogPath
-                captureOutputIn['_logFile'] = self._procLogFile
-                # Initialize with current output (mainly for immediate reading scenarios)
                 outputText = ""
                 if self.procLogPath and os.path.exists(self.procLogPath):
                     try:

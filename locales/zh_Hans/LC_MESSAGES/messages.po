@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-01-11 17:55+0800\n"
+"POT-Creation-Date: 2026-01-22 15:39+0800\n"
 "PO-Revision-Date: 2025-12-21 08:43+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -23,16 +23,18 @@ msgstr "正在浏览器中开启邀请页面..."
 
 #, python-brace-format
 msgid "QR code saved to: {filePath}"
-msgstr ""
+msgstr "二维码已保存到：{filePath}"
 
 msgid ""
 "\n"
 "QR Code:\n"
 msgstr ""
+"\n"
+"二维码：\n"
 
 #, python-brace-format
 msgid "Error generating QR code: {error}"
-msgstr ""
+msgstr "生成二维码时出错：{error}"
 
 #, python-brace-format
 msgid "Sharing information saved to {jsonFile}"
@@ -41,29 +43,6 @@ msgstr "分享资讯已储存至 {jsonFile}"
 #, python-brace-format
 msgid "Failed to write JSON file: {error}"
 msgstr "无法写入 JSON 档案：{error}"
-
-#, python-brace-format
-msgid "{file} does not exist!"
-msgstr "{file} 不存在！"
-
-msgid "Error: Upload functionality requires Upload addon (addons/Upload.py)"
-msgstr "错误：上传功能需要 Upload 附加元件 (addons/Upload.py)"
-
-msgid ""
-"If a firewall notification appears, please allow the application to "
-"connect.\n"
-msgstr "如果出现防火墙通知，请允许应用程式连线。\n"
-
-msgid ""
-"📁 Sharing folder as ZIP - please keep folder contents unchanged during "
-"transfer\n"
-msgstr "📁 以 ZIP 格式分享资料夹 - 请在传输过程中保持资料夹内容不变\n"
-
-msgid "🔐 End-to-end encryption enabled\n"
-msgstr "🔐 已启用端对端加密\n"
-
-msgid "🧅 Tor Privacy Mode Active"
-msgstr "🧅 Tor 隐私模式已启用"
 
 msgid "You can stop the upload at any time and resume it later.\n"
 msgstr "您可以随时停止上传并稍后继续。\n"
@@ -112,6 +91,9 @@ msgstr ""
 "原始上传使用 \"{originalValue}\"，但要求使用 \"{requestedValue}\"。\n"
 "请使用与原始上传相同的参数。"
 
+msgid "Unknown error"
+msgstr "未知错误"
+
 msgid ""
 "Your user points are not enough. Please top up on our website "
 "(https://fastfilelink.com/)."
@@ -122,6 +104,67 @@ msgstr "不允许上传。"
 
 msgid "Retrying...\n"
 msgstr "正在重试...\n"
+
+msgid "Error: VFS mode requires a file or folder path"
+msgstr "错误：VFS 模式需要文件或文件夹路径"
+
+msgid "VFS server started successfully!\n"
+msgstr "VFS 伺服器已成功启动！\n"
+
+#, python-brace-format
+msgid "Please share the URI below to access the {type} remotely:\n"
+msgstr "请分享以下 URI 以远程访问{type}：\n"
+
+#, python-brace-format
+msgid "🔐 Authentication enabled - Username: {authUser}\n"
+msgstr "🔐 已启用身份验证 - 用户名：{authUser}\n"
+
+msgid ""
+"VFS server is running on loopback (127.0.0.1) - only accessible from this"
+" machine."
+msgstr "VFS 伺服器正在环回地址（127.0.0.1）上运行 - 仅可从本机访问。"
+
+msgid "Please keep the application running for remote access."
+msgstr "请保持应用程序运行以进行远程访问。"
+
+msgid "Press Ctrl+C to stop the server.\n"
+msgstr "按 Ctrl+C 停止伺服器。\n"
+
+msgid ""
+"\n"
+"Shutting down VFS server..."
+msgstr ""
+"\n"
+"正在关闭 VFS 伺服器..."
+
+msgid "VFS server stopped."
+msgstr "VFS 伺服器已停止。"
+
+#, python-brace-format
+msgid "{file} does not exist!"
+msgstr "{file} 不存在！"
+
+msgid "Error: Upload functionality requires Upload addon (addons/Upload.py)"
+msgstr "错误：上传功能需要 Upload 附加元件 (addons/Upload.py)"
+
+msgid "User email address has been lost"
+msgstr "使用者电子邮件地址已遗失"
+
+msgid ""
+"If a firewall notification appears, please allow the application to "
+"connect.\n"
+msgstr "如果出现防火墙通知，请允许应用程式连线。\n"
+
+msgid ""
+"📁 Sharing folder as ZIP - please keep folder contents unchanged during "
+"transfer\n"
+msgstr "📁 以 ZIP 格式分享资料夹 - 请在传输过程中保持资料夹内容不变\n"
+
+msgid "🔐 End-to-end encryption enabled\n"
+msgstr "🔐 已启用端对端加密\n"
+
+msgid "🧅 Tor Privacy Mode Active"
+msgstr "🧅 Tor 隐私模式已启用"
 
 msgid "Unable to create tunnel by your tunnel configuration."
 msgstr "无法使用您的通道配置建立通道。"
@@ -140,9 +183,6 @@ msgstr "正在建立通道连线...\n"
 #, python-brace-format
 msgid "Upload failed: {error}"
 msgstr "上传失败：{error}"
-
-msgid "Unknown error"
-msgstr "未知错误"
 
 msgid ""
 "Please share the link below with the person you'd like to share the file "
@@ -168,8 +208,8 @@ msgstr ""
 "\n"
 "应使用者要求退出 (Ctrl+C)..."
 
-msgid "User email address has been lost"
-msgstr "使用者电子邮件地址已遗失"
+msgid "Unable to get uploaded link"
+msgstr "无法获取上传链接"
 
 #, python-brace-format
 msgid "Downloaded: {outputPath}"
@@ -291,12 +331,12 @@ msgid "Support: {supportURL}"
 msgstr "支援：{supportURL}"
 
 msgid "Choose a file or folder you want to share (use '-' for stdin)"
-msgstr ""
+msgstr "选择要分享的文件或文件夹（使用 '-' 表示标准输入）"
 
 msgid ""
 "Specify custom download filename (default: original filename for files, "
 "folder.zip for folders, stdin-YYYYMMDD-HHMMSS.bin for stdin)"
-msgstr ""
+msgstr "指定自定义下载文件名（默认：文件使用原始文件名，文件夹使用 folder.zip，标准输入使用 stdin-YYYYMMDD-HHMMSS.bin）"
 
 msgid "Output link and settings to a JSON file"
 msgstr "将连结和设定输出到 JSON 档案"
@@ -349,7 +389,12 @@ msgid "Open invite page in browser with the sharing link"
 msgstr "在浏览器中开启包含分享连结的邀请页面"
 
 msgid "Display QR code in terminal (default) or save to FILE (e.g., qr.png)"
-msgstr ""
+msgstr "在终端中显示二维码（默认）或保存到文件（例如 qr.png）"
+
+msgid ""
+"Start VFS server and provide vfs:// URI instead of HTTPS link (P2P mode "
+"only, works with --port)"
+msgstr "启动 VFS 伺服器并提供 vfs:// URI 而不是 HTTPS 连结（仅限 P2P 模式，与 --port 一起使用）"
 
 #, python-brace-format
 msgid "Invalid log level '{logLevel}'. Valid levels are: {validLevels}"
@@ -381,7 +426,7 @@ msgid ""
 "Format: http://[user:pass@]host:port/path (e.g., "
 "http://app:token@127.0.0.1:12345/events). Auth credentials are optional "
 "but recommended."
-msgstr ""
+msgstr "用于将事件转发到父进程或外部服务的 Webhook URL。格式：http://[user:pass@]host:port/path（例如：http://app:token@127.0.0.1:12345/events）。认证凭据是可选的，但建议使用。"
 
 msgid "FastFileLink makes file sharing fast, simple, and secure."
 msgstr "快档连结 让档案分享快速、简单且安全。"
@@ -424,9 +469,8 @@ msgstr "指定二进位档路径时的目标版本（预设：最新）"
 msgid "Error: Invalid proxy format: {proxy}"
 msgstr "错误：无效的代理格式：{proxy}"
 
-#, fuzzy
 msgid "Error: --upload option requires Upload addon (addons/Upload.py)"
-msgstr "错误：上传功能需要 Upload 附加元件 (addons/Upload.py)"
+msgstr "错误：--upload 选项需要 Upload 附加元件（addons/Upload.py）"
 
 msgid ""
 "Please install the Upload addon (use Standard/Plus version) or use P2P "
@@ -459,6 +503,18 @@ msgid ""
 "Use --auth-password to enable authentication (username defaults to "
 "'{defaultUser}' if not specified)"
 msgstr "使用 --auth-password 启用身份验证（如果未指定，使用者名称预设为 '{defaultUser}'）"
+
+msgid "Error: --vfs cannot be used with --upload"
+msgstr "错误：--vfs 不能与 --upload 一起使用"
+
+msgid "VFS mode is only for P2P sharing. Remove --upload to use --vfs"
+msgstr "VFS 模式仅用于 P2P 分享。移除 --upload 以使用 --vfs"
+
+msgid "Error: --vfs does not support stdin input"
+msgstr "错误：--vfs 不支持标准输入"
+
+msgid "Please specify a file or folder path instead of \"-\""
+msgstr "请指定文件或文件夹路径，而不是 \"-\""
 
 msgid "⚠️  IMPORTANT: ENCRYPTION KEY"
 msgstr "⚠️  重要：加密金钥"
@@ -743,7 +799,7 @@ msgid "We will fix the problem as soon as possible.\n"
 msgstr "我们会尽快修复问题。\n"
 
 msgid "WebRTC connections are disabled by server policy"
-msgstr ""
+msgstr "伺服器策略已禁用 WebRTC 连接"
 
 msgid "P2P direct"
 msgstr "P2P 直连"
@@ -816,7 +872,7 @@ msgstr "无效的加密金钥：{error}"
 
 #, python-brace-format
 msgid "Downloading {filename} ({fileSize})"
-msgstr ""
+msgstr "正在下载 {filename}（{fileSize}）"
 
 #, python-brace-format
 msgid "Resuming WebRTC download from {resumePos} / {totalSize}"
@@ -843,61 +899,20 @@ msgstr "不支援 WebRTC，使用 HTTP 下载..."
 msgid "Attempting WebRTC download..."
 msgstr "正在尝试 WebRTC 下载..."
 
-#~ msgid "Upgrade to latest version or specified version (e.g., --upgrade v3.7.5)"
-#~ msgstr "升级到最新版本或指定版本（例如：--upgrade v3.7.5）"
 
-#~ msgid "Current executable: {path}"
-#~ msgstr ""
 
-#~ msgid "Failed to execute install script"
-#~ msgstr ""
 
-#~ msgid "Unexpected error during installation"
-#~ msgstr ""
 
-#~ msgid "Could not determine target version from server"
-#~ msgstr ""
 
-#~ msgid "Target version to upgrade to (default: latest)"
-#~ msgstr "要升级到的目标版本（预设：最新版）"
 
-#~ msgid ""
-#~ "LIEF library is required to detect "
-#~ "glibc version from native Linux "
-#~ "binaries. Please install LIEF: pip "
-#~ "install lief"
-#~ msgstr ""
 
-#~ msgid ""
-#~ "LIEF library is required to detect "
-#~ "architecture from native macOS binaries. "
-#~ "Please install LIEF: pip install lief"
-#~ msgstr ""
 
-#~ msgid "Detected Linux native variant (glibc auto-detect)"
-#~ msgstr ""
 
-#~ msgid "Detected macOS native variant (architecture auto-detect)"
-#~ msgstr ""
 
-#~ msgid "Upgrading to Linux native variant (glibc 2.39)"
-#~ msgstr ""
 
-#~ msgid "Upgrading to Linux native variant (glibc 2.28)"
-#~ msgstr ""
 
-#~ msgid "Detected APE variant (fflo.com), will replace with same variant"
-#~ msgstr ""
 
-#~ msgid "Detected APE variant (ffl.com), will replace with same variant"
-#~ msgstr ""
 
-#~ msgid "Unsupported operating system"
-#~ msgstr "不支援的作业系统"
 
-#~ msgid "Choose a file or folder you want to share"
-#~ msgstr "选择您想要分享的档案或资料夹"
 
-#~ msgid "Downloading {filename} ({fileSize:,} bytes)"
-#~ msgstr "正在下载 {filename}（{fileSize:,} 位元组）"
 

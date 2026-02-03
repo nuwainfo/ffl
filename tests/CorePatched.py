@@ -16,7 +16,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 """
 CorePatched.py - A wrapper around Core.py that optionally injects network instability simulation
 for FastFileLink upload operations. When no instability parameters are provided, it behaves exactly like Core.py.
@@ -29,6 +28,9 @@ import argparse
 import importlib.util
 import re
 import logging
+import tempfile
+import datetime
+
 import requests
 import requests_mock
 
@@ -48,28 +50,28 @@ def setupLogger(logLevel='INFO'):
     """Setup logger with specified level"""
     # Convert string level to logging constant
     numericLevel = getattr(logging, logLevel.upper(), logging.INFO)
-    
+
     # Clear any existing handlers
     logger.handlers.clear()
-    
+
     # Create console handler
     handler = logging.StreamHandler()
     handler.setLevel(numericLevel)
-    
+
     # Create formatter
     formatter = logging.Formatter('[%(name)s] %(message)s')
     handler.setFormatter(formatter)
-    
+
     # Add handler to logger
     logger.addHandler(handler)
     logger.setLevel(numericLevel)
-    
+
     return logger
 
 
 class FastFileLinkApiSimulator:
     """Simulates network instability for FastFileLink API operations using requests-mock"""
-    
+
     def __init__(self, failureRate=0.0, maxConsecutiveFailures=1):
         """
         Initialize FastFileLink API instability simulator
@@ -87,22 +89,22 @@ class FastFileLinkApiSimulator:
 
         # FastFileLink API URL patterns (based on Upload.py)
         self.apiPatterns = [
-            r'.*/upload/valid.*',     # Server validation endpoint  
-            r'.*/upload/end.*',       # Upload end endpoint
-            r'.*/upload/commit.*',    # Upload commit endpoint
-            r'.*/upload(?:/.*)?$',    # Main upload endpoints (including dynamic ones)
+            r'.*/upload/valid.*', # Server validation endpoint  
+            r'.*/upload/end.*', # Upload end endpoint
+            r'.*/upload/commit.*', # Upload commit endpoint
+            r'.*/upload(?:/.*)?$', # Main upload endpoints (including dynamic ones)
         ]
 
         # Critical endpoints that should only fail with network exceptions
         self.criticalEndpoints = [
-            r'.*/upload/end.*',       # Upload end endpoint
-            r'.*/upload/commit.*',    # Upload commit endpoint
+            r'.*/upload/end.*', # Upload end endpoint
+            r'.*/upload/commit.*', # Upload commit endpoint
         ]
 
         # Excluded endpoints that should never fail (essential for test initialization)
         self.excludedEndpoints = [
-            r'.*/upload\?.*',         # Upload initialization endpoint (upload?uid=...)
-            r'.*/api/upload\?.*',     # API upload initialization endpoint
+            r'.*/upload\?.*', # Upload initialization endpoint (upload?uid=...)
+            r'.*/api/upload\?.*', # API upload initialization endpoint
         ]
 
         if failureRate > 0:
@@ -116,9 +118,8 @@ class FastFileLinkApiSimulator:
         """Determine if current request should fail"""
         if self.failureRate == 0:
             return False
-            
-        return (random.random() < self.failureRate and 
-                self.consecutiveFailures < self.maxConsecutiveFailures)
+
+        return (random.random() < self.failureRate and self.consecutiveFailures < self.maxConsecutiveFailures)
 
     def isExcludedEndpoint(self, url):
         """Check if the URL is an excluded endpoint that should never fail"""
@@ -139,18 +140,18 @@ class FastFileLinkApiSimulator:
         # Only simulate failures for upload-related methods
         if method.upper() not in ['POST', 'PUT', 'PATCH', 'GET']:
             return False
-            
+
         # Check if URL is excluded from simulation
         url = request.url
         if self.isExcludedEndpoint(url):
             return False
-            
+
         # Check if URL matches any of our FastFileLink API patterns
         for pattern in self.apiPatterns:
             if re.search(pattern, url, re.IGNORECASE):
                 return True
-                
-        return False      
+
+        return False
 
     def getFailureTypeForUrl(self, url):
         """Get appropriate failure type based on the URL"""
@@ -165,58 +166,55 @@ class FastFileLinkApiSimulator:
         # For other upload endpoints, can include HTTP errors
         elif 'upload' in url.lower():
             # Upload endpoints - network issues and HTTP errors
-            failureTypes = [
-                (requests.exceptions.Timeout, "Simulated upload timeout"),
-                (requests.exceptions.ConnectionError, "Simulated connection error during upload"),
-                (requests.exceptions.HTTPError, "Simulated HTTP error during upload")
-            ]
+            failureTypes = [(requests.exceptions.Timeout, "Simulated upload timeout"),
+                            (requests.exceptions.ConnectionError, "Simulated connection error during upload"),
+                            (requests.exceptions.HTTPError, "Simulated HTTP error during upload")]
             return random.choice(failureTypes)
 
         # For other endpoints
         elif 'points' in url.lower():
             # Points/cost checking - server errors
-            failureTypes = [
-                (requests.exceptions.HTTPError, "Simulated points API error"),
-                (requests.exceptions.ConnectionError, "Simulated connection error to points API")
-            ]
+            failureTypes = [(requests.exceptions.HTTPError, "Simulated points API error"),
+                            (requests.exceptions.ConnectionError, "Simulated connection error to points API")]
             return random.choice(failureTypes)
 
         else:
             # General API failures
-            failureTypes = [
-                (requests.exceptions.Timeout, "Simulated API timeout"),
-                (requests.exceptions.ConnectionError, "Simulated API connection error"),
-                (requests.exceptions.HTTPError, "Simulated API HTTP error")
-            ]
+            failureTypes = [(requests.exceptions.Timeout, "Simulated API timeout"),
+                            (requests.exceptions.ConnectionError, "Simulated API connection error"),
+                            (requests.exceptions.HTTPError, "Simulated API HTTP error")]
             return random.choice(failureTypes)
 
     def setupMocker(self):
         """Set up requests-mock mocker with FastFileLink API failure simulation"""
         if self.failureRate == 0:
             return None
-            
+
         # Create mocker with real_http=True so non-mocked requests pass through
         self.mocker = requests_mock.Mocker(real_http=True)
-        
+
         # Register a single matcher using ANY method and ANY URL with additional_matcher
         self.mocker.register_uri(
             requests_mock.ANY,
             requests_mock.ANY,
             additional_matcher=self.createAdditionalMatcher(),
-            text=self.createFailureResponse  # This will be called when matcher returns True
+            text=self.createFailureResponse # This will be called when matcher returns True
         )
-        
+
         logger.debug(f"requests-mock setup completed for FastFileLink API simulation")
         return self.mocker
 
     def createAdditionalMatcher(self):
         """Create additional matcher that decides whether to simulate failure"""
+
         def additionalMatcher(request):
             self.requestCount += 1
 
             # Check if this is an excluded endpoint
             if self.isExcludedEndpoint(request.url):
-                logger.debug(f"{request.method} request {self.requestCount} to {request.url} - EXCLUDED from failure simulation")
+                logger.debug(
+                    f"{request.method} request {self.requestCount} to {request.url} - EXCLUDED from failure simulation"
+                )
                 return False
 
             # Check if this is an upload-related request that should be simulated
@@ -228,18 +226,24 @@ class FastFileLinkApiSimulator:
 
                 # Special logging for critical endpoints
                 if self.isCriticalEndpoint(request.url):
-                    logger.info(f"Simulating NETWORK FAILURE on CRITICAL {request.method} API request {self.requestCount} "
-                          f"to {request.url} (consecutive: {self.consecutiveFailures}, total failures: {self.totalFailures})")
+                    logger.info(
+                        f"Simulating NETWORK FAILURE on CRITICAL {request.method} API request {self.requestCount} "
+                        f"to {request.url} (consecutive: {self.consecutiveFailures}, total failures: {self.totalFailures})"
+                    )
                 else:
-                    logger.info(f"Simulating {request.method} API failure on request {self.requestCount} "
-                          f"to {request.url} (consecutive: {self.consecutiveFailures}, total failures: {self.totalFailures})")
+                    logger.info(
+                        f"Simulating {request.method} API failure on request {self.requestCount} "
+                        f"to {request.url} (consecutive: {self.consecutiveFailures}, total failures: {self.totalFailures})"
+                    )
 
                 # Return True to match this request and trigger the failure response
                 return True
             else:
                 if isUploadRequest:
                     self.consecutiveFailures = 0
-                    logger.debug(f"{request.method} API request {self.requestCount} to {request.url} - no failure simulation")
+                    logger.debug(
+                        f"{request.method} API request {self.requestCount} to {request.url} - no failure simulation"
+                    )
 
                 # Return False to not match this request, allowing real_http to handle it
                 return False
@@ -251,9 +255,9 @@ class FastFileLinkApiSimulator:
         # Choose failure type based on the endpoint
         failureType = self.getFailureTypeForUrl(request.url)
         exception, message = failureType
-        
+
         logger.debug(f"Raising {exception.__name__}: {message}")
-        
+
         # Create a more realistic exception with proper attributes
         if exception == requests.exceptions.HTTPError:
             # Create a mock response object for HTTPError
@@ -261,7 +265,7 @@ class FastFileLinkApiSimulator:
             mockResponse.status_code = random.choice([500, 502, 503, 504])
             mockResponse.reason = "Simulated Server Error"
             mockResponse._content = message.encode('utf-8')
-            
+
             # Create HTTPError with the mock response
             httpError = requests.exceptions.HTTPError(message)
             httpError.response = mockResponse
@@ -282,57 +286,65 @@ class FastFileLinkApiSimulator:
             self.mocker.stop()
             logger.debug(f"FastFileLink API instability mocking stopped")
             if self.totalFailures > 0:
-                logger.info(f"Final stats - Total API requests: {self.requestCount}, Total failures: {self.totalFailures}")
+                logger.info(
+                    f"Final stats - Total API requests: {self.requestCount}, Total failures: {self.totalFailures}"
+                )
 
 
 def parseInstabilityArgs():
     """Parse network instability arguments from command line"""
-    parser = argparse.ArgumentParser(add_help=False)  # Don't interfere with Core.py's help
-    parser.add_argument('--network-failure-rate', type=float, default=0.0,
-                       help='Network failure rate for FastFileLink API (0.0 to 1.0, default: 0.0 for no instability)')
-    parser.add_argument('--max-consecutive-failures', type=int, default=1,
-                       help='Maximum consecutive API failures (default: 1)')
-    parser.add_argument('--sim-log-level', type=str, default='INFO',
-                       choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
-                       help='Log level for network simulation output (default: INFO)')
-    
+    parser = argparse.ArgumentParser(add_help=False) # Don't interfere with Core.py's help
+    parser.add_argument(
+        '--network-failure-rate',
+        type=float,
+        default=0.0,
+        help='Network failure rate for FastFileLink API (0.0 to 1.0, default: 0.0 for no instability)'
+    )
+    parser.add_argument(
+        '--max-consecutive-failures', type=int, default=1, help='Maximum consecutive API failures (default: 1)'
+    )
+    parser.add_argument(
+        '--sim-log-level',
+        type=str,
+        default='INFO',
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+        help='Log level for network simulation output (default: INFO)'
+    )
+
     # Parse only known args, leave the rest for Core.py
     knownArgs, remainingArgs = parser.parse_known_args()
-    
+
     # Update sys.argv to remove our custom arguments
     sys.argv = [sys.argv[0]] + remainingArgs
-    
+
     return knownArgs.network_failure_rate, knownArgs.max_consecutive_failures, knownArgs.sim_log_level
 
 
 def writeDebugLog(message):
     """Write debug message to both stdout and a debug file"""
+
+    if os.getenv("FFL_CORE_PATCHED_DEBUG") != "True":
+        return
+
     try:
         print(message)
         sys.stdout.flush()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Unable to print and flush: {e}")
 
     try:
         # Also write to debug file to bypass buffering issues
-        import tempfile
-        import datetime
         debug_file = os.path.join(tempfile.gettempdir(), "corepatched_debug.log")
         with open(debug_file, "a", encoding="utf-8") as f:
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             f.write(f"[{timestamp}] {message}\n")
             f.flush()
     except Exception as e:
-        try:
-            print(f"[DEBUG_ERROR] Failed to write debug log: {e}")
-        except:
-            pass
+        print(f"[DEBUG_ERROR] Failed to write debug log: {e}")
 
 
 def main():
     """Main entry point that optionally applies FastFileLink API instability simulation"""
-    import tempfile
-
     writeDebugLog(f"[CorePatched] Starting with args: {sys.argv}")
     writeDebugLog(f"[CorePatched] Python version: {sys.version}")
     writeDebugLog(f"[CorePatched] Working directory: {os.getcwd()}")
@@ -341,7 +353,9 @@ def main():
 
     try:
         failureRate, maxConsecutiveFailures, simLogLevel = parseInstabilityArgs()
-        writeDebugLog(f"[CorePatched] Parsed args - failure_rate: {failureRate}, max_failures: {maxConsecutiveFailures}, sim_log_level: {simLogLevel}")
+        writeDebugLog(
+            f"[CorePatched] Parsed args - failure_rate: {failureRate}, max_failures: {maxConsecutiveFailures}, sim_log_level: {simLogLevel}"
+        )
 
         # Setup logger with specified level
         setupLogger(simLogLevel)
@@ -355,7 +369,7 @@ def main():
         import traceback
         traceback.print_exc()
         raise
-    
+
     try:
         # Start mocking if needed
         if mocker:

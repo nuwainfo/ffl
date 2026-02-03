@@ -595,12 +595,13 @@ class E2EEManager {
  * Handles chunk buffering, tag fetching, and AES-GCM decryption.
  */
 class HTTPDecryptor {
-    constructor(contentKey, nonceBase, filename, filesize, chunkSize, embeddedTags = null, log = null) {
+    constructor(contentKey, nonceBase, filename, filesize, chunkSize, embeddedTags = null, log = null, streamId = 'global') {
         this.contentKey = contentKey;
         this.nonceBase = nonceBase;
         this.filename = filename;
         this.filesize = filesize;
         this.chunkSize = chunkSize;
+        this.streamId = streamId;
         this.log = log || console.log;
 
         // Service Worker decryption state
@@ -796,7 +797,9 @@ class HTTPDecryptor {
     async fetchTagIfNeeded(chunkIndex) {
         if (!this.tagMap.has(chunkIndex)) {
             // Fetch batch of tags directly from server
-            const tagsURL = `/e2ee/tags?start=${chunkIndex}&count=${this.tagBatchSize}`;
+            // Use streamId for per-file tag storage 
+            const streamIdParam = this.streamId !== 'global' ? `&streamId=${encodeURIComponent(this.streamId)}` : '';
+            const tagsURL = `/e2ee/tags?start=${chunkIndex}&count=${this.tagBatchSize}${streamIdParam}`;
 
             try {
                 this.log('E2EE', `Fetching tags from ${tagsURL}`);

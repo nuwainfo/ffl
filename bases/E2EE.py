@@ -338,7 +338,8 @@ class StreamEncryptor:
         filesize: int,
         tagStorage,
         startChunkIndex=0,
-        saveTags=True
+        saveTags=True,
+        streamId="global"
     ):
         """Initialize stream encryptor
 
@@ -350,6 +351,7 @@ class StreamEncryptor:
             tagStorage: Tag storage object with save() method
             startChunkIndex: Starting chunk index (for Range support)
             saveTags: Whether to save tags (False for unaligned Range requests)
+            streamId: Stream identifier for tag storage (default: "global")
         """
         self.contentKey = contentKey
         self.nonceBase = nonceBase
@@ -358,6 +360,7 @@ class StreamEncryptor:
         self.tagStorage = tagStorage
         self.chunkIndex = startChunkIndex
         self.saveTags = saveTags
+        self.streamId = streamId
 
         self.crypto = CryptoInterface()
         self.aesgcm = self.crypto.createAESGCM(contentKey)
@@ -383,7 +386,7 @@ class StreamEncryptor:
 
         # Store tag if save_tags is True (prevents unaligned Range from polluting)
         if self.saveTags:
-            self.tagStorage.save("global", self.chunkIndex, tag)
+            self.tagStorage.save(self.streamId, self.chunkIndex, tag)
 
         # Increment chunk index for next call
         self.chunkIndex += 1
@@ -517,7 +520,7 @@ class E2EEManager(Singleton):
             'commitment': base64.b64encode(commitment).decode()
         }
 
-    def createEncryptor(self, filename, filesize, startChunkIndex=0, saveTags=True):
+    def createEncryptor(self, filename, filesize, startChunkIndex=0, saveTags=True, streamId="global"):
         """Create a stream encryptor for HTTP downloads
 
         Args:
@@ -525,6 +528,7 @@ class E2EEManager(Singleton):
             filesize: Original file size
             startChunkIndex: Starting chunk index (for Range support)
             saveTags: Whether to save tags (False for unaligned Range requests)
+            streamId: Stream identifier for tag storage (default: "global")
 
         Returns:
             StreamEncryptor: Configured stream encryptor instance
@@ -533,7 +537,8 @@ class E2EEManager(Singleton):
             raise RuntimeError("E2EE not initialized - call handleInit() first")
 
         return StreamEncryptor(
-            self.contentKey, self.nonceBase, filename, filesize, self.encryptionMetaStorage, startChunkIndex, saveTags
+            self.contentKey, self.nonceBase, filename, filesize, self.encryptionMetaStorage,
+            startChunkIndex, saveTags, streamId
         )
 
     def getTags(self, streamId):

@@ -45,7 +45,7 @@ from signalslot import Signal
 from sentry_sdk.integrations.logging import SentryHandler, LoggingIntegration
 from sentry_sdk.integrations import atexit as sentryAtexit
 
-PUBLIC_VERSION = '3.8.3'
+PUBLIC_VERSION = '3.8.4'
 
 # Map string levels to logging constants for standard level names
 LOG_LEVEL_MAPPING = {'DEBUG': logging.DEBUG, 'INFO': logging.INFO, 'WARNING': logging.WARNING, 'ERROR': logging.ERROR}
@@ -478,6 +478,31 @@ class EventService(Singleton):
             return signalObject._slots.index(observer)
         except ValueError:
             return -1
+
+    def registerEventClass(self, eventClass, excludeNames=None):
+        """
+        Register all Event attributes from an event class.
+
+        Args:
+            eventClass: Class containing Event attributes to register
+            excludeNames: Optional set/list of attribute names to exclude from registration
+
+        Example:
+            eventService.registerEventClass(FFLEvent, excludeNames={'all'})
+            eventService.registerEventClass(FeatureEvent)
+        """
+        if excludeNames is None:
+            excludeNames = set()
+        elif not isinstance(excludeNames, set):
+            excludeNames = set(excludeNames)
+
+        for name in dir(eventClass):
+            if name in excludeNames:
+                continue
+
+            attr = getattr(eventClass, name)
+            if isinstance(attr, Event):
+                self.register(attr.key)
 
 
 class Event:
@@ -1218,7 +1243,4 @@ class FFLEvent:
 eventService = EventService.getInstance()
 
 # Register all FFLEvent events dynamically
-for name in dir(FFLEvent):
-    attr = getattr(FFLEvent, name)
-    if isinstance(attr, Event) and name != 'all':
-        eventService.register(attr.key)
+eventService.registerEventClass(FFLEvent, excludeNames={'all'})

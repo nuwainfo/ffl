@@ -110,13 +110,16 @@
             "savingFile": "Saving file...",
             "creatingDownload": "Creating download...",
             "downloadingPercent": "Downloading via P2P: {{percent}}%",
-            "downloading": "Downloading via P2P..."
+            "downloading": "Downloading via P2P...",
+            "readyToDownload": "Ready to download"
         },
         "connection": {
             "serverRelay": "Using Server Relay Download",
             "waitingPeer": "Waiting for peer ({{seconds}}s)",
             "retrying": "Retrying P2P connection",
-            "directP2p": "Direct P2P transfer"
+            "directP2p": "Direct P2P transfer",
+            "p2pReady": "P2P Connection Ready",
+            "relayReady": "Server Relay Ready"
         },
         "download": {
             "startShortly": "Your download will start shortly.",
@@ -150,5 +153,40 @@
     "errors": {
         "folder_changed": "The shared folder contents changed during transfer. The file owner needs to reshare the folder.",
         "unknown": "An error occurred during transfer."
+    },
+    "zipPreview": {
+        "button": "Preview Contents",
+        "archiveContents": "Archive Contents",
+        "loading": "Loading...",
+        "loadingContents": "Loading archive contents...",
+        "startDownload": "Start download",
+        "closePreview": "Close preview",
+        "noFiles": "No previewable files found",
+        "file": "File",
+        "fileNumber": "File #{{index}}",
+        "loadFailed": "Failed to load archive contents",
+        "filesCount": "{{count}} files",
+        "filesCount_plural": "{{count}} files",
+        "filesSizeCount": "{{count}} files • {{size}}",
+        "optionsTitle": "Preview Options",
+        "optionsMessage": "Your download is in progress. How would you like to preview?",
+        "continueDownloading": "Continue downloading while previewing (Recommended)",
+        "previewOnly": "Preview only (Cancel current download)",
+        "optionsHint": "Note: \"Preview only\" will discard downloaded progress and reload the page.",
+        "hint": {
+            "images": "Images",
+            "otherFiles": "Other Files",
+            "inlineDetails": "for details",
+            "inlinePreview": "to preview"
+        },
+        "badge": {
+            "ready": "Ready",
+            "error": "Error",
+            "waiting": "Waiting"
+        },
+        "actions": {
+            "viewFullSize": "View full size",
+            "downloadFile": "Download file"
+        }
     }
 }

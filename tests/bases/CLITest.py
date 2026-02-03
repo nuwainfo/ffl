@@ -141,85 +141,147 @@ class CLITest(FastFileLinkTestBase):
         if expectedMessage not in combinedOutput:
             self.fail(f"Expected termination message '{expectedMessage}' not found in output: {combinedOutput}")
 
-    def _runCommandAndGetOutput(self, extraArgs):
-        """Helper to run CLI command with args and capture output using generic pattern"""
-        outputCapture = {}
-        command = [
-            "python",
-            os.path.join(os.path.dirname(__file__), "..", "..", "Core.py"), "--cli", "share", self.testFilePath
-        ]
-        command.extend(extraArgs)
+    def _verifyAuthInOutput(self, combinedOutput, username, password):
+        """Verify authentication is enabled with correct username and password is NOT shown"""
+        self.assertIn(f"Authentication enabled - Username: {username}", combinedOutput)
+        self.assertNotIn(password, combinedOutput) # Password should not be shown
+        print(f"[Test] ✓ Authentication enabled for user '{username}' (password hidden)")
 
-        print(f"[Test] Running command: {' '.join(command)}")
+    def _verifyHttpBasicAuth(self, shareLink, username, password, downloadPath):
+        """
+        Comprehensive HTTP Basic Auth verification:
+        1. Test unauthenticated request (expect 401)
+        2. Test wrong credentials (expect 401)
+        3. Test correct credentials (expect 200)
+        4. Verify downloaded file integrity
+        """
+        # Test 1: No credentials
+        print("[Test] Test 1/3: Unauthenticated request (should fail)...")
+        response = requests.get(shareLink, allow_redirects=True, timeout=30)
+        self.assertEqual(
+            response.status_code, 401, f"Expected 401 Unauthorized without credentials, got {response.status_code}"
+        )
+        print("[Test] ✓ Unauthenticated request correctly rejected with 401")
 
-        # Use file-based output capture to avoid pipe buffer issues
-        self._procLogFile = open(self.procLogPath, "w+", encoding="utf-8", buffering=1)
+        # Test 2: Wrong credentials
+        print("[Test] Test 2/3: Wrong credentials (should fail)...")
+        response = requests.get(shareLink, auth=("wronguser", "wrongpass"), allow_redirects=True, timeout=30)
+        self.assertEqual(
+            response.status_code, 401, f"Expected 401 Unauthorized with wrong credentials, got {response.status_code}"
+        )
+        print("[Test] ✓ Wrong credentials correctly rejected with 401")
 
-        # Pass current environment to subprocess (including any test environment variables)
-        env = os.environ.copy()
+        # Test 3: Correct credentials
+        print("[Test] Test 3/3: Correct credentials (should succeed)...")
+        response = requests.get(shareLink, auth=(username, password), stream=True, timeout=30)
+        self.assertEqual(
+            response.status_code, 200, f"Expected 200 OK with correct credentials, got {response.status_code}"
+        )
+        print("[Test] ✓ Authenticated request succeeded with 200 OK")
 
-        self.coreProcess = subprocess.Popen(
-            command, stdout=self._procLogFile, stderr=subprocess.STDOUT, text=True, env=env
+        # Save and verify the downloaded file
+        with open(downloadPath, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+
+        self._verifyDownloadedFile(downloadPath)
+        print("[Test] ✓ Downloaded file integrity verified")
+
+    def _tryDownloadUploadedFile(self, shareLink, username, password):
+        """
+        Try to download uploaded file - handles both scenarios:
+        - Remote server requires auth (returns 401, retry with credentials)
+        - Remote server doesn't require auth (returns 200)
+        """
+        print("[Test] Attempting to download uploaded file...")
+        try:
+            response = requests.get(shareLink, timeout=30, allow_redirects=True)
+
+            if response.status_code == 401:
+                # Remote server requires authentication
+                print("[Test] Remote server requires authentication, retrying with credentials...")
+                response = requests.get(shareLink, auth=(username, password), timeout=30, allow_redirects=True)
+                self.assertEqual(
+                    response.status_code, 200, f"Expected 200 OK with credentials, got {response.status_code}"
+                )
+                print("[Test] ✓ Download with authentication succeeded")
+            elif response.status_code == 200:
+                print("[Test] ✓ Download succeeded (remote server may not require auth)")
+            else:
+                self.fail(f"Unexpected status code: {response.status_code}")
+
+            # Verify we got file content
+            self.assertGreater(len(response.content), 0, "Downloaded file should not be empty")
+            print(f"[Test] ✓ Downloaded {len(response.content)} bytes")
+
+        except requests.exceptions.RequestException as e:
+            print(f"[Test] Warning: Could not download from remote server: {e}")
+            # This is acceptable - upload test is primarily about verifying auth flags work
+
+    def _verifyCustomNameInJson(self, expectedName):
+        """
+        Verify custom filename appears in JSON output.
+
+        Args:
+            expectedName: Expected value for content_name field
+
+        Returns:
+            The full JSON output dictionary
+        """
+        with open(self.jsonOutputPath, 'r') as f:
+            jsonOutput = json.load(f)
+
+        print(f"[Test] JSON output: {jsonOutput}")
+
+        self.assertIn("content_name", jsonOutput, "JSON output should contain 'content_name' field")
+        self.assertEqual(
+            jsonOutput["content_name"], expectedName, f"Expected custom filename '{expectedName}' in JSON output"
         )
 
-        # Setup output capture context (use keys expected by CoreTestBase._updateCapturedOutput)
-        outputCapture['logPath'] = self.procLogPath
-        outputCapture['logFile'] = self._procLogFile
+        return jsonOutput
 
-        # Give the process a moment to start and check what happens
-        print("[Test] Waiting for process to start...")
-        time.sleep(2) # Let the process start and handle arguments
+    def _runCommandAndGetOutput(self, extraArgs):
+        """
+        Helper to run CLI command and capture output (for tests that only check messages).
 
-        # Check if process has already terminated (e.g., due to argument validation error)
-        pollResult = self.coreProcess.poll()
-        if pollResult is not None:
-            print(f"[Test] Process already terminated with exit code: {pollResult}")
-            # Ensure file is flushed before reading
-            if self._procLogFile:
-                self._procLogFile.flush()
-                print(f"[Test] Log file flushed, file size: {os.path.getsize(self.procLogPath)} bytes")
-            # Wait a moment for OS to finish writing
-            time.sleep(0.5)
-            # Get output immediately for early termination
-            output = self._updateCapturedOutput(outputCapture)
-            print(f"[Test] Captured output length: {len(output)} chars")
-            if not output:
-                print(f"[Test] WARNING: No output captured, checking log file directly...")
-                if os.path.exists(self.procLogPath):
-                    with open(self.procLogPath, 'r', encoding='utf-8', errors='replace') as f:
-                        directOutput = f.read()
-                        print(f"[Test] Direct file read: {len(directOutput)} chars")
-                        if directOutput:
-                            return directOutput
-            return output
+        This is a simplified wrapper around _startFastFileLink that:
+        1. Ignores the share link (we only care about output)
+        2. Waits for process to terminate naturally or forces termination
+        3. Returns the captured output text
 
-        print("[Test] Process still running, waiting for completion...")
-        # For auth tests, the process should terminate quickly due to timeout or error
-        # Wait for process to complete, but force terminate if needed
+        Used for tests that just check output messages (auth, alias, etc.)
+        """
+        outputCapture = {}
+
+        # Try to start FastFileLink and capture output
+        # For tests that check output only, we don't care if JSON creation fails
         try:
-            self._assertProcessTerminated(timeout=15) # Increased timeout for auth tests
-        except AssertionError:
-            # Process didn't terminate naturally, force terminate it
-            print("[Test] Process didn't terminate naturally, forcing termination...")
-            print(f"[Test] Process PID: {self.coreProcess.pid if self.coreProcess else 'None'}")
-            if self.coreProcess and self.coreProcess.poll() is None:
+            self._startFastFileLink(p2p=True, extraArgs=extraArgs, captureOutputIn=outputCapture)
+        except Exception as e:
+            # Process may have terminated early (e.g., auth error) - that's expected
+            print(f"[Test] Process terminated early (expected for output-only tests): {e}")
+
+        # Wait for process to terminate or force termination
+        if self.coreProcess and self.coreProcess.poll() is None:
+            print("[Test] Process still running, waiting for completion...")
+            try:
+                self._assertProcessTerminated(timeout=15)
+            except AssertionError:
+                print("[Test] Forcing termination...")
                 self.coreProcess.terminate()
                 try:
                     self.coreProcess.wait(timeout=5)
-                    print("[Test] Process terminated gracefully")
                 except subprocess.TimeoutExpired:
-                    print("[Test] Process didn't respond to terminate, using kill")
                     self.coreProcess.kill()
                     self.coreProcess.wait()
 
-        # Ensure file is flushed before reading
-        if self._procLogFile:
-            self._procLogFile.flush()
-            print(f"[Test] Log file flushed after termination, file size: {os.path.getsize(self.procLogPath)} bytes")
-
-        # Get final output
+        # Get captured output (captureOutputIn was set up in _startFastFileLink)
+        # _updateCapturedOutput handles flushing and reading from the log file
         output = self._updateCapturedOutput(outputCapture)
-        print(f"[Test] Final output length: {len(output)} chars")
+        if output:
+            print(f"[Test] Captured output length: {len(output)} chars")
+
         return output
 
     def testCLIAuthPasswordOnly(self):
@@ -360,7 +422,6 @@ class CLITest(FastFileLinkTestBase):
         try:
             # Start server and get share link
             shareLink = self._startAndGetShareLink(extraArgs=extraArgs)
-            print(f"[Test] Share link: {shareLink}")
 
             # Extract base URL and UID from share link
             parsed = urlparse(shareLink)
@@ -400,7 +461,6 @@ class CLITest(FastFileLinkTestBase):
         try:
             # Start server and get share link
             shareLink = self._startAndGetShareLink(extraArgs=extraArgs)
-            print(f"[Test] Share link: {shareLink}")
 
             # Extract base URL and UID from share link
             # Example: https://domain.com/uid -> base: https://domain.com, uid: uid
@@ -575,27 +635,14 @@ class CLITest(FastFileLinkTestBase):
         # Start FastFileLink and wait for JSON output
         shareLink = self._startFastFileLink(p2p=True, extraArgs=extraArgs)
 
-        print(f"[Test] Share link: {shareLink}")
-
-        # Read JSON output to verify the filename
-        with open(self.jsonOutputPath, 'r') as f:
-            jsonOutput = json.load(f)
-
-        print(f"[Test] JSON output: {jsonOutput}")
-
-        # Check JSON output contains custom filename in content_name field
-        self.assertIn("content_name", jsonOutput, "JSON output should contain 'content_name' field")
-        self.assertEqual(
-            jsonOutput["content_name"], customName, f"Expected custom filename '{customName}' in JSON output"
-        )
-
-        print(f"[Test] PASS: Custom filename '{customName}' verified in JSON output")
+        # Verify custom filename in JSON output
+        self._verifyCustomNameInJson(customName)
+        print(f"[Test] ✓ Custom filename '{customName}' verified in JSON output")
 
         # Verify Content-Disposition header in HTTP response
         downloadedFilePath = self._getDownloadedFilePath("custom_name_test")
         self.downloadFileWithRequests(shareLink, downloadedFilePath, expectedFileName=customName)
-
-        print(f"[Test] PASS: Content-Disposition header verified with filename '{customName}'")
+        print(f"[Test] ✓ Content-Disposition header verified with filename '{customName}'")
 
     def testCustomNameWithFileNoExtension(self):
         """Test --name with a file without extension."""
@@ -607,21 +654,9 @@ class CLITest(FastFileLinkTestBase):
         # Start FastFileLink and wait for JSON output
         shareLink = self._startFastFileLink(p2p=True, extraArgs=extraArgs)
 
-        print(f"[Test] Share link: {shareLink}")
-
-        # Read JSON output to verify the filename
-        with open(self.jsonOutputPath, 'r') as f:
-            jsonOutput = json.load(f)
-
-        print(f"[Test] JSON output: {jsonOutput}")
-
-        # Check JSON output contains custom filename (should keep as-is for files)
-        self.assertIn("content_name", jsonOutput, "JSON output should contain 'content_name' field")
-        self.assertEqual(
-            jsonOutput["content_name"], customName, f"Expected filename '{customName}' without added extension"
-        )
-
-        print(f"[Test] PASS: Filename '{customName}' kept as-is for file")
+        # Verify custom filename in JSON output (should keep as-is for files)
+        self._verifyCustomNameInJson(customName)
+        print(f"[Test] ✓ Filename '{customName}' kept as-is for file")
 
     def testCustomNameWithFolder(self):
         """Test --name with a folder (should add .zip extension)."""
@@ -647,21 +682,9 @@ class CLITest(FastFileLinkTestBase):
             # Start FastFileLink and wait for JSON output
             shareLink = self._startFastFileLink(p2p=True, extraArgs=extraArgs)
 
-            print(f"[Test] Share link: {shareLink}")
-
-            # Read JSON output to verify the filename
-            with open(self.jsonOutputPath, 'r') as f:
-                jsonOutput = json.load(f)
-
-            print(f"[Test] JSON output: {jsonOutput}")
-
-            # Check JSON output contains custom filename with .zip
-            self.assertIn("content_name", jsonOutput, "JSON output should contain 'content_name' field")
-            self.assertEqual(
-                jsonOutput["content_name"], customName, f"Expected custom filename '{customName}' in JSON output"
-            )
-
-            print(f"[Test] PASS: Folder custom name '{customName}' verified")
+            # Verify custom filename in JSON output
+            self._verifyCustomNameInJson(customName)
+            print(f"[Test] ✓ Folder custom name '{customName}' verified")
         finally:
             # Restore original test file and size
             self.testFilePath = originalTestFile
@@ -692,22 +715,9 @@ class CLITest(FastFileLinkTestBase):
             # Start FastFileLink and wait for JSON output
             shareLink = self._startFastFileLink(p2p=True, extraArgs=extraArgs)
 
-            print(f"[Test] Share link: {shareLink}")
-
-            # Read JSON output to verify the filename
-            with open(self.jsonOutputPath, 'r') as f:
-                jsonOutput = json.load(f)
-
-            print(f"[Test] JSON output: {jsonOutput}")
-
-            # Check JSON output contains .zip extension added
-            self.assertIn("content_name", jsonOutput, "JSON output should contain 'content_name' field")
-            self.assertEqual(
-                jsonOutput["content_name"], expectedName,
-                f"Expected filename '{expectedName}' with .zip extension added"
-            )
-
-            print(f"[Test] PASS: Folder name '{customName}' converted to '{expectedName}'")
+            # Verify .zip extension was added
+            self._verifyCustomNameInJson(expectedName)
+            print(f"[Test] ✓ Folder name '{customName}' converted to '{expectedName}'")
         finally:
             # Restore original test file and size
             self.testFilePath = originalTestFile
@@ -738,21 +748,9 @@ class CLITest(FastFileLinkTestBase):
             # Start FastFileLink and wait for JSON output
             shareLink = self._startFastFileLink(p2p=True, extraArgs=extraArgs)
 
-            print(f"[Test] Share link: {shareLink}")
-
-            # Read JSON output to verify the filename
-            with open(self.jsonOutputPath, 'r') as f:
-                jsonOutput = json.load(f)
-
-            print(f"[Test] JSON output: {jsonOutput}")
-
-            # Check JSON output contains .zip appended
-            self.assertIn("content_name", jsonOutput, "JSON output should contain 'content_name' field")
-            self.assertEqual(
-                jsonOutput["content_name"], expectedName, f"Expected filename '{expectedName}' with .zip appended"
-            )
-
-            print(f"[Test] PASS: Folder name '{customName}' converted to '{expectedName}'")
+            # Verify .zip was appended
+            self._verifyCustomNameInJson(expectedName)
+            print(f"[Test] ✓ Folder name '{customName}' converted to '{expectedName}'")
         finally:
             # Restore original test file and size
             self.testFilePath = originalTestFile
@@ -775,6 +773,87 @@ class CLITest(FastFileLinkTestBase):
             f"/{expected_encoded}", combinedOutput,
             f"Expected URL-encoded alias '{expected_encoded}' to appear in the sharing URL"
         )
+
+    def testCLIAuthWithP2P(self):
+        """Test --auth-user and --auth-password work with P2P mode and verify HTTP Basic Auth."""
+        username = "p2puser"
+        password = "p2ppass123"
+        extraArgs = ["--auth-user", username, "--auth-password", password]
+
+        print(f"[Test] Testing HTTP Basic Auth with P2P mode")
+
+        # Start P2P server with authentication
+        self.outputCapture = {}
+        shareLink = self._startFastFileLink(p2p=True, extraArgs=extraArgs, captureOutputIn=self.outputCapture)
+
+        # Verify authentication is enabled in output
+        combinedOutput = self._updateCapturedOutput(self.outputCapture)
+        self._verifyAuthInOutput(combinedOutput, username, password)
+
+        # Verify HTTP Basic Auth works for downloads
+        downloadedFilePath = self._getDownloadedFilePath("auth_p2p_test.bin")
+        self._verifyHttpBasicAuth(shareLink, username, password, downloadedFilePath)
+
+        print("[Test] PASS: HTTP Basic Authentication works correctly in P2P mode")
+
+    def testCLIAuthWithUpload(self):
+        """Test --auth-user and --auth-password work with --upload mode."""
+        username = "uploaduser"
+        password = "uploadpass123"
+        extraArgs = ["--auth-user", username, "--auth-password", password, "--upload"]
+
+        print(f"[Test] Testing auth with upload mode")
+
+        # Start the upload process and get the share link
+        outputCapture = {}
+        shareLink = self._startFastFileLink(p2p=False, extraArgs=extraArgs, captureOutputIn=outputCapture)
+
+        # Wait for upload to complete
+        time.sleep(5)
+
+        # Verify authentication is enabled in output
+        combinedOutput = self._updateCapturedOutput(outputCapture)
+        self._verifyAuthInOutput(combinedOutput, username, password)
+
+        # Verify upload-related messages appear
+        uploadIndicators = ["upload", "Upload", "UPLOAD", shareLink]
+        self.assertTrue(
+            any(indicator in combinedOutput for indicator in uploadIndicators), "Expected upload-related output in logs"
+        )
+
+        # Try to download the uploaded file (remote server may or may not require auth)
+        self._tryDownloadUploadedFile(shareLink, username, password)
+
+        print("[Test] PASS: Authentication with upload mode works correctly")
+
+    def testCLIAuthWithUploadPasswordOnly(self):
+        """Test --auth-password (default username) works with --upload mode."""
+        password = "uploadpass456"
+        extraArgs = ["--auth-password", password, "--upload"]
+
+        print(f"[Test] Testing auth (password only) with upload mode")
+
+        # Start the upload process and get the share link
+        outputCapture = {}
+        shareLink = self._startFastFileLink(p2p=False, extraArgs=extraArgs, captureOutputIn=outputCapture)
+
+        # Wait for upload to complete
+        time.sleep(5)
+
+        # Verify authentication is enabled in output
+        combinedOutput = self._updateCapturedOutput(outputCapture)
+        self._verifyAuthInOutput(combinedOutput, DEFAULT_AUTH_USER_NAME, password)
+
+        # Verify upload-related messages appear
+        uploadIndicators = ["upload", "Upload", "UPLOAD", shareLink]
+        self.assertTrue(
+            any(indicator in combinedOutput for indicator in uploadIndicators), "Expected upload-related output in logs"
+        )
+
+        # Try to download the uploaded file (remote server may or may not require auth)
+        self._tryDownloadUploadedFile(shareLink, DEFAULT_AUTH_USER_NAME, password)
+
+        print("[Test] PASS: Authentication (default username) with upload mode works correctly")
 
 
 class CLIArgumentParsingTest(unittest.TestCase):

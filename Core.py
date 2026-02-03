@@ -166,6 +166,16 @@ def isCLIMode():
     return settingsGetter.isCLIMode()
 
 
+def determineAuthentication(args):
+    authPassword = args.authPassword or os.getenv('FFL_AUTH_PASSWORD')
+    authUser = args.authUser if authPassword else None
+    return authUser, authPassword
+
+
+def promptAuthEnabled(authUser, authPassword):
+    flushPrint(_('Authentication enabled - Username: {authUser}\n').format(authUser=authUser))
+
+
 def onShareLinkCreate(args, link, filePath, fileSize, tunnelType, e2ee, reader, **kwargs):
     """Handle share link creation - invite, QR code, and JSON writing"""
     # Handle --invite flag
@@ -248,6 +258,9 @@ def processUpload(args, reader, proxyConfig: ProxyConfig):
         ResumeValidationError,
     )
 
+    authUser, authPassword = determineAuthentication(args)
+    publishPromptCallback = lambda uploadResult: promptAuthEnabled(authUser, authPassword) if authPassword else None
+
     # Inform GUI users about upload resumability
     if not isCLIMode():
         flushPrint(_('You can stop the upload at any time and resume it later.\n'))
@@ -260,20 +273,29 @@ def processUpload(args, reader, proxyConfig: ProxyConfig):
 
     def doUpload(uploadMethod, uid, link=None, resume=False):
         uploadResult = None
+
         try:
+            extraArgs = {}
+            if args.alias:
+                extraArgs['alias'] = args.alias
+
+            if authPassword:
+                extraArgs['authUser'] = authUser
+                extraArgs['authPassword'] = authPassword
+
             if resume:
                 # Resume mode: use resume() instead of tell()
                 response = uploadMethod.resume(args.file, args.upload, reader=reader, fileName=args.fileName)
             else:
                 # Normal mode: pass reader to tell() to avoid rebuilding
                 response = uploadMethod.tell(
-                    uid, args.file, args.upload, link=link, reader=reader, fileName=args.fileName
+                    uid, args.file, args.upload, link=link, reader=reader, fileName=args.fileName, **extraArgs
                 )
 
             if response['success']:
                 # Pass pause percentage if specified
                 pausePercentage = args.pause
-                uploadResult = uploadMethod.execute(response, args.file, pausePercentage=pausePercentage)
+                uploadResult = uploadMethod.execute(response, args.file, pausePercentage=pausePercentage, **extraArgs)
             else:
                 message = response['message']
                 sendException(logger, message, errorPrefix="Server temporarily cannot process this file")
@@ -364,7 +386,7 @@ def processUpload(args, reader, proxyConfig: ProxyConfig):
 
         def publish(self):
             if self.uploadResult and self.uploadResult.success:
-                self.uploadMethod.publish(self.uploadResult)
+                self.uploadMethod.publish(self.uploadResult, additionalPromptCallback=publishPromptCallback)
                 return self.uploadResult.link
             return None
 
@@ -402,14 +424,14 @@ def processUpload(args, reader, proxyConfig: ProxyConfig):
             return UploadProcessor(uploadMethod=uploadMethod, uid=uid, exitCode=uploadResult.exitCode)
 
         if uploadResult and uploadResult.success:
-            uploadMethod.publish(uploadResult)
+            uploadMethod.publish(uploadResult, additionalPromptCallback=publishPromptCallback)
             FFLEvent.shareLinkCreate.trigger(
                 link=uploadResult.link,
                 filePath=args.file,
                 fileSize=size,
                 tunnelType=None,
                 e2ee=e2eeEnabled,
-                reader=reader
+                reader=reader,
             )
             return UploadProcessor(uploadMethod=uploadMethod, uid=uid, exitCode=0)
         else:
@@ -436,18 +458,7 @@ def processVFS(args):
     # Get port (VFS server uses specified port or random)
     vfsPort = args.port if args.port else 0
 
-    # Get auth credentials from args or environment variable
-    authUser = args.authUser if hasattr(args, 'authUser') else None
-    authPassword = args.authPassword if hasattr(args, 'authPassword') else None
-
-    # Fallback to FFL_AUTH_PASSWORD environment variable if not provided via CLI
-    # This prevents password exposure in command line/process list
-    if not authPassword:
-        authPassword = os.getenv('FFL_AUTH_PASSWORD')
-
-    # If password is set but user is not, use default user
-    if authPassword and not authUser:
-        authUser = 'user'
+    authUser, authPassword = determineAuthentication(args)
 
     # Start VFS server (supports both files and folders)
     vfsServer = VFSServer(args.file, host="127.0.0.1", port=vfsPort, authUser=authUser, authPassword=authPassword)
@@ -460,9 +471,9 @@ def processVFS(args):
     shareType = 'file' if os.path.isfile(args.file) else 'folder'
     flushPrint(_("Please share the URI below to access the {type} remotely:\n").format(type=shareType))
 
-    # Show auth status WITHOUT exposing password (security)
+    # Show auth info if enabled (password enables auth)
     if authPassword:
-        flushPrint(_('🔐 Authentication enabled - Username: {authUser}\n').format(authUser=authUser))
+        promptAuthEnabled(authUser, authPassword)
 
     # Never include password in URI (security issue)
     flushPrint(f"{vfsUri}\n")
@@ -475,14 +486,13 @@ def processVFS(args):
     else:
         flushPrint('')
 
-    # Trigger event for GUI
     FFLEvent.shareLinkCreate.trigger(
         link=vfsUri,
         filePath=args.file,
         fileSize=None, # VFS TAR size unknown
         tunnelType="vfs",
         e2ee=False, # VFS doesn't support E2EE yet
-        reader=None
+        reader=None,
     )
 
     try:
@@ -589,10 +599,6 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
             uid = generateUid()
 
         userPort = args.port
-        # Fallback to FFL_AUTH_PASSWORD environment variable if not provided via CLI
-        authPassword = args.authPassword or os.getenv('FFL_AUTH_PASSWORD')
-        authUser = args.authUser if authPassword else None
-
         port = getAvailablePort(userPort)
 
         # Get enhanced TunnelRunner from FeatureManager if Features or Tunnels addon is available
@@ -640,19 +646,14 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
                 flushPrint(f'{link}\n')
                 copy2Clipboard(f'{link}')
 
-                # Trigger share link create event for GUI and other subscribers
                 FFLEvent.shareLinkCreate.trigger(
                     link=link,
                     filePath=args.file,
                     fileSize=size,
                     tunnelType=tunnelType,
                     e2ee=e2eeEnabled,
-                    reader=reader
+                    reader=reader,
                 )
-
-                # Show auth info if enabled (password enables auth)
-                if authPassword:
-                    flushPrint(_('Authentication enabled - Username: {authUser}\n').format(authUser=authUser))
 
                 flushPrint(_('Please keep the application running so the recipient can download the file.'))
                 if isCLIMode():
@@ -676,6 +677,11 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
                     if torDetected:
                         # Tor mode without Features addon: use DummyWebRTCManager to totally block WebRTC
                         webRTCManagerClass = DummyWebRTCManager
+
+                authUser, authPassword = determineAuthentication(args)
+                # Show auth info if enabled (password enables auth)
+                if authPassword:
+                    promptAuthEnabled(authUser, authPassword)
 
                 # WebRTC default state: disabled by --force-relay flag
                 defaultWebRTC = not args.forceRelay
@@ -720,7 +726,7 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
                     fileSize=size,
                     tunnelType=tunnelType,
                     e2ee=e2eeEnabled,
-                    reader=reader
+                    reader=reader,
                 )
                 return 0
 

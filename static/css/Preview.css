@@ -1,0 +1,1326 @@
+/*!
+ * Preview.css - Glassmorphism Preview Components
+ * File info hint and ZIP preview explorer
+ * Matches FastFileLink index.html design system
+ */
+
+/* ============================================================================
+   Common Glassmorphism Patterns
+   ============================================================================ */
+
+/* Shared glass effect variables in comments for reference:
+   - Main glass: rgba(255, 255, 255, 0.03) + blur(25px) saturate(140%)
+   - Card glass: rgba(255, 255, 255, 0.15) + blur(12px) saturate(130%)
+   - Border: 1.5px solid rgba(255, 255, 255, 0.4)
+   - Shadow: 0 8px 32px rgba(91, 104, 235, 0.2)
+*/
+
+/* ============================================================================
+   File Info Hint (Small popup near info icon)
+   ============================================================================ */
+
+.file-intro-hint {
+    position: fixed;
+    /* EXTREMELY transparent glass effect - see blue background */
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(25px) saturate(140%);
+    -webkit-backdrop-filter: blur(25px) saturate(140%);
+    border-radius: 16px;
+    /* Glass border with glow */
+    border: 1.5px solid rgba(255, 255, 255, 0.4);
+    box-shadow:
+        0 8px 32px rgba(91, 104, 235, 0.2),
+        0 0 0 1px rgba(255, 255, 255, 0.2) inset;
+    padding: 24px;
+    min-width: 420px;
+    max-width: 480px;
+    z-index: 1000;
+    opacity: 0;
+    transform: translateY(-10px);
+    pointer-events: none;
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.file-intro-hint.active {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+
+.file-intro-hint.fade-out {
+    opacity: 0;
+    transform: translateY(-10px);
+}
+
+.file-intro-hint::before {
+    content: '';
+    position: absolute;
+    top: -10px;
+    left: 30px;
+    width: 0;
+    height: 0;
+    border-left: 10px solid transparent;
+    border-right: 10px solid transparent;
+    border-bottom: 10px solid rgba(255, 255, 255, 0.4);
+}
+
+.file-intro-hint-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    margin-bottom: 16px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+.file-intro-hint-icon {
+    font-size: 36px;
+    color: #007bff;
+    flex-shrink: 0;
+}
+
+.file-intro-hint-title {
+    flex: 1;
+}
+
+.file-intro-hint-filename {
+    font-size: 18px;
+    font-weight: 600;
+    color: #222;
+    word-break: break-word;
+    margin-bottom: 6px;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.9);
+}
+
+.file-intro-hint-meta {
+    font-size: 14px;
+    color: #444;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.7);
+}
+
+.file-intro-hint-meta-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.file-intro-hint-meta-item i {
+    color: #666;
+    width: 16px;
+    font-size: 12px;
+}
+
+.file-intro-hint-content {
+    margin-bottom: 16px;
+}
+
+.file-intro-hint-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.file-intro-hint-stat {
+    /* Glass card effect - very transparent */
+    background: rgba(255, 255, 255, 0.15);
+    backdrop-filter: blur(12px) saturate(130%);
+    -webkit-backdrop-filter: blur(12px) saturate(130%);
+    border-radius: 8px;
+    border: 1.5px solid rgba(255, 255, 255, 0.4);
+    box-shadow:
+        0 4px 16px rgba(91, 104, 235, 0.12),
+        0 0 0 1px rgba(255, 255, 255, 0.2) inset;
+    padding: 10px 12px;
+    text-align: center;
+}
+
+.file-intro-hint-stat-value {
+    font-size: 20px;
+    font-weight: 700;
+    color: #111;
+    margin-bottom: 4px;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8);
+}
+
+.file-intro-hint-stat-label {
+    font-size: 11px;
+    color: #444;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.6);
+}
+
+.file-intro-hint-preview {
+    background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+    border: none;
+    border-radius: 10px;
+    padding: 14px 20px;
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    transition: all 0.2s ease;
+    box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3);
+}
+
+.file-intro-hint-preview:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0, 123, 255, 0.5);
+}
+
+.file-intro-hint-preview:active {
+    transform: translateY(0);
+}
+
+.file-intro-hint-preview i {
+    font-size: 16px;
+}
+
+/* ============================================================================
+   ZIP Preview Overlay - Blue Cloudy Theme
+   ============================================================================ */
+
+.zip-preview-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 9999;
+    display: none;
+    opacity: 0;
+    transition: opacity 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    /* NO background - completely transparent to see the page behind */
+    background: transparent;
+    overflow: hidden;
+}
+
+.zip-preview-overlay.active {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: overlayFadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes overlayFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* ============================================================================
+   Preview Container (Glass Card) - Blue Cloudy Theme
+   ============================================================================ */
+
+.zip-preview-container {
+    width: 92vw;
+    max-width: 1400px;
+    height: 85vh;
+    max-height: 900px;
+    /* EXTREMELY transparent glass effect - see blue background */
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(25px) saturate(140%);
+    -webkit-backdrop-filter: blur(25px) saturate(140%);
+    border-radius: 24px;
+    /* Glass border with glow */
+    border: 1.5px solid rgba(255, 255, 255, 0.4);
+    box-shadow:
+        0 8px 32px rgba(91, 104, 235, 0.2),
+        0 0 0 1px rgba(255, 255, 255, 0.2) inset;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transform: scale(0.95);
+    animation: containerSlideIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@keyframes containerSlideIn {
+    from {
+        transform: scale(0.95) translateY(20px);
+        opacity: 0;
+    }
+    to {
+        transform: scale(1) translateY(0);
+        opacity: 1;
+    }
+}
+
+/* ============================================================================
+   Header with Download Progress
+   ============================================================================ */
+
+.zip-preview-header {
+    padding: 12px 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.25);
+    /* Glass effect - extremely transparent */
+    background: rgba(255, 255, 255, 0.01);
+    backdrop-filter: blur(15px) saturate(140%);
+    -webkit-backdrop-filter: blur(15px) saturate(140%);
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.zip-preview-header-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+/* Download Progress in Overlay Header */
+.zip-preview-download-progress {
+    display: flex !important;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    margin-top: 8px;
+}
+
+.zip-preview-download-status {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.zip-preview-download-status-text {
+    font-size: 12px;
+    font-weight: 500;
+    color: #222;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.9);
+    flex: 1;
+}
+
+.zip-preview-download-connection {
+    font-size: 10px;
+    color: #5b68eb;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8);
+    white-space: nowrap;
+    font-weight: 500;
+}
+
+.zip-preview-download-progress-bar {
+    width: 100%;
+    height: 8px;
+    position: relative;
+    background: rgba(150, 150, 150, 0.35);
+    border-radius: 4px;
+    overflow: hidden;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+/* Simple div-based progress bar (fallback) */
+.zip-preview-download-progress-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #28e1fd 0%, #5b68eb 100%);
+    border-radius: 4px;
+    box-shadow: 0 0 15px rgba(40, 225, 253, 0.8);
+    transition: width 0.3s ease;
+    position: absolute;
+    top: 0;
+    left: 0;
+}
+
+.zip-preview-download-progress-bar progress {
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: 4px;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background: transparent;
+    position: relative;
+    z-index: 1;
+}
+
+/* WebKit browsers (Chrome, Safari, Edge) */
+.zip-preview-download-progress-bar progress::-webkit-progress-bar {
+    background: transparent;
+    border-radius: 4px;
+}
+
+.zip-preview-download-progress-bar progress::-webkit-progress-value {
+    background: linear-gradient(90deg, #28e1fd 0%, #5b68eb 100%);
+    border-radius: 4px;
+    box-shadow: 0 0 15px rgba(40, 225, 253, 0.8);
+}
+
+/* Firefox */
+.zip-preview-download-progress-bar progress::-moz-progress-bar {
+    background: linear-gradient(90deg, #28e1fd 0%, #5b68eb 100%);
+    border-radius: 4px;
+    box-shadow: 0 0 15px rgba(40, 225, 253, 0.8);
+}
+
+.zip-preview-download-message {
+    display: none; /* Hide detailed message */
+}
+
+.zip-preview-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+    min-width: 0;
+}
+
+.zip-preview-title-icon {
+    font-size: 20px;
+    color: #5b68eb;
+    flex-shrink: 0;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.zip-preview-title-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.zip-preview-title-main {
+    font-size: 15px;
+    font-weight: 600;
+    color: #222;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.9);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.zip-preview-title-sub {
+    font-size: 12px;
+    color: #444;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.7);
+    opacity: 1;
+}
+
+.zip-preview-close-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 1px solid rgba(200, 200, 200, 0.5);
+    background: rgba(255, 255, 255, 0.4);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    color: #666;
+    font-size: 16px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.zip-preview-close-btn:hover {
+    background: rgba(255, 255, 255, 0.6);
+    border-color: rgba(150, 150, 150, 0.6);
+    color: #333;
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.zip-preview-play-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: none;
+    background: linear-gradient(135deg, #28a745 0%, #218838 100%);
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    margin-right: 8px;
+    box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
+}
+
+.zip-preview-play-btn.visible {
+    display: flex;
+}
+
+.zip-preview-play-btn:hover {
+    background: linear-gradient(135deg, #218838 0%, #1e7e34 100%);
+    box-shadow: 0 4px 12px rgba(40, 167, 69, 0.4);
+    transform: scale(1.05);
+}
+
+.zip-preview-play-btn i {
+    font-size: 14px;
+}
+
+/* ============================================================================
+   Content Area
+   ============================================================================ */
+
+.zip-preview-content {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 24px 28px;
+    /* Very transparent for cloudy effect */
+    background: rgba(255, 255, 255, 0.05);
+}
+
+/* Custom scrollbar to match glass theme */
+.zip-preview-content::-webkit-scrollbar {
+    width: 10px;
+}
+
+.zip-preview-content::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    margin: 8px 0;
+}
+
+.zip-preview-content::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 10px;
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+
+.zip-preview-content::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.5);
+}
+
+/* ============================================================================
+   Gallery Grid
+   ============================================================================ */
+
+.zip-preview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px;
+    width: 100%;
+}
+
+.zip-preview-card {
+    /* Glass card effect - very transparent */
+    background: rgba(255, 255, 255, 0.15);
+    backdrop-filter: blur(12px) saturate(130%);
+    -webkit-backdrop-filter: blur(12px) saturate(130%);
+    border-radius: 16px;
+    border: 1.5px solid rgba(255, 255, 255, 0.4);
+    overflow: hidden;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow:
+        0 4px 16px rgba(91, 104, 235, 0.12),
+        0 0 0 1px rgba(255, 255, 255, 0.2) inset;
+}
+
+.zip-preview-card:hover {
+    transform: translateY(-4px) scale(1.02);
+    background: rgba(255, 255, 255, 0.22);
+    box-shadow:
+        0 12px 28px rgba(91, 104, 235, 0.2),
+        0 0 0 1px rgba(255, 255, 255, 0.3) inset;
+    border-color: rgba(255, 255, 255, 0.5);
+}
+
+.zip-preview-card:active {
+    transform: translateY(-2px) scale(1.01);
+}
+
+/* ============================================================================
+   Thumbnail
+   ============================================================================ */
+
+.zip-preview-thumb-wrap {
+    position: relative;
+    width: 100%;
+    padding-top: 75%; /* 4:3 aspect ratio */
+    /* Blue cloudy gradient background for thumbnails */
+    background: linear-gradient(135deg,
+        rgba(91, 104, 235, 0.1) 0%,
+        rgba(40, 225, 253, 0.05) 100%);
+    overflow: hidden;
+}
+
+.zip-preview-thumb {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.zip-preview-card:hover .zip-preview-thumb {
+    transform: scale(1.08);
+}
+
+/* Loading shimmer effect */
+.zip-preview-thumb[src=""] {
+    background: linear-gradient(
+        90deg,
+        rgba(91, 104, 235, 0.1) 0%,
+        rgba(40, 225, 253, 0.2) 50%,
+        rgba(91, 104, 235, 0.1) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* Status Badge */
+.zip-preview-badge {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    transition: all 0.3s ease;
+}
+
+.zip-preview-badge.wait {
+    background: rgba(255, 193, 7, 0.85);
+    color: #856404;
+    border: 1px solid rgba(255, 193, 7, 0.3);
+}
+
+.zip-preview-badge.ready {
+    background: rgba(40, 167, 69, 0.85);
+    color: #fff;
+    border: 1px solid rgba(40, 167, 69, 0.3);
+}
+
+.zip-preview-badge.error {
+    background: rgba(220, 53, 69, 0.85);
+    color: #fff;
+    border: 1px solid rgba(220, 53, 69, 0.3);
+}
+
+/* Action Overlay (WeTransfer style) */
+.zip-preview-actions {
+    position: absolute;
+    bottom: 12px;
+    right: 12px;
+    display: flex;
+    gap: 8px;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    pointer-events: none;
+    z-index: 20;
+}
+
+.zip-preview-card:hover .zip-preview-actions {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: all;
+}
+
+.zip-preview-action {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.95);
+    border: none;
+    color: #2c3e50;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    transition: all 0.2s ease;
+    font-size: 16px;
+}
+
+.zip-preview-action:hover {
+    background: #fff;
+    transform: scale(1.1);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+    color: #5b68eb;
+}
+
+.zip-preview-action:active {
+    transform: scale(0.95);
+}
+
+.zip-preview-action.loading {
+    pointer-events: none;
+    opacity: 0.8;
+}
+
+.zip-preview-action.loading:hover {
+    transform: none;
+}
+
+.zip-preview-action .fa-spin {
+    animation: fa-spin 1s infinite linear;
+}
+
+@keyframes fa-spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Dark overlay on hover */
+.zip-preview-thumb-wrap::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0);
+    transition: background 0.25s ease;
+    pointer-events: none;
+    border-radius: 12px;
+    z-index: 10;
+}
+
+.zip-preview-card:hover .zip-preview-thumb-wrap::before {
+    background: rgba(0, 0, 0, 0.3);
+}
+
+/* ============================================================================
+   Card Metadata
+   ============================================================================ */
+
+.zip-preview-meta {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    /* Glass effect for meta section */
+    background: rgba(255, 255, 255, 0.18);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+}
+
+.zip-preview-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: #111;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.3;
+}
+
+.zip-preview-details {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    color: #444;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.6);
+    opacity: 1;
+}
+
+.zip-preview-size {
+    font-weight: 500;
+}
+
+.zip-preview-index {
+    opacity: 0.7;
+}
+
+/* ============================================================================
+   Loading State
+   ============================================================================ */
+
+.zip-preview-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 20px;
+    gap: 20px;
+}
+
+.zip-preview-spinner {
+    width: 50px;
+    height: 50px;
+    border: 4px solid rgba(91, 104, 235, 0.2);
+    border-top-color: #5b68eb;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    box-shadow: 0 0 20px rgba(91, 104, 235, 0.3);
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.zip-preview-loading-text {
+    font-size: 16px;
+    color: #5b68eb;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8);
+    font-weight: 500;
+}
+
+/* ============================================================================
+   Empty State
+   ============================================================================ */
+
+.zip-preview-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 80px 20px;
+    gap: 16px;
+    color: #666;
+}
+
+.zip-preview-empty-icon {
+    font-size: 64px;
+    opacity: 0.4;
+    color: #999;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);
+}
+
+.zip-preview-empty-text {
+    font-size: 16px;
+    font-weight: 500;
+    color: #666;
+    text-shadow: 0 1px 1px rgba(255, 255, 255, 0.5);
+}
+
+/* ============================================================================
+   File Viewer Modal (for clicking thumbnails)
+   ============================================================================ */
+
+.zip-file-viewer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10000;
+    /* Transparent - no background! */
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.zip-file-viewer.active {
+    display: flex;
+    animation: fadeIn 0.3s ease;
+}
+
+.zip-file-viewer-content {
+    max-width: 90vw;
+    max-height: 85vh;
+    /* Transparent glass like main overlay */
+    background: rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(30px) saturate(140%);
+    -webkit-backdrop-filter: blur(30px) saturate(140%);
+    border-radius: 20px;
+    border: 1.5px solid rgba(255, 255, 255, 0.4);
+    padding: 20px;
+    box-shadow:
+        0 20px 60px rgba(91, 104, 235, 0.25),
+        0 0 0 1px rgba(255, 255, 255, 0.2) inset;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.zip-file-viewer-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(200, 200, 200, 0.4);
+}
+
+.zip-file-viewer-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: #111;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.9);
+    max-width: 600px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.zip-file-viewer-close {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid rgba(200, 200, 200, 0.5);
+    background: rgba(255, 255, 255, 0.3);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    color: #666;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.zip-file-viewer-close:hover {
+    background: rgba(255, 255, 255, 0.5);
+    border-color: rgba(150, 150, 150, 0.6);
+    color: #333;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.zip-file-viewer-body {
+    max-width: 90vw;
+    max-height: 70vh;
+    overflow: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.zip-file-viewer-body img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 12px;
+}
+
+.zip-file-viewer-body video {
+    max-width: 100%;
+    max-height: 70vh;
+    border-radius: 12px;
+    background: #000;
+}
+
+/* ============================================================================
+   Info Icon Enhancement (Trigger)
+   ============================================================================ */
+
+#file-info-icon.has-zip-preview {
+    cursor: pointer !important;
+    transition: all 0.2s ease;
+}
+
+#file-info-icon.has-zip-preview:hover {
+    color: #0056b3 !important;
+    transform: scale(1.15);
+}
+
+/* Pulse animation when ZIP detected */
+@keyframes iconPulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+}
+
+#file-info-icon.has-zip-preview.pulse {
+    animation: iconPulse 2s ease-in-out infinite;
+}
+
+/* ============================================================================
+   Responsive Design
+   ============================================================================ */
+
+@media (max-width: 768px) {
+    .zip-preview-container {
+        width: 95vw;
+        height: 90vh;
+        border-radius: 16px;
+    }
+
+    .zip-preview-header {
+        padding: 12px 16px 16px 16px;
+    }
+
+    .zip-preview-content {
+        padding: 16px 20px;
+    }
+
+    .zip-preview-grid {
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 12px;
+    }
+
+    .zip-preview-title-main {
+        font-size: 16px;
+    }
+
+    .zip-preview-title-sub {
+        font-size: 12px;
+    }
+
+    /* Progress section on mobile */
+    .zip-preview-download-progress {
+        padding: 10px 12px;
+        gap: 6px;
+    }
+
+    .zip-preview-download-status {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+    }
+
+    .zip-preview-download-status-text {
+        font-size: 12px;
+    }
+
+    .zip-preview-download-connection {
+        font-size: 10px;
+        align-self: flex-end;
+    }
+
+    .zip-preview-download-message {
+        font-size: 11px;
+    }
+}
+
+@media (max-width: 480px) {
+    .zip-preview-grid {
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 10px;
+    }
+
+    .zip-preview-card {
+        border-radius: 12px;
+    }
+}
+
+/* ============================================================================
+   Inline File Info Hint (Below h4, auto fade-out)
+   ============================================================================ */
+
+/* Positioning context for absolute hint */
+.section-heading {
+    position: relative;
+}
+
+.file-intro-inline-hint {
+    /* Absolute positioning to avoid layout shift */
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 12px;
+
+    text-align: center;
+    /* Match pricing-item-pro width (col-lg-4 = 33.33% container, section-heading is col-lg-8 = 66.67%, so 50% of parent) */
+    width: 50%;
+
+    /* Start hidden, fade in/out without layout shift */
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.6s ease-in-out, visibility 0.6s;
+    pointer-events: none;
+
+    /* Transparent glass effect - white glassmorphism like zip preview overlay */
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    border-radius: 12px;
+    /* Glass border with subtle glow */
+    border: 1.5px solid rgba(255, 255, 255, 0.8);
+    box-shadow:
+        0 8px 32px rgba(91, 104, 235, 0.15),
+        0 0 0 1px rgba(255, 255, 255, 0.3) inset;
+    /* Compact padding for 1-2 line layout */
+    padding: 12px 20px;
+    z-index: 10;
+}
+
+.file-intro-inline-hint.fade-in {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+}
+
+.file-intro-inline-hint.fade-out {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+/* Hover effect for clickable inline hint (ZIP files only) */
+.file-intro-inline-hint[style*="cursor: pointer"]:hover {
+    background: rgba(255, 255, 255, 0.95);
+    transform: translateX(-50%) translateY(-2px);
+    box-shadow: 0 8px 32px rgba(0, 123, 255, 0.25),
+                0 0 0 1px rgba(0, 123, 255, 0.1);
+    transition: all 0.2s ease;
+}
+
+.file-intro-inline-text {
+    font-size: 14px;
+    color: #2c3e50;
+    line-height: 1.6;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.file-intro-inline-text strong {
+    color: #1a1a1a;
+    font-weight: 600;
+}
+
+.file-intro-inline-text button {
+    background: #007bff;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    padding: 4px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: background 0.2s ease;
+    margin-left: 8px;
+}
+
+.file-intro-inline-text button:hover {
+    background: #0056b3;
+}
+
+/* Responsive: adjust hint width on small screens */
+@media (max-width: 991px) {
+    .file-intro-inline-hint {
+        /* On medium/small screens, match pricing-item width more flexibly */
+        width: 66.67%;
+        padding: 12px 16px;
+    }
+
+    .file-intro-inline-text {
+        font-size: 13px;
+    }
+
+    .file-intro-inline-text .hover-hint {
+        font-size: 12px;
+        flex-wrap: wrap;
+    }
+}
+
+/* ============================================================================
+   Preview Options Modal
+   ============================================================================ */
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+.preview-options-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    animation: fadeIn 0.2s ease-in-out;
+}
+
+.preview-options-content {
+    background: white;
+    border-radius: 12px;
+    padding: 30px;
+    max-width: 500px;
+    width: 90%;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+}
+
+.preview-options-content h3 {
+    margin: 0 0 15px 0;
+    font-size: 24px;
+    color: #333;
+}
+
+.preview-options-content > p {
+    margin: 0 0 20px 0;
+    color: #666;
+    font-size: 16px;
+}
+
+.preview-options-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 15px;
+}
+
+.preview-option-btn {
+    padding: 15px 20px;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: all 0.2s;
+}
+
+.preview-option-btn.primary {
+    background: #007bff;
+    color: white;
+}
+
+.preview-option-btn.primary:hover {
+    background: #0056b3;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3);
+}
+
+.preview-option-btn.secondary {
+    background: #f8f9fa;
+    color: #495057;
+    border: 1px solid #dee2e6;
+}
+
+.preview-option-btn.secondary:hover {
+    background: #e9ecef;
+    transform: translateY(-2px);
+}
+
+.preview-options-hint {
+    margin: 0;
+    font-size: 14px;
+    color: #999;
+    text-align: center;
+}
+
+/* ============================================================================
+   Responsive Styles
+   ============================================================================ */
+
+@media (max-width: 768px) {
+    .file-intro-inline-hint {
+        /* On mobile, use most of the width */
+        width: 90%;
+    }
+}
+
+/* ============================================================================
+   Loading Indicators
+   ============================================================================ */
+
+/* Loading spinner animation */
+@keyframes spin {
+    from {
+        transform: translate(-50%, -50%) rotate(0deg);
+    }
+    to {
+        transform: translate(-50%, -50%) rotate(360deg);
+    }
+}
+
+/* Thumbnail card loading state */
+.zip-preview-card.loading {
+    position: relative;
+    pointer-events: none;
+}
+
+.zip-preview-card.loading::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 32px;
+    height: 32px;
+    border: 3px solid rgba(255, 255, 255, 0.3);
+    border-top-color: #5b68eb;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    z-index: 10;
+}
+
+.zip-preview-card.loading::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(4px);
+    border-radius: 12px;
+    z-index: 9;
+}
+
+/* File viewer loading state */
+.zip-file-viewer-loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    z-index: 10;
+}
+
+.zip-file-viewer-spinner {
+    width: 48px;
+    height: 48px;
+    border: 4px solid rgba(255, 255, 255, 0.3);
+    border-top-color: #5b68eb;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+.zip-file-viewer-loading-text {
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 14px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+/* ============================================================================
+   Print Styles (hide overlay when printing)
+   ============================================================================ */
+
+@media print {
+    .zip-preview-overlay,
+    .zip-file-viewer,
+    .file-intro-inline-hint {
+        display: none !important;
+    }
+}

@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-01-11 17:55+0800\n"
+"POT-Creation-Date: 2026-01-22 15:39+0800\n"
 "PO-Revision-Date: 2025-12-17 09:22+0800\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -40,29 +40,6 @@ msgstr ""
 
 #, python-brace-format
 msgid "Failed to write JSON file: {error}"
-msgstr ""
-
-#, python-brace-format
-msgid "{file} does not exist!"
-msgstr ""
-
-msgid "Error: Upload functionality requires Upload addon (addons/Upload.py)"
-msgstr ""
-
-msgid ""
-"If a firewall notification appears, please allow the application to "
-"connect.\n"
-msgstr ""
-
-msgid ""
-"📁 Sharing folder as ZIP - please keep folder contents unchanged during "
-"transfer\n"
-msgstr ""
-
-msgid "🔐 End-to-end encryption enabled\n"
-msgstr ""
-
-msgid "🧅 Tor Privacy Mode Active"
 msgstr ""
 
 msgid "You can stop the upload at any time and resume it later.\n"
@@ -103,6 +80,9 @@ msgid ""
 "Please use the same parameters as the original upload."
 msgstr ""
 
+msgid "Unknown error"
+msgstr ""
+
 msgid ""
 "Your user points are not enough. Please top up on our website "
 "(https://fastfilelink.com/)."
@@ -112,6 +92,65 @@ msgid "Upload not allowed."
 msgstr ""
 
 msgid "Retrying...\n"
+msgstr ""
+
+msgid "Error: VFS mode requires a file or folder path"
+msgstr ""
+
+msgid "VFS server started successfully!\n"
+msgstr ""
+
+#, python-brace-format
+msgid "Please share the URI below to access the {type} remotely:\n"
+msgstr ""
+
+#, python-brace-format
+msgid "🔐 Authentication enabled - Username: {authUser}\n"
+msgstr ""
+
+msgid ""
+"VFS server is running on loopback (127.0.0.1) - only accessible from this"
+" machine."
+msgstr ""
+
+msgid "Please keep the application running for remote access."
+msgstr ""
+
+msgid "Press Ctrl+C to stop the server.\n"
+msgstr ""
+
+msgid ""
+"\n"
+"Shutting down VFS server..."
+msgstr ""
+
+msgid "VFS server stopped."
+msgstr ""
+
+#, python-brace-format
+msgid "{file} does not exist!"
+msgstr ""
+
+msgid "Error: Upload functionality requires Upload addon (addons/Upload.py)"
+msgstr ""
+
+msgid "User email address has been lost"
+msgstr ""
+
+msgid ""
+"If a firewall notification appears, please allow the application to "
+"connect.\n"
+msgstr ""
+
+msgid ""
+"📁 Sharing folder as ZIP - please keep folder contents unchanged during "
+"transfer\n"
+msgstr ""
+
+msgid "🔐 End-to-end encryption enabled\n"
+msgstr ""
+
+msgid "🧅 Tor Privacy Mode Active"
 msgstr ""
 
 msgid "Unable to create tunnel by your tunnel configuration."
@@ -130,9 +169,6 @@ msgstr ""
 
 #, python-brace-format
 msgid "Upload failed: {error}"
-msgstr ""
-
-msgid "Unknown error"
 msgstr ""
 
 msgid ""
@@ -157,7 +193,7 @@ msgid ""
 "Exiting on user request (Ctrl+C)..."
 msgstr ""
 
-msgid "User email address has been lost"
+msgid "Unable to get uploaded link"
 msgstr ""
 
 #, python-brace-format
@@ -336,6 +372,11 @@ msgstr ""
 msgid "Display QR code in terminal (default) or save to FILE (e.g., qr.png)"
 msgstr ""
 
+msgid ""
+"Start VFS server and provide vfs:// URI instead of HTTPS link (P2P mode "
+"only, works with --port)"
+msgstr ""
+
 #, python-brace-format
 msgid "Invalid log level '{logLevel}'. Valid levels are: {validLevels}"
 msgstr ""
@@ -439,6 +480,18 @@ msgstr ""
 msgid ""
 "Use --auth-password to enable authentication (username defaults to "
 "'{defaultUser}' if not specified)"
+msgstr ""
+
+msgid "Error: --vfs cannot be used with --upload"
+msgstr ""
+
+msgid "VFS mode is only for P2P sharing. Remove --upload to use --vfs"
+msgstr ""
+
+msgid "Error: --vfs does not support stdin input"
+msgstr ""
+
+msgid "Please specify a file or folder path instead of \"-\""
 msgstr ""
 
 msgid "⚠️  IMPORTANT: ENCRYPTION KEY"
@@ -814,163 +867,53 @@ msgstr ""
 msgid "Attempting WebRTC download..."
 msgstr ""
 
-#~ msgid "Unsupported architecture: {machine}"
-#~ msgstr ""
 
-#~ msgid "No compatible glibc archive found; using APE (ffl.com)"
-#~ msgstr ""
 
-#~ msgid "Unknown file format: {path}"
-#~ msgstr ""
 
-#~ msgid "Binary '{name}' not found in archive"
-#~ msgstr ""
 
-#~ msgid "Failed to backup current binary: {error}"
-#~ msgstr ""
 
-#~ msgid "Failed to install new binary: {error}"
-#~ msgstr ""
 
-#~ msgid "Could not delete backup file: {path}"
-#~ msgstr ""
 
-#~ msgid "Failed to fetch release assets: {error}"
-#~ msgstr ""
 
-#~ msgid "No assets found for release {tag}"
-#~ msgstr ""
 
-#~ msgid "Downloading: {percent:.1f}%"
-#~ msgstr ""
 
-#~ msgid "Failed to download asset: {error}"
-#~ msgstr ""
 
-#~ msgid "Platform: {os} {arch}"
-#~ msgstr ""
 
-#~ msgid "glibc version: {version}"
-#~ msgstr ""
 
-#~ msgid "Current binary: {path}"
-#~ msgstr ""
 
-#~ msgid "Fetching release information..."
-#~ msgstr ""
 
-#~ msgid "Found {count} assets"
-#~ msgstr ""
 
-#~ msgid "Error: No compatible asset found for your platform"
-#~ msgstr ""
 
-#~ msgid "Available assets:"
-#~ msgstr ""
 
-#~ msgid "Selected asset: {name}"
-#~ msgstr ""
 
-#~ msgid "Downloading from: {url}"
-#~ msgstr ""
 
-#~ msgid "Download complete!"
-#~ msgstr ""
 
-#~ msgid "Extracting binary..."
-#~ msgstr ""
 
-#~ msgid "Failed to extract binary from archive"
-#~ msgstr ""
 
-#~ msgid "Extracted: {name}"
-#~ msgstr ""
 
-#~ msgid "Installing new version..."
-#~ msgstr ""
 
-#~ msgid "Installation complete!"
-#~ msgstr ""
 
-#~ msgid ""
-#~ "Cannot upgrade when running from Python"
-#~ " source. Please use: pip install "
-#~ "--upgrade fastfilelink"
-#~ msgstr ""
 
-#~ msgid "Unsupported operating system: {system}"
-#~ msgstr ""
 
-#~ msgid "Detected APE variant (fflo.com), will install same variant"
-#~ msgstr ""
 
-#~ msgid "Detected APE variant (ffl.com), will install same variant"
-#~ msgstr ""
 
-#~ msgid "Error: {error}"
-#~ msgstr ""
 
-#~ msgid "Please restart the application to use the new version."
-#~ msgstr ""
 
-#~ msgid "Upgrade to latest version or specified version (e.g., --upgrade v3.7.5)"
-#~ msgstr ""
 
-#~ msgid "Current executable: {path}"
-#~ msgstr ""
 
-#~ msgid "Target version to upgrade to (default: latest)"
-#~ msgstr ""
 
-#~ msgid "Upgrading to native variant for {os}"
-#~ msgstr ""
 
-#~ msgid "Could not determine target version from server"
-#~ msgstr ""
 
-#~ msgid "Failed to execute install script"
-#~ msgstr ""
 
-#~ msgid "Unexpected error during installation"
-#~ msgstr ""
 
-#~ msgid ""
-#~ "LIEF library is required to detect "
-#~ "glibc version from native Linux "
-#~ "binaries. Please install LIEF: pip "
-#~ "install lief"
-#~ msgstr ""
 
-#~ msgid ""
-#~ "LIEF library is required to detect "
-#~ "architecture from native macOS binaries. "
-#~ "Please install LIEF: pip install lief"
-#~ msgstr ""
 
-#~ msgid "Detected Linux native variant (glibc auto-detect)"
-#~ msgstr ""
 
-#~ msgid "Detected macOS native variant (architecture auto-detect)"
-#~ msgstr ""
 
-#~ msgid "Upgrading to Linux native variant (glibc 2.39)"
-#~ msgstr ""
 
-#~ msgid "Upgrading to Linux native variant (glibc 2.28)"
-#~ msgstr ""
 
-#~ msgid "Detected APE variant (fflo.com), will replace with same variant"
-#~ msgstr ""
 
-#~ msgid "Detected APE variant (ffl.com), will replace with same variant"
-#~ msgstr ""
 
-#~ msgid "Unsupported operating system"
-#~ msgstr ""
 
-#~ msgid "Choose a file or folder you want to share"
-#~ msgstr ""
 
-#~ msgid "Downloading {filename} ({fileSize:,} bytes)"
-#~ msgstr ""
 

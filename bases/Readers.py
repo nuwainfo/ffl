@@ -353,7 +353,8 @@ class SegmentIndex:
         totalSize: int,
         centralDirStart: int,
         centralDirSize: int,
-        metadataHash: str = None
+        metadataHash: str = None,
+        entriesMap: dict = None
     ):
         """
         Initialize with pre-calculated segment coordinates
@@ -365,6 +366,7 @@ class SegmentIndex:
             centralDirStart: Offset where central directory starts
             centralDirSize: Size of central directory
             metadataHash: Deterministic fingerprint of folder content (arcname/size/mtime)
+            entriesMap: Pre-built map of arcname -> entry for O(1) lookup (optional)
         """
         self.entries = entries
         self.segments = segments
@@ -373,6 +375,26 @@ class SegmentIndex:
         self.centralDirSize = centralDirSize
         # Deterministic fingerprint of folder content for resume validation
         self.metadataHash = metadataHash
+        # O(1) lookup map: arcname -> entry (built during index construction)
+        self._entriesMap = entriesMap if entriesMap is not None else {}
+
+    def getEntry(self, arcname: str) -> dict:
+        """
+        Get entry by arcname (O(1) lookup)
+
+        Args:
+            arcname: File path within ZIP
+
+        Returns:
+            dict: Entry dict with metadata (size, data_offset, etc.)
+
+        Raises:
+            FileNotFoundError: If arcname doesn't exist
+        """
+        entry = self._entriesMap.get(arcname)
+        if entry is None:
+            raise FileNotFoundError(f"File not found in ZIP: {arcname}")
+        return entry
 
     @classmethod
     def computeMetadataHash(cls, rawEntries: list) -> str:
@@ -428,6 +450,7 @@ class SegmentIndex:
         metadataHash = cls.computeMetadataHash(rawEntries)
 
         entries = []
+        entriesMap = {} # Build map while building entries (O(1) lookup)
         segments = []
         offset = 0
 
@@ -493,6 +516,7 @@ class SegmentIndex:
                 offset += descriptorLength
 
             entries.append(entry)
+            entriesMap[entry['arcname']] = entry # Add to map for O(1) lookup
 
         # Phase 2: Calculate CD segments
         centralDirStart = offset
@@ -549,7 +573,15 @@ class SegmentIndex:
             "SegmentIndex built: totalSize=%s, entries=%s, segments=%s", totalSize, len(entries), len(segments)
         )
 
-        return cls(entries, segments, totalSize, centralDirStart, centralDirSize, metadataHash=metadataHash)
+        return cls(
+            entries,
+            segments,
+            totalSize,
+            centralDirStart,
+            centralDirSize,
+            metadataHash=metadataHash,
+            entriesMap=entriesMap
+        )
 
     def locate(self, offset: int) -> dict:
         """
@@ -649,6 +681,16 @@ class SourceReader:
         """Whether the reader has been consumed and cannot be read again"""
         raise NotImplementedError
 
+    @property
+    def supportManifest(self) -> bool:
+        """Whether this reader supports /zip/manifest endpoint"""
+        return False
+
+    @property
+    def supportFileAccess(self) -> bool:
+        """Whether this reader supports /zip/file endpoint"""
+        return False
+
     @classmethod
     def build(cls, path: str, fileName: str = None, compression: str = None) -> 'SourceReader':
         """
@@ -733,6 +775,43 @@ class SourceReader:
                  None if content doesn't exist or can't be hashed
         """
         raise NotImplementedError
+
+    def getManifestEntry(self, fileName: str) -> dict:
+        """
+        Get manifest entry by fileName
+        Only available for readers with supportFileAccess=True
+
+        Args:
+            fileName: Name of the file to get entry for
+
+        Returns:
+            dict: Entry dict with metadata
+
+        Raises:
+            NotImplementedError: If supportFileAccess is False
+            FileNotFoundError: If fileName doesn't exist
+        """
+        raise NotImplementedError(f"{self.__class__.__name__} does not support file access")
+
+    def iterFileChunks(self, fileName: str, chunkSize: int, start: int = 0, end: int = None):
+        """
+        Iterate over chunks of a specific file within the content
+        Only available for readers with supportFileAccess=True
+
+        Args:
+            fileName: Name of the file to extract
+            chunkSize: Size of each chunk in bytes
+            start: Starting byte offset within the file (default: 0)
+            end: Ending byte offset within the file (inclusive, default: end of file)
+
+        Yields:
+            bytes: Chunks of the requested file
+
+        Raises:
+            NotImplementedError: If supportFileAccess is False
+            FileNotFoundError: If fileName doesn't exist in the content
+        """
+        raise NotImplementedError(f"{self.__class__.__name__} does not support file access")
 
 
 class FileSourceReader(SourceReader):
@@ -1418,6 +1497,90 @@ class ZipDirSourceReader(CachingMixin, SourceReader):
     def consumed(self) -> bool:
         """Directories can be read multiple times"""
         return False
+
+    @property
+    def supportManifest(self) -> bool:
+        return True
+
+    @property
+    def supportFileAccess(self) -> bool:
+        return True
+
+    @property
+    def manifest(self):
+        return self._entries if self._entries else []
+
+    def getManifestEntry(self, fileName: str) -> dict:
+        """
+        Get manifest entry by fileName (O(1) lookup)
+
+        Args:
+            fileName: File path within ZIP (arcname)
+
+        Returns:
+            dict: Entry dict with metadata (size, data_offset, etc.)
+
+        Raises:
+            FileNotFoundError: If fileName doesn't exist in manifest
+        """
+        if not self._segmentIndex:
+            raise FileNotFoundError(f"No index available (deflate mode)")
+
+        return self._segmentIndex.getEntry(fileName)
+
+    def iterFileChunks(self, fileName: str, chunkSize: int, start: int = 0, end: int = None):
+        """
+        Iterate over chunks of a specific file within the ZIP
+
+        Args:
+            fileName: File path within ZIP (arcname)
+            chunkSize: Size of each chunk in bytes
+            start: Starting byte offset within the file (default: 0)
+            end: Ending byte offset within the file (inclusive, default: end of file)
+
+        Yields:
+            bytes: Chunks of the requested file
+
+        Raises:
+            FileNotFoundError: If fileName doesn't exist in the ZIP
+        """
+        # Get entry using O(1) map lookup
+        entry = self.getManifestEntry(fileName)
+
+        # Get file metadata from entry
+        fileSize = entry.get('size', 0)
+        dataOffset = entry.get('data_offset', 0) # Offset within ZIP stream
+
+        # Calculate byte range within file
+        fileStart = start if start is not None else 0
+        fileEnd = end if end is not None else fileSize - 1
+
+        # Validate range
+        if fileStart >= fileSize:
+            raise ValueError(f"Start offset {fileStart} beyond file size {fileSize}")
+
+        if fileEnd >= fileSize:
+            fileEnd = fileSize - 1
+
+        # Calculate ZIP stream offsets
+        zipStart = dataOffset + fileStart
+        zipEnd = dataOffset + fileEnd
+
+        # Stream requested bytes from ZIP
+        bytesToRead = zipEnd - zipStart + 1
+        bytesRead = 0
+
+        for chunk in self.iterChunks(chunkSize, start=zipStart):
+            # Don't yield more than requested
+            if bytesRead + len(chunk) > bytesToRead:
+                chunk = chunk[:bytesToRead - bytesRead]
+
+            yield chunk
+            bytesRead += len(chunk)
+
+            # Stop when we've read all requested bytes
+            if bytesRead >= bytesToRead:
+                break
 
     def _yieldChunks(self, buffer, chunkSize):
         """

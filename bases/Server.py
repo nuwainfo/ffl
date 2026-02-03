@@ -252,6 +252,9 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 '/debug/log': self._handleDebugLog,
             })
 
+        # Allow addons to register additional endpoints
+        self._registerAdditionalEndpoints()
+
         # One request one handler, so _extraHeaders can be safely used in self.end_headers.
         self._extraHeaders = {}
 
@@ -267,6 +270,13 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
     def auth(self) -> HTTPAuth:
         """Return HTTPAuth from server config for AuthMixin."""
         return HTTPAuth(user=self.server.config.authUser, password=self.server.config.authPassword)
+
+    def _registerAdditionalEndpoints(self):
+        """
+        Hook method for addons to register additional endpoints.
+        Override this method in enhanced handler classes to add custom endpoints.
+        """
+        pass
 
     def _normalizeRequestPath(self):
         pasedURL = urlparse(self.path)
@@ -604,7 +614,13 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         self.wfile.write(content.encode())
 
     def _handleE2EETags(self, args):
-        """Handle /e2ee/tags endpoint - returns tags for chunk range"""
+        """Handle /e2ee/tags endpoint - returns tags for chunk range
+
+        Query parameters:
+            start: Starting chunk index
+            count: Number of tags to return
+            streamId: Stream identifier (optional, default: "global")
+        """
         if not self.server.config.e2eeEnabled:
             # Return silent 404 if E2EE not enabled
             self._handle404(f"[E2EE] E2EE not enabled, returning silent 404 for /e2ee/tags")
@@ -614,17 +630,18 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             # Parse query parameters from args (already parsed by do_GET)
             startChunk = int(args.get('start', ['0'])[0])
             count = int(args.get('count', ['0'])[0])
+            streamId = args.get('streamId', ['global'])[0]  # Default to "global" for backwards compatibility
 
-            logger.debug(f"[E2EE] Tags request: start={startChunk}, count={count}")
+            logger.debug(f"[E2EE] Tags request: streamId={streamId}, start={startChunk}, count={count}")
 
             if count <= 0:
                 logger.warning(f"[E2EE] Invalid count parameter: {count}")
                 self.send_error(HTTPStatus.BAD_REQUEST, f"Invalid count parameter: {count}")
                 return
 
-            # Load all tags from E2EEManager
-            allTags = self.server.e2eeManager.getTags("global")
-            logger.debug(f"[E2EE] Total tags available: {len(allTags)}")
+            # Load all tags from E2EEManager for specified stream
+            allTags = self.server.e2eeManager.getTags(streamId)
+            logger.debug(f"[E2EE] Total tags available for stream '{streamId}': {len(allTags)}")
 
             # Filter tags by range
             endChunk = startChunk + count

@@ -28,8 +28,6 @@ import subprocess
 import sys
 import zlib
 
-import babel
-
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -42,7 +40,10 @@ excludedPackages = ['numpy.libs', "av", "av.lib", 'mbedtls']
 if sys.platform == 'win32':
     excludedPackages.append('lief')
 
-hiddenImports = ['bases.crypto.Cryptography']
+hiddenImports = [
+    'bases.crypto.Cryptography',
+    'addons.Preview',
+]
 
 if sys.platform == 'darwin':
     hiddenImports.extend(['Foundation', 'AppKit'])
@@ -53,9 +54,12 @@ packageData = [
     ('static/assets/gooey/program_icon.png', 'static/assets/gooey'), # gooey program icon
     ('static/assets/gooey/config_icon.png', 'static/assets/gooey'), # gooey config icon    
     ('static/assets/gooey/running_icon.png', 'static/assets/gooey'), # gooey running icon
-    ('static/index.html', 'static'),
+    ('static/assets/thumbnails/Thumb.png', 'static/assets'),
+    ('static/assets/thumbnails/Video.png', 'static/assets'),
     ('static/assets/mitm.html', 'static/assets'),
     ('static/assets/sw.js', 'static/assets'),
+    ('static/index.html', 'static'),
+    ('static/js/WebRTC.js', 'static/js'),
     ('locales', 'locales'), # i18n translation files
 ]
 

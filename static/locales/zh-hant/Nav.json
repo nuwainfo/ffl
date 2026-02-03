@@ -10,11 +10,12 @@
     "features": "功能",
     "tutorial": "教學",
     "free": "免費下載",
-    "pricing": "方案",
+    "pricing": "訂價",
     "support": "支援",
     "language": "語言",
     "blog": "部落格",
     "account":"帳號",
     "clientArea": "個人設定",
+    "logout":"登出",
     "menu": "選單"
 }

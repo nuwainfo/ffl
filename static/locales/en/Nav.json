@@ -16,5 +16,6 @@
     "blog": "Blog",
     "account":"Account",
     "clientArea": "Client Area",
+    "logout":"logout",
     "menu": "Menu"
 }

@@ -1,5 +1,11 @@
 {
     "period": ".",
     "and":" and ",
-    "fastFileLink":"FastFileLink"
+    "fastFileLink":"FastFileLink",
+    "first":"first",
+    "previous":"previous",
+    "page":"Page",
+    "of":"of",
+    "next":"next",
+    "last":"last"
 }

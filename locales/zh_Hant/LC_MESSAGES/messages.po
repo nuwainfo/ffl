@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-01-11 17:55+0800\n"
+"POT-Creation-Date: 2026-01-22 15:39+0800\n"
 "PO-Revision-Date: 2025-12-21 08:43+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -23,16 +23,18 @@ msgstr "正在瀏覽器中開啟邀請頁面..."
 
 #, python-brace-format
 msgid "QR code saved to: {filePath}"
-msgstr ""
+msgstr "QR code 已儲存到：{filePath}"
 
 msgid ""
 "\n"
 "QR Code:\n"
 msgstr ""
+"\n"
+"QR Code：\n"
 
 #, python-brace-format
 msgid "Error generating QR code: {error}"
-msgstr ""
+msgstr "產生 QR code 時出錯：{error}"
 
 #, python-brace-format
 msgid "Sharing information saved to {jsonFile}"
@@ -41,29 +43,6 @@ msgstr "分享資訊已儲存至 {jsonFile}"
 #, python-brace-format
 msgid "Failed to write JSON file: {error}"
 msgstr "無法寫入 JSON 檔案：{error}"
-
-#, python-brace-format
-msgid "{file} does not exist!"
-msgstr "{file} 不存在！"
-
-msgid "Error: Upload functionality requires Upload addon (addons/Upload.py)"
-msgstr "錯誤：上傳功能需要 Upload 附加元件 (addons/Upload.py)"
-
-msgid ""
-"If a firewall notification appears, please allow the application to "
-"connect.\n"
-msgstr "如果出現防火牆通知，請允許應用程式連線。\n"
-
-msgid ""
-"📁 Sharing folder as ZIP - please keep folder contents unchanged during "
-"transfer\n"
-msgstr "📁 以 ZIP 格式分享資料夾 - 請在傳輸過程中保持資料夾內容不變\n"
-
-msgid "🔐 End-to-end encryption enabled\n"
-msgstr "🔐 已啟用端對端加密\n"
-
-msgid "🧅 Tor Privacy Mode Active"
-msgstr "🧅 Tor 隱私模式已啟用"
 
 msgid "You can stop the upload at any time and resume it later.\n"
 msgstr "您可以隨時停止上傳並稍後繼續。\n"
@@ -112,6 +91,9 @@ msgstr ""
 "原始上傳使用 \"{originalValue}\"，但要求使用 \"{requestedValue}\"。\n"
 "請使用與原始上傳相同的參數。"
 
+msgid "Unknown error"
+msgstr "未知錯誤"
+
 msgid ""
 "Your user points are not enough. Please top up on our website "
 "(https://fastfilelink.com/)."
@@ -122,6 +104,67 @@ msgstr "不允許上傳。"
 
 msgid "Retrying...\n"
 msgstr "正在重試...\n"
+
+msgid "Error: VFS mode requires a file or folder path"
+msgstr "錯誤：VFS 模式需要檔案或資料夾路徑"
+
+msgid "VFS server started successfully!\n"
+msgstr "VFS 伺服器已成功啟動！\n"
+
+#, python-brace-format
+msgid "Please share the URI below to access the {type} remotely:\n"
+msgstr "請分享以下 URI 以遠端存取{type}：\n"
+
+#, python-brace-format
+msgid "🔐 Authentication enabled - Username: {authUser}\n"
+msgstr "🔐 已啟用身分驗證 - 使用者名稱：{authUser}\n"
+
+msgid ""
+"VFS server is running on loopback (127.0.0.1) - only accessible from this"
+" machine."
+msgstr "VFS 伺服器正在環回位址（127.0.0.1）上執行 - 僅可從本機存取。"
+
+msgid "Please keep the application running for remote access."
+msgstr "請保持應用程式執行以進行遠端存取。"
+
+msgid "Press Ctrl+C to stop the server.\n"
+msgstr "按 Ctrl+C 停止伺服器。\n"
+
+msgid ""
+"\n"
+"Shutting down VFS server..."
+msgstr ""
+"\n"
+"正在關閉 VFS 伺服器..."
+
+msgid "VFS server stopped."
+msgstr "VFS 伺服器已停止。"
+
+#, python-brace-format
+msgid "{file} does not exist!"
+msgstr "{file} 不存在！"
+
+msgid "Error: Upload functionality requires Upload addon (addons/Upload.py)"
+msgstr "錯誤：上傳功能需要 Upload 附加元件 (addons/Upload.py)"
+
+msgid "User email address has been lost"
+msgstr "使用者電子郵件地址已遺失"
+
+msgid ""
+"If a firewall notification appears, please allow the application to "
+"connect.\n"
+msgstr "如果出現防火牆通知，請允許應用程式連線。\n"
+
+msgid ""
+"📁 Sharing folder as ZIP - please keep folder contents unchanged during "
+"transfer\n"
+msgstr "📁 以 ZIP 格式分享資料夾 - 請在傳輸過程中保持資料夾內容不變\n"
+
+msgid "🔐 End-to-end encryption enabled\n"
+msgstr "🔐 已啟用端對端加密\n"
+
+msgid "🧅 Tor Privacy Mode Active"
+msgstr "🧅 Tor 隱私模式已啟用"
 
 msgid "Unable to create tunnel by your tunnel configuration."
 msgstr "無法使用您的通道配置建立通道。"
@@ -140,9 +183,6 @@ msgstr "正在建立通道連線...\n"
 #, python-brace-format
 msgid "Upload failed: {error}"
 msgstr "上傳失敗：{error}"
-
-msgid "Unknown error"
-msgstr "未知錯誤"
 
 msgid ""
 "Please share the link below with the person you'd like to share the file "
@@ -168,8 +208,8 @@ msgstr ""
 "\n"
 "應使用者要求退出 (Ctrl+C)..."
 
-msgid "User email address has been lost"
-msgstr "使用者電子郵件地址已遺失"
+msgid "Unable to get uploaded link"
+msgstr "無法取得上傳連結"
 
 #, python-brace-format
 msgid "Downloaded: {outputPath}"
@@ -291,12 +331,12 @@ msgid "Support: {supportURL}"
 msgstr "支援：{supportURL}"
 
 msgid "Choose a file or folder you want to share (use '-' for stdin)"
-msgstr ""
+msgstr "選擇要分享的檔案或資料夾（使用 '-' 表示標準輸入）"
 
 msgid ""
 "Specify custom download filename (default: original filename for files, "
 "folder.zip for folders, stdin-YYYYMMDD-HHMMSS.bin for stdin)"
-msgstr ""
+msgstr "指定自訂下載檔案名稱（預設：檔案使用原始檔案名稱，資料夾使用 folder.zip，標準輸入使用 stdin-YYYYMMDD-HHMMSS.bin）"
 
 msgid "Output link and settings to a JSON file"
 msgstr "將連結和設定輸出到 JSON 檔案"
@@ -349,7 +389,12 @@ msgid "Open invite page in browser with the sharing link"
 msgstr "在瀏覽器中開啟包含分享連結的邀請頁面"
 
 msgid "Display QR code in terminal (default) or save to FILE (e.g., qr.png)"
-msgstr ""
+msgstr "在終端機中顯示 QR code（預設）或儲存到檔案（例如 qr.png）"
+
+msgid ""
+"Start VFS server and provide vfs:// URI instead of HTTPS link (P2P mode "
+"only, works with --port)"
+msgstr "啟動 VFS 伺服器並提供 vfs:// URI 而不是 HTTPS 連結（僅限 P2P 模式，與 --port 一起使用）"
 
 #, python-brace-format
 msgid "Invalid log level '{logLevel}'. Valid levels are: {validLevels}"
@@ -381,7 +426,7 @@ msgid ""
 "Format: http://[user:pass@]host:port/path (e.g., "
 "http://app:token@127.0.0.1:12345/events). Auth credentials are optional "
 "but recommended."
-msgstr ""
+msgstr "用於將事件轉發到父程序或外部服務的 Webhook URL。格式：http://[user:pass@]host:port/path（例如：http://app:token@127.0.0.1:12345/events）。認證憑據是可選的，但建議使用。"
 
 msgid "FastFileLink makes file sharing fast, simple, and secure."
 msgstr "快檔連結 讓檔案分享快速、簡單且安全。"
@@ -424,9 +469,8 @@ msgstr "指定二進位檔路徑時的目標版本（預設：最新）"
 msgid "Error: Invalid proxy format: {proxy}"
 msgstr "錯誤：無效的代理格式：{proxy}"
 
-#, fuzzy
 msgid "Error: --upload option requires Upload addon (addons/Upload.py)"
-msgstr "錯誤：上傳功能需要 Upload 附加元件 (addons/Upload.py)"
+msgstr "錯誤：--upload 選項需要 Upload 附加元件（addons/Upload.py）"
 
 msgid ""
 "Please install the Upload addon (use Standard/Plus version) or use P2P "
@@ -459,6 +503,18 @@ msgid ""
 "Use --auth-password to enable authentication (username defaults to "
 "'{defaultUser}' if not specified)"
 msgstr "使用 --auth-password 啟用身份驗證（如果未指定，使用者名稱預設為 '{defaultUser}'）"
+
+msgid "Error: --vfs cannot be used with --upload"
+msgstr "錯誤：--vfs 不能與 --upload 一起使用"
+
+msgid "VFS mode is only for P2P sharing. Remove --upload to use --vfs"
+msgstr "VFS 模式僅用於 P2P 分享。移除 --upload 以使用 --vfs"
+
+msgid "Error: --vfs does not support stdin input"
+msgstr "錯誤：--vfs 不支援標準輸入"
+
+msgid "Please specify a file or folder path instead of \"-\""
+msgstr "請指定檔案或資料夾路徑，而不是 \"-\""
 
 msgid "⚠️  IMPORTANT: ENCRYPTION KEY"
 msgstr "⚠️  重要：加密金鑰"
@@ -743,7 +799,7 @@ msgid "We will fix the problem as soon as possible.\n"
 msgstr "我們會盡快修復問題。\n"
 
 msgid "WebRTC connections are disabled by server policy"
-msgstr ""
+msgstr "伺服器原則已停用 WebRTC 連線"
 
 msgid "P2P direct"
 msgstr "P2P 直連"
@@ -816,7 +872,7 @@ msgstr "無效的加密金鑰：{error}"
 
 #, python-brace-format
 msgid "Downloading {filename} ({fileSize})"
-msgstr ""
+msgstr "正在下載 {filename}（{fileSize}）"
 
 #, python-brace-format
 msgid "Resuming WebRTC download from {resumePos} / {totalSize}"
@@ -843,48 +899,18 @@ msgstr "不支援 WebRTC，使用 HTTP 下載..."
 msgid "Attempting WebRTC download..."
 msgstr "正在嘗試 WebRTC 下載..."
 
-#~ msgid "Upgrade to latest version or specified version (e.g., --upgrade v3.7.5)"
-#~ msgstr "升級到最新版本或指定版本（例如：--upgrade v3.7.5）"
 
-#~ msgid "Current executable: {path}"
-#~ msgstr ""
 
-#~ msgid "Target version to upgrade to (default: latest)"
-#~ msgstr "要升級到的目標版本（預設：最新版）"
 
-#~ msgid "Could not determine target version from server"
-#~ msgstr "無法從伺服器確定目標版本"
 
-#~ msgid "Failed to execute install script"
-#~ msgstr "執行安裝腳本失敗"
 
-#~ msgid "Unexpected error during installation"
-#~ msgstr "安裝時發生意外錯誤"
 
-#~ msgid "Detected Linux native variant (glibc auto-detect)"
-#~ msgstr "偵測到 Linux 原生變體（glibc 自動偵測）"
 
-#~ msgid "Detected macOS native variant (architecture auto-detect)"
-#~ msgstr "偵測到 macOS 原生變體（架構自動偵測）"
 
-#~ msgid "Upgrading to Linux native variant (glibc 2.39)"
-#~ msgstr "升級到 Linux 原生變體（glibc 2.39）"
 
-#~ msgid "Upgrading to Linux native variant (glibc 2.28)"
-#~ msgstr "升級到 Linux 原生變體（glibc 2.28）"
 
-#~ msgid "Detected APE variant (fflo.com), will replace with same variant"
-#~ msgstr "偵測到 APE 變體（fflo.com），將以相同變體替換"
 
-#~ msgid "Detected APE variant (ffl.com), will replace with same variant"
-#~ msgstr "偵測到 APE 變體（ffl.com），將以相同變體替換"
 
-#~ msgid "Unsupported operating system"
-#~ msgstr "不支援的作業系統"
 
-#~ msgid "Choose a file or folder you want to share"
-#~ msgstr "選擇您想要分享的檔案或資料夾"
 
-#~ msgid "Downloading {filename} ({fileSize:,} bytes)"
-#~ msgstr "正在下載 {filename}（{fileSize:,} 位元組）"
 

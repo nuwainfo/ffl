@@ -110,13 +110,16 @@
             "savingFile": "储存档案中...",
             "creatingDownload": "建立下载中...",
             "downloadingPercent": "透过P2P下载中：{{percent}}%",
-            "downloading": "透过P2P下载中..."
+            "downloading": "透过P2P下载中...",
+            "readyToDownload": "下载已准备完成"
         },
         "connection": {
             "serverRelay": "使用伺服器中继下载",
             "waitingPeer": "等待对等节点 ({{seconds}}秒)",
             "retrying": "重试P2P连线",
-            "directP2p": "直接P2P传输"
+            "directP2p": "直接P2P传输",
+            "p2pReady": "P2P连线已就绪",
+            "relayReady": "伺服器中继已就绪"
         },
         "download": {
             "startShortly": "您的下载将很快开始。",
@@ -150,5 +153,40 @@
     "errors": {
         "folder_changed": "分享的资料夹内容在传输过程中已变更。档案拥有者需要重新分享该资料夹。",
         "unknown": "传输过程中发生错误。"
+    },
+    "zipPreview": {
+        "button": "预览内容",
+        "archiveContents": "压缩档内容",
+        "loading": "载入中...",
+        "loadingContents": "载入压缩档内容中...",
+        "startDownload": "开始下载",
+        "closePreview": "关闭预览",
+        "noFiles": "找不到可预览的档案",
+        "file": "档案",
+        "fileNumber": "档案 #{{index}}",
+        "loadFailed": "载入压缩档内容失败",
+        "filesCount": "{{count}} 个档案",
+        "filesCount_plural": "{{count}} 个档案",
+        "filesSizeCount": "{{count}} 个档案 • {{size}}",
+        "optionsTitle": "预览选项",
+        "optionsMessage": "您的下载正在进行中。您希望如何预览？",
+        "continueDownloading": "继续下载同时预览（建议）",
+        "previewOnly": "仅预览（取消当前下载）",
+        "optionsHint": "注意：「仅预览」将会舍弃已下载的进度并重新载入页面。",
+        "hint": {
+            "images": "图片",
+            "otherFiles": "其他档案",
+            "inlineDetails": "查看详情",
+            "inlinePreview": "预览内容"
+        },
+        "badge": {
+            "ready": "就绪",
+            "error": "错误",
+            "waiting": "等待中"
+        },
+        "actions": {
+            "viewFullSize": "检视原图",
+            "downloadFile": "下载档案"
+        }
     }
 }

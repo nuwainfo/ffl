@@ -1,5 +1,11 @@
 {
     "period": "。",
     "and":"和",
-    "fastFileLink":"快檔連結"
+    "fastFileLink":"快檔連結",
+    "first":"第一頁",
+    "previous":"前一頁",
+    "page":"頁碼",
+    "of":"/",
+    "next":"下一頁",
+    "last":"最後一頁"
 }

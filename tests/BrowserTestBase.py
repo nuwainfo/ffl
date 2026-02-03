@@ -47,7 +47,7 @@ from .CoreTestBase import FastFileLinkTestBase, generateRandomFile, getFileHash
 # ---------------------------
 class BrowserTestBase(FastFileLinkTestBase):
     """Base class for browser-based download tests (Chrome, Firefox)"""
-    
+
     USE_BLOB_THRESHOLD = 10 * 1024 * 1024 # 10MB, see static/index.html USE_BLOB_THRESHOLD
 
     DEFAULT_FILE_SIZE = USE_BLOB_THRESHOLD + 2 * 1024 * 1024 # > USE_BLOB_THRESHOLD, so use StreamSaver
@@ -131,7 +131,7 @@ class BrowserTestBase(FastFileLinkTestBase):
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-gpu')
         options.add_argument('--window-size=1920,1080')
-        options.add_argument("--disable-cache")  # Optional, not always effective
+        options.add_argument("--disable-cache") # Optional, not always effective
         options.add_experimental_option("prefs", prefs)
         options.set_capability('goog:loggingPrefs', {'browser': 'ALL', 'performance': 'ALL'})
 
@@ -141,7 +141,7 @@ class BrowserTestBase(FastFileLinkTestBase):
             options.add_argument('--allow-running-insecure-content')
             options.add_argument('--allow-insecure-localhost')
 
-        driver = uc.Chrome(options=options)
+        driver = uc.Chrome(options=options, version_main=144)
         try:
             driver.execute_cdp_cmd(
                 "Page.setDownloadBehavior", {
@@ -151,7 +151,7 @@ class BrowserTestBase(FastFileLinkTestBase):
                 }
             )
             driver.execute_cdp_cmd("Network.enable", {})
-            driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})            
+            driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
         except Exception as e:
             print(f"[Test] Warning: Failed to set download behavior via CDP: {e}")
 
@@ -471,7 +471,7 @@ class BrowserTestBase(FastFileLinkTestBase):
                 try:
                     currentFiles = os.listdir(downloadDir)
                     print(f"[Test] Current files in download dir: {currentFiles}")
-                    if currentFiles:                        
+                    if currentFiles:
                         for filename in currentFiles:
                             filePath = os.path.join(downloadDir, filename)
                             try:
@@ -511,25 +511,24 @@ class BrowserTestBase(FastFileLinkTestBase):
                 logs = driver.get_log('performance')
                 for entry in logs:
                     msg = json.loads(entry['message'])['message']
-                    if msg.get('method') in ('Browser.downloadProgress','Network.loadingFailed'):
+                    if msg.get('method') in ('Browser.downloadProgress', 'Network.loadingFailed'):
                         print('[CDP]', msg)
             except (AttributeError, Exception) as e:
                 # Firefox and other browsers don't support get_log('performance')
-                print(f"[Test] Performance logs not available for this browser: {e}")            
-                                 
+                print(f"[Test] Performance logs not available for this browser: {e}")
 
         if True: #not downloadedFile:
             if driver:
                 # 如果超時或失敗時，再抓一次，常常能看到 targetDestroyed
                 self._drainAndPrintTargetEvents(driver)
-                
+
                 browserLogs = self._getBrowserLogs(driver)
                 # Print ALL browser logs on failure (no filtering)
                 print("[Test] Browser logs at time of failure (all logs):")
                 for logEntry in browserLogs:
                     message, level = self._normalizeLogEntry(logEntry)
-                    print(f"  [{level}] {message}")                
-        
+                    print(f"  [{level}] {message}")
+
         if not downloadedFile:
             try:
                 filesInDir = os.listdir(downloadDir) if os.path.exists(downloadDir) else []
@@ -542,7 +541,6 @@ class BrowserTestBase(FastFileLinkTestBase):
                 )
 
         return downloadedFile
-        
 
     def _normalizeLogEntry(self, logEntry):
         """Normalize log entry to unified format (message, level)
@@ -583,7 +581,7 @@ class BrowserTestBase(FastFileLinkTestBase):
             print("[Test] Browser logs (all logs):")
         else:
             print("[Test] Browser logs (filtered):")
-            
+
         with open('browser_logs.log', 'w', encoding='utf-8') as f:
             for logEntry in browserLogs:
                 message, level = self._normalizeLogEntry(logEntry)
@@ -591,7 +589,6 @@ class BrowserTestBase(FastFileLinkTestBase):
                 if logFilter is None or logFilter(message, level):
                     print(f"  [{level}] {message}")
                     print(f"  [{level}] {message}", file=f)
-
 
     def _withBrowserFallbackDisabled(self, url):
         """Return URL with ?fallback=0 to disable browser-side HTTP fallback"""
@@ -801,11 +798,11 @@ class BrowserTestBase(FastFileLinkTestBase):
                 # Inject JavaScript patches before page navigation to fix Chrome headless + StreamSaver race condition
                 # These scripts must be injected via CDP before the page loads to take effect
                 # Note: DataChannel delay patch is currently disabled as the other two patches are sufficient
-                if self.originalFileSize > self.USE_BLOB_THRESHOLD:  # Only patch if use StreamSaver
+                if self.originalFileSize > self.USE_BLOB_THRESHOLD: # Only patch if use StreamSaver
                     # Uncomment if needed: self._injectWebRTCDataChannelDelayPatch(driver)
                     self._injectPerformanceTimelineMonitor(driver)
                     self._injectStreamSaverMitmPrewarm(driver)
-                        
+
             print(f"[Test] Navigating to: {targetUrl}")
             driver.get(targetUrl)
 
@@ -823,7 +820,7 @@ class BrowserTestBase(FastFileLinkTestBase):
             print("[Test] Waiting for automatic download to start...")
 
             downloadedFile = self._waitForDownload(downloadDir, expectedFilename, driver=driver)
-            
+
             # Print with encoding handling for Windows console
             try:
                 print(f"[Test] Download completed successfully: {downloadedFile}")

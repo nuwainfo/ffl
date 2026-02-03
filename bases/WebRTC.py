@@ -95,6 +95,14 @@ CHROME_EDGE_LOCAL_SLEEP_INTERVAL = getEnv('WEBRTC_CHROME_EDGE_LOCAL_SLEEP_INTERV
 HTTP_CONNECT_TIMEOUT = getEnv('HTTP_CONNECT_TIMEOUT', 10)
 HTTP_READ_TIMEOUT = getEnv('HTTP_READ_TIMEOUT', 600)  # 10 minutes to handle large file stalls
 
+# WebRTC connection idle timeout configuration (seconds)
+# Heartbeat idle timeout: How long to wait without heartbeat before considering connection stale
+# Max wait for START: Hard upper limit to prevent infinite waiting for START signal
+# 5 minutes - generous for background tab throttling
+HEARTBEAT_IDLE_TIMEOUT = getEnv('WEBRTC_HEARTBEAT_IDLE_TIMEOUT', 5 * 60)  
+# 2 hours - optional hard limit to prevent infinite waiting
+MAX_WAIT_FOR_START = getEnv('WEBRTC_MAX_WAIT_FOR_START', 2 * 60 * 60)  
+
 # Without winloop, Edge will fail to use WebRTC, it will cause consent query timeout after few seconds.
 # It speeds up a lot on Firefox, but slow down a little on Chrome/Edge.
 if sys.platform == "win32":
@@ -468,6 +476,26 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         self.sendFileTasks.pop(peerId, None)
         self.peerStats.pop(peerId, None)
 
+    async def _failWithTimeoutError(self, dc: RTCDataChannel, peerId: str, errorMsg: str, errorCode: str):
+        """
+        Unified helper for timeout error handling
+
+        Args:
+            dc: Data channel to send error message
+            peerId: Peer identifier
+            errorMsg: Error message to log and raise
+            errorCode: Error code to send to client (e.g., "ERROR:STALE", "ERROR:TIMEOUT")
+        """
+        logger.error(errorMsg)
+
+        try:
+            dc.send(errorCode)
+        except Exception as e:
+            logger.debug(f'Unable to send {errorCode} ({e}) for peer {peerId}')
+
+        await self._cleanupPeer(peerId)
+        raise RuntimeError(errorMsg)
+
     async def sendFile(
         self,
         dc: RTCDataChannel,
@@ -478,8 +506,58 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         offset=0,
         e2eeManager=None
     ):
+        startReceived = asyncio.Event()
+        lastHeartbeat = time.monotonic()
+
+        def onMessage(message):
+            nonlocal lastHeartbeat
+            # Any message counts as keepalive signal
+            lastHeartbeat = time.monotonic()
+
+            if isinstance(message, str):
+                if message == "START":
+                    logger.debug(f"Received START signal from client for peer {peerId}")
+                    startReceived.set()
+                elif message == "PING":
+                    # Respond to heartbeat
+                    try:
+                        dc.send("PONG")
+                    except Exception as e:
+                        logger.debug(f"PONG error {e} for peer {peerId}")
+                elif message == "CANCEL":
+                    # Optional: support explicit cancellation
+                    logger.info(f"Client cancelled preview for peer {peerId}")
+                    startReceived.set()  # Exit wait loop
+                else:
+                    logger.debug(f"Unrecognized {message} for peer {peerId}")
+
+        # Set up message handler FIRST (before waiting for open)
+        dc.on("message", onMessage)
+
+        # Now wait for channel to open
         while dc.readyState != "open":
             await asyncio.sleep(0.05)
+
+        logger.debug(f"Waiting for START signal (heartbeat mode) for peer {peerId}")
+        waitStartBegin = time.monotonic()
+
+        # Wait for START with heartbeat validation
+        while not startReceived.is_set():
+            now = time.monotonic()
+
+            # Check if client heartbeat is lost (page closed, network disconnected, etc.)
+            if now - lastHeartbeat > HEARTBEAT_IDLE_TIMEOUT:
+                errorMsg = f"Client heartbeat lost (>{HEARTBEAT_IDLE_TIMEOUT}s) before START for peer {peerId}"
+                await self._failWithTimeoutError(dc, peerId, errorMsg, "ERROR:STALE")
+
+            # Optional: hard upper limit to prevent server resource exhaustion
+            if now - waitStartBegin > MAX_WAIT_FOR_START:
+                errorMsg = f"Client never started within {MAX_WAIT_FOR_START}s for peer {peerId}"
+                await self._failWithTimeoutError(dc, peerId, errorMsg, "ERROR:TIMEOUT")
+
+            await asyncio.sleep(1.0)
+
+        logger.info(f"Client ready to receive file for peer {peerId}")
 
         pc = None
         clientInfo = None
@@ -1481,6 +1559,23 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             mode = 'ab' if resumePosition > 0 else 'wb'
             context['outputFile'] = open(outputPath, mode)
 
+            # Send START signal when channel opens
+            def sendStartSignal():
+                try:
+                    logger.debug(f"Data channel ready, sending START signal")
+                    channel.send("START")
+                except Exception as e:
+                    logger.warning(f"Failed to send START signal: {e}")
+
+            @channel.on("open")
+            def onChannelOpen():
+                sendStartSignal()
+
+            # If channel is already open, send START immediately
+            if channel.readyState == "open":
+                logger.debug(f"Data channel already open, sending START immediately")
+                sendStartSignal()
+
             @channel.on("message")
             def onMessage(data):
                 try:
@@ -1513,6 +1608,16 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                             if context['outputFile']:
                                 context['outputFile'].close()
                             downloadComplete.set()
+                        elif data.startswith("ERROR:"):
+                            # Handle specific error codes from server (ERROR:STALE, ERROR:TIMEOUT)
+                            errorType = data.split(":", 1)[1] if ":" in data else "UNKNOWN"
+                            progress.write(f"Server connection error: {errorType}")
+                            if context['outputFile']:
+                                context['outputFile'].close()
+                            self._failDownload(context, RuntimeError(f"Server error: {errorType}"), errorEvent)
+                        elif data == "PONG":
+                            # Heartbeat response from server (no action needed)
+                            logger.debug("Received PONG from server")
                     else:
                         # Binary data
                         if context['outputFile']:

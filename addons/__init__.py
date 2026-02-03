@@ -23,11 +23,12 @@
 # Addons will be loaded in this exact order by the AddonsManager
 # Each addon may have an optional load() function that will be called during initialization
 addons = [
-    'API',       # API integration
-    'Features',  # User features and registration
-    'Upload',    # Core upload functionality
-    'Tunnels',   # Network tunneling capabilities
-    'GUI'        # GUI interface - loaded last as it may depend on other addons
+    'API', # API integration
+    'Features', # User features and registration
+    'Upload', # Core upload functionality
+    'Tunnels', # Network tunneling capabilities
+    'GUI', # GUI interface - loaded last as it may depend on other addons
+    'Preview', # ZIP file browsing and preview    
 ]
 
 # I18n support for addons domain

@@ -1,13 +1,19 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# $Id: VFS.py 18505 2026-01-18 04:35:47Z Bear $
+# SPDX-License-Identifier: Apache-2.0
 #
-# Copyright (c) 2025 Nuwa Information Co., Ltd, All Rights Reserved.
+# FastFileLink CLI - Fast, no-fuss file sharing
+# Copyright (C) 2025-2026 FastFileLink contributors
 #
-# Licensed under the Proprietary License,
+# Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at our web site.
+# You may obtain a copy of the License at
 #
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
@@ -25,8 +31,7 @@ import json
 import time
 import threading
 
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from socketserver import ThreadingMixIn
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, Tuple
 from urllib.parse import urlparse, parse_qs, urlencode
 
@@ -44,7 +49,7 @@ DEFAULT_VFS_HOST = "127.0.0.1"
 DEFAULT_VFS_PORT = 0 # Random port
 
 
-class VFSServer:
+class VFSServer(ThreadingHTTPServer):
     """
     HTTP server exposing local filesystem via vfs:// protocol.
 
@@ -59,8 +64,16 @@ class VFSServer:
     - GET /file?id=<docId>: Stream file with Range support
     """
 
-    def __init__(self, rootPath: str, host: str = DEFAULT_VFS_HOST, port: int = DEFAULT_VFS_PORT,
-                 authUser: Optional[str] = None, authPassword: Optional[str] = None):
+    daemon_threads = True
+
+    def __init__(
+        self,
+        rootPath: str,
+        host: str = DEFAULT_VFS_HOST,
+        port: int = DEFAULT_VFS_PORT,
+        authUser: Optional[str] = None,
+        authPassword: Optional[str] = None
+    ):
         """
         Initialize VFS server.
 
@@ -80,10 +93,8 @@ class VFSServer:
         self.rootPath = os.path.abspath(rootPath)
         self.isFile = os.path.isfile(rootPath)
         self.host = host
-        self.port = port
         self.authUser = authUser
         self.authPassword = authPassword
-        self._server = None
         self._thread = None
         self._running = False
 
@@ -97,6 +108,10 @@ class VFSServer:
         self._rootId = self._registerPath(self.rootPath)
 
         logger.debug(f"VfsServer initialized: root={self.rootPath}, rootId={self._rootId}, isFile={self.isFile}")
+
+        # Create handler class and initialize HTTPServer
+        handler = self._createHandler()
+        super().__init__((host, port), handler)
 
     def _registerPath(self, path: str) -> str:
         """
@@ -143,16 +158,16 @@ class VFSServer:
     @property
     def clientUri(self) -> str:
         """Get client URI for connecting (vfs:// format)"""
-        if not self._server:
+        if not self._running:
             raise RuntimeError("Server not started")
         return f"vfs://{self.host}:{self.actualPort}"
 
     @property
     def actualPort(self) -> int:
         """Get actual bound port (useful when port=0)"""
-        if not self._server:
+        if not self._running:
             raise RuntimeError("Server not started")
-        return self._server.server_port
+        return self.server_port
 
     def start(self, blocking: bool = False) -> None:
         """
@@ -167,21 +182,14 @@ class VFSServer:
         if self._running:
             raise RuntimeError("Server already started")
 
-        handler = self._createHandler()
-
-        # Use ThreadingMixIn for concurrent requests
-        class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
-            daemon_threads = True
-
-        self._server = ThreadedHTTPServer((self.host, self.port), handler)
         self._running = True
 
         logger.info(f"VfsServer listening on {self.clientUri}")
 
         if blocking:
-            self._server.serve_forever()
+            self.serve_forever()
         else:
-            self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+            self._thread = threading.Thread(target=self.serve_forever, daemon=True)
             self._thread.start()
             # Give server time to start
             time.sleep(0.1)
@@ -193,10 +201,8 @@ class VFSServer:
 
         self._running = False
 
-        if self._server:
-            self._server.shutdown()
-            self._server.server_close()
-            self._server = None
+        self.shutdown()
+        self.server_close()
 
         if self._thread:
             self._thread.join(timeout=1.0)
