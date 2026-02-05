@@ -231,6 +231,7 @@ ffl https://4567.81.fastfilelink.com/abcd1234
 
 ### 🐳Docker:
 ```bash
+# -v mounts your current dir to /data inside the container
 docker run --rm --network host -v "$(pwd):/data" ffl myfile
 ```
 
@@ -239,6 +240,7 @@ docker run --rm --network host -v "$(pwd):/data" ffl myfile
 > - `--max-downloads 1` will stop after one download.
 > - `--network host` is not strictly required, but adding it can greatly improve the success rate of WebRTC connections. Otherwise, the transfer may fall back to Relay, which is slower.
 
+💡 Tip: Using Docker is ideal for environments where you cannot or do not want to execute external binaries. Just remember to mount your volumes.
 For the complete command usage, please see https://hub.docker.com/r/fastfilelink/ffl
 
 ---
