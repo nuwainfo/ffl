@@ -15,7 +15,7 @@ AFAIK, `ffl` is the only CLI file-transfer tool that does all of the following:
 - 📁 **Folder & stdin support** — streaming, no need to zip/encrypt first, works even for TB-scale data
 - ⏯️ **Resume interrupted transfers**
 - 🧱 **Actually Portable Executable (APE)** + native builds for **Windows, Linux, macOS**
-- 🧰 **Built-in & pluggable tunnels** (Cloudflare, ngrok, localtunnel, etc.) — supports proxies like Tor
+- 🧰 **Built-in & pluggable tunnels** (Cloudflare, ngrok, self-hosted, etc.) — supports proxies like Tor
 - ☁️ **Optional temporary upload to server** (licensed feature) when both sides can’t be online simultaneously
 
 👉 **Official site:** <https://fastfilelink.com>  
@@ -450,6 +450,7 @@ ffl download https://my-fixed-tunnel.com/nightly-build
   - [Loophole](https://loophole.cloud/)
   - [Dev Tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/overview)
   - [Bore](https://github.com/ekzhang/bore)
+  - [sish](https://ssi.sh/) (Public or Self-hosted)
 
    If you want to use any of these tunnels, make sure the tunnel program is already installed on your system. Once installed, no additional configuration is needed — simply set your preferred tunnel once using:
   ```
@@ -667,6 +668,14 @@ If you use a third-party tunnel provider (Cloudflare, ngrok, bore, etc.), your c
 * You can verify that `ffl` continues to work even if fastfilelink.com goes offline
 
 > Your overall privacy will then depend on the tunnel provider, your network/ISP, and your local system configuration.
+
+### 🏠 Self-Hosted Infrastructure
+If you require maximum privacy or need to comply with strict corporate policies, `ffl` supports using your own infrastructure:
+
+* Self-Hosted Tunnel: You can run your own relay server using **sish**. This ensures that even the encrypted metadata and traffic do not pass through any third-party tunnel services (like Cloudflare or ngrok).
+* Private Relay: Control your own domain, TLS certificates, and access logs.
+
+👉 **Step-by-step guide:** [Self-host a sish tunnel for ffl (Wiki)](https://github.com/nuwainfo/ffl/wiki/Self-host-a-sish-tunnel)
 
 ### 🛡️ Additional Security Controls
 
