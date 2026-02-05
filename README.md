@@ -241,6 +241,7 @@ docker run --rm --network host -v "$(pwd):/data" ffl myfile
 > - `--network host` is not strictly required, but adding it can greatly improve the success rate of WebRTC connections. Otherwise, the transfer may fall back to Relay, which is slower.
 
 💡 Tip: Using Docker is ideal for environments where you cannot or do not want to execute external binaries. Just remember to mount your volumes.
+
 For the complete command usage, please see https://hub.docker.com/r/fastfilelink/ffl
 
 ---
