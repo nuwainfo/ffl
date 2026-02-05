@@ -563,7 +563,7 @@ ffl download https://my-fixed-tunnel.com/nightly-build
   * **Custom Branding:** Use your own domain (e.g., `https://share.yourcompany.com`).
   * **Enhanced Security:** Control your own TLS certificates and access policies.
 
-  👉 **Check out the guide:** [How to self-host a sish tunnel for ffl (GitHub Wiki)](https://github.com/nuwainfo/ffl/wiki/Self-host-a-sish-tunnel)
+  👉 **Check out the guide:** [How to self-host a sish tunnel for ffl (GitHub Wiki)](https://github.com/nuwainfo/ffl/wiki/Self%E2%80%90host-a-sish-tunnel)
 
 ### 4. 📥 Downloading with ffl (wget replacement)
 
@@ -675,7 +675,7 @@ If you require maximum privacy or need to comply with strict corporate policies,
 * Self-Hosted Tunnel: You can run your own relay server using **sish**. This ensures that even the encrypted metadata and traffic do not pass through any third-party tunnel services (like Cloudflare or ngrok).
 * Private Relay: Control your own domain, TLS certificates, and access logs.
 
-👉 **Step-by-step guide:** [Self-host a sish tunnel for ffl (Wiki)](https://github.com/nuwainfo/ffl/wiki/Self-host-a-sish-tunnel)
+👉 **Step-by-step guide:** [Self-host a sish tunnel for ffl (Wiki)](https://github.com/nuwainfo/ffl/wiki/Self%E2%80%90host-a-sish-tunnel)
 
 ### 🛡️ Additional Security Controls
 
