@@ -68,6 +68,7 @@ You can download the [latest release](https://github.com/nuwainfo/ffl/releases/)
 > * **Linux/macOS Install:** `curl -fsSL https://fastfilelink.com/install.sh | bash`
 > * **Windows Install:** `iwr -useb https://fastfilelink.com/install.ps1 | iex`
 > * **APE Binary:** `curl -fL https://fastfilelink.com/ffl.com -o ffl.com && chmod +x ffl.com`
+> * **Docker (Quick Run):** `docker run --rm --network host -v $(pwd):/data fastfilelink/ffl`
 >
 > 🔒 **Security Note:** `fastfilelink.com/*` is only a redirect to GitHub. If you prefer, use the direct GitHub URLs below (checksums & GPG signatures available at the bottom).
 
