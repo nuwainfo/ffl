@@ -2,6 +2,7 @@
 
 [![License](https://img.shields.io/github/license/nuwainfo/ffl?style=flat-square)](./LICENSE)
 [![Release](https://img.shields.io/github/v/release/nuwainfo/ffl?style=flat-square)](https://github.com/nuwainfo/ffl/releases/latest)
+[![Docker Pulls](https://img.shields.io/docker/pulls/fastfilelink/ffl?style=flat-square)](https://hub.docker.com/r/fastfilelink/ffl)
 
 **FastFileLink CLI (ffl)** is an [*Actually Portable*](https://justine.lol/ape.html) command-line tool that turns any file or folder into a secure HTTPS link, allowing two computers to simply and securely transfer files using real peer-to-peer (WebRTC) connections.
 
