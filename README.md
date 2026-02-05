@@ -229,6 +229,18 @@ ffl https://4567.81.fastfilelink.com/abcd1234
 * Tries **WebRTC P2P** first.
 * If NAT traversal fails, automatically resumes via HTTPS relay.
 
+### 🐳Docker:
+```bash
+docker run --rm --network host -v "$(pwd):/data" ffl myfile
+```
+
+> **Note:**
+> - The command prints a public HTTPS link. Keep the container running until the recipient downloads.
+> - `--max-downloads 1` will stop after one download.
+> - `--network host` is not strictly required, but adding it can greatly improve the success rate of WebRTC connections. Otherwise, the transfer may fall back to Relay, which is slower.
+
+For the complete command usage, please see https://hub.docker.com/r/fastfilelink/ffl
+
 ---
 
 ## CLI Reference (short version)
