@@ -555,6 +555,15 @@ ffl download https://my-fixed-tunnel.com/nightly-build
 
   If you prefer to always use the nearest high-performance node regardless of file size, please consider the **Licensed Version**. Your contribution helps us happily maintain these global infrastructure costs.
 
+  **🛡️ Self-Host Your Own Relay / Tunnel**
+
+  For ultimate privacy or corporate compliance, you can self-host your own relay infrastructure using **sish**. This allows you to:
+  * **Full Data Control:** No traffic passes through any third-party infrastructure.
+  * **Custom Branding:** Use your own domain (e.g., `https://share.yourcompany.com`).
+  * **Enhanced Security:** Control your own TLS certificates and access policies.
+
+  👉 **Check out the guide:** [How to self-host a sish tunnel for ffl (GitHub Wiki)](https://github.com/nuwainfo/ffl/wiki/Self-host-a-sish-tunnel)
+
 ### 4. 📥 Downloading with ffl (wget replacement)
 
 ffl can also act like an HTTP download tool:
