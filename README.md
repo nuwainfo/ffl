@@ -6,6 +6,9 @@
 
 **FastFileLink CLI (ffl)** is an [*Actually Portable*](https://justine.lol/ape.html) command-line tool that turns any file or folder into a secure HTTPS link, allowing two computers to simply and securely transfer files using real peer-to-peer (WebRTC) connections.
 
+⚡ At a glance: **Think `croc` or `magic-wormhole`, but the recipient uses a standard browser/HTTPS link — no software installation required.**
+> 📊 **How does it compare to other tools?** See our [Comparison Guide (Wiki)](https://github.com/nuwainfo/ffl/wiki/Comparison-with-Other-File-Transfer-Tools)
+
 AFAIK, `ffl` is the only CLI file-transfer tool that does all of the following:
 
 - 📡 **Instant P2P file sharing using WebRTC**
