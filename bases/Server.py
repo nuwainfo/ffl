@@ -210,7 +210,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         ],
     }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, request, client_address, server):
         # Define path handlers for HEAD, GET, and POST methods
         # HEAD is using to let server side get file information like filename, file size, etc.
         self.headPathMap = {
@@ -253,7 +253,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             })
 
         # Allow addons to register additional endpoints
-        self._registerAdditionalEndpoints()
+        self._registerAdditionalEndpoints(server=server)
 
         # One request one handler, so _extraHeaders can be safely used in self.end_headers.
         self._extraHeaders = {}
@@ -264,19 +264,43 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
         settingsGetter = SettingsGetter.getInstance()
 
-        super().__init__(directory=settingsGetter.baseDir, *args, **kwargs)
+        super().__init__(request, client_address, server, directory=settingsGetter.baseDir)
 
     @property
     def auth(self) -> HTTPAuth:
         """Return HTTPAuth from server config for AuthMixin."""
         return HTTPAuth(user=self.server.config.authUser, password=self.server.config.authPassword)
 
-    def _registerAdditionalEndpoints(self):
+    def _registerAdditionalEndpoints(self, server):
         """
         Hook method for addons to register additional endpoints.
         Override this method in enhanced handler classes to add custom endpoints.
         """
-        pass
+        originalPathsByMap = {
+            'getPathMap': set(self.getPathMap.keys()),
+            'postPathMap': set(self.postPathMap.keys()),
+            'headPathMap': set(self.headPathMap.keys()),
+        }
+        routeMaps = {
+            'getPathMap': dict(self.getPathMap),
+            'postPathMap': dict(self.postPathMap),
+            'headPathMap': dict(self.headPathMap),
+        }
+
+        FFLEvent.serverEndpointsRegister.trigger(
+            handler=self,
+            server=server,
+            getPathMap=routeMaps['getPathMap'],
+            postPathMap=routeMaps['postPathMap'],
+            headPathMap=routeMaps['headPathMap']
+        )
+
+        for mapName, routeMap in routeMaps.items():
+            originalPaths = originalPathsByMap[mapName]
+            targetMap = getattr(self, mapName)
+            for path, endpointHandler in routeMap.items():
+                if path not in originalPaths:
+                    targetMap[path] = endpointHandler
 
     def _normalizeRequestPath(self):
         pasedURL = urlparse(self.path)
@@ -630,7 +654,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             # Parse query parameters from args (already parsed by do_GET)
             startChunk = int(args.get('start', ['0'])[0])
             count = int(args.get('count', ['0'])[0])
-            streamId = args.get('streamId', ['global'])[0]  # Default to "global" for backwards compatibility
+            streamId = args.get('streamId', ['global'])[0] # Default to "global" for backwards compatibility
 
             logger.debug(f"[E2EE] Tags request: streamId={streamId}, start={startChunk}, count={count}")
 

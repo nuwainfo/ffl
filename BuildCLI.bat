@@ -24,7 +24,6 @@ if exist "%serverStaticDir%" (
     for %%f in (js client css locales) do (
         if exist "%serverStaticDir%\%%f" (
             echo Copying server static folder: %%f
-            if exist "%targetStaticDir%\%%f" rd /s /q "%targetStaticDir%\%%f"
             xcopy "%serverStaticDir%\%%f" "%targetStaticDir%\%%f\" /E /I /Y >nul
         ) else (
             echo Warning: Server static folder not found: %serverStaticDir%\%%f

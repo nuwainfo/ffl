@@ -45,7 +45,7 @@ from signalslot import Signal
 from sentry_sdk.integrations.logging import SentryHandler, LoggingIntegration
 from sentry_sdk.integrations import atexit as sentryAtexit
 
-PUBLIC_VERSION = '3.8.4'
+PUBLIC_VERSION = '3.8.5'
 
 # Map string levels to logging constants for standard level names
 LOG_LEVEL_MAPPING = {'DEBUG': logging.DEBUG, 'INFO': logging.INFO, 'WARNING': logging.WARNING, 'ERROR': logging.ERROR}
@@ -1195,6 +1195,7 @@ class FFLEvent:
 
     # Server lifecycle events
     serverStarting = Event('/server/create')
+    serverEndpointsRegister = Event('/server/endpoints/create')
     serverShutdown = Event('/server/shutdown')
     serverTimeout = Event('/server/timeout')
 
@@ -1204,16 +1205,6 @@ class FFLEvent:
     downloadCompleted = Event('/download/complete')
     downloadFailed = Event('/download/fail')
     maxDownloadsReached = Event('/download/limit/reach')
-
-    # Upload events
-    uploadStarting = Event('/upload/start')
-    uploadStarted = Event('/upload/create')
-    uploadProgress = Event('/upload/progress')
-    uploadPaused = Event('/upload/pause')
-    uploadResumed = Event('/upload/resume')
-    uploadCompleted = Event('/upload/complete')
-    uploadFailed = Event('/upload/fail')
-    uploadCancelled = Event('/upload/cancel')
 
     # WebRTC events
     webrtcOfferReceived = Event('/webrtc/offer/create')

@@ -474,11 +474,15 @@
 
 .zip-preview-content {
     flex: 1;
-    overflow-y: auto;
+    overflow-y: scroll;
     overflow-x: hidden;
     padding: 24px 28px;
     /* Very transparent for cloudy effect */
     background: rgba(255, 255, 255, 0.05);
+
+    /* Firefox scrollbar */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.3) rgba(0, 0, 0, 0.08);
 }
 
 /* Custom scrollbar to match glass theme */
@@ -487,21 +491,18 @@
 }
 
 .zip-preview-content::-webkit-scrollbar-track {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(0, 0, 0, 0.08);
     border-radius: 10px;
     margin: 8px 0;
 }
 
 .zip-preview-content::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.3);
+    background: rgba(0, 0, 0, 0.3);
     border-radius: 10px;
-    border: 2px solid rgba(255, 255, 255, 0.1);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
 }
 
 .zip-preview-content::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.5);
+    background: rgba(0, 0, 0, 0.45);
 }
 
 /* ============================================================================
@@ -1324,3 +1325,33 @@
         display: none !important;
     }
 }
+
+/* ==========================================================
+   Chrome-only matte blur (Firefox unchanged)
+   Gate: ::-webkit-scrollbar (Chrome/Edge/Safari true)
+   Technique: blur the whole page behind the overlay
+   ========================================================== */
+@supports selector(::-webkit-scrollbar) {
+
+  /* Blur everything behind the overlay */
+  body:has(.zip-preview-overlay.active) > *:not(.zip-preview-overlay):not(.zip-file-viewer):not(script):not(style) {
+    filter: blur(14px) saturate(0.90) brightness(1.02);
+    transform: translateZ(0);
+  }
+
+  /* Keep overlay clean with a subtle veil */
+  .zip-preview-overlay.active {
+    background: rgba(255, 255, 255, 0.10) !important;
+  }
+
+  /* Keep modal glass light (don't turn into white sheet) */
+  .zip-preview-container {
+    background: rgba(255, 255, 255, 0.06) !important;
+    -webkit-backdrop-filter: blur(18px) saturate(125%) !important;
+    backdrop-filter: blur(18px) saturate(125%) !important;
+  }
+}
+
+
+
+

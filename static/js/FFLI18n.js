@@ -239,6 +239,50 @@ function t(key, defaultValue, options = {}) {
   return i18next.t(key, { ...options, defaultValue });
 }
 
+/**
+ * Run callback when i18n is ready.
+ * Handles both normal event flow and race where i18n was already initialized
+ * before listeners were attached.
+ *
+ * @param {Function} callback - Function to run once i18n is ready
+ */
+function runAfterI18nReady(callback) {
+  const run = () => {
+    try {
+      callback();
+    } catch (error) {
+      const logger =
+        (typeof window !== "undefined" && typeof window.log === "function")
+          ? window.log
+          : function () {};
+      logger("FFLI18n", `runAfterI18nReady callback failed: ${error?.message || error}`);
+    }
+  };
+
+  if (typeof i18next !== "undefined" && i18next.isInitialized) {
+    run();
+    return;
+  }
+
+  let handled = false;
+  const handleReady = () => {
+    if (handled) {
+      return;
+    }
+    handled = true;
+    run();
+  };
+
+  window.addEventListener("i18nReady", handleReady, { once: true });
+
+  // Guard for race: i18n may become ready between check and listener attachment.
+  setTimeout(() => {
+    if (!handled && typeof i18next !== "undefined" && i18next.isInitialized) {
+      handleReady();
+    }
+  }, 0);
+}
+
 // Function to update all page translations using jquery-i18next only
 function updatePageTranslations(log) {
   // Use global log or fallback to no-op
@@ -291,6 +335,7 @@ function changeLanguage(lang, log) {
 
 // Make functions globally available
 window.t = t;
+window.runAfterI18nReady = runAfterI18nReady;
 window.updatePageTranslations = updatePageTranslations;
 window.changeLanguage = changeLanguage;
 window.initializeI18n = initializeI18n;

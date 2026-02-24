@@ -172,7 +172,6 @@ copyServerStatic() {
         for folder in js client css locales; do
             if [ -d "$serverStaticDir/$folder" ]; then
                 echo "Copying server static folder: $folder"
-                rm -rf "$targetStaticDir/$folder"
                 cp -r "$serverStaticDir/$folder" "$targetStaticDir/"
             else
                 echo "Warning: Server static folder not found: $serverStaticDir/$folder"

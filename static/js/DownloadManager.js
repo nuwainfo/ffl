@@ -1108,7 +1108,8 @@ class DownloadManager {
     async startNativeDownload(url, filename, {
         writer = null,
         progressSwSupported = false,
-        resumeConfig = null
+        resumeConfig = null,
+        forceWriter = false
     } = {}) {
         if (this.downloadTriggeredOnce) {
             this.log('DownloadManager', 'Download already triggered, ignoring duplicate request');
@@ -1119,7 +1120,8 @@ class DownloadManager {
         this.log('DownloadManager', 'Starting native download', {
             hasWriter: !!writer,
             progressSwSupported,
-            hasResumeConfig: !!resumeConfig
+            hasResumeConfig: !!resumeConfig,
+            forceWriter
         });
 
         const downloadUrl = new URL(url, location.origin);
@@ -1128,11 +1130,12 @@ class DownloadManager {
 
         if (progressSwSupported) {
             // Case A: Service Worker is available
-            if (writer && resumeConfig) {
-                // Has SW + has resumeConfig + has writer
+            if (writer && (resumeConfig || forceWriter)) {
+                // Has SW + (has resumeConfig OR forceWriter) + has writer
                 // SW handles resume + decryption, we just write plaintext to writer
                 // No progressCallback needed (SW broadcasts events)
-                this.log('DownloadManager', 'BRANCH: SW + writer + resumeConfig -> fetchToWriter (SW handles resume/decrypt)');
+                // forceWriter=true ensures ZIP preview can feed chunks even without resume
+                this.log('DownloadManager', 'BRANCH: SW + writer + (resumeConfig OR forceWriter) -> fetchToWriter (SW handles resume/decrypt)');
                 const needsDecryption = false;
                 const progressCallback = null;  // SW broadcasts events
                 return this.fetchToWriter(
@@ -1421,6 +1424,7 @@ class DownloadManager {
     async startDownload(options = {}) {
         // Extract writer as first-class parameter
         const writer = options.writer || null;
+        const forceWriter = options.forceWriter || false;
 
         const resumeConfig = this.setResumeConfig(options.resume);
         if (resumeConfig) {
@@ -1487,14 +1491,189 @@ class DownloadManager {
         return this.startNativeDownload(url, filename, {
             writer,
             progressSwSupported,
-            resumeConfig
+            resumeConfig,
+            forceWriter
         });
+    }
+}
+
+/**
+ * BlobWriter: Writer implementation that accumulates chunks in memory
+ * Mimics WritableStream writer interface for compatibility with fetchToWriter
+ * Automatically triggers download when closed
+ */
+class BlobWriter {
+    constructor(fileName, expectedSize = null) {
+        this.fileName = fileName;
+        this.chunks = [];
+        this.bytesWritten = 0;
+        this.expectedSize = expectedSize;
+        this.closed = false;
+    }
+
+    async write(chunk) {
+        if (this.closed) {
+            throw new Error('Writer is closed');
+        }
+
+        // Store a copy to prevent external modifications
+        const chunkView = chunk instanceof ArrayBuffer
+            ? new Uint8Array(chunk.slice(0))
+            : new Uint8Array(chunk);
+
+        this.chunks.push(chunkView);
+        this.bytesWritten += chunkView.byteLength;
+    }
+
+    async close() {
+        if (this.closed) {
+            return;
+        }
+        this.closed = true;
+
+        // Size verification (skip if size is unknown)
+        const hasKnownSize = this.expectedSize !== null && this.expectedSize > 0;
+        if (hasKnownSize && this.bytesWritten !== this.expectedSize) {
+            throw new Error(`Size mismatch: written=${this.bytesWritten}, expected=${this.expectedSize}`);
+        }
+
+        // Automatically trigger blob download on close
+        this.triggerDownload();
+    }
+
+    triggerDownload() {
+        if (!this.closed) {
+            throw new Error('Writer must be closed before triggering download');
+        }
+
+        dmLog("BlobWriter", `Creating blob download for ${this.fileName} (${this.bytesWritten} bytes)`);
+
+        const blob = new Blob(this.chunks, { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = this.fileName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+
+        dmLog("BlobWriter", `Triggering download for ${this.fileName}`);
+        a.click();
+
+        setTimeout(() => {
+            dmLog("BlobWriter", "Cleaning up object URL");
+            URL.revokeObjectURL(url);
+            a.remove();
+        }, 60000);
+    }
+}
+
+/**
+ * WriterFactory: Creates appropriate writer based on file size and browser capabilities
+ */
+class WriterFactory {
+
+    static create(fileName, fileSize) {
+        const USE_BLOB_THRESHOLD = 10 * 1024 * 1024; // 10MB
+
+        // Check if size is unknown
+        const isUnknownSize = fileSize == null || fileSize <= 0;
+        const sizeDesc = isUnknownSize ? 'unknown' : `${fileSize} bytes`;
+
+        // Check if StreamSaver is available
+        const canUseSW = location.protocol === 'https:' ||
+                        location.hostname === 'localhost' ||
+                        location.hostname === '127.0.0.1';
+
+        const streamSaverReady = canUseSW &&
+                                'serviceWorker' in navigator &&
+                                typeof streamSaver !== 'undefined';
+
+        // Use StreamSaver for:
+        // 1. Large files (> threshold)
+        // 2. Unknown size files (to avoid memory issues)
+        const needsStreamSaver = isUnknownSize || fileSize > USE_BLOB_THRESHOLD;
+
+        if (streamSaverReady && needsStreamSaver) {
+            try {
+                dmLog("WriterFactory", `Creating StreamSaver writer for ${fileName} (${sizeDesc})`);
+
+                // Configure StreamSaver mitm path
+                if (!streamSaver.mitm) {
+                    streamSaver.mitm = '/static/assets/mitm.html';
+                }
+
+                // For unknown size, don't specify size option (let browser handle it)
+                const streamOptions = isUnknownSize ? {} : { size: fileSize };
+                const fileStream = streamSaver.createWriteStream(fileName, streamOptions);
+                const writer = fileStream.getWriter();
+
+                return {
+                    type: 'streamsaver',
+                    writer: writer,
+                    fileName: fileName,
+                    fileSize: fileSize
+                };
+            } catch (e) {
+                dmLog('WriterFactory', 'StreamSaver initialization failed, falling back to Blob', e);
+                // Fall through to blob creation
+            }
+        }
+
+        // Use Blob for small files with known size
+        dmLog("WriterFactory", `Creating Blob writer for ${fileName} (${sizeDesc})`);
+        const blobWriter = new BlobWriter(fileName, fileSize);
+
+        return {
+            type: 'blob',
+            writer: blobWriter,
+            fileName: fileName,
+            fileSize: fileSize
+        };
+    }
+
+    static getUnsupportedReason(fileSize) {
+        const USE_BLOB_THRESHOLD = 10 * 1024 * 1024;
+
+        // Unknown size - need StreamSaver to avoid memory issues
+        // Treat as large file (requires ServiceWorker)
+        const isUnknownSize = fileSize == null || fileSize <= 0;
+        const isSmallFile = !isUnknownSize && fileSize <= USE_BLOB_THRESHOLD;
+
+        if (isSmallFile) {
+            return null; // Small files always supported (BlobWriter)
+        }
+
+        // Large or unknown size files require ServiceWorker + StreamSaver
+        const canUseSW = location.protocol === 'https:' ||
+                        location.hostname === 'localhost' ||
+                        location.hostname === '127.0.0.1';
+
+        if (!canUseSW) {
+            return 'ServiceWorker not available (requires HTTPS or localhost)';
+        }
+
+        if (!('serviceWorker' in navigator)) {
+            return 'ServiceWorker not supported by browser';
+        }
+
+        if (typeof streamSaver === 'undefined') {
+            return 'StreamSaver library not loaded';
+        }
+
+        return null;
+    }
+
+    static isSupported(fileSize) {
+        return this.getUnsupportedReason(fileSize) === null;
     }
 }
 
 // Export for use in other scripts
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = DownloadManager;
+    module.exports = { DownloadManager, BlobWriter, WriterFactory };
 } else {
     window.DownloadManager = DownloadManager;
+    window.BlobWriter = BlobWriter;
+    window.WriterFactory = WriterFactory;
 }

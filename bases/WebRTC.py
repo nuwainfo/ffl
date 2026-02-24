@@ -79,7 +79,6 @@ DEFAULT_ICE_SERVERS = [
     RTCIceServer(urls="stun:stun.l.google.com:19302"),
     RTCIceServer(urls="stun:stun.cloudflare.com:3478"),
     RTCIceServer(urls="stun:stun.nextcloud.com:443"),
-    RTCIceServer(urls="stun:openrelayproject.org:80"),
     RTCIceServer(urls="stun:openrelayproject.org:443"),
 ]
 
@@ -1402,10 +1401,8 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                     logger.debug(f"[STATUS_POLL] Polling status endpoint...")
                     statusData, status = self._sendHTTPRequest(statusURL, "GET", None, authHeaders, 5)
 
-                    logger.debug(
-                        f"[STATUS_POLL] Status response: {status}, has error: {statusData.get('error') 
-                                                                               if statusData else None}"
-                    )
+                    hasError = statusData.get('error') if statusData else None
+                    logger.debug(f"[STATUS_POLL] Status response: {status}, has error: {hasError}")
 
                     if status == 200 and statusData:
                         error = statusData.get('error')

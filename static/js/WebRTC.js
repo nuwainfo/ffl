@@ -460,178 +460,6 @@ class WritePump {
     }
 }
 
-/**
- * BlobWriter: Writer implementation that accumulates chunks in memory
- * Mimics WritableStream writer interface for compatibility with WritePump
- * Automatically triggers download when closed
- */
-class BlobWriter {
-    constructor(fileName, expectedSize = null) {
-        this.fileName = fileName;
-        this.chunks = [];
-        this.bytesWritten = 0;
-        this.expectedSize = expectedSize;
-        this.closed = false;
-    }
-
-    async write(chunk) {
-        if (this.closed) {
-            throw new Error('Writer is closed');
-        }
-
-        // Store a copy to prevent external modifications
-        const chunkView = chunk instanceof ArrayBuffer
-            ? new Uint8Array(chunk.slice(0))
-            : new Uint8Array(chunk);
-
-        this.chunks.push(chunkView);
-        this.bytesWritten += chunkView.byteLength;
-    }
-
-    async close() {
-        if (this.closed) {
-            return;
-        }
-        this.closed = true;
-
-        // Size verification (skip if size is unknown)
-        const hasKnownSize = this.expectedSize !== null && this.expectedSize > 0;
-        if (hasKnownSize && this.bytesWritten !== this.expectedSize) {
-            throw new Error(`Size mismatch: written=${this.bytesWritten}, expected=${this.expectedSize}`);
-        }
-
-        // Automatically trigger blob download on close
-        this.triggerDownload();
-    }
-
-    triggerDownload() {
-        if (!this.closed) {
-            throw new Error('Writer must be closed before triggering download');
-        }
-
-        log("BlobWriter", `Creating blob download for ${this.fileName} (${this.bytesWritten} bytes)`);
-
-        const blob = new Blob(this.chunks, { type: 'application/octet-stream' });
-        const url = URL.createObjectURL(blob);
-
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = this.fileName;
-        a.style.display = 'none';
-        document.body.appendChild(a);
-
-        log("BlobWriter", `Triggering download for ${this.fileName}`);
-        a.click();
-
-        setTimeout(() => {
-            log("BlobWriter", "Cleaning up object URL");
-            URL.revokeObjectURL(url);
-            a.remove();
-        }, 60000);
-    }
-}
-
-/**
- * WriterFactory: Creates appropriate writer based on file size and browser capabilities
- */
-class WriterFactory {
-
-    static create(fileName, fileSize) {
-        const USE_BLOB_THRESHOLD = 10 * 1024 * 1024; // 10MB
-
-        // Check if size is unknown
-        const isUnknownSize = fileSize == null || fileSize <= 0;
-        const sizeDesc = isUnknownSize ? 'unknown' : `${fileSize} bytes`;
-
-        // Check if StreamSaver is available
-        const canUseSW = location.protocol === 'https:' ||
-                        location.hostname === 'localhost' ||
-                        location.hostname === '127.0.0.1';
-
-        const streamSaverReady = canUseSW &&
-                                'serviceWorker' in navigator &&
-                                typeof streamSaver !== 'undefined';
-
-        // Use StreamSaver for:
-        // 1. Large files (> threshold)
-        // 2. Unknown size files (to avoid memory issues)
-        const needsStreamSaver = isUnknownSize || fileSize > USE_BLOB_THRESHOLD;
-
-        if (streamSaverReady && needsStreamSaver) {
-            try {
-                log("WriterFactory", `Creating StreamSaver writer for ${fileName} (${sizeDesc})`);
-
-                // Configure StreamSaver (encapsulated here)
-                if (!streamSaver.mitm) {
-                    streamSaver.mitm = '/static/assets/mitm.html';
-                }
-
-                // For unknown size, don't specify size option (let browser handle it)
-                const streamOptions = isUnknownSize ? {} : { size: fileSize };
-                const fileStream = streamSaver.createWriteStream(fileName, streamOptions);
-                const writer = fileStream.getWriter();
-
-                return {
-                    type: 'streamsaver',
-                    writer: writer,
-                    fileName: fileName,
-                    fileSize: fileSize
-                };
-            } catch (e) {
-                log('WriterFactory', 'StreamSaver initialization failed, falling back to Blob', e);
-                // Fall through to blob creation
-            }
-        }
-
-        // Use Blob for small files with known size
-        log("WriterFactory", `Creating Blob writer for ${fileName} (${sizeDesc})`);
-        const blobWriter = new BlobWriter(fileName, fileSize);
-
-        return {
-            type: 'blob',
-            writer: blobWriter,
-            fileName: fileName,
-            fileSize: fileSize
-        };
-    }
-
-    static getUnsupportedReason(fileSize) {
-        const USE_BLOB_THRESHOLD = 10 * 1024 * 1024;
-
-        // Unknown size - need StreamSaver to avoid memory issues
-        // Treat as large file (requires ServiceWorker)
-        const isUnknownSize = fileSize == null || fileSize <= 0;
-        const isSmallFile = !isUnknownSize && fileSize <= USE_BLOB_THRESHOLD;
-
-        if (isSmallFile) {
-            return null; // Small files always supported (BlobWriter)
-        }
-
-        // Large or unknown size files require ServiceWorker + StreamSaver
-        const canUseSW = location.protocol === 'https:' ||
-                        location.hostname === 'localhost' ||
-                        location.hostname === '127.0.0.1';
-
-        if (!canUseSW) {
-            return 'ServiceWorker not available (requires HTTPS or localhost)';
-        }
-
-        if (!('serviceWorker' in navigator)) {
-            return 'ServiceWorker not supported by browser';
-        }
-
-        if (typeof streamSaver === 'undefined') {
-            return 'StreamSaver library not loaded';
-        }
-
-        return null;
-    }
-
-    static isSupported(fileSize) {
-        return this.getUnsupportedReason(fileSize) === null;
-    }
-}
-
 // ============================================================
 // Debug Configuration Manager
 // ============================================================
@@ -1032,6 +860,7 @@ class FallbackManager {
         downloadUrl,
         log,
         t,
+        forceWriter,
         // Callbacks for external state
         getWritePump,
         getBytesReceived,
@@ -1049,6 +878,7 @@ class FallbackManager {
         this.downloadUrl = downloadUrl;
         this.log = log;
         this.t = t;
+        this.forceWriter = forceWriter || false;
 
         // Callbacks
         this.getWritePump = getWritePump;
@@ -1191,10 +1021,11 @@ class FallbackManager {
         // Calculate resume options
         const resumeOptions = this._calculateResumeOptions(actualBytesWritten);
 
-        this.log("Fallback", `Starting DownloadManager with writer: ${writePump ? 'YES' : 'NO'}, resume: ${resumeOptions ? 'YES' : 'NO'}`);
+        this.log("Fallback", `Starting DownloadManager with writer: ${writePump ? 'YES' : 'NO'}, resume: ${resumeOptions ? 'YES' : 'NO'}, forceWriter: ${this.forceWriter}`);
         this.downloadManager.startDownload({
             writer: writePump ? writePump.writer : null,
-            resume: resumeOptions
+            resume: resumeOptions,
+            forceWriter: this.forceWriter
         });
     }
 
@@ -1494,8 +1325,8 @@ class WebRTCManager {
             complete: `/${this.uid}/complete`,
             download: `/${this.uid}/download`,
             manifest: `/${this.uid}/manifest`,
-            thumbnailTemplate: `/${this.uid}/thumb?path={path}&w=420&h=320&fmt=jpeg`,
-            fileTemplate: `/${this.uid}/file?path={path}`
+            thumbnailTemplate: `/${this.uid}/thumb?hash={hash}&w=420&h=320&fmt=jpeg`,
+            fileTemplate: `/${this.uid}/file?hash={hash}`
         };
 
         // State tracking
@@ -1668,6 +1499,9 @@ class WebRTCManager {
         }
 
         // Initialize FallbackManager
+        // Check if file is previewable ZIP to force writer mode (ensures chunks feed to extractor)
+        const forceWriter = this.previewUI && this.previewUI.isPreviewableZip;
+
         this.fallbackManager = new FallbackManager({
             debugConfig: this.debugConfig,
             e2eeManager: this.e2eeManager,
@@ -1677,6 +1511,7 @@ class WebRTCManager {
             downloadUrl: this.endpoints.download,
             log: this.log,
             t: this.t,
+            forceWriter: forceWriter,
             getWritePump: () => this.writePump,
             getBytesReceived: () => this.bytesReceived,
             getDownloadCompleted: () => this.downloadCompleted,
@@ -1687,6 +1522,11 @@ class WebRTCManager {
 
         // Fallback to HTTP helper
         const fallbackToHTTP = (reason, force = false) => {
+            if (isPreviewMode && !this.pauseGate.isPaused()) {
+                this.log("Fallback", "Preview mode detected - requesting pause before HTTP fallback");
+                this.pauseGate.requestPause();
+            }
+
             const startFn = () => this.fallbackManager.triggerFallback(reason, force);
             const shouldStartNow = this.pauseGate.setPendingStart({
                 kind: 'http',
@@ -1833,7 +1673,6 @@ class WebRTCManager {
                     { urls: 'stun:stun.l.google.com:19302' },
                     { urls: 'stun:stun.cloudflare.com:3478' },
                     { urls: 'stun:stun.nextcloud.com:443' },
-                    { urls: 'stun:openrelayproject.org:80' },
                     { urls: 'stun:openrelayproject.org:443' }
                 ],
             });

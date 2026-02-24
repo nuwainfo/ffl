@@ -6,6 +6,7 @@ get-gecko-driver
 # GUI
 pyautogui
 opencv-python
+scikit-image
 
 # CorePatched
 requests_mock

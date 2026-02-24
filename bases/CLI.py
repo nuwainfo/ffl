@@ -29,7 +29,7 @@ from bases.Kernel import (
 )
 from bases.Settings import DEFAULT_AUTH_USER_NAME, DEFAULT_UPLOAD_DURATION, SettingsGetter
 from bases.Utils import flushPrint, checkVersionCompatibility, getEnv, parseProxyString, setupProxyEnvironment
-from bases.Hook import HookClient, HookFileWriter
+from bases.Hook import HookClient, HookFileWriter, forwardEventToHook
 from bases.Upgrade import performUpgrade
 from bases.I18n import _
 
@@ -283,8 +283,8 @@ def configureCLIParser():
             "--upload",
             help=_("Upload file to FastFileLink server to share it "
                    "(Share duration after upload). Default: {default}").format(
-                default=DEFAULT_UPLOAD_DURATION
-            ),
+                       default=DEFAULT_UPLOAD_DURATION
+                   ),
             choices=times if times else ['unavailable'],
             nargs='?',
             const=DEFAULT_UPLOAD_DURATION if times else 'unavailable',
@@ -540,11 +540,7 @@ def handleHookArgument(hook, result=None):
         jsonl = True
 
     logger.info(f"Hook client initialized: {hook}")
-
-    def forwardEventToHook(eventName, **eventData):
-        sender.sendEvent(eventName, eventData)
-
-    FFLEvent.all.subscribe(forwardEventToHook)
+    FFLEvent.all.subscribe(lambda eventName, **eventData: forwardEventToHook(sender, eventName, **eventData))
 
     if jsonl:
         # HookFileWriter requires close on shutdown or interrupt (Ctrl+C)

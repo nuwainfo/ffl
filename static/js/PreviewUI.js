@@ -66,8 +66,8 @@
                 log: options.log || ((tag, msg) => console.log(`[${tag}] ${msg}`)),
                 metadataURL: options.metadataURL || '/uid=****/manifest',
                 thumbnailURLTemplate: options.thumbnailURLTemplate ||
-                    '/uid=****/thumb?path={path}&w=420&h=320&fmt=jpeg',
-                fileURLTemplate: options.fileURLTemplate || '/uid=****/file?path={path}',
+                    '/uid=****/thumb?hash={hash}&w=420&h=320&fmt=jpeg',
+                fileURLTemplate: options.fileURLTemplate || '/uid=****/file?hash={hash}',
                 ...options
             };
 
@@ -78,6 +78,12 @@
 
             // Store getDownloadState function
             this.getDownloadState = options.getDownloadState || null;
+
+            // Configurable element selectors for syncing download progress (defaults match client-side)
+            this.statusTextSelector = options.statusTextSelector || '#statusText';
+            this.progressBarSelector = options.progressBarSelector || '#downloadProgress';
+            this.connectionTypeSelector = options.connectionTypeSelector || '#connectionType';
+            this.downloadMessageSelector = options.downloadMessageSelector || '#download-message';
 
             // Thumbnail loading queue (prevents tunnel/relay 502 from too many simultaneous requests)
             this._thumbnailQueue = [];
@@ -99,6 +105,21 @@
         async _initialize() {
             this.log('ZipPreview', 'Initializing...');
 
+            // If E2EE key promise is provided, wait for user to provide decryption key
+            // before fetching metadata (manifest is encrypted and can't be parsed without key)
+            if (this.options.e2eeKeyPromise) {
+                this.log('ZipPreview', 'E2EE enabled - waiting for decryption key before fetching metadata...');
+                try {
+                    this._e2eeContext = await this.options.e2eeKeyPromise;
+                    this.log('ZipPreview', 'E2EE key received, proceeding with metadata fetch');
+                } catch (e) {
+                    this.log('ZipPreview', `E2EE key promise rejected: ${e}`);
+                    this.isPreviewableZip = false;
+                    this.enhanceInfoIcon();
+                    return;
+                }
+            }
+
             // Try to fetch metadata to determine if this is a previewable ZIP
             try {
                 this.log('ZipPreview', 'Checking for preview support (fetching metadata)...');
@@ -111,17 +132,9 @@
                     const rawData = await response.arrayBuffer();
                     this.log('ZipPreview', `Metadata fetched: ${rawData.byteLength} bytes`);
 
-                    // Extract X-Original-Size header (needed for E2EE decryption)
-                    const originalSize = response.headers.get('X-Original-Size');
-                    const originalSizeNum = originalSize ? parseInt(originalSize, 10) : null;
-
-                    if (originalSizeNum !== null) {
-                        this.log('ZipPreview', `Original size: ${originalSizeNum} bytes`);
-                    }
-
                     // Metadata fetch succeeded - create extractor with raw data
                     this.isPreviewableZip = true;
-                    this.createExtractor(rawData, originalSizeNum);
+                    this.createExtractor(rawData);
                     this.log('ZipPreview', 'Extractor created with metadata');
                 } else {
                     this.log('ZipPreview', `No preview support (metadata fetch failed: ${response.status})`);
@@ -155,6 +168,15 @@
             if (this.options.log) {
                 this.options.log(tag, message);
             }
+        }
+
+        /**
+         * Wait for PreviewUI initialization to complete
+         * Returns a promise that resolves when metadata fetch and setup is done
+         * @returns {Promise} Promise that resolves when initialization is complete
+         */
+        ready() {
+            return this._initPromise;
         }
 
         // ====================================================================
@@ -391,21 +413,20 @@
                 closeBtn.addEventListener('click', () => this.closePreview());
             }
 
-            // Play button - sync with main play button
+            // Play button - handle both client and server modes
             const overlayPlayBtn = document.getElementById('zip-preview-play-btn');
+            const mainPlayBtn = document.getElementById('play-download-btn');
+
             if (overlayPlayBtn) {
+                // Click handler - trigger main play button
                 overlayPlayBtn.addEventListener('click', () => {
-                    // Trigger the main play button click
-                    const mainPlayBtn = document.getElementById('play-download-btn');
                     if (mainPlayBtn) {
                         mainPlayBtn.click();
                     }
                 });
 
                 // Sync visibility with main play button
-                const mainPlayBtn = document.getElementById('play-download-btn');
                 if (mainPlayBtn) {
-                    // Check initial state FIRST (in case button is already visible)
                     const updateVisibility = () => {
                         if (mainPlayBtn.style.display === 'inline-flex') {
                             overlayPlayBtn.classList.add('visible');
@@ -490,11 +511,11 @@
         }
 
         syncProgress() {
-            // Get elements from main page
-            const mainStatusText = document.getElementById('statusText');
-            const mainProgressBar = document.getElementById('downloadProgress');
-            const mainConnectionType = document.getElementById('connectionType');
-            const mainDownloadMessage = document.getElementById('download-message');
+            // Get elements from main page using configurable selectors
+            const mainStatusText = document.querySelector(this.statusTextSelector);
+            const mainProgressBar = document.querySelector(this.progressBarSelector);
+            const mainConnectionType = document.querySelector(this.connectionTypeSelector);
+            const mainDownloadMessage = document.querySelector(this.downloadMessageSelector);
 
             // Get elements from overlay
             const overlayStatusText = document.getElementById('zip-preview-status-text');
@@ -508,11 +529,22 @@
                 overlayStatusText.textContent = mainStatusText.textContent || this.t('Download:client.status.establishing', 'Establishing connection...');
             }
 
-            // Sync progress bar - use BOTH progress element AND div fallback
+            // Sync progress bar - handle both <progress> element and Bootstrap <div>
             if (mainProgressBar) {
-                const progressValue = mainProgressBar.value || 0;
-                const progressMax = mainProgressBar.max || 100;
-                const progressPercent = (progressValue / progressMax) * 100;
+                let progressValue, progressMax, progressPercent;
+
+                // Check if it's a <progress> element or Bootstrap div
+                if (mainProgressBar.tagName === 'PROGRESS') {
+                    // HTML5 progress element
+                    progressValue = mainProgressBar.value || 0;
+                    progressMax = mainProgressBar.max || 100;
+                } else {
+                    // Bootstrap progress bar div (aria-valuenow)
+                    progressValue = parseFloat(mainProgressBar.getAttribute('aria-valuenow')) || 0;
+                    progressMax = parseFloat(mainProgressBar.getAttribute('aria-valuemax')) || 100;
+                }
+
+                progressPercent = (progressValue / progressMax) * 100;
 
                 // Update progress element
                 if (overlayProgressBar) {
@@ -806,8 +838,8 @@
             card.className = 'zip-preview-card';
             card.dataset.index = entry.index;
 
-            const thumbnailURL = this.options.thumbnailURLTemplate.replace('{path}', encodeURIComponent(entry
-                .name));
+            const thumbnailURL = this.options.thumbnailURLTemplate.replace('{hash}', encodeURIComponent(entry
+                .hash));
             const fileName = entry.name || `#${entry.index + 1}`; // User-friendly index (1-based)
             const fileSize = this.formatFileSize(entry.size || 0);
 
@@ -820,6 +852,7 @@
                     <img class="zip-preview-thumb"
                          data-thumbnail-url="${thumbnailURL}"
                          data-arcname="${entry.name}"
+                         data-hash="${entry.hash}"
                          alt="${fileName}"
                          loading="lazy" />
                     ${debugMode ? `<div class="zip-preview-badge wait">${this.t('Download:zipPreview.badge.waiting', 'Waiting')}</div>` : ''}
@@ -898,12 +931,38 @@
         }
 
         /**
+         * Check if an element is currently visible in the viewport
+         * @private
+         */
+        _isElementVisible(element) {
+            if (!element || !element.isConnected) {
+                return false;
+            }
+
+            const container = document.getElementById('zip-preview-content');
+            if (!container) {
+                return false;
+            }
+
+            const containerRect = container.getBoundingClientRect();
+            const elementRect = element.getBoundingClientRect();
+
+            // Check if element is within container's visible area
+            return (
+                elementRect.top < containerRect.bottom &&
+                elementRect.bottom > containerRect.top &&
+                elementRect.left < containerRect.right &&
+                elementRect.right > containerRect.left
+            );
+        }
+
+        /**
          * Add thumbnail to loading queue (LIFO - current viewport loads first)
          * @private
          */
-        _queueThumbnail(imgEl, arcname, thumbnailURL) {
+        _queueThumbnail(imgEl, arcname, arcnameHash, thumbnailURL) {
             // Add to queue (LIFO - push to end, pop from end)
-            this._thumbnailQueue.push({ imgEl, arcname, thumbnailURL, token: this._thumbnailLoadToken });
+            this._thumbnailQueue.push({ imgEl, arcname, arcnameHash, thumbnailURL, token: this._thumbnailLoadToken });
             this.log('ZipPreview', `Queued thumbnail: ${arcname} (queue size: ${this._thumbnailQueue.length})`);
 
             // Try to process queue
@@ -912,7 +971,7 @@
 
         /**
          * Process thumbnail loading queue with concurrency limit
-         * LIFO (Last In, First Out) - loads current viewport thumbnails first
+         * Prioritizes visible thumbnails in viewport before loading off-screen ones
          * @private
          */
         async _processThumbnailQueue() {
@@ -924,15 +983,42 @@
                     break;
                 }
 
+                // Skip invalid tasks
                 if (!task.imgEl || !task.imgEl.isConnected || task.token !== this._thumbnailLoadToken) {
                     continue;
                 }
 
+                // Check if thumbnail is currently visible
+                const isVisible = this._isElementVisible(task.imgEl);
+
+                // If not visible and there are more tasks to check, defer this one
+                // But prevent infinite loop: only defer if we haven't checked all tasks yet
+                if (!isVisible && this._thumbnailQueue.length > 0) {
+                    // Mark as deferred to prevent infinite loop
+                    if (!task._deferCount) {
+                        task._deferCount = 0;
+                    }
+                    task._deferCount++;
+
+                    // Only defer up to queue length times (means we've checked all tasks once)
+                    if (task._deferCount <= this._thumbnailQueue.length) {
+                        // Move to front of queue (will be processed last due to LIFO)
+                        this._thumbnailQueue.unshift(task);
+                        this.log('ZipPreview', `Deferred non-visible thumbnail: ${task.arcname} (defer count: ${task._deferCount})`);
+                        continue;
+                    } else {
+                        // All tasks checked, no visible ones left - load this one anyway
+                        this.log('ZipPreview', `Loading non-visible thumbnail (no visible ones left): ${task.arcname}`);
+                    }
+                }
+
+                // Load this thumbnail (either visible, or no more visible ones in queue)
                 this._activeThumbnailLoads++;
-                this.log('ZipPreview', `Processing thumbnail: ${task.arcname} (active: ${this._activeThumbnailLoads}/${this._maxConcurrentThumbnails})`);
+                const priority = isVisible ? 'visible' : 'deferred';
+                this.log('ZipPreview', `Processing ${priority} thumbnail: ${task.arcname} (active: ${this._activeThumbnailLoads}/${this._maxConcurrentThumbnails})`);
 
                 // Load thumbnail asynchronously
-                this._loadThumbnail(task.imgEl, task.arcname, task.thumbnailURL)
+                this._loadThumbnail(task.imgEl, task.arcname, task.arcnameHash, task.thumbnailURL)
                     .finally(() => {
                         this._activeThumbnailLoads--;
                         this.log('ZipPreview', `Completed thumbnail: ${task.arcname} (active: ${this._activeThumbnailLoads})`);
@@ -958,12 +1044,13 @@
                     if (entry.isIntersecting) {
                         const imgEl = entry.target;
                         const arcname = imgEl.dataset.arcname;
+                        const arcnameHash = imgEl.dataset.hash;
                         const thumbnailURL = imgEl.dataset.thumbnailUrl;
 
                         // Add to queue if not already loaded (LIFO - current viewport first)
                         if (imgEl.dataset.pendingLoad === 'true') {
                             imgEl.dataset.pendingLoad = 'false';
-                            this._queueThumbnail(imgEl, arcname, thumbnailURL);
+                            this._queueThumbnail(imgEl, arcname, arcnameHash, thumbnailURL);
                         }
 
                         // Stop observing this image after queuing
@@ -989,9 +1076,10 @@
          * Load thumbnail with E2EE decryption support
          * @param {HTMLImageElement} imgEl - Image element to load thumbnail into
          * @param {string} arcname - File path in ZIP
+         * @param {string} arcnameHash - BLAKE2 hash of arcname
          * @param {string} thumbnailURL - Thumbnail URL
          */
-        async _loadThumbnail(imgEl, arcname, thumbnailURL) {
+        async _loadThumbnail(imgEl, arcname, arcnameHash, thumbnailURL) {
             const existingSrc = imgEl.getAttribute('src');
             if (imgEl.dataset.thumbnailLoaded === 'true' || (existingSrc && existingSrc.trim() !== '')) {
                 return;
@@ -1008,7 +1096,7 @@
                 if (this.extractor.e2eeContext && typeof this.extractor.getThumbnailBlob === 'function') {
                     // E2EE enabled - fetch and decrypt thumbnail
                     this.log('ZipPreview', `Fetching encrypted thumbnail: ${arcname}`);
-                    const blobURL = await this.extractor.getThumbnailBlob(arcname, thumbnailURL);
+                    const blobURL = await this.extractor.getThumbnailBlob(arcname, arcnameHash, thumbnailURL);
                     imgEl.src = blobURL;
                 } else {
                     // E2EE not enabled - load thumbnail directly
@@ -1153,13 +1241,13 @@
                 // Display full image
                 const url = URL.createObjectURL(blob);
                 imgEl.src = url;
-                imgEl.style.display = 'block';
                 imgEl.style.maxWidth = '100%';
                 imgEl.style.maxHeight = '100%';
                 imgEl.style.objectFit = 'contain';
                 imgEl.alt = entry.name || 'Preview';
                 imgEl.onload = () => {
                     URL.revokeObjectURL(url);
+                    imgEl.style.display = 'block'; // Show image only after it loads
                     this._hideFileViewerLoading();
                 };
                 imgEl.onerror = () => {
@@ -1176,8 +1264,8 @@
          * @private
          */
         async _handleImageFallback(entry, imgEl) {
-            const thumbnailURL = this.options.thumbnailURLTemplate.replace('{path}', encodeURIComponent(entry.name));
-            await this._loadThumbnail(imgEl, entry.name, thumbnailURL);
+            const thumbnailURL = this.options.thumbnailURLTemplate.replace('{hash}', encodeURIComponent(entry.hash));
+            await this._loadThumbnail(imgEl, entry.name, entry.hash, thumbnailURL);
             imgEl.style.display = 'block';
             imgEl.alt = entry.name || 'Preview';
             this._hideFileViewerLoading();
@@ -1226,6 +1314,34 @@
         }
 
         /**
+         * Clean up media element and prepare for new content
+         * @private
+         */
+        _cleanupMediaElement(element, otherElement) {
+            // Remove event handlers first to prevent stale callbacks
+            if (element.tagName === 'VIDEO') {
+                element.onloadeddata = null;
+                element.onerror = null;
+            } else {
+                element.onload = null;
+                element.onerror = null;
+            }
+
+            // Revoke old blob URL if it exists
+            const oldSrc = element.src;
+            if (oldSrc && oldSrc.startsWith('blob:')) {
+                URL.revokeObjectURL(oldSrc);
+            }
+
+            // Clear src and hide both elements
+            element.src = '';
+            element.style.display = 'none';
+            if (otherElement) {
+                otherElement.style.display = 'none';
+            }
+        }
+
+        /**
          * Preview image in modal viewer
          * @private
          */
@@ -1237,15 +1353,16 @@
                 return;
             }
 
-            // Show modal and hide video element
+            this._cleanupMediaElement(imgEl, videoEl);
             this._showViewerModal(entry);
-            if (videoEl) {
-                videoEl.style.display = 'none';
-            }
 
             // Fetch blob and handle display
             try {
                 const blob = await this.extractor.getFileBlob(entry.index, true);
+                if (!blob || blob.size === 0) {
+                    await this._handleImageFallback(entry, imgEl);
+                    return;
+                }
                 await this._handleImagePreview(blob, entry, imgEl);
             } catch (e) {
                 await this._handleImageFallback(entry, imgEl);
@@ -1264,13 +1381,8 @@
                 return;
             }
 
-            // Show viewer modal
+            this._cleanupMediaElement(videoEl, imgEl);
             this._showViewerModal(entry);
-
-            // Hide image element
-            if (imgEl) {
-                imgEl.style.display = 'none';
-            }
 
             // Fetch and display video
             if (!this.extractor) {
@@ -1284,9 +1396,9 @@
                 if (blob && blob.size > 0) {
                     const url = URL.createObjectURL(blob);
                     videoEl.src = url;
-                    videoEl.style.display = 'block';
                     videoEl.onloadeddata = () => {
                         URL.revokeObjectURL(url);
+                        videoEl.style.display = 'block'; // Show video only after it loads
                         this._hideFileViewerLoading();
                     };
                     videoEl.onerror = () => {
@@ -1656,19 +1768,21 @@
         }
 
 
-        createExtractor(rawMetadata, originalSize = null) {
+        createExtractor(rawMetadata) {
             if (typeof ZipPreviewExtractor === 'undefined') {
                 this.log('ZipPreview', 'ZipPreviewExtractor not loaded');
                 return;
             }
 
-            // Create extractor instance with raw metadata (will be decrypted internally)
+            // Constructor now supports explicit e2eeContext and deferred metadata input,
+            // so we can keep initialization in one place without post-construction injection.
             this.extractor = new ZipPreviewExtractor({
                 dbName: 'zip_gallery',
                 storeName: 'files',
+                metadataURL: this.options.metadataURL,
                 fileURLTemplate: this.options.fileURLTemplate,
-                rawMetadata: rawMetadata,  // Pass raw data to extractor
-                rawMetadataOriginalSize: originalSize,  // Pass original size for E2EE decryption
+                rawMetadata: rawMetadata,
+                e2eeContext: this._e2eeContext || null,
                 e2eeManager: this.options.e2eeManager,  // Reuse existing E2EE manager to avoid duplicate checks
                 onFileReady: ({
                     name,

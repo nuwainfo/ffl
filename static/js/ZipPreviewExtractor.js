@@ -1,4 +1,4 @@
-/*!
+﻿/*!
  * FastFileLink - ZipPreviewExtractor
  * https://github.com/nuwainfo/ffl
  *
@@ -22,9 +22,11 @@ class ZipPreviewExtractor {
         this.downloadId = opts.downloadId || null;
         // Control whether to fetch individual files via /[uid]/file when requested
         this.enableFileFetch = (opts.enableFileFetch ?? true) ? true : false;
-        // URL template for fetching individual files (e.g., '/uid=****/file?path={path}')
-        this.fileURLTemplate = opts.fileURLTemplate || '/uid=****/file?path={path}';
+        // URL template for fetching individual files (e.g., '/uid=****/file?hash={hash}')
+        this.fileURLTemplate = opts.fileURLTemplate || '/uid=****/file?hash={hash}';
+        this.metadataURL = opts.metadataURL || '/uid=****/manifest';
         this._fetchInflight = new Map();
+        this._e2eePlanCache = new Map();
 
         // Log function from PreviewUI (already handles debug flag)
         this.log = opts.log || ((tag, msg) => console.log(`[${tag}] ${msg}`));
@@ -34,9 +36,13 @@ class ZipPreviewExtractor {
         this.e2eeManager = opts.e2eeManager || null;
         this.e2eeContext = null;
 
-        // Only initialize E2EE if manager is provided
-        // If no manager provided, it means WebRTCManager already checked and E2EE is disabled
-        if (this.e2eeManager) {
+        // Prefer explicit context (server page with user-provided key), otherwise reuse manager.
+        if (opts.e2eeContext) {
+            this.e2eeContext = opts.e2eeContext;
+            this.log('ZipPreviewExtractor', 'Using provided e2eeContext');
+            this._e2eeInitPromise = Promise.resolve();
+        } else if (this.e2eeManager) {
+            // If manager exists, WebRTC/legacy path performs key exchange.
             this.log('ZipPreviewExtractor', 'Reusing existing E2EE manager (skip duplicate check)');
             this._e2eeInitPromise = this._reuseE2EEManager(); // Reuse existing manager
         } else {
@@ -44,9 +50,9 @@ class ZipPreviewExtractor {
             this._e2eeInitPromise = Promise.resolve(); // No-op, E2EE disabled
         }
 
-        // If raw metadata provided, parse it (with E2EE decryption if needed)
-        if (opts.rawMetadata) {
-            this._metadataInitPromise = this._initMetadata(opts.rawMetadata, opts.rawMetadataOriginalSize || null);
+        // rawMetadata accepts ArrayBuffer, Promise<ArrayBuffer>, or callback returning either.
+        if (opts.rawMetadata !== undefined && opts.rawMetadata !== null) {
+            this._metadataInitPromise = this._initMetadataFromInput(opts.rawMetadata);
         }
 
         this._stats = {
@@ -101,7 +107,9 @@ class ZipPreviewExtractor {
             this.e2eeContext = {
                 contentKey: keyData.contentKey,
                 nonceBase: keyData.nonceBase,
-                chunkSize: this.e2eeManager.manifest.chunkSize
+                chunkSize: this.e2eeManager.manifest.chunkSize,
+                filename: keyData.filename,
+                filesize: keyData.filesize
             };
 
             this.log('ZipPreviewExtractor', '✓ E2EE initialized from existing manager - files will be decrypted');
@@ -123,77 +131,183 @@ class ZipPreviewExtractor {
         }
     }
 
+    async _resolveRawMetadataInput(rawMetadataInput) {
+        if (typeof rawMetadataInput === 'function') {
+            return await rawMetadataInput();
+        }
+        return await Promise.resolve(rawMetadataInput);
+    }
+
+    _normalizeToArrayBuffer(data) {
+        if (data instanceof ArrayBuffer) {
+            return data;
+        }
+        if (ArrayBuffer.isView(data)) {
+            return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+        }
+        throw new Error('rawMetadata must resolve to ArrayBuffer or TypedArray');
+    }
+
+    async _initMetadataFromInput(rawMetadataInput) {
+        const resolved = await this._resolveRawMetadataInput(rawMetadataInput);
+        const rawMetadata = this._normalizeToArrayBuffer(resolved);
+        return await this._initMetadata(rawMetadata);
+    }
+
+    _isEmbeddedE2EEMode() {
+        return !!(
+            this.e2eeContext &&
+            Array.isArray(this.e2eeContext.embeddedTags) &&
+            this.e2eeContext.embeddedTags.length > 0 &&
+            this.e2eeContext.filename &&
+            Number.isFinite(this.e2eeContext.filesize)
+        );
+    }
+
+    _buildE2EEPlanURL(resourceURL, endpointOverride = null) {
+        const parsed = new URL(resourceURL || this.metadataURL, window.location.origin);
+        const pathParts = parsed.pathname.split('/').filter(Boolean);
+        if (pathParts.length === 0) {
+            throw new Error('Cannot resolve endpoint path for E2EE plan');
+        }
+
+        const endpointName = endpointOverride || pathParts[pathParts.length - 1];
+        pathParts[pathParts.length - 1] = 'e2ee';
+
+        const planURL = new URL(parsed.toString());
+        planURL.pathname = `/${pathParts.join('/')}`;
+
+        const params = new URLSearchParams(parsed.search);
+        params.set('endpoint', endpointName);
+        planURL.search = params.toString();
+        return planURL.toString();
+    }
+
+    async _fetchEmbeddedE2EEPlan(resourceURL, endpointOverride = null) {
+        const planURL = this._buildE2EEPlanURL(resourceURL, endpointOverride);
+        if (this._e2eePlanCache.has(planURL)) {
+            return this._e2eePlanCache.get(planURL);
+        }
+
+        const response = await fetch(planURL, { cache: 'no-cache' });
+        if (!response.ok) {
+            throw new Error(`Failed to fetch E2EE plan: HTTP ${response.status}`);
+        }
+
+        const plan = await response.json();
+        this._e2eePlanCache.set(planURL, plan);
+        return plan;
+    }
+
+    async _decryptEmbeddedWindow(ciphertextBuffer, plan) {
+        const decryptor = new HTTPDecryptor(
+            this.e2eeContext.contentKey,
+            this.e2eeContext.nonceBase,
+            this.e2eeContext.filename,
+            this.e2eeContext.filesize,
+            this.e2eeContext.chunkSize,
+            this.e2eeContext.embeddedTags || null,
+            this.log,
+            'global',
+            plan.globalChunkStart || 0
+        );
+
+        const decryptedChunk = await decryptor.decryptChunk(ciphertextBuffer);
+        const finalChunk = await decryptor.flush();
+
+        const totalLength = decryptedChunk.byteLength + finalChunk.byteLength;
+        const plaintext = new Uint8Array(totalLength);
+        plaintext.set(decryptedChunk, 0);
+        plaintext.set(finalChunk, decryptedChunk.byteLength);
+
+        const trimOffset = Number(plan.trimOffset || plan.start || 0);
+        const plainSize = Number(plan.plainSize || plan.size || 0);
+        const trimEnd = plainSize > 0 ? trimOffset + plainSize : plaintext.byteLength;
+        return plaintext.slice(trimOffset, trimEnd).buffer;
+    }
+
     /**
-     * Fetch and decrypt data from server (DRY helper for manifest/thumbnails/files)
+     * Fetch and decrypt data from server 
      * @param {string|null} url - URL to fetch (null if rawData provided)
-     * @param {string} streamId - Stream ID for tag fetching (e.g., "manifest", "thumb/image.png", "folder/file.txt")
-     * @param {number|null} originalSize - Original data size (optional - will read from X-Original-Size header if not provided)
+     * @param {string} filename - Filename for AAD (authentication) - usually arcname
+     * @param {number|null} originalSize - Original data size (optional)
      * @param {ArrayBuffer|null} rawData - Raw data (if already fetched, null to fetch from URL)
+     * @param {string|null} streamId - Stream ID for tag fetching (if different from filename, e.g., hash for privacy)
      * @returns {Promise<ArrayBuffer>} - Decrypted data (or plaintext if E2EE not enabled)
      */
-    async _fetchAndDecrypt(url, streamId, originalSize = null, rawData = null) {
+    async _fetchAndDecrypt(url, filename, originalSize = null, rawData = null, streamId = null) {
         let data;
-        let response = null;
 
-        // Fetch data from server if not provided
         if (rawData === null) {
-            response = await fetch(url, { cache: 'no-cache' });
+            const response = await fetch(url, { cache: 'no-cache' });
             if (!response.ok) {
                 throw new Error(`Fetch failed: ${response.status}`);
             }
             data = await response.arrayBuffer();
         } else {
-            // Use provided raw data
             data = rawData;
         }
 
-        // Decrypt if E2EE is enabled
-        if (this.e2eeContext) {
-            // Get original size from header if not provided
-            if (originalSize === null && response) {
-                const sizeHeader = response.headers.get('X-Original-Size');
-                if (sizeHeader) {
-                    originalSize = parseInt(sizeHeader, 10);
-                } else {
-                    throw new Error(`Missing X-Original-Size header for encrypted resource: ${streamId}`);
-                }
-            }
-
-            this.log('ZipPreviewExtractor', `Decrypting ${streamId} (${data.byteLength} bytes encrypted -> ${originalSize || 'unknown'} bytes expected)`);
-
-            // Create HTTPDecryptor for this resource
-            const decryptor = new HTTPDecryptor(
-                this.e2eeContext.contentKey,
-                this.e2eeContext.nonceBase,
-                streamId,                    // filename (for AAD) = streamId
-                originalSize,                // original size (for AAD)
-                this.e2eeContext.chunkSize,
-                null,                        // no embedded tags
-                this.log,
-                streamId                     // streamId for per-resource tag storage
-            );
-
-            // Decrypt chunks
-            const decryptedChunk = await decryptor.decryptChunk(data);
-            const finalChunk = await decryptor.flush();
-
-            // Concatenate decrypted chunks
-            const totalLength = decryptedChunk.byteLength + finalChunk.byteLength;
-            const plaintext = new Uint8Array(totalLength);
-            plaintext.set(decryptedChunk, 0);
-            plaintext.set(finalChunk, decryptedChunk.byteLength);
-
-            this.log('ZipPreviewExtractor', `✓ Decrypted ${streamId} (${plaintext.byteLength} bytes plaintext)`);
-            data = plaintext.buffer;
+        if (!this.e2eeContext) {
+            return data;
         }
 
-        return data;
+        // Embedded upload/server mode: use global stream metadata + /uid/e2ee plan.
+        if (this._isEmbeddedE2EEMode()) {
+            const resourceURL = url || this.metadataURL;
+            const endpointOverride = filename === 'manifest' ? 'manifest' : null;
+            const plan = await this._fetchEmbeddedE2EEPlan(resourceURL, endpointOverride);
+            this.log(
+                'ZipPreviewExtractor',
+                `Decrypting embedded ${filename} (chunkStart=${plan.globalChunkStart}, chunks=${plan.chunkCount})`
+            );
+            return await this._decryptEmbeddedWindow(data, plan);
+        }
+
+        // Non-embedded path (P2P/tag-fetch mode) keeps legacy behavior.
+        const actualStreamId = streamId || filename;
+
+        if (originalSize === null && data.byteLength > 0) {
+            // HTTP/P2P endpoint encryption stores GCM tags out-of-band (/e2ee/tags).
+            // Therefore ciphertext length equals plaintext length for endpoint payloads.
+            originalSize = data.byteLength;
+            this.log(
+                'ZipPreviewExtractor',
+                `Computed original size from encrypted payload length: ${originalSize} bytes`
+            );
+        }
+
+        this.log(
+            'ZipPreviewExtractor',
+            `Decrypting ${filename} (${data.byteLength} bytes encrypted -> ${originalSize || 'unknown'} bytes expected)`
+        );
+
+        const decryptor = new HTTPDecryptor(
+            this.e2eeContext.contentKey,
+            this.e2eeContext.nonceBase,
+            filename,
+            originalSize,
+            this.e2eeContext.chunkSize,
+            this.e2eeContext.embeddedTags || null,
+            this.log,
+            actualStreamId
+        );
+
+        const decryptedChunk = await decryptor.decryptChunk(data);
+        const finalChunk = await decryptor.flush();
+        const totalLength = decryptedChunk.byteLength + finalChunk.byteLength;
+        const plaintext = new Uint8Array(totalLength);
+        plaintext.set(decryptedChunk, 0);
+        plaintext.set(finalChunk, decryptedChunk.byteLength);
+
+        this.log('ZipPreviewExtractor', `Decrypted ${filename} (${plaintext.byteLength} bytes plaintext)`);
+        return plaintext.buffer;
     }
 
     /**
      * Initialize metadata from raw data (decrypt if E2EE enabled)
      * @param {ArrayBuffer} rawData - Raw metadata from server
-     * @param {number|null} originalSize - Original size before encryption (from X-Original-Size header)
+     * @param {number|null} originalSize - Original size before encryption (optional)
      */
     async _initMetadata(rawData, originalSize = null) {
         try {
@@ -205,7 +319,7 @@ class ZipPreviewExtractor {
             // Decrypt if E2EE is enabled
             if (this.e2eeContext) {
                 this.log('ZipPreviewExtractor', 'Decrypting metadata...');
-                data = await this._fetchAndDecrypt(null, 'manifest', originalSize, data);
+                data = await this._fetchAndDecrypt(this.metadataURL, 'manifest', originalSize, data);
             }
 
             // Parse JSON
@@ -287,12 +401,13 @@ class ZipPreviewExtractor {
         // Wait for E2EE initialization to complete (if ongoing)
         await this._waitForE2EEInit();
 
-        // Use fileURLTemplate to construct URL (replaces {path} placeholder)
-        const url = this.fileURLTemplate.replace('{path}', encodeURIComponent(entry.name));
+        // Use fileURLTemplate to construct URL (replaces {hash} placeholder)
+        const url = this.fileURLTemplate.replace('{hash}', encodeURIComponent(entry.hash));
         this.log('ZipPreviewExtractor', `Fetching file: ${entry.name} (${size} bytes)`);
 
-        // Fetch and decrypt using DRY helper (streamId = arcname)
-        const buf = await this._fetchAndDecrypt(url, entry.name, size);
+        // Fetch and decrypt using DRY helper
+        // IMPORTANT: Use arcname for AAD (authentication), hash for streamId (tag fetching)
+        const buf = await this._fetchAndDecrypt(url, entry.name, size, null, entry.hash);
 
         if (!buf || buf.byteLength <= 0)
             return null;
@@ -306,17 +421,18 @@ class ZipPreviewExtractor {
     /**
      * Fetch and decrypt thumbnail for a file
      * @param {string} arcname - File path in ZIP
-     * @param {string} thumbnailURL - Thumbnail URL (e.g., '/uid/thumb?path=...&w=420&h=320')
+     * @param {string} arcnameHash - BLAKE2 hash of arcname
+     * @param {string} thumbnailURL - Thumbnail URL (e.g., '/uid/thumb?hash=...&w=420&h=320')
      * @returns {Promise<string>} - Blob URL for decrypted thumbnail
      */
-    async getThumbnailBlob(arcname, thumbnailURL) {
+    async getThumbnailBlob(arcname, arcnameHash, thumbnailURL) {
         try {
             // Wait for E2EE initialization to complete (if ongoing)
             await this._waitForE2EEInit();
 
             // Fetch and decrypt thumbnail using DRY helper
-            // StreamId = "thumb/{arcname}" for per-thumbnail tag storage
-            const streamId = `thumb/${arcname}`;
+            // StreamId = "thumb/{hash}" for per-thumbnail tag storage (privacy)
+            const streamId = `thumb/${arcnameHash}`;
             const data = await this._fetchAndDecrypt(thumbnailURL, streamId);
 
             // Create blob from decrypted data
@@ -372,8 +488,13 @@ class ZipPreviewExtractor {
                 return null;
 
             // Persist to IndexedDB so subsequent access is instant
-            await this.putFile(e.name, b, e.index, e.mime || '');
-            this.log('ZipPreviewExtractor', `File stored to DB: ${e.name}`);
+            try {
+                await this.putFile(e.name, b, e.index, e.mime || '');
+                this.log('ZipPreviewExtractor', `File stored to DB: ${e.name}`);
+            } catch (dbError) {
+                // Don't throw - return the blob anyway so it can still be displayed
+                this.log('ZipPreviewExtractor', `⚠ IndexedDB error (file still usable): ${dbError.message}`);
+            }
 
             // Notify UI to mark file as READY (same callback as stream-extracted files)
             try {

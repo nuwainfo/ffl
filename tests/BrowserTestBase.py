@@ -140,6 +140,11 @@ class BrowserTestBase(FastFileLinkTestBase):
         if staticServer.startswith("http://"):
             options.add_argument('--allow-running-insecure-content')
             options.add_argument('--allow-insecure-localhost')
+            # Allow loading loopback static assets (e.g. http://localhost:8000) from HTTPS share pages
+            # in test runs where STATIC_SERVER points to localhost.
+            options.add_argument('--disable-features=BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights')
+            options.add_argument(f'--unsafely-treat-insecure-origin-as-secure={staticServer}')
+            options.add_argument('--disable-web-security')
 
         driver = uc.Chrome(options=options, version_main=144)
         try:

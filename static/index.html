@@ -435,8 +435,8 @@ Licensed under Apache-2.0 license.
                 webrtcManager.start();
             } // End of startWebRTCDownload function
             
-            // Listen for i18n ready event
-            window.addEventListener('i18nReady', startWebRTCDownload);
+            // Start when i18n is ready (or immediately if i18n is already initialized).
+            window.runAfterI18nReady(startWebRTCDownload);
 
             // Fallback: if i18nReady doesn't fire within 2 seconds, proceed anyway
             startWebRTCTimer = setTimeout(() => {

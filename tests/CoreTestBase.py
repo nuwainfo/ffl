@@ -756,6 +756,10 @@ class FastFileLinkTestBase(unittest.TestCase):
 
                 time.sleep(1)
 
+            # Re-check for JSON after loop exit (handles race where process writes JSON and exits immediately)
+            if not jsonFileCreated and os.path.exists(self.jsonOutputPath):
+                jsonFileCreated = True
+
             if not jsonFileCreated:
                 # Try to get some diagnostic information about the process failure
                 processStatus = "unknown"
@@ -773,7 +777,9 @@ class FastFileLinkTestBase(unittest.TestCase):
                     try:
                         with open(self.procLogPath, "r", encoding="utf-8", errors="replace") as lf:
                             logContent = lf.read()
-                            print(f"[Test] Process combined log:\n{logContent}")
+                            # Encode-safe print for consoles that can't handle all unicode (e.g., cp950)
+                            safeContent = logContent.encode(sys.stdout.encoding or 'utf-8', errors='replace').decode(sys.stdout.encoding or 'utf-8', errors='replace')
+                            print(f"[Test] Process combined log:\n{safeContent}")
                     except Exception as e:
                         print(f"[Test] Failed to read process log: {e}")
                 else:

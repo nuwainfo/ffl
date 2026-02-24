@@ -54,7 +54,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional
 
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse, urlencode
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 import requests
@@ -131,10 +131,12 @@ class HookRequestHandler(AuthMixin, BaseHTTPRequestHandler):
             logger.warning(f"Missing event field from {self.client_address[0]}")
             return
 
+        responsePayload = None
+
         # Call event handler
         if self.server.onEvent:
             try:
-                self.server.onEvent(eventName, eventData)
+                responsePayload = self.server.onEvent(eventName, eventData)
             except Exception as e:
                 logger.error(f"Error in event handler for {eventName}: {e}")
                 self.send_response(500)
@@ -143,10 +145,17 @@ class HookRequestHandler(AuthMixin, BaseHTTPRequestHandler):
                 return
 
         # Send success response
+        if responsePayload is None:
+            responsePayload = {'status': 'ok'}
+
+        jsonResponse = HookEventSerializer.makeJsonSafe(responsePayload)
+        responseBody = json.dumps(jsonResponse).encode('utf-8')
+
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(responseBody)))
         self.end_headers()
-        self.wfile.write(b'{"status": "ok"}')
+        self.wfile.write(responseBody)
 
 
 class HookServer(ThreadingHTTPServer):
@@ -225,6 +234,8 @@ class HookServer(ThreadingHTTPServer):
         if self._thread:
             self._thread.join(timeout=5.0)
 
+        self.server_close()
+
         logger.debug("Hook server stopped")
 
     def getHookURL(self) -> str:
@@ -251,12 +262,21 @@ class HookEventSerializer:
     - Converting values to JSON-safe format via makeJsonSafe
     """
 
+    @staticmethod
+    def extractShareLinkCreateEvent(eventData: dict) -> dict:
+        extracted = {key: value for key, value in eventData.items() if key not in ('args', 'reader')}
+
+        reader = eventData.get('reader')
+        if not reader or not reader.supportManifest:
+            return extracted
+
+        extracted['manifest'] = reader.manifest
+        return extracted
+
     EXTRACTORS = {
         # Remove non-serializable objects from events
         FFLEvent.shareLinkCreate:
-            lambda e: {
-                k: v for k, v in e.items() if k not in ('args', 'reader')
-            },
+            lambda eventData: HookEventSerializer.extractShareLinkCreateEvent(eventData),
         FFLEvent.downloadStarted:
             lambda e: {
                 k: v for k, v in e.items() if k not in ('request', 'handler', 'server')
@@ -272,26 +292,6 @@ class HookEventSerializer:
         FFLEvent.downloadFailed:
             lambda e: {
                 k: v for k, v in e.items() if k not in ('exception', 'handler')
-            },
-        FFLEvent.uploadStarting:
-            lambda e: {
-                k: v for k, v in e.items() if k not in ('reader', 'uploadMethod')
-            },
-        FFLEvent.uploadStarted:
-            lambda e: {
-                k: v for k, v in e.items() if k not in ('reader', 'uploadMethod')
-            },
-        FFLEvent.uploadProgress:
-            lambda e: {
-                k: v for k, v in e.items() if k not in ('progressObj', 'uploadMethod', 'reader')
-            },
-        FFLEvent.uploadCompleted:
-            lambda e: {
-                k: v for k, v in e.items() if k not in ('uploadMethod', 'reader', 'response')
-            },
-        FFLEvent.uploadFailed:
-            lambda e: {
-                k: v for k, v in e.items() if k not in ('exception', 'uploadMethod')
             },
         FFLEvent.webrtcConnected:
             lambda e: {
@@ -310,6 +310,20 @@ class HookEventSerializer:
                 k: v for k, v in e.items() if k not in ('exception', 'stack')
             },
     }
+
+    @classmethod
+    def registerExtractor(cls, event, extractor):
+        """
+        Register an extractor for an event type.
+
+        Allows addons to register their own event extractors without
+        modifying the base EXTRACTORS dict.
+
+        Args:
+            event: Event instance (e.g., UploadEvent.uploadStarted)
+            extractor: Callable that takes event data dict and returns filtered dict
+        """
+        cls.EXTRACTORS[event] = extractor
 
     @staticmethod
     def makeJsonSafe(value):
@@ -435,6 +449,9 @@ class HookClient:
             client.sendEvent('/server/ready', {'url': 'http://...'})
     """
 
+    EVENT_ENDPOINTS_REGISTER = '/hook/server/endpoints/register'
+    EVENT_ENDPOINT_REQUEST = '/hook/server/request'
+
     @staticmethod
     def parseHookURL(hookURL: str) -> dict:
         """
@@ -499,36 +516,252 @@ class HookClient:
         self.config = HookClient.parseHookURL(hookURL)
         self.hookURL = hookURL
 
-    def sendEvent(self, eventName: str, eventData: dict = None):
+    def _getAuth(self):
+        if self.config['username'] and self.config['password']:
+            return (self.config['username'], self.config['password'])
+        return None
+
+    def _postPayload(self, payload: dict, timeout: float = 10.0):
+        try:
+            response = requests.post(self.hookURL, json=payload, auth=self._getAuth(), timeout=timeout)
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to send hook payload: {e}")
+            raise HookError(f"Request failed: {e}")
+
+        if response.status_code == 401:
+            raise HookAuthError("Authentication failed")
+        if response.status_code != 200:
+            raise HookError(f"Server returned status {response.status_code}: {response.text}")
+
+        return response
+
+    def sendEvent(self, eventName: str, eventData: dict = None, timeout: float = 10.0, expectResponse: bool = False):
         """
         Send event to webhook server.
 
         Args:
             eventName: Event name (e.g., '/server/ready')
             eventData: Event data dictionary
+            timeout: Request timeout in seconds
+            expectResponse: Parse and return JSON response payload when True
 
         Raises:
             HookError: If request fails
         """
         payload = HookEventSerializer.serialize(eventName, eventData)
+        response = self._postPayload(payload, timeout=timeout)
+
+        if not expectResponse:
+            logger.debug(f"Sent event: {eventName}")
+            return None
 
         try:
-            # Prepare auth if credentials provided
-            auth = None
-            if self.config['username'] and self.config['password']:
-                auth = (self.config['username'], self.config['password'])
+            responsePayload = response.json()
+        except json.JSONDecodeError as e:
+            raise HookError(f"Hook response is not valid JSON: {e}")
 
-            # Send POST request
-            response = requests.post(self.hookURL, json=payload, auth=auth, timeout=10.0)
+        if not isinstance(responsePayload, dict):
+            raise HookError("Hook response must be a JSON object")
 
-            # Check response
-            if response.status_code == 401:
-                raise HookAuthError("Authentication failed")
-            elif response.status_code != 200:
-                raise HookError(f"Server returned status {response.status_code}: {response.text}")
+        logger.debug(f"Sent event with response: {eventName}")
+        return responsePayload
 
-            logger.debug(f"Sent event: {eventName}")
+    def registerServerEndpoints(self, serverContext: dict, timeout: float = 5.0) -> list:
+        response = self.sendEvent(
+            HookClient.EVENT_ENDPOINTS_REGISTER, serverContext, timeout=timeout, expectResponse=True
+        )
 
+        routes = response.get('routes')
+        if routes is None:
+            data = response.get('data')
+            if isinstance(data, dict):
+                routes = data.get('routes')
+
+        if routes is None:
+            return []
+
+        if not isinstance(routes, list):
+            raise HookError("Hook endpoint registration response requires 'routes' as a list")
+
+        return routes
+
+    def dispatchServerRequest(self, requestData: dict, timeout: float = 10.0) -> dict:
+        return self.sendEvent(HookClient.EVENT_ENDPOINT_REQUEST, requestData, timeout=timeout, expectResponse=True)
+
+
+class HookEndpointRouter:
+    ALLOWED_METHODS = {'GET', 'POST', 'HEAD'}
+    BLOCKED_RESPONSE_HEADERS = {
+        'content-length', 'content-encoding', 'connection', 'transfer-encoding', 'server', 'date'
+    }
+
+    @classmethod
+    def _normalizeRoute(cls, route: dict) -> Optional[dict]:
+        if not isinstance(route, dict):
+            return None
+
+        method = route.get('method')
+        path = route.get('path')
+
+        if not isinstance(method, str) or not isinstance(path, str):
+            return None
+
+        method = method.strip().upper()
+        path = path.strip()
+
+        if method not in cls.ALLOWED_METHODS:
+            return None
+
+        if not path.startswith('/') or '?' in path or '*' in path:
+            return None
+
+        return {'method': method, 'path': path}
+
+    @classmethod
+    def _fetchRoutes(cls, server, hookClient: HookClient) -> list:
+        context = {
+            'uid': server.uid,
+            'domain': server.domain,
+            'port': server.server_address[1],
+            'authEnabled': bool(server.config.authPassword),
+            'defaultWebRTC': bool(server.config.defaultWebRTC),
+            'e2eeEnabled': bool(server.config.e2eeEnabled),
+            'torEnabled': bool(server.config.torEnabled),
+            'fileName': server.reader.contentName,
+            'fileSize': server.reader.size,
+        }
+
+        routes = []
+        try:
+            registered = hookClient.registerServerEndpoints(context)
+            for route in registered:
+                normalized = cls._normalizeRoute(route)
+                if normalized:
+                    routes.append(normalized)
+                else:
+                    logger.warning(f"Ignored invalid hook endpoint route: {route}")
+        except Exception as e:
+            logger.warning(f"Hook endpoint registration failed: {e}")
+
+        return routes
+
+    @staticmethod
+    def _buildProxyURL(hookClient: HookClient, path: str, args=None) -> str:
+        scheme = hookClient.config['scheme']
+        host = hookClient.config['host']
+        port = hookClient.config['port']
+        defaultPort = 443 if scheme == 'https' else 80
+        netloc = f'{host}:{port}' if port != defaultPort else host
+        query = urlencode(args or {}, doseq=True)
+        return urlunparse((scheme, netloc, path, '', query, ''))
+
+    @staticmethod
+    def _buildForwardHeaders(handler):
+        blockedRequestHeaders = {'host', 'content-length', 'connection', 'transfer-encoding'}
+        headers = {}
+        for key in handler.headers:
+            if key.lower() in blockedRequestHeaders:
+                continue
+            headers[key] = handler.headers.get(key)
+
+        # Keep upstream response body/headers consistent by disabling compression.
+        headers['Accept-Encoding'] = 'identity'
+        return headers
+
+    @classmethod
+    def _sendProxyResponse(cls, handler, method: str, response: requests.Response):
+        status = response.status_code
+        body = b'' if method == 'HEAD' else response.content
+
+        if status in (204, 304):
+            body = b''
+
+        handler.send_response(status)
+
+        for key, value in response.headers.items():
+            lower = key.lower()
+            if lower in cls.BLOCKED_RESPONSE_HEADERS:
+                continue
+
+            strValue = str(value)
+            if '\r' in key or '\n' in key or '\r' in strValue or '\n' in strValue:
+                continue
+
+            handler.send_header(key, strValue)
+
+        handler.send_header('Content-Length', str(len(body)))
+        handler.end_headers()
+
+        if method != 'HEAD' and body:
+            handler.wfile.write(body)
+
+    @classmethod
+    def _proxyRequest(cls, handler, hookClient: HookClient, method: str, path: str, args=None, body=None):
+        try:
+            url = cls._buildProxyURL(hookClient, path, args=args)
+            requestHeaders = cls._buildForwardHeaders(handler)
+
+            requestArgs = {
+                'url': url,
+                'headers': requestHeaders,
+                'auth': hookClient._getAuth(),
+                'timeout': 10.0,
+                'allow_redirects': False,
+            }
+
+            if method == 'POST':
+                requestArgs['json'] = HookEventSerializer.makeJsonSafe(body if body is not None else {})
+
+            response = requests.request(method, **requestArgs)
+            cls._sendProxyResponse(handler, method, response)
         except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to send event {eventName}: {e}")
-            raise HookError(f"Request failed: {e}")
+            handler.send_error(502, f'Hook endpoint request failed: {e}')
+        except Exception as e:
+            logger.exception(f"Unexpected hook proxy error: {e}")
+            handler.send_error(502, "Hook endpoint request failed")
+
+    @classmethod
+    def registerForHandler(cls, handler, server, hookClient: HookClient, getPathMap, postPathMap, headPathMap):
+        routes = cls._fetchRoutes(server, hookClient)
+        for route in routes:
+            method = route['method']
+            path = route['path']
+
+            if method == 'GET':
+                getPathMap[path] = (
+                    lambda args, _path=path: cls._proxyRequest(handler, hookClient, 'GET', _path, args=args)
+                )
+                headPathMap[path] = (lambda _path=path: cls._proxyRequest(handler, hookClient, 'HEAD', _path, args={}))
+            elif method == 'POST':
+                postPathMap[path] = (
+                    lambda data, _path=path: cls._proxyRequest(handler, hookClient, 'POST', _path, body=data)
+                )
+            elif method == 'HEAD':
+                headPathMap[path] = (lambda _path=path: cls._proxyRequest(handler, hookClient, 'HEAD', _path))
+
+
+def registerHookEndpointsForHandler(handler, server, hookClient: HookClient, getPathMap, postPathMap, headPathMap):
+    HookEndpointRouter.registerForHandler(
+        handler=handler,
+        server=server,
+        hookClient=hookClient,
+        getPathMap=getPathMap,
+        postPathMap=postPathMap,
+        headPathMap=headPathMap
+    )
+
+
+def forwardEventToHook(hookSender, eventName, **eventData):
+    if eventName == FFLEvent.serverEndpointsRegister.key:
+        if isinstance(hookSender, HookClient):
+            registerHookEndpointsForHandler(
+                handler=eventData['handler'],
+                server=eventData['server'],
+                hookClient=hookSender,
+                getPathMap=eventData['getPathMap'],
+                postPathMap=eventData['postPathMap'],
+                headPathMap=eventData['headPathMap']
+            )
+        return
+
+    hookSender.sendEvent(eventName, eventData)

@@ -332,14 +332,17 @@ class WebRTCDecryptor {
 // ========== E2EEManager Class ==========
 
 class E2EEManager {
-    constructor(log) {
+    constructor(log, options = {}) {
         this.log = log || console.log;
         this.e2eeEnabled = false;
         this.manifest = null;
+
+        // Allow disabling /e2ee/manifest fallback (useful when using embedded-only mode)
+        this.disableManifestFallback = options.disableManifestFallback || false;
     }
 
     /**
-     * Check if E2EE is enabled - first check for embedded data, then fall back to /e2ee/manifest
+     * Check if E2EE is enabled - first check for embedded data, then optionally fall back to /e2ee/manifest
      */
     async checkE2EEStatus() {
         try {
@@ -364,6 +367,13 @@ class E2EEManager {
 
                 this.log("E2EE", `✓ E2EE enabled (embedded) - chunk size: ${this.manifest.chunkSize}`);
                 return true;
+            }
+
+            // Skip /e2ee/manifest fallback if disabled
+            if (this.disableManifestFallback) {
+                this.log("E2EE", "No embedded data and manifest fallback disabled - E2EE not enabled");
+                this.e2eeEnabled = false;
+                return false;
             }
 
             // Fall back to fetching /e2ee/manifest if no embedded data
@@ -595,7 +605,17 @@ class E2EEManager {
  * Handles chunk buffering, tag fetching, and AES-GCM decryption.
  */
 class HTTPDecryptor {
-    constructor(contentKey, nonceBase, filename, filesize, chunkSize, embeddedTags = null, log = null, streamId = 'global') {
+    constructor(
+        contentKey,
+        nonceBase,
+        filename,
+        filesize,
+        chunkSize,
+        embeddedTags = null,
+        log = null,
+        streamId = 'global',
+        startChunkIndex = 0
+    ) {
         this.contentKey = contentKey;
         this.nonceBase = nonceBase;
         this.filename = filename;
@@ -606,7 +626,7 @@ class HTTPDecryptor {
 
         // Service Worker decryption state
         this.chunkBuffer = new Uint8Array(0);
-        this.currentChunkIndex = 0;
+        this.currentChunkIndex = Number.isFinite(startChunkIndex) && startChunkIndex >= 0 ? startChunkIndex : 0;
         this.tagMap = new Map();
         this.tagBatchSize = 100;
         this.embedded = false;
