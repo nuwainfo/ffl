@@ -22,6 +22,7 @@ import sys
 import threading
 import uuid
 import concurrent.futures
+import hashlib
 import re
 import urllib.parse
 import base64
@@ -202,7 +203,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
     # Transfer chunk size - shared across WebRTC and HTTP downloads
     CHUNK_SIZE = TRANSFER_CHUNK_SIZE
 
-    def __init__(self, loggerCallback=print, downloadCallback=None, exceptionCallback=None):
+    def __init__(self, loggerCallback=print, downloadCallback=None, exceptionCallback=None, checksumStore=None):
         # WebRTC state
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self._runLoop, daemon=True)
@@ -212,6 +213,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         self.loggerCallback = loggerCallback
         self.downloadCallback = downloadCallback
         self.exceptionCallback = exceptionCallback
+        self.checksumStore = checksumStore
 
         # Download completion events for each peer
         self.downloadCompleteEvents: Dict[str, threading.Event] = {}
@@ -507,6 +509,8 @@ class WebRTCManager(AsyncLoopExceptionMixin):
     ):
         startReceived = asyncio.Event()
         lastHeartbeat = time.monotonic()
+        checksumSession = None
+        shouldCommitChecksum = False
 
         def onMessage(message):
             nonlocal lastHeartbeat
@@ -602,6 +606,13 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         if e2eeManager:
             streamEncryptor = e2eeManager.createWebRTCEncryptor(reader.contentName, fileSize)
 
+        if self.checksumStore:
+            checksumSession = self.checksumStore.begin(
+                transport='webrtc',
+                e2ee=bool(streamEncryptor)
+            )
+            shouldCommitChecksum = offset == 0
+
         bufferFlushed = asyncio.Event()
         bufferFlushed.set()
 
@@ -652,6 +663,9 @@ class WebRTCManager(AsyncLoopExceptionMixin):
                 if streamEncryptor:
                     chunk = streamEncryptor.processChunk(chunk)
 
+                if checksumSession:
+                    checksumSession.update(chunk)
+
                 dc.send(chunk)
                 sent += plaintextSize # Count plaintext bytes, not encrypted bytes
                 bufferFlushed.clear()
@@ -687,6 +701,9 @@ class WebRTCManager(AsyncLoopExceptionMixin):
             # Wait for buffer to drain before sending EOF to prevent race condition
             # where EOF arrives before final chunk on receiver side
             await bufferFlushed.wait()
+
+            if checksumSession and shouldCommitChecksum:
+                checksumSession.commit()
 
             # Send EOF marker
             dc.send("EOF")
@@ -729,7 +746,6 @@ class WebRTCManager(AsyncLoopExceptionMixin):
 
             # Clean up peer connection and resources
             await self._cleanupPeer(peerId)
-
             # Trigger post event (includes tracking and callback)
             self._handlePostDownloadActions(sent)
 
@@ -749,6 +765,9 @@ class WebRTCManager(AsyncLoopExceptionMixin):
 
             # Clean up peer connection and resources
             await self._cleanupPeer(peerId)
+        finally:
+            if checksumSession and not checksumSession.isClosed:
+                checksumSession.abort()
 
     async def shutdownWebRTC(self):
         # Cancel all sendFile tasks
@@ -802,6 +821,8 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
     # Default connection timeout for WebRTC establishment (seconds)
     # Web uses 30s, CLI uses 60s for more tolerance on slower connections
     CONNECTION_TIMEOUT_DEFAULT = 60
+    CHECKSUM_READY_POLL_RETRIES = 10
+    CHECKSUM_READY_POLL_INTERVAL = 0.2
 
     @staticmethod
     def _isKnownSize(fileSize: int) -> bool:
@@ -987,6 +1008,95 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         if queryParams:
             url += "?" + urllib.parse.urlencode(queryParams)
         return url
+
+    def _shouldVerifyChecksum(self, urlInfo: URLInfo, resumePosition: int) -> bool:
+        """Checksum verification is only meaningful for full FastFileLink transfers."""
+        return (not urlInfo.isGenericURL) and resumePosition == 0
+
+    def _createTransferChecksumState(self, enabled: bool) -> Optional[dict]:
+        if not enabled:
+            return None
+
+        return {
+            'hasher': hashlib.blake2b(),
+            'size': 0,
+            'checksum': None
+        }
+
+    def _updateTransferChecksumState(self, checksumState: Optional[dict], data: bytes):
+        if not checksumState or not data:
+            return
+
+        checksumState['hasher'].update(data)
+        checksumState['size'] += len(data)
+
+    def _finalizeTransferChecksumState(self, checksumState: Optional[dict]) -> Optional[str]:
+        if not checksumState:
+            return None
+
+        checksum = checksumState.get('checksum')
+        if checksum:
+            return checksum
+
+        checksum = checksumState['hasher'].hexdigest()
+        checksumState['checksum'] = checksum
+        return checksum
+
+    def _fetchReadyRemoteChecksum(self, baseURL: str, headers: dict) -> Optional[dict]:
+        checksumURL = self._buildURL(baseURL, "checksum")
+
+        for attemptIndex in range(self.CHECKSUM_READY_POLL_RETRIES):
+            responseData, statusCode = self._sendHTTPRequest(checksumURL, "GET", None, headers, 10)
+
+            if statusCode == 200 and isinstance(responseData, dict) and responseData.get('ready'):
+                return responseData
+
+            if attemptIndex + 1 < self.CHECKSUM_READY_POLL_RETRIES:
+                time.sleep(self.CHECKSUM_READY_POLL_INTERVAL)
+
+        return None
+
+    def _verifyTransferChecksum(
+        self,
+        baseURL: str,
+        headers: dict,
+        checksumState: Optional[dict],
+        expectedTransport: str
+    ):
+        localChecksum = self._finalizeTransferChecksumState(checksumState)
+        if not localChecksum:
+            return
+
+        remoteData = self._fetchReadyRemoteChecksum(baseURL, headers)
+        if not remoteData:
+            logger.debug("Checksum endpoint not ready after transfer, skip strict checksum verification")
+            return
+
+        remoteTransport = remoteData.get('transport')
+        if remoteTransport and remoteTransport != expectedTransport:
+            logger.debug(
+                f"Checksum transport mismatch (remote={remoteTransport}, local={expectedTransport}), skip verify"
+            )
+            return
+
+        remoteChecksum = str(remoteData.get('checksum', '')).lower()
+        if not remoteChecksum:
+            raise RuntimeError("Checksum verification failed: remote checksum is empty")
+
+        localChecksum = localChecksum.lower()
+        if remoteChecksum != localChecksum:
+            raise RuntimeError(
+                f"Checksum verification failed: local={localChecksum}, remote={remoteChecksum}"
+            )
+
+        remoteSize = remoteData.get('size')
+        localSize = checksumState.get('size', 0)
+        if isinstance(remoteSize, int) and remoteSize >= 0 and remoteSize != localSize:
+            raise RuntimeError(
+                f"Checksum size mismatch: local={localSize}, remote={remoteSize}"
+            )
+
+        self.loggerCallback(_("Checksum verified"))
 
     @property
     def e2eeClient(self):
@@ -1496,7 +1606,8 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         progress,
         resumePosition: int = 0,
         e2eeContext: Optional[dict] = None,
-        statusErrorQueue: Optional[deque] = None
+        statusErrorQueue: Optional[deque] = None,
+        verifyChecksum: bool = False
     ):
         """Setup data channel for file reception
 
@@ -1522,7 +1633,8 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             'error': None,
             'downloadStarted': False,
             'statusUpdated': False,
-            'streamDecryptor': streamDecryptor
+            'streamDecryptor': streamDecryptor,
+            'checksumState': self._createTransferChecksumState(verifyChecksum)
         }
 
         # Monitor connection state for early failure detection
@@ -1592,6 +1704,8 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                                 context['outputFile'].flush()
                                 context['outputFile'].close()
 
+                            self._finalizeTransferChecksumState(context['checksumState'])
+
                             # Final progress update
                             progress.update(context['bytesReceived'], forceLog=True, extraText="WebRTC P2P")
 
@@ -1618,6 +1732,8 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                     else:
                         # Binary data
                         if context['outputFile']:
+                            self._updateTransferChecksumState(context['checksumState'], data)
+
                             # Process chunk (decrypt if E2EE enabled, otherwise passthrough)
                             processedData = context['streamDecryptor'].processChunk(
                                 data
@@ -1743,6 +1859,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
 
         # Handle resume logic
         resumePosition = self._handleResumeLogic(finalOutputPath, fileSize, resume)
+        verifyChecksum = self._shouldVerifyChecksum(urlInfo, resumePosition)
 
         # File already complete (skip check for unknown size)
         if self._isKnownSize(fileSize) and resumePosition >= fileSize:
@@ -1812,7 +1929,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             # Setup data channel handling (pass statusErrorQueue for error prioritization)
             downloadComplete, errorEvent, context = await self._setupDataChannelHandling(
                 pc, finalOutputPath, fileSize, urlInfo.baseURL, peerId, authHeaders, progress, resumePosition,
-                e2eeContext, statusErrorQueue
+                e2eeContext, statusErrorQueue, verifyChecksum
             )
 
             # Setup ICE candidate handling
@@ -1950,6 +2067,15 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             # Finish progress bar on successful completion
             self._finishProgress()
 
+            if verifyChecksum:
+                await asyncio.to_thread(
+                    self._verifyTransferChecksum,
+                    urlInfo.baseURL,
+                    authHeaders,
+                    context.get('checksumState'),
+                    'webrtc'
+                )
+
             return finalOutputPath
 
         finally:
@@ -2022,6 +2148,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
 
         # Handle resume logic (forceResume takes precedence for WebRTC fallback)
         resumePosition = self._handleResumeLogic(finalOutputPath, fileSize, forceResume or resume)
+        verifyChecksum = self._shouldVerifyChecksum(urlInfo, resumePosition)
 
         # File already complete - early return (skip check for unknown/unreliable sizes)
         if (self._isPositiveSize(fileSize) and resumePosition >= fileSize and
@@ -2069,10 +2196,11 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         statusErrorQueue = deque()
         self._startStatusPollingThread(urlInfo.baseURL, downloadHeaders, statusStopEvent, statusErrorQueue)
 
+        serverDownloadId = None
         try:
             # Use tuple timeout: (connect_timeout, read_timeout) with increased read timeout
             # to handle large file stalls (especially on Python 3.12 + TLS 1.3)
-            with session.get(downloadURL, headers=downloadHeaders, stream=True, 
+            with session.get(downloadURL, headers=downloadHeaders, stream=True,
                              timeout=(HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT)) as response:
                 # Check status codes
                 if response.status_code not in (200, 206): # 206 is partial content for resume
@@ -2081,6 +2209,9 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                 # Verify content range for resume
                 if resumePosition > 0 and response.status_code != 206:
                     raise RuntimeError("Server does not support resume")
+
+                # Extract server-assigned download ID for completion ACK (relay drain coordination)
+                serverDownloadId = response.headers.get('FFL-DownloadId')
 
                 # For unknown size (generic URLs or stdin), try to get actual Content-Length from GET response
                 if not self._isKnownSize(fileSize):
@@ -2099,6 +2230,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                 totalDownloaded = resumePosition # Start from resume position
 
                 with open(finalOutputPath, mode) as f:
+                    checksumState = self._createTransferChecksumState(verifyChecksum)
                     for chunk in response.iter_content(chunk_size=TRANSFER_CHUNK_SIZE):
                         # Check status error queue (lock-free, very fast - no performance impact)
                         if statusErrorQueue:
@@ -2108,6 +2240,8 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                             raise serverError
 
                         if chunk: # Filter out keep-alive chunks
+                            self._updateTransferChecksumState(checksumState, chunk)
+
                             # Process chunk (decrypt if E2EE enabled, otherwise passthrough)
                             processedData = streamDecryptor.processChunk(chunk) if streamDecryptor else chunk
 
@@ -2160,9 +2294,47 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         progress.update(finalSize, forceLog=True, extraText="HTTP fallback")
         if not sharedProgress: # Only finish bar if we created it
             self._finishProgress()
+
+        if verifyChecksum:
+            self._verifyTransferChecksum(
+                urlInfo.baseURL,
+                self._createAuthHeaders(credentials),
+                checksumState,
+                'http'
+            )
+
+        # Notify server that client has received all bytes (unblocks relay drain wait)
+        if serverDownloadId and not urlInfo.isGenericURL:
+            self._notifyHTTPDownloadComplete(urlInfo.baseURL, serverDownloadId, credentials, finalSize)
+
         # Only log to logger, not loggerCallback to avoid extra line after progress bar
         logger.debug(f"HTTP download completed: {finalOutputPath}")
         return finalOutputPath
+
+    def _notifyHTTPDownloadComplete(
+        self,
+        baseURL: str,
+        downloadId: str,
+        credentials: Optional[Tuple[str, str]],
+        receivedBytes: int
+    ):
+        """Notify server that client has received all bytes via HTTP.
+
+        Mirrors the WebRTC /complete ACK so the server can safely call
+        _handlePostDownloadActions() after the relay has fully drained.
+        Errors are suppressed — the server will timeout gracefully after 30s.
+        """
+        try:
+            completeURL = self._buildURL(baseURL, "complete")
+            authHeaders = self._createAuthHeaders(credentials)
+            self._sendHTTPRequest(
+                completeURL, "POST",
+                {"downloadId": downloadId, "receivedBytes": receivedBytes},
+                authHeaders, timeout=10
+            )
+            logger.debug(f"HTTP download complete ACK sent for {downloadId[:8]}")
+        except Exception as e:
+            logger.debug(f"Failed to send HTTP download complete ACK: {e}")
 
     def _fallbackToHTTP(
         self,

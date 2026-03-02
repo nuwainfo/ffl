@@ -776,7 +776,7 @@ class DownloadUIManager {
 
     showRetryingP2P() {
         this.setStatus(
-            this.t('Download:client.status.retryingP2p', 'Retrying P2P connection…'),
+            this.t('Download:client.status.retryingP2p', 'Retrying P2P connection...'),
             true
         );
         this.setConnectionType(
@@ -829,6 +829,35 @@ class DownloadUIManager {
         setTimeout(() => {
             this.removeProgressBar();
         }, 1000);
+    }
+
+    showChecksumVerifiedBadge() {
+        if (!this.statusText) {
+            return;
+        }
+
+        const verifiedText = 'verified';
+
+        if (typeof FFLChecksum !== 'undefined' && typeof FFLChecksum.showVerifiedBadge === 'function') {
+            FFLChecksum.showVerifiedBadge({
+                targetElement: this.statusText,
+                text: verifiedText,
+                className: 'ffl-checksum-verified'
+            });
+            return;
+        }
+
+        if (typeof $ !== 'undefined') {
+            const $statusText = $(this.statusText);
+            if (!$statusText.length || $statusText.find('.ffl-checksum-verified').length) {
+                return;
+            }
+            const $badge = $('<span class="ffl-checksum-verified"></span>')
+                .text(` (${verifiedText})`)
+                .hide();
+            $statusText.append($badge);
+            $badge.fadeIn(250);
+        }
     }
 
     updateFallbackMessage() {
@@ -1324,6 +1353,7 @@ class WebRTCManager {
             answer: `/${this.uid}/answer`,
             complete: `/${this.uid}/complete`,
             download: `/${this.uid}/download`,
+            checksum: `/${this.uid}/checksum`,
             manifest: `/${this.uid}/manifest`,
             thumbnailTemplate: `/${this.uid}/thumb?hash={hash}&w=420&h=320&fmt=jpeg`,
             fileTemplate: `/${this.uid}/file?hash={hash}`
@@ -1353,6 +1383,7 @@ class WebRTCManager {
         this.fallbackManager = null;
         this.e2eeManager = null;
         this.webrtcDecryptor = null;
+        this.transferChecksumVerifier = null;
         this.pc = null;
         this.dc = null;
         this.peerId = null;
@@ -1522,6 +1553,8 @@ class WebRTCManager {
 
         // Fallback to HTTP helper
         const fallbackToHTTP = (reason, force = false) => {
+            this.transferChecksumVerifier = null;
+
             if (isPreviewMode && !this.pauseGate.isPaused()) {
                 this.log("Fallback", "Preview mode detected - requesting pause before HTTP fallback");
                 this.pauseGate.requestPause();
@@ -1823,7 +1856,7 @@ class WebRTCManager {
                 if (!this.hasTransferStarted()) {
                     if (!this.restartAttempted) {
                         this.restartAttempted = true;
-                        this.log("ICE", "ICE failed – trying restartIce() once");
+                        this.log("ICE", "ICE failed - trying restartIce() once");
                         this.pc.restartIce();
                         this.uiManager.showRetryingP2P();
 
@@ -1960,6 +1993,7 @@ class WebRTCManager {
             if (!this.shouldStopPeerOperations() && bytesWrittenSoFar < this.fileSize) {
                 this.log("DataChannel", `Channel closed before completion (written: ${bytesWrittenSoFar}/${this.fileSize})`);
                 const fallbackToHTTP = (reason, force = false) => {
+                    this.transferChecksumVerifier = null;
                     const startFn = () => this.fallbackManager.triggerFallback(reason, force);
                     const shouldStartNow = this.pauseGate.setPendingStart({
                         kind: 'http',
@@ -1978,6 +2012,7 @@ class WebRTCManager {
             this.log("DataChannel", "Error:", err);
             if (!this.shouldStopPeerOperations()) {
                 const fallbackToHTTP = (reason, force = false) => {
+                    this.transferChecksumVerifier = null;
                     const startFn = () => this.fallbackManager.triggerFallback(reason, force);
                     const shouldStartNow = this.pauseGate.setPendingStart({
                         kind: 'http',
@@ -2069,6 +2104,19 @@ class WebRTCManager {
             this.log("DataChannel", "✓ P2P transfer confirmed - data flowing");
         }
 
+        if (this.transferChecksumVerifier) {
+            try {
+                if (data instanceof Blob) {
+                    const rawBuffer = await data.arrayBuffer();
+                    this.transferChecksumVerifier.update(new Uint8Array(rawBuffer));
+                } else {
+                    this.transferChecksumVerifier.update(data);
+                }
+            } catch (checksumError) {
+                this.log("Checksum", `Failed to update checksum verifier: ${checksumError}`);
+            }
+        }
+
         // Binary data - decrypt if E2EE enabled
         let plainData = data;
         if (this.webrtcDecryptor) {
@@ -2135,6 +2183,16 @@ class WebRTCManager {
      * @private
      */
     async _startP2PTransfer(dc) {
+        if (typeof FFLChecksum !== 'undefined' && typeof FFLChecksum.createVerifier === 'function') {
+            this.transferChecksumVerifier = FFLChecksum.createVerifier({
+                uid: this.uid,
+                transport: 'webrtc',
+                log: (category, message, payload) => this.log(category, message, payload)
+            });
+        } else {
+            this.transferChecksumVerifier = null;
+        }
+
         // Wait for dc to be open (if not already)
         if (dc.readyState !== 'open') {
             this.log("DataChannel", `Waiting for channel to open (current: ${dc.readyState})...`);
@@ -2156,9 +2214,9 @@ class WebRTCManager {
         // NOTE: Server must wait for START before sending file data
         try {
             dc.send('START');
-            this.log("DataChannel", "✓ START signal sent");
+            this.log("DataChannel", "??START signal sent");
         } catch (e) {
-            this.log("DataChannel", `✗ Failed to send START: ${e}`);
+            this.log("DataChannel", `??Failed to send START: ${e}`);
             throw e; // Re-throw to trigger fallback
         }
 
@@ -2236,12 +2294,12 @@ class WebRTCManager {
             // Download-first mode: START sent immediately
             this.log("DataChannel", "Auto-starting download");
             this._startP2PTransfer(dc).catch(err => {
-                this.log("DataChannel", `✗ Failed to start P2P transfer: ${err}`);
+                this.log("DataChannel", `??Failed to start P2P transfer: ${err}`);
                 fallbackToHTTP("Failed to start P2P transfer", true);
             });
         } else {
             // Paused or preview-first mode: wait for user action (PauseGate handles heartbeat)
-            this.log("DataChannel", `⏸ Transfer paused - ${isPreviewMode ? 'preview mode' : 'user pause'}`);
+            this.log("DataChannel", `??Transfer paused - ${isPreviewMode ? 'preview mode' : 'user pause'}`);
         }
     }
 
@@ -2360,6 +2418,7 @@ class WebRTCManager {
             this.log("Download", `Incomplete P2P transfer detected: expected ${this.fileSize}, got ${this.bytesReceived}`);
             if (!this.shouldStopPeerOperations()) {
                 const fallbackToHTTP = (reason, force = false) => {
+                    this.transferChecksumVerifier = null;
                     const startFn = () => this.fallbackManager.triggerFallback(reason, force);
                     const shouldStartNow = this.pauseGate.setPendingStart({
                         kind: 'http',
@@ -2380,6 +2439,7 @@ class WebRTCManager {
 
         // Show completion UI
         this.uiManager.showComplete(this.fileSize);
+        this._verifyTransferChecksum();
 
         // Notify server
         if (this.peerId) {
@@ -2404,6 +2464,38 @@ class WebRTCManager {
         // Cleanup connections
         if (this.cleanupConnectionsCallback) {
             this.cleanupConnectionsCallback();
+        }
+    }
+
+    async _verifyTransferChecksum() {
+        if (!this.transferChecksumVerifier) {
+            return;
+        }
+
+        try {
+            const verifyResult = await this.transferChecksumVerifier.finalizeAndVerify();
+            if (verifyResult.verified) {
+                this.log("Checksum", "WebRTC checksum verified");
+                this.uiManager.showChecksumVerifiedBadge();
+                return;
+            }
+
+            if (verifyResult.pending || verifyResult.transportMismatch) {
+                this.log("Checksum", "WebRTC checksum verification skipped", verifyResult);
+                return;
+            }
+
+            this.log("Checksum", "WebRTC checksum verification failed", verifyResult);
+            this.uiManager.setStatus(
+                this.t(
+                    'Download:complete.checksumFailed',
+                    'Checksum verification failed. Please re-download the file if integrity is required.'
+                )
+            );
+        } catch (verifyError) {
+            this.log("Checksum", `Checksum verification error: ${verifyError}`);
+        } finally {
+            this.transferChecksumVerifier = null;
         }
     }
 }

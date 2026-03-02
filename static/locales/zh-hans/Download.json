@@ -154,6 +154,9 @@
         "folder_changed": "分享的资料夹内容在传输过程中已变更。档案拥有者需要重新分享该资料夹。",
         "unknown": "传输过程中发生错误。"
     },
+    "checksum": {
+        "verified": "已验证"
+    },
     "zipPreview": {
         "button": "预览内容",
         "archiveContents": "压缩档内容",

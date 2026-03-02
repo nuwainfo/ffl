@@ -42,6 +42,7 @@ from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
 from bases.WebRTC import WebRTCManager, WebRTCDisabledError
 from bases.Progress import Progress
 from bases.E2EE import E2EEManager
+from bases.Checksum import TransferChecksumStore
 from bases.Readers import FolderChangedException
 from bases.I18n import _
 
@@ -228,6 +229,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
         self.getPathMap = {
             '/download': self._handleDownload,
+            '/checksum': self._handleChecksum,
             '/static/index.html': self._handleStaticIndex,
             '/static/js/ProgressServiceWorker.js': self._handleProgressServiceWorker,
             '/static/js/E2EE.js': self._handleE2EEScript,
@@ -243,7 +245,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         self.postPathMap = {
             '/answer': self._handleWebRTCAnswer,
             '/candidate': self._handleWebRTCCandidate,
-            '/complete': self._handleWebRTCComplete,
+            '/complete': self._handleDownloadComplete,
             '/e2ee/init': self._handleE2EEInit,
         }
 
@@ -510,6 +512,9 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
     def _handleStartDownloadActions(self, size):
         flushPrint(_('[{timestamp}] Downloading by user').format(timestamp=self.date_time_string()))
 
+        # Register completion event so _waitForHTTPDownloadComplete can block until client ACKs
+        self.server.httpDownloadCompleteEvents[self._downloadId] = threading.Event()
+
         # Get client information
         userAgent = self.headers.get('User-Agent', 'Unknown')
         host = self.headers.get('Host', 'Unknown')
@@ -556,6 +561,29 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         )
 
         self.server.doAfterDownload()
+
+    def _waitForHTTPDownloadComplete(self):
+        """Block until the client ACKs receipt via POST /complete, or until timeout.
+
+        Mirrors the WebRTC sendFile() completionEvent.wait() pattern.
+        Prevents server.shutdown() (triggered by doAfterDownload) from racing
+        the relay/tunnel that is still draining buffered bytes to the client.
+
+        FFL clients (browser, CLI) send /complete immediately after receiving all
+        bytes, so the wait resolves in milliseconds. Non-FFL clients (curl, wget)
+        never send /complete — the short timeout lets the server proceed quickly
+        without hanging.
+        """
+        event = self.server.httpDownloadCompleteEvents.get(self._downloadId)
+        if not event:
+            return
+
+        completed = event.wait(timeout=2)
+        if not completed:
+            logger.debug(
+                f"HTTP download complete ACK not received for {self._downloadId[:8]} "
+                "(non-FFL client or slow relay), proceeding"
+            )
 
     def _handleDownloadExceptionActions(self, exception):
         # Determine failure reason
@@ -754,6 +782,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
         start = None
         end = None
+        checksumSession = None
+        shouldCommitChecksum = False
 
         try:
             # Handle range requests (only for files that support it)
@@ -813,6 +843,12 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                     filename=name, filesize=size, startChunkIndex=startChunkIndex, saveTags=saveTags
                 )
 
+            checksumSession = self.server.checksumStore.begin(
+                transport='http',
+                e2ee=bool(encryptor)
+            )
+            shouldCommitChecksum = (not self.range) and start == 0
+
             # Send file/directory data in chunks
             chunkSize = self.server.e2eeManager.chunkSize if self.server.config.e2eeEnabled else self.CHUNK_SIZE
             progressThrottler = Throttler(interval=1.0)
@@ -825,6 +861,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 # Encrypt if E2EE enabled
                 if encryptor:
                     data = encryptor.encryptChunk(data)
+
+                checksumSession.update(data)
 
                 # Write using chunked encoding or direct write
                 if useChunked:
@@ -869,6 +907,14 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             # Final progress update
             progress.update(written, forceLog=True, forceFinish=size is None)
 
+            if shouldCommitChecksum:
+                checksumSession.commit()
+
+            # Wait for client to ACK receipt before triggering post-download actions.
+            # Without this, server.shutdown() (on maxDownloads) can race the relay/tunnel
+            # still draining buffered bytes to the client, truncating the download.
+            self._waitForHTTPDownloadComplete()
+
             # Handle post-download actions
             self._handlePostDownloadActions(size)
 
@@ -878,6 +924,11 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             self._handleDownloadExceptionActions(ce)
         except OSError as e:
             self._handleDownloadExceptionActions(e)
+        finally:
+            if checksumSession and not checksumSession.isClosed:
+                checksumSession.abort()
+            # Always clean up the completion event (covers exception / connection-reset paths)
+            self.server.httpDownloadCompleteEvents.pop(self._downloadId, None)
 
     def _handleStaticIndex(self, args):
         try:
@@ -997,12 +1048,18 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             logger.exception(e)
             self.send_error(500, str(e))
 
-    def _proxyStaticScript(self, scriptPath, requestHeaders=None):
+    def _serveLocalStaticScript(self, requestHeaders=None):
+        """Serve script from local filesystem."""
+        self._extraHeaders = requestHeaders or {}
+        super().do_GET()
+
+    def _proxyStaticScript(self, scriptPath, requestHeaders=None, fallbackToLocal=False):
         """Generic method to proxy JavaScript files from static server
 
         Args:
             scriptPath: Relative path to script (e.g., "/static/js/E2EE.js")
             requestHeaders: Optional dict of additional headers to send with request
+            fallbackToLocal: If True, fallback to local script when remote fetch fails
         """
         try:
             settingsGetter = SettingsGetter.getInstance()
@@ -1026,30 +1083,36 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             self.wfile.write(response.content)
 
         except requests.RequestException as e:
+            if fallbackToLocal:
+                logger.warning(
+                    f"Failed to fetch {scriptPath} from {remoteUrl}, fallback to local script: {e}"
+                )
+                self._serveLocalStaticScript(requestHeaders=requestHeaders)
+                return
+
             logger.error(f"Failed to fetch {scriptPath} from {remoteUrl}: {e}")
             self.send_error(HTTPStatus.BAD_GATEWAY, f"Failed to fetch from remote server: {str(e)}")
         except Exception as e:
             logger.exception(e)
             self.send_error(500, str(e))
 
-    def _handleStaticScript(self, scriptPath, requestHeaders=None):
+    def _handleStaticScript(self, scriptPath, requestHeaders=None, fallbackToLocal=False):
         """Handle static script - proxy from remote or serve locally
 
         Args:
             scriptPath: Path to the script file
             requestHeaders: Headers to send with remote request (proxy mode) or set in response (local mode)
+            fallbackToLocal: If True, fallback to local script when remote fetch fails
         """
         settingsGetter = SettingsGetter.getInstance()
         staticServer = settingsGetter.getStaticServer()
 
         # If static server is remote (starts with http), proxy the file
         if staticServer.startswith('http'):
-            self._proxyStaticScript(scriptPath, requestHeaders)
+            self._proxyStaticScript(scriptPath, requestHeaders, fallbackToLocal=fallbackToLocal)
         else:
             # Static server is local - serve from local filesystem
-            # Store extra headers to be added by end_headers()
-            self._extraHeaders = requestHeaders
-            super().do_GET()
+            self._serveLocalStaticScript(requestHeaders=requestHeaders)
 
     def _handleProgressServiceWorker(self, args):
         """Handle ProgressServiceWorker.js - proxy from remote or serve locally"""
@@ -1083,6 +1146,23 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         except Exception as e:
             logger.exception(f"Status endpoint error: {e}")
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Status endpoint error")
+
+    def _handleChecksum(self, args):
+        """Handle checksum polling endpoint for download integrity verification."""
+        try:
+            responseData = self.server.checksumStore.getResponseData()
+            responseBody = json.dumps(responseData).encode('utf-8')
+
+            self.send_response(HTTPStatus.OK)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(responseBody)))
+            self.send_header('Cache-Control', 'no-cache')
+            self.end_headers()
+            self.wfile.write(responseBody)
+
+        except Exception as e:
+            logger.exception(f"Checksum endpoint error: {e}")
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Checksum endpoint error")
 
     def _detectBrowser(self):
         """Detect browser type from User-Agent header for DTLS strategy selection"""
@@ -1229,11 +1309,27 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         result = self.server.webRTC.runAsync(self.server.webRTC.addCandidate(data), wait=False, name="addCandidate")
         self._sendBytes(b"OK")
 
-    def _handleWebRTCComplete(self, data):
-        """Handle browser notification that file download is complete"""
-        self.server.webRTC.runAsync(
-            self.server.webRTC.notifyDownloadComplete(data), wait=False, name="notifyDownloadComplete"
-        )
+    def _handleDownloadComplete(self, data):
+        """Handle client notification that file download is complete.
+
+        Handles two cases sharing this endpoint:
+        - WebRTC P2P: payload contains peerId, unblocks sendFile() completion wait
+        - HTTP relay:  payload contains downloadId, unblocks _waitForHTTPDownloadComplete()
+        """
+        if 'peerId' in data:
+            self.server.webRTC.runAsync(
+                self.server.webRTC.notifyDownloadComplete(data), wait=False, name="notifyDownloadComplete"
+            )
+
+        downloadId = data.get('downloadId')
+        if downloadId:
+            event = self.server.httpDownloadCompleteEvents.get(downloadId)
+            if event:
+                event.set()
+                logger.debug(f"HTTP download complete ACK received for {downloadId[:8]}")
+            else:
+                logger.debug(f"HTTP download complete ACK: unknown downloadId {downloadId[:8]}")
+
         self._sendBytes(b"OK")
 
     def _handleDebugLog(self, data):
@@ -1366,6 +1462,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         if self.server.config.e2eeEnabled:
             mode += "+E2EE"
         self.send_header("FFL-Mode", mode)
+        self.send_header("FFL-DownloadId", self._downloadId)
 
         # Add any extra headers if set (for static scripts like service workers)
         if self._extraHeaders:
@@ -1430,12 +1527,17 @@ class Server(ThreadingHTTPServer):
         self.uid = uid
         self.domain = domain
         self.config = config
+        self.checksumStore = TransferChecksumStore()
 
         self.downloadCount = 0
         self.startTime = time.time()
 
         # Initialize error tracking for status polling
         self.lastError = None
+
+        # Completion events for HTTP downloads (relay path)
+        # Maps downloadId -> threading.Event, set by client POST /complete
+        self.httpDownloadCompleteEvents = {}
 
         # Initialize E2E encryption if enabled
         if self.config.e2eeEnabled:
@@ -1474,7 +1576,10 @@ class Server(ThreadingHTTPServer):
             handler._handleDownloadExceptionActions(exception)
 
         self.webRTC = webRTCManagerClass(
-            loggerCallback=flushPrint, downloadCallback=self.doAfterDownload, exceptionCallback=handleWebRTCException
+            loggerCallback=flushPrint,
+            downloadCallback=self.doAfterDownload,
+            exceptionCallback=handleWebRTCException,
+            checksumStore=self.checksumStore
         )
 
         # Trigger serverStarting event

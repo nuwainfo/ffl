@@ -82,6 +82,7 @@ class FastFileLinkTestBase(unittest.TestCase):
         self.testConfigVars = testConfigVars or {}
         self._testConfigDir = None
         self._originalEnvVars = None
+        self._downloadChecksumByPath = {}
 
     def setUp(self):
         """Set up the test environment"""
@@ -195,7 +196,70 @@ class FastFileLinkTestBase(unittest.TestCase):
             else:
                 print("[Test] Process already terminated")
 
-    def downloadFileWithRequests(self, shareLink, outputPath, expectedFileName=None):
+    def _getChecksumUrl(self, shareLink):
+        return shareLink.rstrip('/') + '/checksum'
+
+    def _getB2sumCommand(self):
+        if sys.platform == 'win32':
+            b2sumExePath = os.path.join(os.path.dirname(__file__), "fixtures", "b2sum.exe")
+            if os.path.exists(b2sumExePath):
+                return b2sumExePath
+            raise AssertionError(f"b2sum.exe not found at expected path: {b2sumExePath}")
+
+        b2sumCommand = shutil.which("b2sum")
+        if b2sumCommand:
+            return b2sumCommand
+
+        raise AssertionError("b2sum command not found in PATH")
+
+    def _calculateBlake2b(self, filePath):
+        b2sumCommand = self._getB2sumCommand()
+        try:
+            result = subprocess.run(
+                [b2sumCommand, filePath],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+        except subprocess.CalledProcessError as e:
+            raise AssertionError(f"b2sum failed for {filePath}: {e.stderr or e.stdout or e}") from e
+
+        output = (result.stdout or "").strip()
+        if not output:
+            raise AssertionError(f"b2sum returned empty output for file: {filePath}")
+
+        checksum = output.split()[0].strip().lower()
+        if not checksum:
+            raise AssertionError(f"Failed to parse checksum from b2sum output: {output}")
+        return checksum
+
+    def _fetchChecksumData(self, shareLink, requireReady=True, retries=10, retryInterval=0.2):
+        checksumUrl = self._getChecksumUrl(shareLink)
+        lastResponseData = None
+        lastStatusCode = None
+
+        for attemptIndex in range(retries):
+            response = requests.get(checksumUrl, timeout=30)
+            lastStatusCode = response.status_code
+            if response.status_code != 200:
+                if attemptIndex + 1 < retries:
+                    time.sleep(retryInterval)
+                    continue
+                raise AssertionError(f"Checksum endpoint should return 200, got {response.status_code}")
+
+            responseData = response.json()
+            lastResponseData = responseData
+            if not requireReady or responseData.get('ready'):
+                return responseData
+
+            if attemptIndex + 1 < retries:
+                time.sleep(retryInterval)
+
+        if requireReady:
+            raise AssertionError(f"Checksum should be ready, got {lastResponseData}")
+        return lastResponseData if lastResponseData is not None else {'ready': False}
+
+    def downloadFileWithRequests(self, shareLink, outputPath, expectedFileName=None, headers=None, expectedStatus=200):
         """
         Download file using requests library with retry logic
 
@@ -203,6 +267,11 @@ class FastFileLinkTestBase(unittest.TestCase):
             shareLink: URL to download from
             outputPath: Local path to save downloaded file
             expectedFileName: If provided, verify Content-Disposition header matches this filename
+            headers: Optional request headers (e.g., Range)
+            expectedStatus: Expected HTTP status code
+
+        Returns:
+            str: Incremental blake2b checksum of received bytes
         """
         print("[Test] Attempting to download file through share link...")
 
@@ -210,39 +279,53 @@ class FastFileLinkTestBase(unittest.TestCase):
         for attempt in range(3):
             try:
                 print(f"[Test] Download attempt {attempt + 1}")
-                response = requests.get(shareLink, timeout=30)
-                if response.status_code == 200:
-                    # Verify Content-Disposition header if expectedFileName provided
-                    if expectedFileName:
-                        contentDisposition = response.headers.get('Content-Disposition', '')
-                        print(f"[Test] Content-Disposition header: {contentDisposition}")
+                with requests.get(shareLink, headers=headers or {}, stream=True, timeout=30) as response:
+                    if response.status_code == expectedStatus:
+                        # Verify Content-Disposition header if expectedFileName provided
+                        if expectedFileName:
+                            contentDisposition = response.headers.get('Content-Disposition', '')
+                            print(f"[Test] Content-Disposition header: {contentDisposition}")
 
-                        # Parse filename from Content-Disposition header
-                        # Format: attachment; filename="myfile.txt" or attachment; filename=myfile.txt
-                        actualFileName = None
-                        if 'filename=' in contentDisposition:
-                            # Extract filename (handle both quoted and unquoted)
-                            filenamePart = contentDisposition.split('filename=')[1].split(';')[0].strip()
-                            actualFileName = filenamePart.strip('"\'')
+                            # Parse filename from Content-Disposition header
+                            # Format: attachment; filename="myfile.txt" or attachment; filename=myfile.txt
+                            actualFileName = None
+                            if 'filename=' in contentDisposition:
+                                # Extract filename (handle both quoted and unquoted)
+                                filenamePart = contentDisposition.split('filename=')[1].split(';')[0].strip()
+                                actualFileName = filenamePart.strip('"\'')
 
-                        if actualFileName:
-                            print(f"[Test] Extracted filename from header: {actualFileName}")
-                            if actualFileName != expectedFileName:
+                            if actualFileName:
+                                print(f"[Test] Extracted filename from header: {actualFileName}")
+                                if actualFileName != expectedFileName:
+                                    raise AssertionError(
+                                        f"Content-Disposition filename mismatch: expected '{expectedFileName}', got '{actualFileName}'"
+                                    )
+                                print(f"[Test] Content-Disposition filename matches: {expectedFileName}")
+                            else:
                                 raise AssertionError(
-                                    f"Content-Disposition filename mismatch: expected '{expectedFileName}', got '{actualFileName}'"
+                                    f"Content-Disposition header missing filename (header: {contentDisposition})"
                                 )
-                            print(f"[Test] Content-Disposition filename matches: {expectedFileName}")
-                        else:
-                            raise AssertionError(
-                                f"Content-Disposition header missing filename (header: {contentDisposition})"
-                            )
 
-                    with open(outputPath, 'wb') as f:
-                        f.write(response.content)
-                    print(f"[Test] File downloaded successfully to {outputPath}")
-                    return
-                else:
-                    print(f"[Test] Received status code: {response.status_code}")
+                        transferHasher = hashlib.blake2b()
+                        with open(outputPath, 'wb') as outputFile:
+                            for chunk in response.iter_content(chunk_size=65536):
+                                if not chunk:
+                                    continue
+                                transferHasher.update(chunk)
+                                outputFile.write(chunk)
+
+                        transferChecksum = transferHasher.hexdigest()
+                        print(f"[Test] File downloaded successfully to {outputPath}")
+                        print(f"[Test] Transfer checksum (blake2b): {transferChecksum}")
+
+                        if expectedStatus == 200:
+                            self._downloadChecksumByPath[os.path.abspath(outputPath)] = {
+                                'shareLink': shareLink,
+                                'transferChecksum': transferChecksum
+                            }
+                        return transferChecksum
+                    else:
+                        print(f"[Test] Received status code: {response.status_code}")
             except Exception as e:
                 print(f"[Test] Download attempt failed: {e}")
             time.sleep(2)
@@ -1014,12 +1097,15 @@ class FastFileLinkTestBase(unittest.TestCase):
 
         return shareLink
 
-    def _verifyDownloadedFile(self, downloadedFilePath):
+    def _verifyDownloadedFile(self, downloadedFilePath, shareLink=None, transferChecksum=None, verifyOriginalContent=True):
         """
         Verify that the downloaded file matches the original file
         
         Args:
             downloadedFilePath (str): Path to the downloaded file
+            shareLink (str): Optional FastFileLink share URL for /checksum verification
+            transferChecksum (str): Optional incremental checksum returned from downloadFileWithRequests
+            verifyOriginalContent (bool): Whether to verify file matches original source file
         """
         if not os.path.exists(downloadedFilePath):
             raise AssertionError(f"Downloaded file does not exist: {downloadedFilePath}")
@@ -1027,17 +1113,56 @@ class FastFileLinkTestBase(unittest.TestCase):
         # Calculate hash of downloaded file
         downloadedFileHash = getFileHash(downloadedFilePath)
         downloadedFileSize = os.path.getsize(downloadedFilePath)
+        downloadedBlake2b = self._calculateBlake2b(downloadedFilePath)
 
         print(f"[Test] Downloaded file size: {downloadedFileSize} bytes")
         print(f"[Test] Downloaded file hash: {downloadedFileHash}")
+        print(f"[Test] Downloaded file checksum (blake2b): {downloadedBlake2b}")
+
+        rememberedDownload = self._downloadChecksumByPath.get(os.path.abspath(downloadedFilePath))
+        if rememberedDownload:
+            if not transferChecksum:
+                transferChecksum = rememberedDownload.get('transferChecksum')
 
         # Verify the file size and content match
-        if downloadedFileSize != self.originalFileSize:
-            raise AssertionError(
-                f"Downloaded file size ({downloadedFileSize}) doesn't match original ({self.originalFileSize})"
-            )
-        if downloadedFileHash != self.originalFileHash:
-            raise AssertionError("Downloaded file content doesn't match original")
+        if verifyOriginalContent:
+            if downloadedFileSize != self.originalFileSize:
+                raise AssertionError(
+                    f"Downloaded file size ({downloadedFileSize}) doesn't match original ({self.originalFileSize})"
+                )
+            if downloadedFileHash != self.originalFileHash:
+                raise AssertionError("Downloaded file content doesn't match original")
+
+        if transferChecksum:
+            transferChecksum = transferChecksum.lower()
+            if transferChecksum != downloadedBlake2b.lower():
+                raise AssertionError(
+                    f"Returned transfer checksum ({transferChecksum}) should equal full file checksum ({downloadedBlake2b})"
+                )
+
+        if shareLink:
+            checksumData = self._fetchChecksumData(shareLink, requireReady=True)
+            remoteChecksum = checksumData.get('checksum')
+            if not remoteChecksum:
+                raise AssertionError(f"Checksum endpoint should include checksum: {checksumData}")
+
+            remoteChecksum = remoteChecksum.lower()
+            if transferChecksum:
+                if transferChecksum != remoteChecksum:
+                    raise AssertionError(
+                        f"downloadFileWithRequests checksum ({transferChecksum}) should equal /checksum ({remoteChecksum})"
+                    )
+
+            if downloadedBlake2b.lower() != remoteChecksum:
+                raise AssertionError(
+                    f"Full file checksum ({downloadedBlake2b}) should equal /checksum ({remoteChecksum})"
+                )
+
+            remoteSize = checksumData.get('size')
+            if isinstance(remoteSize, int) and remoteSize >= 0 and remoteSize != downloadedFileSize:
+                raise AssertionError(
+                    f"Checksum endpoint size ({remoteSize}) should equal downloaded size ({downloadedFileSize})"
+                )
 
         print("[Test] File verification successful!")
 

@@ -247,7 +247,7 @@ msgid ""
 msgstr "通道伺服器暂时无法使用。请参阅 https://github.com/nuwainfo/ffl#3--using-tunnels 以了解替代通道。"
 
 msgid "Failed to connect server"
-msgstr "无法连线到伺服器"
+msgstr "无法连线到云端"
 
 msgid "Server return error"
 msgstr "伺服器回传错误"
@@ -345,7 +345,7 @@ msgstr "将连结和设定输出到 JSON 档案"
 msgid ""
 "Upload file to FastFileLink server to share it (Share duration after "
 "upload). Default: {default}"
-msgstr "上传档案到 快档连结 伺服器以分享（上传后的分享期限）。预设：{default}"
+msgstr "上传档案到 快档连结 云端以分享（上传后的分享期限）。预设：{default}"
 
 msgid ""
 "Resume a previously interrupted upload (requires previous upload session "
@@ -596,11 +596,11 @@ msgstr ""
 
 #, python-brace-format
 msgid "Timeout ({timeout} seconds) reached. Shutting down server."
-msgstr "已达到逾时时间（{timeout} 秒）。正在关闭伺服器。"
+msgstr "已达到逾时时间（{timeout} 秒）。正在关闭云端。"
 
 #, python-brace-format
 msgid "Maximum downloads ({maxDownloads}) reached. Shutting down server."
-msgstr "已达到最大下载次数（{maxDownloads}）。正在关闭伺服器。"
+msgstr "已达到最大下载次数（{maxDownloads}）。正在关闭云端。"
 
 msgid "3 hours"
 msgstr "3小时"
@@ -811,7 +811,7 @@ msgid ""
 msgstr "完成给 [#{peerId}] 的 {sizeDisplay} 传输，请等待接收者完成下载后再关闭应用程式。\n"
 
 msgid "Connecting to server"
-msgstr "正在连线到伺服器"
+msgstr "正在连线到云端"
 
 msgid "Requesting connection"
 msgstr "正在请求连线"

@@ -154,6 +154,9 @@
         "folder_changed": "分享的資料夾內容在傳輸過程中已變更。檔案擁有者需要重新分享該資料夾。",
         "unknown": "傳輸過程中發生錯誤。"
     },
+    "checksum": {
+        "verified": "已驗證"
+    },
     "zipPreview": {
         "button": "預覽內容",
         "archiveContents": "壓縮檔內容",

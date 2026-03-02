@@ -744,9 +744,8 @@ class DownloadTest(FastFileLinkTestBase):
         """Test downloading from a generic HTTP URL (like wget) without /download endpoint"""
         print("\n[Test] Testing generic URL download (wget-like behavior)")
 
-        # Use a reliable public URL that returns HTML
-        # Example.com is a well-known test domain maintained by IANA
-        testUrl = "https://example.com/"
+        # Use a reliable public URL that returns HTML.
+        testUrl = "https://www.google.com/"
         outputPath = os.path.join(self.tempDir, "example.html")
 
         # Download using Core.py
@@ -782,7 +781,7 @@ class DownloadTest(FastFileLinkTestBase):
         with open(downloadedPath, 'r', encoding='utf-8') as f:
             content = f.read()
             self.assertIn("<!doctype html>", content.lower(), "Downloaded content should be HTML")
-            self.assertIn("example domain", content.lower(), "Downloaded content should contain 'Example Domain'")
+            self.assertIn("google", content.lower(), "Downloaded content should contain 'Google'")
 
         print(f"[Test] Generic URL download successful: {downloadedPath}")
         print(f"[Test] File size: {os.path.getsize(downloadedPath)} bytes")
@@ -794,7 +793,15 @@ class DownloadTest(FastFileLinkTestBase):
 
     def testFolderHTTPResume(self):
         """Test folder download resume with HTTP and Range support"""
-        self._testFolderResume(useWebRTC=False, simulateFailure=None)
+        originalDisableSidecar = os.environ.get("FFL_DISABLE_SIDECAR")
+        os.environ["FFL_DISABLE_SIDECAR"] = "True"
+        try:
+            self._testFolderResume(useWebRTC=False, simulateFailure=None)
+        finally:
+            if originalDisableSidecar is None:
+                os.environ.pop("FFL_DISABLE_SIDECAR", None)
+            else:
+                os.environ["FFL_DISABLE_SIDECAR"] = originalDisableSidecar
 
     def testFolderWebRTCWithICEFailureFallback(self):
         """Test folder download with WebRTC ICE failure falling back to HTTP Range resume"""

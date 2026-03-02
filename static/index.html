@@ -345,7 +345,7 @@ Licensed under Apache-2.0 license.
             // Initialize i18n system with log function and Download namespace
             initializeI18n({
                 log: log,
-				getCurrentLanguageFunc: function() { null },
+                getCurrentLanguageFunc: function() { null },
                 localesPath: '{{ STATIC_SERVER }}/static/locales',
                 ns: ['Download']  // Load Download namespace for this page
             });
@@ -363,7 +363,11 @@ Licensed under Apache-2.0 license.
                 skipVariableName: 'SKIP_WEBRTC_DUE_TO_RESTRICTION'
             });            
         </script>
-        
+
+        <!-- BLAKE2b implementation (CDN) -->
+        <script src="https://unpkg.com/hash-wasm@4.12.0/dist/blake2b.umd.min.js"></script>
+        <script src="{{ STATIC_SERVER }}/static/js/Checksum.js"></script>
+
         <!-- DownloadManager integration -->
         <script src="{{ STATIC_SERVER }}/static/js/DownloadManager.js"></script>
 

@@ -16,6 +16,18 @@ try {
     console.error('[ProgressSW] E2EE.js must be served from the same origin as the Service Worker');
 }
 
+try {
+    importScripts('https://unpkg.com/hash-wasm@4.12.0/dist/blake2b.umd.min.js');
+} catch (e) {
+    console.error('[ProgressSW] Failed to import BLAKE2b CDN script:', e);
+}
+
+try {
+    importScripts('/static/js/Checksum.js');
+} catch (e) {
+    console.error('[ProgressSW] Failed to import Checksum.js:', e);
+}
+
 // Firefox detection - use user agent from service worker context
 const isFirefox = (typeof navigator !== 'undefined' && navigator.userAgent.includes('Firefox')) ||
                   (typeof self !== 'undefined' && self.navigator?.userAgent?.includes('Firefox'));
@@ -71,6 +83,17 @@ function broadcast(msg) {
 
 function isDownloadRequest(url) {
     return url.origin === self.location.origin && url.pathname.endsWith('/download');
+}
+
+function extractUidFromDownloadPath(pathname) {
+    const segments = pathname.split('/').filter(Boolean);
+    if (segments.length < 2) {
+        return '';
+    }
+    if (segments[segments.length - 1] !== 'download') {
+        return '';
+    }
+    return segments[segments.length - 2] || '';
 }
 
 // Helper function to get configuration from URL parameters
@@ -310,8 +333,24 @@ async function handlePassthroughForResume(event, url, downloadId, resumeConfig) 
 
 async function handleDownloadWithTransform(event, url, downloadId, resumeConfig) {
     const e2eeEnabled = url.searchParams.get('e2ee') === '1';
+    const uid = extractUidFromDownloadPath(url.pathname);
+    const shouldVerifyChecksum = !resumeConfig && !!uid && typeof FFLChecksum !== 'undefined';
+    const checksumVerifier = shouldVerifyChecksum
+        ? FFLChecksum.createVerifier({
+            uid: uid,
+            transport: 'http',
+            log: (...args) => log('[ProgressSW/Checksum]', ...args)
+        })
+        : null;
 
     log('[ProgressSW] Handling download with TransformStream, ID:', downloadId, 'E2EE:', e2eeEnabled, 'resume:', !!resumeConfig);
+    if (!shouldVerifyChecksum) {
+        log('[ProgressSW] Checksum verify disabled', {
+            hasResume: !!resumeConfig,
+            uid: uid,
+            hasChecksumModule: typeof FFLChecksum !== 'undefined'
+        });
+    }
     if (resumeConfig) {
         log('[ProgressSW] Resume config details:', {
             rangeStart: resumeConfig.rangeStart,
@@ -357,6 +396,9 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
 
         const rangeFromServer = parseContentRange(upstream.headers.get('Content-Range'));
         log('[ProgressSW] Parsed Content-Range:', rangeFromServer);
+
+        // Capture server-assigned download ID so DownloadManager can ACK receipt via POST /complete
+        const serverDownloadId = upstream.headers.get('FFL-DownloadId') || null;
 
         const reportedSize = getFileSize(upstream, url);
         const expectedSize = resumeConfig && resumeConfig.expectedSize ? resumeConfig.expectedSize : 0;
@@ -449,7 +491,11 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
                 chunkCount++;
                 const chunkSize = chunk.byteLength || chunk.length || 0;
                 log('[ProgressSW] Transform chunk #' + chunkCount + ' received, size:', chunkSize, 'skipRemaining:', skipRemaining, 'delivered:', delivered);
-                
+
+                if (checksumVerifier) {
+                    checksumVerifier.update(chunk);
+                }
+
                 // This chunk is the actual data going to the browser
                 let processedChunk = chunk;
 
@@ -560,10 +606,38 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
                 log('[ProgressSW] Transform stream completed,', completionDesc);
 
                 try {
-                    broadcast({ type: 'download-complete', id: downloadId, sent: delivered, total: resolvedTotal });
+                    broadcast({
+                        type: 'download-complete',
+                        id: downloadId,
+                        sent: delivered,
+                        total: resolvedTotal,
+                        serverId: serverDownloadId  // Server-assigned ID for POST /complete ACK
+                    });
                 } catch (broadcastError) {
                     console.error('[ProgressSW] Complete broadcast failed:', broadcastError);
                 }
+
+                if (checksumVerifier) {
+                    try {
+                        const checksumResult = await checksumVerifier.finalizeAndVerify();
+                        broadcast({
+                            type: 'download-checksum',
+                            id: downloadId,
+                            transport: 'http',
+                            ...checksumResult
+                        });
+                    } catch (verifyError) {
+                        broadcast({
+                            type: 'download-checksum',
+                            id: downloadId,
+                            transport: 'http',
+                            verified: false,
+                            reason: 'verify-error',
+                            message: String(verifyError)
+                        });
+                    }
+                }
+
                 resolveDone();
 
                 // Clean up E2EE context

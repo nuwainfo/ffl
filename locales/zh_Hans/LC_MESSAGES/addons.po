@@ -589,7 +589,7 @@ msgid "Directly share file (P2P, need to keep running for the others download)"
 msgstr "直接分享档案（P2P，需持续执行以供他人下载）"
 
 msgid "Upload file to FastFileLink server to share it"
-msgstr "上传档案至快档连结伺服器进行分享"
+msgstr "上传档案至快档连结云端进行分享"
 
 msgid "Share duration after upload"
 msgstr "上传后的分享期限"
@@ -688,12 +688,12 @@ msgstr "请将以下连结分享给您想要分享档案的人。\n"
 
 #, python-brace-format
 msgid "Your file will be stored on our servers until {end}"
-msgstr "您的档案将储存在我们的伺服器上直到 {end}"
+msgstr "您的档案将储存在我们的云端上直到 {end}"
 
 msgid ""
 "Once the sharing duration ends, your files will be permanently removed "
 "from our servers."
-msgstr "分享期限结束后，您的档案将从我们的伺服器上永久移除。"
+msgstr "分享期限结束后，您的档案将从我们的云端上永久移除。"
 
 msgid ""
 "\n"
@@ -828,7 +828,7 @@ msgstr "处理关闭请求时发生错误：{error}"
 
 #, python-brace-format
 msgid "[{timestamp}] Uploading to server"
-msgstr "[{timestamp}] 正在上传到伺服器"
+msgstr "[{timestamp}] 正在上传到云端"
 
 msgid ""
 "Finish uploading, please still wait a moment because the FastFileLink "

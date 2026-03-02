@@ -54,6 +54,7 @@ class DownloadManager {
         this.progressInfo = options.progressInfo || '#progress-info';
         this.retryLink = options.retryLink || '#retry-link';
         this.completeBlock = options.completeBlock || '#completeBlock';
+        this.completeStatusHeading = options.completeStatusHeading || null;
         this.downloadBlock = options.downloadBlock || '#downloadBlock';
         this.downloadLink = options.downloadLink || '#download-link';
         this.filenameInput = options.filenameInput || '#filename';
@@ -87,6 +88,11 @@ class DownloadManager {
         this.newTabOpened = false; // Flag to prevent retry after new tab
         this.currentCheckInterval = this.stallCheckInterval; // Current active interval
         this.isTabHidden = document.hidden || false; // Track visibility state
+        this.checksumVerified = false;
+        this.pendingChecksumResult = null;
+
+        // Server-assigned download ID for POST /complete ACK (relay truncation fix)
+        this.serverDownloadId = null;
 
         // Resume support state
         this.resumeConfig = null;
@@ -339,7 +345,26 @@ class DownloadManager {
         }
 
         this.updateStatus(this.t('Download:complete.title', 'Download completed!'), '');
+        if (this.checksumVerified) {
+            this.showChecksumVerifiedMessage();
+        }
         this.showCompleteBlock();
+
+        // Notify server that client has received all bytes.
+        // Mirrors WebRTC.js _downloadComplete() POST to /complete.
+        // Unblocks _waitForHTTPDownloadComplete() on the server so shutdown/doAfterDownload
+        // is only triggered after the relay has fully drained to the client.
+        if (this.serverDownloadId && this.uid) {
+            this.log('DownloadManager', `Notifying server of HTTP download completion, downloadId: ${this.serverDownloadId}`);
+            fetch(`/${this.uid}/complete`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ downloadId: this.serverDownloadId, receivedBytes: resolvedTotal || 0 }),
+            }).catch(err => {
+                this.log('DownloadManager', `Failed to notify server of HTTP completion: ${err}`);
+            });
+            this.serverDownloadId = null; // Prevent duplicate ACK on re-entry
+        }
 
         // Call external callback if provided
         if (this.onDownloadCompleteCallback) {
@@ -372,6 +397,108 @@ class DownloadManager {
         }
     }
 
+    handleChecksumVerificationResult(result, transport = 'http') {
+        if (!result) {
+            return;
+        }
+
+        if (result.verified) {
+            this.checksumVerified = true;
+            this.showChecksumVerifiedMessage();
+            this.log('Checksum', `${transport} checksum verified`, {
+                algorithm: result.algorithm || 'blake2b',
+                checksum: result.localChecksum
+            });
+            return;
+        }
+
+        if (result.pending || result.transportMismatch) {
+            this.log('Checksum', `${transport} checksum verification skipped`, result);
+            return;
+        }
+
+        this.checksumVerified = false;
+        this.clearChecksumVerifiedMessage();
+        this.log('Checksum', `${transport} checksum verification failed`, result);
+        this.updateStatus(
+            this.t('Download:complete.title', 'Download completed!'),
+            this.t(
+                'Download:complete.checksumFailed',
+                'Checksum verification failed. Please re-download the file if integrity is required.'
+            )
+        );
+    }
+
+    _checksumBadgeTargets() {
+        const targets = [this.statusHeading];
+        if (this.completeStatusHeading) {
+            targets.push(this.completeStatusHeading);
+        }
+        return targets;
+    }
+
+    _resolveTarget(target) {
+        return (typeof target === 'string') ? document.querySelector(target) : target;
+    }
+
+    showChecksumVerifiedMessage() {
+        const verifiedText = this.t('Download:checksum.verified', 'verified');
+        const className = 'ffl-checksum-verified';
+
+        for (const target of this._checksumBadgeTargets()) {
+            const targetSelector = (typeof target === 'string') ? target : null;
+            const targetElement = targetSelector ? null : target;
+
+            if (typeof FFLChecksum !== 'undefined' && typeof FFLChecksum.showVerifiedBadge === 'function') {
+                FFLChecksum.showVerifiedBadge({ targetSelector, targetElement, text: verifiedText, className });
+                continue;
+            }
+
+            const el = this._resolveTarget(target);
+            if (!el || el.querySelector('.' + className)) {
+                continue;
+            }
+
+            const span = document.createElement('span');
+            span.className = className;
+            span.textContent = ` (${verifiedText})`;
+            span.style.opacity = '0';
+            span.style.transition = 'opacity 250ms';
+            el.appendChild(span);
+            requestAnimationFrame(() => { span.style.opacity = '1'; });
+        }
+    }
+
+    clearChecksumVerifiedMessage() {
+        const className = 'ffl-checksum-verified';
+        for (const target of this._checksumBadgeTargets()) {
+            this._resolveTarget(target)?.querySelector('.' + className)?.remove();
+        }
+    }
+
+    createChecksumVerifierForHTTP(resumeConfig = null) {
+        const hasResume = !!resumeConfig && (
+            (resumeConfig.rangeStart || 0) > 0 ||
+            (resumeConfig.baseBytes || 0) > 0 ||
+            (resumeConfig.skipBytes || 0) > 0
+        );
+        if (hasResume) {
+            this.log('Checksum', 'Skip checksum verifier for resumed HTTP transfer');
+            return null;
+        }
+
+        if (typeof FFLChecksum === 'undefined' || typeof FFLChecksum.createVerifier !== 'function') {
+            this.log('Checksum', 'Checksum module unavailable, skip verifier');
+            return null;
+        }
+
+        return FFLChecksum.createVerifier({
+            uid: this.uid,
+            transport: 'http',
+            log: (category, message, payload) => this.log(category, message, payload)
+        });
+    }
+
     setupBroadcastChannel() {
         if (this.dlChannel) {
             this.dlChannel.onmessage = (evt) => {
@@ -388,9 +515,14 @@ class DownloadManager {
                 } else if (type === 'download-progress') {
                     this.handleDownloadProgress(sent, total);
                 } else if (type === 'download-complete') {
+                    if (evt.data.serverId) {
+                        this.serverDownloadId = evt.data.serverId;
+                    }
                     this.handleDownloadComplete(total);
                 } else if (type === 'download-error') {
                     this.handleDownloadError(evt.data.message);
+                } else if (type === 'download-checksum') {
+                    this.handleChecksumVerificationResult(evt.data, evt.data.transport || 'http');
                 } else if (type === 'debug' && evt.data.message) {
                     this.log('ProgressSW', evt.data.message);
                 }
@@ -644,6 +776,9 @@ class DownloadManager {
     
     onDownloadStart(total, initialSent = 0) {
         this.downloadStarted = true;
+        this.checksumVerified = false;
+        this.pendingChecksumResult = null;
+        this.clearChecksumVerifiedMessage();
         this.startTime = Date.now(); // Reset timer when download actually starts
         if (this.adaptiveUnlockTimer) {
             clearTimeout(this.adaptiveUnlockTimer);
@@ -950,7 +1085,7 @@ class DownloadManager {
         return this.activeDlId;
     }
 
-    async fetchToWriter(urlPath, writer, needsDecryption, resume = null, progressCallback = null) {
+    async fetchToWriter(urlPath, writer, needsDecryption, resume = null, progressCallback = null, checksumVerifier = null) {
         if (needsDecryption) {
             this.log('DownloadManager', 'E2EE decryption will be applied during resume (bypassing Service Worker)');
 
@@ -983,6 +1118,13 @@ class DownloadManager {
 
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        // Capture server-assigned download ID for POST /complete ACK (relay truncation fix).
+        // Only reachable when SW is NOT active (SW path gets serverId via broadcast instead).
+        const serverDlId = response.headers.get('FFL-DownloadId');
+        if (serverDlId) {
+            this.serverDownloadId = serverDlId;
         }
 
         // Validate 206 / Content-Range for resume and get total size
@@ -1042,6 +1184,10 @@ class DownloadManager {
 
             let chunk = value;
 
+            if (checksumVerifier) {
+                checksumVerifier.update(chunk);
+            }
+
             // Apply E2EE decryption only when resuming (bypassing Service Worker)
             // Normal path: Service Worker already decrypts chunks
             if (needsDecryption) {
@@ -1085,6 +1231,15 @@ class DownloadManager {
         // Close the writer (completes the file)
         await writer.close();
         this.log('DownloadManager', 'Writer closed successfully, HTTP bytes written:', totalWritten);
+
+        if (checksumVerifier) {
+            try {
+                const checksumResult = await checksumVerifier.finalizeAndVerify();
+                this.pendingChecksumResult = checksumResult;
+            } catch (verifyError) {
+                this.log('Checksum', 'Failed to verify HTTP checksum:', verifyError);
+            }
+        }
 
         // Return total size for caller to handle completion
         return totalSizeFromServer;
@@ -1143,7 +1298,8 @@ class DownloadManager {
                     writer,
                     needsDecryption,
                     null,  // Resume handled by SW
-                    progressCallback
+                    progressCallback,
+                    null
                 ).catch(err => {
                     this.log('DownloadManager', 'Writer-based download failed:', err);
                     this.onDownloadErrorCallback && this.onDownloadErrorCallback(String(err));
@@ -1167,6 +1323,7 @@ class DownloadManager {
             // Prepare callbacks and parameters
             const needsDecryption = this.e2eeEnabled;
             const progressCallback = this.handleDownloadProgress.bind(this);
+            const checksumVerifier = this.createChecksumVerifierForHTTP(resumeConfig);
             const baseBytes = resumeConfig?.baseBytes || 0;
 
             // Get expected total size for download-started event
@@ -1183,12 +1340,17 @@ class DownloadManager {
                     writer,
                     needsDecryption,
                     resumeConfig,
-                    progressCallback
+                    progressCallback,
+                    checksumVerifier
                 );
 
                 // Simulate download-complete event (after success)
                 this.log('DownloadManager', 'Simulating download-complete event (no SW)');
                 this.handleDownloadComplete(totalSize || expectedSize);
+                if (this.pendingChecksumResult) {
+                    this.handleChecksumVerificationResult(this.pendingChecksumResult, 'http');
+                    this.pendingChecksumResult = null;
+                }
 
             } catch (err) {
                 this.log('DownloadManager', 'Direct fetch -> writer failed:', err);

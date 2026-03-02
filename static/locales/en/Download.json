@@ -154,6 +154,9 @@
         "folder_changed": "The shared folder contents changed during transfer. The file owner needs to reshare the folder.",
         "unknown": "An error occurred during transfer."
     },
+    "checksum": {
+        "verified": "verified"
+    },
     "zipPreview": {
         "button": "Preview Contents",
         "archiveContents": "Archive Contents",

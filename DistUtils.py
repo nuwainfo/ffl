@@ -54,8 +54,8 @@ packageData = [
     ('static/assets/gooey/program_icon.png', 'static/assets/gooey'), # gooey program icon
     ('static/assets/gooey/config_icon.png', 'static/assets/gooey'), # gooey config icon    
     ('static/assets/gooey/running_icon.png', 'static/assets/gooey'), # gooey running icon
-    ('static/assets/thumbnails/Thumb.png', 'static/assets'),
-    ('static/assets/thumbnails/Video.png', 'static/assets'),
+    ('static/assets/thumbnails/Thumb.png', 'static/assets/thumbnails'),
+    ('static/assets/thumbnails/Video.png', 'static/assets/thumbnails'),
     ('static/assets/mitm.html', 'static/assets'),
     ('static/assets/sw.js', 'static/assets'),
     ('static/index.html', 'static'),

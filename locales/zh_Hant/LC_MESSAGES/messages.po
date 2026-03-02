@@ -247,7 +247,7 @@ msgid ""
 msgstr "通道伺服器暫時無法使用。請參閱 https://github.com/nuwainfo/ffl#3--using-tunnels 以了解替代通道。"
 
 msgid "Failed to connect server"
-msgstr "無法連線到伺服器"
+msgstr "無法連線到雲端"
 
 msgid "Server return error"
 msgstr "伺服器回傳錯誤"
@@ -345,7 +345,7 @@ msgstr "將連結和設定輸出到 JSON 檔案"
 msgid ""
 "Upload file to FastFileLink server to share it (Share duration after "
 "upload). Default: {default}"
-msgstr "上傳檔案到 快檔連結 伺服器以分享（上傳後的分享期限）。預設：{default}"
+msgstr "上傳檔案到 快檔連結 雲端以分享（上傳後的分享期限）。預設：{default}"
 
 msgid ""
 "Resume a previously interrupted upload (requires previous upload session "
@@ -358,12 +358,12 @@ msgstr "在指定百分比時暫停上傳（1-99，需要 --upload）"
 msgid ""
 "Maximum number of downloads before the server automatically shuts down "
 "(P2P mode only). 0 means unlimited."
-msgstr "伺服器自動關閉前的最大下載次數（僅限 P2P 模式）。0 表示無限制。"
+msgstr "雲端自動關閉前的最大下載次數（僅限 P2P 模式）。0 表示無限制。"
 
 msgid ""
 "Timeout in seconds before the server automatically shuts down (P2P mode "
 "only). 0 means no timeout."
-msgstr "伺服器自動關閉前的逾時秒數（僅限 P2P 模式）。0 表示無逾時。"
+msgstr "雲端自動關閉前的逾時秒數（僅限 P2P 模式）。0 表示無逾時。"
 
 msgid ""
 "Port number for local server (1024-65535, default: auto-detect available "
@@ -596,11 +596,11 @@ msgstr ""
 
 #, python-brace-format
 msgid "Timeout ({timeout} seconds) reached. Shutting down server."
-msgstr "已達到逾時時間（{timeout} 秒）。正在關閉伺服器。"
+msgstr "已達到逾時時間（{timeout} 秒）。正在關閉雲端。"
 
 #, python-brace-format
 msgid "Maximum downloads ({maxDownloads}) reached. Shutting down server."
-msgstr "已達到最大下載次數（{maxDownloads}）。正在關閉伺服器。"
+msgstr "已達到最大下載次數（{maxDownloads}）。正在關閉雲端。"
 
 msgid "3 hours"
 msgstr "3小時"
@@ -811,7 +811,7 @@ msgid ""
 msgstr "完成給 [#{peerId}] 的 {sizeDisplay} 傳輸，請等待接收者完成下載後再關閉應用程式。\n"
 
 msgid "Connecting to server"
-msgstr "正在連線到伺服器"
+msgstr "正在連線到雲端"
 
 msgid "Requesting connection"
 msgstr "正在請求連線"
