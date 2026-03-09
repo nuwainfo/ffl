@@ -70,7 +70,48 @@
             "solution2Text": "Use the",
             "solution2Stable": "for stable downloads of large encrypted files",
             "solution3": "<strong>Wait:</strong> The download may still be progressing in the background"
-        }
+        },
+        "enterKey": "Please enter an encryption key",
+        "invalidKeyLength": "Invalid encryption key length. Expected 32-byte AES-256 key (44 characters in base64).",
+        "invalidKeyLengthDecoded": "Invalid encryption key length. Expected 32-byte AES-256 key."
+    },
+    "pickup": {
+        "title": "🔑 Pickup Code Required",
+        "description": "The sender requires a 6-digit pickup code to download this file.",
+        "placeholder": "6-digit code",
+        "button": "Proceed",
+        "invalidCode": "Please enter a valid 6-digit numeric code.",
+        "wrongCode": "Invalid pickup code. Please check and try again."
+    },
+    "pubkey": {
+        "title": "🔐 Private Key Required",
+        "description": "This file is protected with your public key. Upload your private key file (.fflkey) to unlock.",
+        "selectFile": "📁 Select .fflkey file",
+        "noFile": "Please select your .fflkey private key file.",
+        "readError": "Failed to read key file.",
+        "invalidPem": "Invalid key file — expected a PKCS#8 private key (.fflkey).",
+        "base64Error": "Invalid key file (base64 decode failed).",
+        "invalidFormat": "Invalid private key — wrong format or not an RSA-OAEP key.",
+        "decryptError": "Decryption failed — wrong private key.",
+        "authFailed": "Authentication failed — check your key."
+    },
+    "email": {
+        "title": "📧 Email Verification Required",
+        "description": "Click \"Send Code\" to receive a one-time verification code at your email address.",
+        "sendCode": "Send Code",
+        "codeSent": "Code sent! Please check your email.",
+        "placeholder": "6-digit code",
+        "invalidCode": "Please enter the 6-digit code from your email.",
+        "sendFirst": "Please request a verification code first.",
+        "sendFailed": "Failed to send code. Please try again.",
+        "sendError": "Network error. Please try again.",
+        "sending": "Sending…"
+    },
+    "auth": {
+        "failed": "Authentication failed. Please try again.",
+        "verifying": "Verifying…",
+        "unlockButton": "Continue",
+        "rateLimited": "Too many failed attempts. Please try again in 5 minutes."
     },
     "downloadFooter":{
         "message": "PS: Wishing you a great day! Download your free file sharing app at",

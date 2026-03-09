@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-01-22 15:39+0800\n"
+"POT-Creation-Date: 2026-03-09 15:51+0800\n"
 "PO-Revision-Date: 2025-12-17 09:22+0800\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -17,6 +17,14 @@ msgstr ""
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.17.0\n"
+
+#, python-brace-format
+msgid "Authentication enabled - Username: {authUser}\n"
+msgstr ""
+
+#, python-brace-format
+msgid "Pickup code: {code}\n"
+msgstr ""
 
 msgid "Opening invite page in browser..."
 msgstr ""
@@ -104,10 +112,6 @@ msgstr ""
 msgid "Please share the URI below to access the {type} remotely:\n"
 msgstr ""
 
-#, python-brace-format
-msgid "🔐 Authentication enabled - Username: {authUser}\n"
-msgstr ""
-
 msgid ""
 "VFS server is running on loopback (127.0.0.1) - only accessible from this"
 " machine."
@@ -174,10 +178,6 @@ msgstr ""
 msgid ""
 "Please share the link below with the person you'd like to share the file "
 "with."
-msgstr ""
-
-#, python-brace-format
-msgid "Authentication enabled - Username: {authUser}\n"
 msgstr ""
 
 msgid ""
@@ -311,6 +311,34 @@ msgstr ""
 msgid "Support: {supportURL}"
 msgstr ""
 
+msgid ""
+"Recipient verification mode. 'pickup': 6-digit code required to download;"
+" 'pubkey': RSA public-key challenge required; 'pubkey+pickup': both "
+"required; 'email': one-time code sent to recipient's email"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Custom {n}-digit pickup code (use with --recipient-auth pickup or "
+"pubkey+pickup)"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Path to recipient's RSA public key file ({ext}). Required with "
+"--recipient-auth pubkey or pubkey+pickup"
+msgstr ""
+
+msgid ""
+"Recipient email address for OTP verification (implies --recipient-auth "
+"email)"
+msgstr ""
+
+msgid ""
+"Base URL for OTP email API (e.g. https://myserver.com/api). Required for "
+"--recipient-auth email"
+msgstr ""
+
 msgid "Choose a file or folder you want to share (use '-' for stdin)"
 msgstr ""
 
@@ -432,6 +460,18 @@ msgstr ""
 msgid "Password for HTTP Basic Authentication"
 msgstr ""
 
+msgid "Recipient verification mode when downloading a protected file"
+msgstr ""
+
+msgid ""
+"Pickup code to present when downloading (use with --recipient-auth pickup"
+" or pubkey+pickup)"
+msgstr ""
+
+#, python-brace-format
+msgid "Path to recipient's RSA private key file ({ext}) for pubkey auth"
+msgstr ""
+
 msgid "Upgrade to latest version or specified version"
 msgstr ""
 
@@ -443,8 +483,56 @@ msgstr ""
 msgid "Target version when binary path is specified (default: latest)"
 msgstr ""
 
+msgid "Generate an RSA-2048 keypair for --recipient-auth pubkey"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Base name for keypair files (default: recipient → recipient{pub} + "
+"recipient{priv})"
+msgstr ""
+
+msgid ""
+"Share the generated private key immediately after generation (private key"
+" can only be downloaded once, then auto-deleted; recommended: add "
+"--recipient-auth pickup or --recipient-auth pubkey)"
+msgstr ""
+
+msgid "Output link and settings to a JSON file (use with --share)"
+msgstr ""
+
 #, python-brace-format
 msgid "Error: Invalid proxy format: {proxy}"
+msgstr ""
+
+msgid "Generated RSA-2048 keypair:"
+msgstr ""
+
+#, python-brace-format
+msgid "  Private key : {path}"
+msgstr ""
+
+#, python-brace-format
+msgid "  Public key  : {path}  ← share with sender"
+msgstr ""
+
+msgid "Share the public key file with the sender who will use:"
+msgstr ""
+
+#, python-brace-format
+msgid "  ffl share file.bin --recipient-auth pubkey --recipient-public-key {pub}"
+msgstr ""
+
+#, python-brace-format
+msgid "Private key deleted: {path}"
+msgstr ""
+
+msgid "Sharing private key (download once, then auto-deleted)."
+msgstr ""
+
+msgid ""
+"Tip: use --recipient-auth pickup or --recipient-auth pubkey to restrict "
+"who can download.\n"
 msgstr ""
 
 msgid "Error: --upload option requires Upload addon (addons/Upload.py)"
@@ -480,6 +568,39 @@ msgstr ""
 msgid ""
 "Use --auth-password to enable authentication (username defaults to "
 "'{defaultUser}' if not specified)"
+msgstr ""
+
+#, python-brace-format
+msgid "Error: --pickup-code must be exactly {n} digits"
+msgstr ""
+
+msgid "Error: --recipient-email is required with --recipient-auth email"
+msgstr ""
+
+msgid "Use: --recipient-auth email --recipient-email user@example.com"
+msgstr ""
+
+msgid "Error: --recipient-auth email requires an OTP API server"
+msgstr ""
+
+msgid "Use --recipient-otp-api-base to specify one"
+msgstr ""
+
+#, python-brace-format
+msgid "Error: --recipient-public-key is required with --recipient-auth {mode}"
+msgstr ""
+
+#, python-brace-format
+msgid "Use --recipient-public-key {name}{ext}"
+msgstr ""
+
+msgid ""
+"Error: --recipient-public-key requires --recipient-auth pubkey or "
+"pubkey+pickup"
+msgstr ""
+
+#, python-brace-format
+msgid "Error: public key file not found: {path}"
 msgstr ""
 
 msgid "Error: --vfs cannot be used with --upload"
@@ -813,6 +934,9 @@ msgstr ""
 msgid "Getting file metadata"
 msgstr ""
 
+msgid "Checksum verified"
+msgstr ""
+
 msgid ""
 "\n"
 "⚠️  This file is encrypted. Please enter the encryption key:"
@@ -867,53 +991,19 @@ msgstr ""
 msgid "Attempting WebRTC download..."
 msgstr ""
 
+#~ msgid "🔐 Authentication enabled - Username: {authUser}\n"
+#~ msgstr ""
 
+#~ msgid ""
+#~ "Recipient verification mode. 'pickup': 6-digit"
+#~ " code required to download"
+#~ msgstr ""
 
+#~ msgid "Custom {n}-digit pickup code (only valid with --recipient-auth pickup)"
+#~ msgstr ""
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+#~ msgid ""
+#~ "Pickup code to present when downloading"
+#~ " (use with --recipient-auth pickup)"
+#~ msgstr ""
 

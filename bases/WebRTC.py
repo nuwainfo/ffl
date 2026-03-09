@@ -39,12 +39,14 @@ import requests
 from aiortc import (RTCConfiguration, RTCDataChannel, RTCIceServer, RTCPeerConnection, RTCSessionDescription)
 from aiortc.sdp import candidate_from_sdp
 
+from bases.Checksum import DEFAULT_CHECKSUM_ALGORITHM
 from bases.Kernel import getLogger, FFLEvent, Throttler
 from bases.Utils import ONE_MB, formatSize, getEnv, StallResilientAdapter
 from bases.Progress import Progress
 from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
 from bases.E2EE import E2EEClient
 from bases.Readers import FolderChangedException
+from bases.crypto import CryptoInterface
 from bases.I18n import _
 
 
@@ -93,15 +95,15 @@ CHROME_EDGE_LOCAL_SLEEP_INTERVAL = getEnv('WEBRTC_CHROME_EDGE_LOCAL_SLEEP_INTERV
 # Connect timeout: How long to wait for initial connection
 # Read timeout: How long to wait between chunks (increased from 30s to handle stalls)
 HTTP_CONNECT_TIMEOUT = getEnv('HTTP_CONNECT_TIMEOUT', 10)
-HTTP_READ_TIMEOUT = getEnv('HTTP_READ_TIMEOUT', 600)  # 10 minutes to handle large file stalls
+HTTP_READ_TIMEOUT = getEnv('HTTP_READ_TIMEOUT', 600) # 10 minutes to handle large file stalls
 
 # WebRTC connection idle timeout configuration (seconds)
 # Heartbeat idle timeout: How long to wait without heartbeat before considering connection stale
 # Max wait for START: Hard upper limit to prevent infinite waiting for START signal
 # 5 minutes - generous for background tab throttling
-HEARTBEAT_IDLE_TIMEOUT = getEnv('WEBRTC_HEARTBEAT_IDLE_TIMEOUT', 5 * 60)  
+HEARTBEAT_IDLE_TIMEOUT = getEnv('WEBRTC_HEARTBEAT_IDLE_TIMEOUT', 5 * 60)
 # 2 hours - optional hard limit to prevent infinite waiting
-MAX_WAIT_FOR_START = getEnv('WEBRTC_MAX_WAIT_FOR_START', 2 * 60 * 60)  
+MAX_WAIT_FOR_START = getEnv('WEBRTC_MAX_WAIT_FOR_START', 2 * 60 * 60)
 
 # Without winloop, Edge will fail to use WebRTC, it will cause consent query timeout after few seconds.
 # It speeds up a lot on Firefox, but slow down a little on Chrome/Edge.
@@ -251,6 +253,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         fut = asyncio.run_coroutine_threadsafe(coro, self.loop)
 
         if not wait:
+
             def _done(f):
                 try:
                     f.result()
@@ -271,7 +274,6 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         except Exception as e:
             logger.exception(f"Error in runAsync: {e}")
             raise
-
 
     async def createOffer(self, reader, fileSize, getSizeFunc=None, browserHint=None, offset=0, e2eeManager=None):
         # Generate a unique peer ID
@@ -530,7 +532,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
                 elif message == "CANCEL":
                     # Optional: support explicit cancellation
                     logger.info(f"Client cancelled preview for peer {peerId}")
-                    startReceived.set()  # Exit wait loop
+                    startReceived.set() # Exit wait loop
                 else:
                     logger.debug(f"Unrecognized {message} for peer {peerId}")
 
@@ -607,10 +609,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
             streamEncryptor = e2eeManager.createWebRTCEncryptor(reader.contentName, fileSize)
 
         if self.checksumStore:
-            checksumSession = self.checksumStore.begin(
-                transport='webrtc',
-                e2ee=bool(streamEncryptor)
-            )
+            checksumSession = self.checksumStore.begin(transport='webrtc', e2ee=bool(streamEncryptor))
             shouldCommitChecksum = offset == 0
 
         bufferFlushed = asyncio.Event()
@@ -691,11 +690,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
                     speed = int(sent / duration) if duration > 0 else 0
 
                     FFLEvent.webrtcTransferProgress.trigger(
-                        peerId=peerId,
-                        bytesTransferred=sent,
-                        totalBytes=fileSize,
-                        percentage=percentage,
-                        speed=speed
+                        peerId=peerId, bytesTransferred=sent, totalBytes=fileSize, percentage=percentage, speed=speed
                     )
 
             # Wait for buffer to drain before sending EOF to prevent race condition
@@ -715,10 +710,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
             duration = time.time() - transferStartTime
             averageSpeed = int(sent / duration) if duration > 0 else 0
             FFLEvent.webrtcTransferCompleted.trigger(
-                peerId=peerId,
-                bytesTransferred=sent,
-                duration=duration,
-                averageSpeed=averageSpeed
+                peerId=peerId, bytesTransferred=sent, duration=duration, averageSpeed=averageSpeed
             )
 
             # Calculate final statistics
@@ -862,8 +854,8 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         )
 
         debugEnabled = (
-            self.debugSimulateStall or self.debugSimulateIceFailure
-            or self.debugSimulateConnectionHang or self.disableHTTPFallback
+            self.debugSimulateStall or self.debugSimulateIceFailure or self.debugSimulateConnectionHang or
+            self.disableHTTPFallback
         )
         if debugEnabled:
             logger.debug(
@@ -1013,15 +1005,11 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         """Checksum verification is only meaningful for full FastFileLink transfers."""
         return (not urlInfo.isGenericURL) and resumePosition == 0
 
-    def _createTransferChecksumState(self, enabled: bool) -> Optional[dict]:
+    def _createTransferChecksumState(self, enabled: bool, algorithm: str = DEFAULT_CHECKSUM_ALGORITHM) -> Optional[dict]:
         if not enabled:
             return None
 
-        return {
-            'hasher': hashlib.blake2b(),
-            'size': 0,
-            'checksum': None
-        }
+        return {'hasher': hashlib.new(algorithm), 'size': 0, 'checksum': None}
 
     def _updateTransferChecksumState(self, checksumState: Optional[dict], data: bytes):
         if not checksumState or not data:
@@ -1057,11 +1045,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         return None
 
     def _verifyTransferChecksum(
-        self,
-        baseURL: str,
-        headers: dict,
-        checksumState: Optional[dict],
-        expectedTransport: str
+        self, baseURL: str, headers: dict, checksumState: Optional[dict], expectedTransport: str
     ):
         localChecksum = self._finalizeTransferChecksumState(checksumState)
         if not localChecksum:
@@ -1085,16 +1069,12 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
 
         localChecksum = localChecksum.lower()
         if remoteChecksum != localChecksum:
-            raise RuntimeError(
-                f"Checksum verification failed: local={localChecksum}, remote={remoteChecksum}"
-            )
+            raise RuntimeError(f"Checksum verification failed: local={localChecksum}, remote={remoteChecksum}")
 
         remoteSize = remoteData.get('size')
         localSize = checksumState.get('size', 0)
         if isinstance(remoteSize, int) and remoteSize >= 0 and remoteSize != localSize:
-            raise RuntimeError(
-                f"Checksum size mismatch: local={localSize}, remote={remoteSize}"
-            )
+            raise RuntimeError(f"Checksum size mismatch: local={localSize}, remote={remoteSize}")
 
         self.loggerCallback(_("Checksum verified"))
 
@@ -1607,7 +1587,8 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         resumePosition: int = 0,
         e2eeContext: Optional[dict] = None,
         statusErrorQueue: Optional[deque] = None,
-        verifyChecksum: bool = False
+        verifyChecksum: bool = False,
+        checksumAlgorithm: str = DEFAULT_CHECKSUM_ALGORITHM
     ):
         """Setup data channel for file reception
 
@@ -1634,7 +1615,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             'downloadStarted': False,
             'statusUpdated': False,
             'streamDecryptor': streamDecryptor,
-            'checksumState': self._createTransferChecksumState(verifyChecksum)
+            'checksumState': self._createTransferChecksumState(verifyChecksum, checksumAlgorithm)
         }
 
         # Monitor connection state for early failure detection
@@ -1830,7 +1811,10 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         credentials: Optional[Tuple[str, str]] = None,
         resume: bool = False,
         e2eeContext: Optional[dict] = None,
-        urlInfo: Optional[URLInfo] = None
+        urlInfo: Optional[URLInfo] = None,
+        checksumAlgorithm: str = DEFAULT_CHECKSUM_ALGORITHM,
+        pickupCode: Optional[str] = None,
+        proof: Optional[str] = None
     ) -> str:
         """Core WebRTC download implementation
 
@@ -1891,6 +1875,10 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                 'stall-after': self.debugStallAfterBytes
             } if self.debugSimulateStall else {})
         )
+        if pickupCode:
+            authHeaders['X-FFL-Pickup'] = pickupCode
+        if proof:
+            authHeaders['X-FFL-Proof'] = proof
 
         if resumePosition > 0 or self.debugSimulateIceFailure or self.debugSimulateStall:
             logger.debug(f"Using offer URL: {offerURL}")
@@ -1929,7 +1917,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             # Setup data channel handling (pass statusErrorQueue for error prioritization)
             downloadComplete, errorEvent, context = await self._setupDataChannelHandling(
                 pc, finalOutputPath, fileSize, urlInfo.baseURL, peerId, authHeaders, progress, resumePosition,
-                e2eeContext, statusErrorQueue, verifyChecksum
+                e2eeContext, statusErrorQueue, verifyChecksum, checksumAlgorithm
             )
 
             # Setup ICE candidate handling
@@ -1967,7 +1955,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             # Start ICE candidate polling and wait for completion
             self._updateProgressStatus(progress, self._STATUS_WAITING_CHANNEL)
 
-            # Start background thread for status polling 
+            # Start background thread for status polling
             statusStopEvent = threading.Event()
             self._startStatusPollingThread(urlInfo.baseURL, authHeaders, statusStopEvent, statusErrorQueue)
 
@@ -2069,11 +2057,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
 
             if verifyChecksum:
                 await asyncio.to_thread(
-                    self._verifyTransferChecksum,
-                    urlInfo.baseURL,
-                    authHeaders,
-                    context.get('checksumState'),
-                    'webrtc'
+                    self._verifyTransferChecksum, urlInfo.baseURL, authHeaders, context.get('checksumState'), 'webrtc'
                 )
 
             return finalOutputPath
@@ -2105,7 +2089,10 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         resume: bool = False,
         forceResume: bool = False,
         e2eeContext: Optional[dict] = None,
-        urlInfo: Optional[URLInfo] = None
+        urlInfo: Optional[URLInfo] = None,
+        checksumAlgorithm: str = DEFAULT_CHECKSUM_ALGORITHM,
+        pickupCode: Optional[str] = None,
+        proof: Optional[str] = None
     ) -> str:
         """
         Download file via HTTP with resume capability as fallback
@@ -2128,11 +2115,18 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             # Construct the download URL (same as web interface)
             downloadURL = self._buildURL(urlInfo.baseURL, "download")
 
+        # Build auth headers for pickup code and pubkey proof
+        authExtra = {}
+        if pickupCode:
+            authExtra['X-FFL-Pickup'] = pickupCode
+        if proof:
+            authExtra['X-FFL-Proof'] = proof
+
         # Get file metadata using HEAD request - always respect Content-Disposition from server
         if sharedProgress:
             self._updateProgressStatus(sharedProgress, self._STATUS_METADATA)
         try:
-            headers = self._makeHeaders(credentials)
+            headers = self._makeHeaders(credentials, authExtra if authExtra else None)
             # For generic URLs, use the actual URL directly; for FastFileLink URLs, use baseURL
             metadataURL = url if urlInfo.isGenericURL else urlInfo.baseURL
             fileSize, fileName = self._getRemoteMetadata(metadataURL, headers, isGenericURL=urlInfo.isGenericURL)
@@ -2151,8 +2145,10 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         verifyChecksum = self._shouldVerifyChecksum(urlInfo, resumePosition)
 
         # File already complete - early return (skip check for unknown/unreliable sizes)
-        if (self._isPositiveSize(fileSize) and resumePosition >= fileSize and
-            not (urlInfo.isGenericURL and fileSize == 0)):
+        if (
+            self._isPositiveSize(fileSize) and resumePosition >= fileSize and
+            not (urlInfo.isGenericURL and fileSize == 0)
+        ):
             return self._finishAlreadyComplete(fileSize, resumePosition, finalOutputPath, sharedProgress)
 
         # Show resume message if resuming (only when not using shared progress and size is known)
@@ -2173,7 +2169,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
 
         # Set range header for resume using helper
         rangeHeader = {'Range': f'bytes={resumePosition}-'} if resumePosition > 0 else None
-        downloadHeaders = self._makeHeaders(credentials, rangeHeader)
+        downloadHeaders = self._makeHeaders(credentials, {**(rangeHeader or {}), **authExtra})
 
         # Initialize E2EE stream decryptor if enabled (tags fetched on-demand)
         streamDecryptor = None
@@ -2186,7 +2182,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         session = requests.Session()
         adapter = StallResilientAdapter(
             chunkSize=TRANSFER_CHUNK_SIZE,
-            allowedMethods={'GET'}  # Download method only
+            allowedMethods={'GET'} # Download method only
         )
         session.mount("https://", adapter)
         session.mount("http://", adapter)
@@ -2200,8 +2196,9 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         try:
             # Use tuple timeout: (connect_timeout, read_timeout) with increased read timeout
             # to handle large file stalls (especially on Python 3.12 + TLS 1.3)
-            with session.get(downloadURL, headers=downloadHeaders, stream=True,
-                             timeout=(HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT)) as response:
+            with session.get(
+                downloadURL, headers=downloadHeaders, stream=True, timeout=(HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT)
+            ) as response:
                 # Check status codes
                 if response.status_code not in (200, 206): # 206 is partial content for resume
                     raise RuntimeError(f"HTTP download failed: {response.status_code}")
@@ -2230,7 +2227,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                 totalDownloaded = resumePosition # Start from resume position
 
                 with open(finalOutputPath, mode) as f:
-                    checksumState = self._createTransferChecksumState(verifyChecksum)
+                    checksumState = self._createTransferChecksumState(verifyChecksum, checksumAlgorithm)
                     for chunk in response.iter_content(chunk_size=TRANSFER_CHUNK_SIZE):
                         # Check status error queue (lock-free, very fast - no performance impact)
                         if statusErrorQueue:
@@ -2283,7 +2280,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             raise RuntimeError(f"HTTP download failed: {e}")
         finally:
             statusStopEvent.set()
-            session.close()  # Clean up session resources
+            session.close() # Clean up session resources
 
         # Verify final file size (skip for generic URLs and unknown sizes)
         finalSize = os.path.getsize(finalOutputPath)
@@ -2296,12 +2293,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             self._finishProgress()
 
         if verifyChecksum:
-            self._verifyTransferChecksum(
-                urlInfo.baseURL,
-                self._createAuthHeaders(credentials),
-                checksumState,
-                'http'
-            )
+            self._verifyTransferChecksum(urlInfo.baseURL, self._createAuthHeaders(credentials), checksumState, 'http')
 
         # Notify server that client has received all bytes (unblocks relay drain wait)
         if serverDownloadId and not urlInfo.isGenericURL:
@@ -2312,11 +2304,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         return finalOutputPath
 
     def _notifyHTTPDownloadComplete(
-        self,
-        baseURL: str,
-        downloadId: str,
-        credentials: Optional[Tuple[str, str]],
-        receivedBytes: int
+        self, baseURL: str, downloadId: str, credentials: Optional[Tuple[str, str]], receivedBytes: int
     ):
         """Notify server that client has received all bytes via HTTP.
 
@@ -2328,9 +2316,13 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             completeURL = self._buildURL(baseURL, "complete")
             authHeaders = self._createAuthHeaders(credentials)
             self._sendHTTPRequest(
-                completeURL, "POST",
-                {"downloadId": downloadId, "receivedBytes": receivedBytes},
-                authHeaders, timeout=10
+                completeURL,
+                "POST", {
+                    "downloadId": downloadId,
+                    "receivedBytes": receivedBytes
+                },
+                authHeaders,
+                timeout=10
             )
             logger.debug(f"HTTP download complete ACK sent for {downloadId[:8]}")
         except Exception as e:
@@ -2344,7 +2336,10 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         resume: bool,
         webrtcError: Exception,
         e2eeContext: Optional[dict] = None,
-        urlInfo: Optional[URLInfo] = None
+        urlInfo: Optional[URLInfo] = None,
+        checksumAlgorithm: str = DEFAULT_CHECKSUM_ALGORITHM,
+        pickupCode: Optional[str] = None,
+        proof: Optional[str] = None
     ) -> str:
         """Common HTTP fallback logic for both timeout and exception cases
 
@@ -2385,7 +2380,10 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                 resume,
                 forceResume=True,
                 e2eeContext=e2eeContext,
-                urlInfo=urlInfo
+                urlInfo=urlInfo,
+                pickupCode=pickupCode,
+                proof=proof,
+                checksumAlgorithm=checksumAlgorithm
             )
             self._finishProgress()
             return result
@@ -2402,12 +2400,39 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                 f"Both WebRTC and HTTP downloads failed. WebRTC: {webrtcError}. HTTP: {httpError}"
             ) from webrtcError
 
+    def _fetchChecksumData(self, urlInfo) -> dict:
+        """Fetch /checksum once. Always returns a dict with at least 'algorithm'.
+        Also contains 'encrypted_challenge' when pubkey auth is enabled on the server."""
+        checksumURL = self._buildURL(urlInfo.baseURL, "checksum")
+        response = requests.get(checksumURL, timeout=15)
+        response.raise_for_status()
+        return response.json()
+
+    def _resolveProof(self, checksumData: dict, recipientPrivateKeySpec: Optional[str]) -> Optional[str]:
+        """Decrypt RSA-OAEP challenge from checksumData['encrypted_challenge'], return base64 proof."""
+        if not recipientPrivateKeySpec:
+            return None
+
+        encryptedChallengeB64 = checksumData.get('encrypted_challenge')
+        if not encryptedChallengeB64:
+            return None
+
+        challengeCiphertext = base64.b64decode(encryptedChallengeB64)
+        with open(recipientPrivateKeySpec, 'r', encoding='utf-8') as f:
+            privKeyPem = f.read()
+
+        crypto = CryptoInterface()
+        challenge = crypto.decryptRSAOAEP(privKeyPem, challengeCiphertext)
+        return base64.b64encode(challenge).decode()
+
     def downloadFile(
         self,
         url: str,
         outputPath: Optional[str] = None,
         credentials: Optional[Tuple[str, str]] = None,
-        resume: bool = False
+        resume: bool = False,
+        pickupCode: Optional[str] = None,
+        recipientPrivateKey: Optional[str] = None
     ) -> str:
         """Download file via WebRTC with HTTP fallback"""
         # Validate URL and check if WebRTC is supported
@@ -2415,6 +2440,11 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             urlInfo = self._extractURLInfo(url)
         except (ValueError, requests.exceptions.RequestException) as e:
             raise RuntimeError(f"Invalid download URL: {e}")
+
+        # Fetch /checksum once — provides encrypted_challenge (for pubkey proof) and algorithm (for hasher)
+        checksumData = {} if urlInfo.isGenericURL else self._fetchChecksumData(urlInfo)
+        proof = self._resolveProof(checksumData, recipientPrivateKey)
+        checksumAlgorithm = checksumData.get('algorithm', DEFAULT_CHECKSUM_ALGORITHM)
 
         # If this is a generic HTTP URL (not FastFileLink), show warning and download directly
         if urlInfo.isGenericURL:
@@ -2444,7 +2474,16 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         if not useWebRTC:
             self.loggerCallback(_("WebRTC not supported, using HTTP download..."))
             return self._downloadViaHTTP(
-                url, outputPath, credentials, None, resume, e2eeContext=e2eeContext, urlInfo=urlInfo
+                url,
+                outputPath,
+                credentials,
+                None,
+                resume,
+                e2eeContext=e2eeContext,
+                urlInfo=urlInfo,
+                pickupCode=pickupCode,
+                proof=proof,
+                checksumAlgorithm=checksumAlgorithm
             )
 
         future = None
@@ -2452,7 +2491,8 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             # Try WebRTC first
             self.loggerCallback(_("Attempting WebRTC download..."))
             future = asyncio.run_coroutine_threadsafe(
-                self._downloadViaWebRTC(url, outputPath, credentials, resume, e2eeContext, urlInfo), self.loop
+                self._downloadViaWebRTC(url, outputPath, credentials, resume, e2eeContext, urlInfo, checksumAlgorithm, pickupCode, proof),
+                self.loop
             )
 
             # Wait for result with interruptible polling to allow Ctrl+C
@@ -2479,11 +2519,15 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             raise
         except WebRTCConnectionTimeout as timeoutError:
             # Connection establishment timed out, fall back to HTTP
-            return self._fallbackToHTTP(url, outputPath, credentials, resume, timeoutError, e2eeContext, urlInfo)
+            return self._fallbackToHTTP(
+                url, outputPath, credentials, resume, timeoutError, e2eeContext, urlInfo, checksumAlgorithm, pickupCode, proof
+            )
         except Exception as webrtcError:
             # Log WebRTC failure and fall back to HTTP
             logger.debug(f"WebRTC download failed: {webrtcError}")
-            return self._fallbackToHTTP(url, outputPath, credentials, resume, webrtcError, e2eeContext, urlInfo)
+            return self._fallbackToHTTP(
+                url, outputPath, credentials, resume, webrtcError, e2eeContext, urlInfo, checksumAlgorithm, pickupCode, proof
+            )
 
     def close(self):
         """Cleanup resources"""
@@ -2491,4 +2535,3 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             self.loop.call_soon_threadsafe(self.loop.stop)
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=1)
-

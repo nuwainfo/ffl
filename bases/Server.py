@@ -17,10 +17,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
 import io
 import json
 import os
 import re
+import secrets
 import sys
 import uuid
 import datetime
@@ -41,8 +43,9 @@ from bases.Utils import flushPrint, utf8, formatSize
 from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
 from bases.WebRTC import WebRTCManager, WebRTCDisabledError
 from bases.Progress import Progress
+from bases.Auth import RecipientAuth
 from bases.E2EE import E2EEManager
-from bases.Checksum import TransferChecksumStore
+from bases.Checksum import DEFAULT_CHECKSUM_ALGORITHM, TransferChecksumStore
 from bases.Readers import FolderChangedException
 from bases.I18n import _
 
@@ -168,6 +171,90 @@ class AuthMixin:
         self.wfile.write(html)
 
 
+class AuthRateLimiter:
+    """Brute-force protection for all credential verification (pickup code, pubkey, email OTP).
+
+    Tracks failure counts per credential type independently so that failures in one
+    type do not consume the budget of another (e.g. 2 pickup failures + 3 OTP failures
+    locks neither). Each type gets its own MAX_FAILURES budget and lockout timer.
+
+    Locks for LOCKOUT_DURATION seconds after MAX_FAILURES consecutive failures of the same type.
+    Resets on a successful verification of that type. Tracks globally per server instance.
+    """
+
+    MAX_FAILURES = 5
+    LOCKOUT_DURATION = 300  # 5 minutes
+
+    def __init__(self):
+        self._state = {}  # authType -> {'failures': int, 'lockedUntil': float}
+        self._lock = threading.Lock()
+
+    def _stateFor(self, authType: str) -> dict:
+        """Return (creating if needed) the state dict for authType. Must be called under lock."""
+        if authType not in self._state:
+            self._state[authType] = {'failures': 0, 'lockedUntil': 0.0}
+        return self._state[authType]
+
+    def isLocked(self, authType: str) -> bool:
+        with self._lock:
+            return time.time() < self._stateFor(authType)['lockedUntil']
+
+    def recordFailure(self, authType: str):
+        with self._lock:
+            state = self._stateFor(authType)
+            state['failures'] += 1
+            if state['failures'] >= self.MAX_FAILURES:
+                state['lockedUntil'] = time.time() + self.LOCKOUT_DURATION
+                state['failures'] = 0
+
+    def recordSuccess(self, authType: str):
+        with self._lock:
+            self._state[authType] = {'failures': 0, 'lockedUntil': 0.0}
+
+
+class DownloadSessionStore:
+    """Thread-safe in-memory store for download session cookies.
+
+    Lifecycle:
+    - POST /auth exchanges X-FFL-* credentials for a session cookie (dlk).
+    - Once claimed, the credentials cannot be used again to create a new session.
+    - The existing session cookie (dlk) remains valid until expiry and supports Range requests.
+    """
+
+    SESSION_TTL = 600  # seconds
+
+    def __init__(self):
+        self._sessions = {}  # dlk_hash -> expires_at
+        self._claimed = False
+        self._lock = threading.Lock()
+
+    def create(self) -> str:
+        """Generate and store a new session token. Raises RuntimeError if already claimed."""
+        with self._lock:
+            if self._claimed:
+                raise RuntimeError("Download session already claimed")
+                
+            dlk = secrets.token_urlsafe(32)
+            dlkHash = hashlib.sha256(dlk.encode()).hexdigest()
+            self._sessions[dlkHash] = time.time() + self.SESSION_TTL
+            self._claimed = True
+            return dlk
+
+    def validate(self, dlk: str) -> bool:
+        """Return True if dlk is a valid, unexpired session token."""
+        dlkHash = hashlib.sha256(dlk.encode()).hexdigest()
+        with self._lock:
+            expiresAt = self._sessions.get(dlkHash)
+            if expiresAt is None:
+                return False
+                
+            if time.time() > expiresAt:
+                del self._sessions[dlkHash]
+                return False
+                
+            return True
+
+
 class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
     # Transfer chunk size - shared across WebRTC and HTTP downloads
     CHUNK_SIZE = TRANSFER_CHUNK_SIZE
@@ -247,6 +334,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             '/candidate': self._handleWebRTCCandidate,
             '/complete': self._handleDownloadComplete,
             '/e2ee/init': self._handleE2EEInit,
+            '/auth': self._handleAuth,
+            '/email/request': self._handleEmailOTPRequest,
         }
 
         if os.getenv('JS_LOG_TO_SERVER_DEBUG') == 'True':
@@ -578,7 +667,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         if not event:
             return
 
-        completed = event.wait(timeout=2)
+        completed = event.wait(timeout=5)
         if not completed:
             logger.debug(
                 f"HTTP download complete ACK not received for {self._downloadId[:8]} "
@@ -744,7 +833,217 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             logger.error(f"E2EE init error: {e}")
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
 
+    def _parseCookie(self, name: str) -> Optional[str]:
+        """Extract a single cookie value by name from the Cookie request header."""
+        cookieHeader = self.headers.get('Cookie', '')
+        for part in cookieHeader.split(';'):
+            k, _, v = part.strip().partition('=')
+            if k.strip() == name:
+                return v.strip()
+                
+        return None
+
+    def _sendRateLimitExceeded(self) -> None:
+        """Send a 429 Too Many Requests response when the rate limiter is locked."""
+        message = b'Too many failed attempts. Try again in 5 minutes.'
+        self.send_response(HTTPStatus.TOO_MANY_REQUESTS)
+        self.send_header('Content-type', 'text/plain; charset=utf-8')
+        self.send_header('Content-Length', str(len(message)))
+        self.send_header('Retry-After', str(AuthRateLimiter.LOCKOUT_DURATION))
+        self.end_headers()
+        self.wfile.write(message)
+
+    def _sendAuthFailure(self, message: bytes) -> None:
+        """Send a 401 Unauthorized response with a plain-text message."""
+        self.send_response(HTTPStatus.UNAUTHORIZED)
+        self.send_header('Content-type', 'text/plain; charset=utf-8')
+        self.send_header('Content-Length', str(len(message)))
+        self.end_headers()
+        self.wfile.write(message)
+
+    def _createAuthSession(self) -> None:
+        """Create a download session and respond 204 + Set-Cookie, or 401 if already claimed."""
+        try:
+            dlk = self.server.downloadSessionStore.create()
+        except RuntimeError:
+            self._sendAuthFailure(b'Pickup already claimed.')
+            return
+            
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self.send_header(
+            'Set-Cookie',
+            f'ffl_dlk={dlk}; HttpOnly; Secure; SameSite=Strict; '
+            f'Max-Age={DownloadSessionStore.SESSION_TTL}; Path=/'
+        )
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
+    def _verifyEmailOTP(self, email: str, otp: str, link: str) -> bool:
+        """Verify email OTP by calling the FFL OTP verification API.
+
+        The Python P2P server acts as a proxy: the browser sends the OTP it received
+        via email, and the server forwards it to the FFL API for cryptographic verification.
+        """
+        recipientAuth = self.server.config.recipientAuth
+        if not email or not otp or not recipientAuth or not recipientAuth.otpVerifyUrl:
+            return False
+            
+        try:
+            resp = requests.post(
+                recipientAuth.otpVerifyUrl,
+                json={'email': email, 'otp': otp, 'link': link or ''},
+                timeout=10
+            )
+            return resp.ok and bool(resp.json().get('verificationToken'))
+        except Exception as e:
+            logger.warning(f'Email OTP verification failed: {e}')
+            return False
+
+    def _handleEmailOTPRequest(self, data):
+        """POST /{uid}/email/request — proxy OTP send request to FFL API (avoids CORS).
+
+        Browser posts {email, link} to the same-origin P2P server; this method
+        forwards the request to the FFL API server-side and relays the response.
+        """
+        recipientAuth = self.server.config.recipientAuth
+        if not recipientAuth or not recipientAuth.requiresEmail() or not recipientAuth.otpRequestUrl:
+            self.send_error(400, 'Email auth not enabled')
+            return
+
+        email = data.get('email') or recipientAuth.recipientEmail
+        link = data.get('link', '')
+        try:
+            resp = requests.post(
+                recipientAuth.otpRequestUrl,
+                json={'email': email, 'link': link},
+                timeout=10
+            )
+            self.send_response(resp.status_code)
+            self.send_header('Content-type', 'application/json; charset=utf-8')
+            body = resp.content
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as e:
+            logger.warning(f'Email OTP request proxy failed: {e}')
+            self.send_error(502, 'Failed to reach OTP service')
+
+    def _handleAuth(self, data):
+        """POST /{uid}/auth — exchange X-FFL-* credentials for a download session cookie.
+
+        On success: 204 No Content (+ Set-Cookie when session is created).
+        On failure: 401 Unauthorized.
+        """
+        recipientAuth = self.server.config.recipientAuth
+        if not recipientAuth or not recipientAuth.isEnabled():
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
+
+        rateLimiter = self.server.authRateLimiter
+        code = self.headers.get('X-FFL-Pickup')
+        proof = self.headers.get('X-FFL-Proof')
+        emailOtp = self.headers.get('X-FFL-EmailOTP')
+        emailAddr = self.headers.get('X-FFL-EmailAddress')
+        emailLink = self.headers.get('X-FFL-EmailLink')
+        verifyParam = data.get('verify')
+
+        if verifyParam == 'code':
+            if recipientAuth.verifyCode(code):
+                rateLimiter.recordSuccess('pickup')
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+            elif rateLimiter.isLocked('pickup'):
+                self._sendRateLimitExceeded()
+            else:
+                rateLimiter.recordFailure('pickup')
+                self._sendAuthFailure(b'Invalid pickup code.')
+            return
+
+        if verifyParam == 'proof':
+            if recipientAuth.verifyProof(proof):
+                rateLimiter.recordSuccess('pubkey')
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+            elif rateLimiter.isLocked('pubkey'):
+                self._sendRateLimitExceeded()
+            else:
+                rateLimiter.recordFailure('pubkey')
+                self._sendAuthFailure(b'Invalid pubkey proof.')
+            return
+
+        if recipientAuth.requiresEmail():
+            if self._verifyEmailOTP(emailAddr or recipientAuth.recipientEmail, emailOtp, emailLink):
+                rateLimiter.recordSuccess('email')
+                self._createAuthSession()
+            elif rateLimiter.isLocked('email'):
+                self._sendRateLimitExceeded()
+            else:
+                rateLimiter.recordFailure('email')
+                self._sendAuthFailure(b'Invalid or expired email OTP.')
+            return
+
+        authType = recipientAuth.mode.value
+        if recipientAuth.verify(code=code, proof=proof):
+            rateLimiter.recordSuccess(authType)
+            self._createAuthSession()
+        elif rateLimiter.isLocked(authType):
+            self._sendRateLimitExceeded()
+        else:
+            rateLimiter.recordFailure(authType)
+            self._sendAuthFailure(b'Invalid credentials.')
+
+    def _handleRecipientAuth(self, args: dict) -> bool:
+        """Verify recipient credentials via session cookie or X-FFL-* headers.
+
+        Accepts either:
+        - ffl_dlk cookie (browser path — set after POST /auth)
+        - X-FFL-Pickup / X-FFL-Proof headers (curl / CLI path)
+
+        Returns False and sends 401 on failure.
+        """
+        recipientAuth = self.server.config.recipientAuth
+        if not recipientAuth or not recipientAuth.isEnabled():
+            return True
+
+        # Cookie-based session (browser <a href> fallback path) — bypasses rate limit
+        dlk = self._parseCookie('ffl_dlk')
+        if dlk and self.server.downloadSessionStore.validate(dlk):
+            return True
+
+        rateLimiter = self.server.authRateLimiter
+        authType = recipientAuth.mode.value
+
+        # Direct header auth (curl / CLI path) — verify first, then rate-limit
+        if recipientAuth.requiresEmail():
+            emailOtp = self.headers.get('X-FFL-EmailOTP')
+            emailAddr = self.headers.get('X-FFL-EmailAddress') or recipientAuth.recipientEmail
+            emailLink = self.headers.get('X-FFL-EmailLink')
+            ok = self._verifyEmailOTP(emailAddr, emailOtp, emailLink)
+        else:
+            code = self.headers.get('X-FFL-Pickup')
+            proof = self.headers.get('X-FFL-Proof')
+            ok = recipientAuth.verify(code=code, proof=proof)
+
+        if ok:
+            rateLimiter.recordSuccess(authType)
+            return True
+
+        if rateLimiter.isLocked(authType):
+            self._sendRateLimitExceeded()
+            return False
+
+        rateLimiter.recordFailure(authType)
+        self._sendAuthFailure(b'Invalid or missing credentials.')
+        return False
+
     def _handleDownload(self, args):
+        if not self._handleRecipientAuth(args):
+            return
+
         # Get file info using existing helper method
         path, name, size, ctype, reader = self._getFileInfo(quoteName=False)
 
@@ -947,6 +1246,23 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 path, name, size, ctype, reader = self._getFileInfo(quoteName=False)
                 content = content.replace(b'{{ fileName }}', name.encode())
                 content = content.replace(b'{{ fileSize }}', str(size if size is not None else -1).encode())
+
+                # Replace PICKUP_REQUIRED / PUBKEY_REQUIRED / EMAIL_REQUIRED placeholders
+                recipientAuth = self.server.config.recipientAuth
+                pickupRequired = b'true' if recipientAuth and recipientAuth.requiresPickup() else b'false'
+                pubkeyRequired = b'true' if recipientAuth and recipientAuth.requiresPubkey() else b'false'
+                pubkeyChallenge = (
+                    base64.b64encode(recipientAuth.challengeCiphertext)
+                    if recipientAuth and recipientAuth.challengeCiphertext
+                    else b''
+                )
+                emailRequired = b'true' if recipientAuth and recipientAuth.requiresEmail() else b'false'
+                recipientEmail = (recipientAuth.recipientEmail or '').encode() if recipientAuth else b''
+                content = content.replace(b'{{ PICKUP_REQUIRED }}', pickupRequired)
+                content = content.replace(b'{{ PUBKEY_REQUIRED }}', pubkeyRequired)
+                content = content.replace(b'{{ PUBKEY_CHALLENGE }}', pubkeyChallenge)
+                content = content.replace(b'{{ EMAIL_REQUIRED }}', emailRequired)
+                content = content.replace(b'{{ RECIPIENT_EMAIL }}', recipientEmail)
 
                 # Replace COPYRIGHT placeholder
                 settingsGetter = SettingsGetter.getInstance()
@@ -1151,6 +1467,14 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         """Handle checksum polling endpoint for download integrity verification."""
         try:
             responseData = self.server.checksumStore.getResponseData()
+            recipientAuth = self.server.config.recipientAuth
+            if recipientAuth and recipientAuth.requiresPubkey():
+                # Expose the RSA-OAEP challenge for CLI clients downloading via P2P.
+                # The browser gets this challenge baked into index.html as PUBKEY_CHALLENGE
+                # at serve time; CLI clients (ffl download <url>) cannot render HTML, so they
+                # fetch /checksum to retrieve it dynamically and decrypt it with their private key.
+                responseData['encrypted_challenge'] = base64.b64encode(recipientAuth.challengeCiphertext).decode()
+                
             responseBody = json.dumps(responseData).encode('utf-8')
 
             self.send_response(HTTPStatus.OK)
@@ -1180,6 +1504,9 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             return 'unknown'
 
     def _handleWebRTCOffer(self, args):
+        if not self._handleRecipientAuth(args):
+            return
+            
         try:
             # Check for debug simulation parameters
             simulateIceFailure = args and self.parseURLBooleanParam(args.get('simulate-ice-failure', [None])[0])
@@ -1483,7 +1810,6 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             else:
                 raise
 
-
 @dataclass
 class ServerConfig:
     """Configuration for Server instance"""
@@ -1495,6 +1821,7 @@ class ServerConfig:
     defaultWebRTC: bool = True # Enable WebRTC support by default
     e2eeEnabled: bool = False # Enable end-to-end encryption
     torEnabled: bool = False # Tor privacy mode enabled.
+    recipientAuth: Optional[RecipientAuth] = None # Recipient authentication (e.g. pickup code)
 
 
 class Server(ThreadingHTTPServer):
@@ -1528,6 +1855,8 @@ class Server(ThreadingHTTPServer):
         self.domain = domain
         self.config = config
         self.checksumStore = TransferChecksumStore()
+        self.downloadSessionStore = DownloadSessionStore()
+        self.authRateLimiter = AuthRateLimiter()
 
         self.downloadCount = 0
         self.startTime = time.time()

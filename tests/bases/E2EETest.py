@@ -39,7 +39,7 @@ from cryptography.hazmat.primitives import serialization
 
 from bases.crypto import CryptoInterface
 
-from tests.CoreTestBase import getFileHash
+from tests.CoreTestBase import getFileHash, LOCAL_TEST_SERVER_URL
 from tests.ResumeTestBase import ResumeTestBase, ResumeBrowserTestBase
 from tests.BrowserTestBase import CONCURRENT_WEBRTC_DOWNLOADS
 
@@ -718,7 +718,7 @@ class E2EEUploadResumeBrowserTest(E2EEUploadTestBase, ResumeBrowserTestBase):
             resumeShareLink, resumeLog = self._resumeUpload(
                 outputCapture=resumeOutput,
                 extraArgs=['--e2ee', *loggingArgs],
-                extraEnv={'FILESHARE_TEST': 'http://localhost:5000'}
+                extraEnv={'FILESHARE_TEST': LOCAL_TEST_SERVER_URL}
             )
             print(f"[Test] Resume log: {resumeLog.strip()}")
 
@@ -796,7 +796,7 @@ class E2EEUploadDownloadTest(E2EEUploadTestBase, ResumeTestBase):
                 downloadedPath,
                 extraEnvVars={
                     'DISABLE_WEBRTC': 'True',
-                    'FILESHARE_TEST': 'http://localhost:5000'
+                    'FILESHARE_TEST': LOCAL_TEST_SERVER_URL
                 }
             )
 

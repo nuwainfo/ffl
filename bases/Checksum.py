@@ -42,7 +42,7 @@ class TransferChecksumSession:
         self.store = store
         self.transport = transport
         self.e2ee = e2ee
-        self.hasher = hashlib.blake2b()
+        self.hasher = hashlib.new(DEFAULT_CHECKSUM_ALGORITHM)
         self.size = 0
         self.closed = False
 
@@ -100,7 +100,7 @@ class TransferChecksumStore:
             record = self.latestRecord
 
         if not record:
-            return {'ready': False}
+            return {'ready': False, 'algorithm': DEFAULT_CHECKSUM_ALGORITHM}
 
         return {
             'ready': True,

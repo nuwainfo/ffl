@@ -33,6 +33,499 @@ const dmT = (typeof window !== 'undefined' && typeof window.t === 'function') ? 
     return defaultValue || key;
 };
 
+/**
+ * AuthGateRegistry — collects auth gates (pickup code, pubkey, E2EE key, …) and runs them
+ * in sequence before invoking onUnlockedCallback. Decoupled from DownloadManager so that
+ * DownloadManager can be constructed at the right moment with correct, final values.
+ *
+ * Each gate: { validate() → null|string, apply() → void, focus?() → void }
+ */
+class AuthGateRegistry {
+    constructor(options = {}) {
+        this.gates = [];
+        this.unlockBtnId = options.unlockBtnId || 'unlock-btn';
+        this.onUnlockedCallback = options.onUnlockedCallback || null;
+        this.authEndpoint = options.authEndpoint || null;
+        this.authErrorMsgId = options.authErrorMsgId || null;
+        this.gateContainerId = options.gateContainerId || 'authGateContainer';
+        this.downloadBlockId = options.downloadBlockId || 'downloadBlock';
+
+        const btn = document.getElementById(this.unlockBtnId);
+        if (btn) {
+            btn.addEventListener('click', () => this.unlock());
+        }
+        for (const inputId of (options.inputIds || [])) {
+            const input = document.getElementById(inputId);
+            if (input) {
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        this.unlock();
+                    }
+                });
+            }
+        }
+    }
+
+    registerGate(gate) {
+        if (this.gates.length === 0) {
+            document.getElementById(this.gateContainerId)?.style.setProperty('display', 'block');
+            document.getElementById(this.downloadBlockId)?.style.setProperty('display', 'none');
+        }
+        this.gates.push(gate);
+        gate.show?.();
+    }
+
+    async unlock() {
+        const btn = document.getElementById(this.unlockBtnId);
+        let originalContent = null;
+        if (btn) {
+            btn.disabled = true;
+            originalContent = btn.innerHTML;
+            const spinnerHtml = '<span class="auth-gate-spinner"></span>';
+            const label = dmT('Download:auth.verifying', 'Verifying…');
+            btn.innerHTML = `${spinnerHtml}<span>${label}</span>`;
+        }
+        try {
+            for (const gate of this.gates) {
+                const error = await gate.validate();
+                if (error !== null) {
+                    gate.focus?.();
+                    return;
+                }
+            }
+            for (const gate of this.gates) {
+                try {
+                    await gate.apply();
+                } catch {
+                    return;
+                }
+            }
+            if (this.authEndpoint) {
+                const headers = {};
+                for (const gate of this.gates) {
+                    Object.assign(headers, gate.authHeaders ?? {});
+                }
+                const response = await fetch(this.authEndpoint, { method: 'POST', headers });
+                if (!response.ok) {
+                    const errorMsg = this.authErrorMsgId ? document.getElementById(this.authErrorMsgId) : null;
+                    if (errorMsg) {
+                        const msg = response.status === 429
+                            ? dmT('Download:auth.rateLimited', 'Too many failed attempts. Please try again in 5 minutes.')
+                            : dmT('Download:auth.failed', 'Authentication failed. Please try again.');
+                        errorMsg.textContent = msg;
+                        errorMsg.style.display = 'block';
+                    }
+                    return;
+                }
+            }
+            if (this.gateContainerId) {
+                document.getElementById(this.gateContainerId)?.style.setProperty('display', 'none');
+            }
+            if (this.downloadBlockId) {
+                document.getElementById(this.downloadBlockId)?.style.setProperty('display', 'block');
+            }
+            await this.onUnlockedCallback?.();
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                if (originalContent !== null) {
+                    btn.innerHTML = originalContent;
+                }
+            }
+        }
+    }
+}
+
+/**
+ * PickupCodeGate — auth gate for 6-digit pickup code.
+ * Implements the { validate(), apply(), focus() } interface for AuthGateRegistry.
+ *
+ * options:
+ *   codeInputId    — id of the code <input>  (default: 'pickup-code-input')
+ *   errorMsgId     — id of the error element (default: 'pickup-error-message')
+ *   verifyEndpoint — string; when provided, verifies the code server-side before accepting it.
+ *                    GET: appends ?verify=code to the URL (e.g. Caddy file_server).
+ *                    POST: sends { verify: 'code' } in the JSON body (e.g. P2P Python server).
+ *   verifyMethod   — 'GET' or 'POST' (default 'POST')
+ *   onAccepted     — callback(code: string) invoked after the gate passes
+ *   t              — translation function (key, defaultValue) → string
+ */
+class PickupCodeGate {
+    constructor(options = {}) {
+        this.codeInputId    = options.codeInputId    || 'pickup-code-input';
+        this.errorMsgId     = options.errorMsgId     || 'pickup-error-message';
+        this.containerId    = options.containerId    || null;
+        this.verifyEndpoint = options.verifyEndpoint || null;
+        this.verifyMethod   = options.verifyMethod   || 'POST';
+        this.onAccepted     = options.onAccepted     || null;
+        this.t              = options.t              || dmT;
+        this._code          = null;
+    }
+
+    get authHeaders() {
+        return this._code ? { [PickupCodeGate.HEADER]: this._code } : {};
+    }
+
+    show() {
+        if (this.containerId) {
+            document.getElementById(this.containerId)?.style.setProperty('display', 'block');
+        }
+    }
+
+    validate() {
+        const code     = document.getElementById(this.codeInputId).value.trim();
+        const errorMsg = document.getElementById(this.errorMsgId);
+        if (!/^\d{6}$/.test(code)) {
+            errorMsg.textContent = this.t('Download:pickup.invalidCode', 'Please enter a valid 6-digit numeric code.');
+            errorMsg.style.display = 'block';
+            return 'invalid-code';
+        }
+        errorMsg.style.display = 'none';
+        return null;
+    }
+
+    async apply() {
+        const code     = document.getElementById(this.codeInputId).value.trim();
+        const errorMsg = document.getElementById(this.errorMsgId);
+        if (this.verifyEndpoint) {
+            let url = this.verifyEndpoint;
+            const fetchOptions = { method: this.verifyMethod, headers: { [PickupCodeGate.HEADER]: code } };
+            if (this.verifyMethod === 'GET') {
+                url += (url.includes('?') ? '&' : '?') + 'verify=code';
+            } else {
+                fetchOptions.headers['Content-Type'] = 'application/json';
+                fetchOptions.body = JSON.stringify({ verify: 'code' });
+            }
+            const response = await fetch(url, fetchOptions);
+            if (response.status === 429) {
+                errorMsg.textContent = this.t('Download:auth.rateLimited', 'Too many failed attempts. Please try again in 5 minutes.');
+                errorMsg.style.display = 'block';
+                throw new Error('Rate limited');
+            }
+            if (!response.ok) {
+                errorMsg.textContent = this.t('Download:pickup.wrongCode', 'Invalid pickup code. Please check and try again.');
+                errorMsg.style.display = 'block';
+                throw new Error('Invalid pickup code');
+            }
+            errorMsg.style.display = 'none';
+        }
+        this._code = code;
+        this.onAccepted?.(code);
+    }
+
+    focus() {
+        document.getElementById(this.codeInputId).focus();
+    }
+}
+PickupCodeGate.HEADER = 'X-FFL-Pickup';
+
+/**
+ * PubkeyGate — RSA-OAEP challenge-response authentication gate.
+ *
+ * Options:
+ *   fileInputId    — id of the <input type="file"> element (default 'pubkey-file-input')
+ *   fileLabelId    — id of the label/span element showing file name (default 'pubkey-file-label')
+ *   errorMsgId     — id of error <p> element (default 'pubkey-error-message')
+ *   containerId    — id of gate wrapper div (shown by show())
+ *   challenge      — base64-encoded RSA-OAEP ciphertext (server-generated)
+ *   verifyEndpoint — URL to verify the proof (optional).
+ *                    GET: appends ?verify=proof (e.g. Caddy file_server auth endpoint).
+ *                    POST: sends { verify: 'proof' } in JSON body (e.g. P2P Python server).
+ *   verifyMethod   — 'GET' or 'POST' (default 'POST')
+ *   onAccepted     — callback(proof: string) invoked after the gate passes
+ *   t              — translation function (key, defaultValue) → string
+ */
+class PubkeyGate {
+    constructor(options = {}) {
+        this.fileInputId    = options.fileInputId  || 'pubkey-file-input';
+        this.fileLabelId    = options.fileLabelId  || 'pubkey-file-label';
+        this.errorMsgId     = options.errorMsgId   || 'pubkey-error-message';
+        this.containerId    = options.containerId  || null;
+        this.challenge      = options.challenge;
+        this.verifyEndpoint = options.verifyEndpoint || null;
+        this.verifyMethod   = options.verifyMethod || 'POST';
+        this.onAccepted     = options.onAccepted   || null;
+        this.t              = options.t            || dmT;
+        this._proof         = null;
+
+        // Update label text when the user picks a file
+        const fileInput = document.getElementById(this.fileInputId);
+        const fileLabel = document.getElementById(this.fileLabelId);
+        if (fileInput && fileLabel) {
+            fileInput.addEventListener('change', () => {
+                fileLabel.textContent = fileInput.files[0]
+                    ? `✓ ${fileInput.files[0].name}`
+                    : this.t('Download:pubkey.selectFile', '📁 Select .fflkey file');
+            });
+        }
+    }
+
+    get authHeaders() {
+        return this._proof ? { [PubkeyGate.HEADER]: this._proof } : {};
+    }
+
+    show() {
+        if (this.containerId) {
+            document.getElementById(this.containerId)?.style.setProperty('display', 'block');
+        }
+    }
+
+    validate() {
+        const err = document.getElementById(this.errorMsgId);
+        if (!document.getElementById(this.fileInputId).files[0]) {
+            err.textContent = this.t('Download:pubkey.noFile', 'Please select your .fflkey private key file.');
+            err.style.display = 'block';
+            return 'no-file';
+        }
+        err.style.display = 'none';
+        return null;
+    }
+
+    async apply() {
+        const err  = document.getElementById(this.errorMsgId);
+        const file = document.getElementById(this.fileInputId).files[0];
+        let privKeyPem;
+        try {
+            privKeyPem = await file.text();
+        } catch (e) {
+            err.textContent = this.t('Download:pubkey.readError', 'Failed to read key file.');
+            err.style.display = 'block';
+            throw e;
+        }
+        if (!privKeyPem.includes('PRIVATE KEY')) {
+            err.textContent = this.t('Download:pubkey.invalidPem', 'Invalid key file — expected a PKCS#8 private key (.fflkey).');
+            err.style.display = 'block';
+            throw new Error('invalid-pem');
+        }
+        const b64 = privKeyPem
+            .replace(/-----BEGIN PRIVATE KEY-----/, '')
+            .replace(/-----END PRIVATE KEY-----/, '')
+            .replace(/\s+/g, '');
+        let der;
+        try {
+            der = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        } catch (e) {
+            err.textContent = this.t('Download:pubkey.base64Error', 'Invalid key file (base64 decode failed).');
+            err.style.display = 'block';
+            throw e;
+        }
+        let privateKey;
+        try {
+            privateKey = await crypto.subtle.importKey(
+                'pkcs8', der.buffer,
+                { name: 'RSA-OAEP', hash: 'SHA-256' },
+                false, ['decrypt']
+            );
+        } catch (e) {
+            err.textContent = this.t('Download:pubkey.invalidFormat', 'Invalid private key — wrong format or not an RSA-OAEP key.');
+            err.style.display = 'block';
+            throw e;
+        }
+        const ciphertextBytes = Uint8Array.from(atob(this.challenge), c => c.charCodeAt(0));
+        let plaintext;
+        try {
+            plaintext = await crypto.subtle.decrypt(
+                { name: 'RSA-OAEP' }, privateKey, ciphertextBytes.buffer
+            );
+        } catch (e) {
+            err.textContent = this.t('Download:pubkey.decryptError', 'Decryption failed — wrong private key.');
+            err.style.display = 'block';
+            throw e;
+        }
+        const proof = btoa(String.fromCharCode(...new Uint8Array(plaintext)));
+        if (this.verifyEndpoint) {
+            let url = this.verifyEndpoint;
+            const fetchOptions = { method: this.verifyMethod, headers: { [PubkeyGate.HEADER]: proof } };
+            if (this.verifyMethod === 'GET') {
+                url += (url.includes('?') ? '&' : '?') + 'verify=proof';
+            } else {
+                fetchOptions.headers['Content-Type'] = 'application/json';
+                fetchOptions.body = JSON.stringify({ verify: 'proof' });
+            }
+            const authResp = await fetch(url, fetchOptions);
+            if (authResp.status === 429) {
+                err.textContent = this.t('Download:auth.rateLimited', 'Too many failed attempts. Please try again in 5 minutes.');
+                err.style.display = 'block';
+                throw new Error('Rate limited');
+            }
+            if (!authResp.ok) {
+                err.textContent = this.t('Download:pubkey.authFailed', 'Authentication failed — check your key.');
+                err.style.display = 'block';
+                throw new Error('Auth failed');
+            }
+        }
+        err.style.display = 'none';
+        this._proof = proof;
+        this.onAccepted?.(proof);
+    }
+
+    focus() {
+        document.getElementById(this.fileInputId).click();
+    }
+}
+PubkeyGate.HEADER = 'X-FFL-Proof';
+
+/**
+ * EmailGate — email OTP authentication gate.
+ *
+ * Flow:
+ *   1. show() displays the gate and the recipient email address.
+ *   2. User clicks "Send Code" → _sendCode() POSTs to otpRequestUrl with {email, link}.
+ *   3. OTP input section appears after successful send.
+ *   4. User enters 6-digit OTP and clicks the main unlock button.
+ *   5. validate() checks the format; apply() stores the OTP.
+ *   6. authHeaders carries X-FFL-EmailOTP / X-FFL-EmailAddress / X-FFL-EmailLink
+ *      to the auth endpoint (P2P: POST /{uid}/auth → Python server calls FFL API).
+ *
+ * Options:
+ *   containerId       — id of the gate wrapper div
+ *   sendBtnId         — id of the "Send Code" button (default: 'email-send-btn')
+ *   otpSectionId      — id of the OTP input section shown after send (default: 'email-otp-section')
+ *   otpInputId        — id of the OTP <input> (default: 'email-otp-input')
+ *   emailDisplayId    — id of the element showing the recipient email (default: 'email-address-display')
+ *   statusMsgId       — id of the success/info message element (default: 'email-status-message')
+ *   errorMsgId        — id of error <p> (default: 'email-error-message')
+ *   recipientEmail    — pre-configured recipient email address
+ *   otpRequestUrl     — full URL for POST {email, link} to trigger OTP send
+ *   shareLink         — the share link used as the OTP binding key (window.location.href)
+ *   onAccepted        — callback(otp: string) invoked after gate passes
+ *   t                 — translation function
+ */
+class EmailGate {
+    constructor(options = {}) {
+        this.containerId    = options.containerId    || null;
+        this.sendBtnId      = options.sendBtnId      || 'email-send-btn';
+        this.otpSectionId   = options.otpSectionId   || 'email-otp-section';
+        this.otpInputId     = options.otpInputId     || 'email-otp-input';
+        this.emailDisplayId = options.emailDisplayId || 'email-address-display';
+        this.statusMsgId    = options.statusMsgId    || 'email-status-message';
+        this.errorMsgId     = options.errorMsgId     || 'email-error-message';
+        this.recipientEmail = options.recipientEmail || '';
+        this.otpRequestUrl  = options.otpRequestUrl  || null;
+        this.verifyEndpoint = options.verifyEndpoint || null;
+        this.shareLink      = options.shareLink      || window.location.href;
+        this.onAccepted     = options.onAccepted     || null;
+        this.t              = options.t              || dmT;
+        this._otp           = null;
+        this._codeSent      = false;
+
+        const sendBtn = document.getElementById(this.sendBtnId);
+        if (sendBtn) {
+            sendBtn.addEventListener('click', () => this._sendCode());
+        }
+    }
+
+    get authHeaders() {
+        return this._otp ? {
+            [EmailGate.HEADER_OTP]:     this._otp,
+            [EmailGate.HEADER_ADDRESS]: this.recipientEmail,
+            [EmailGate.HEADER_LINK]:    this.shareLink,
+        } : {};
+    }
+
+    show() {
+        if (this.containerId) {
+            document.getElementById(this.containerId)?.style.setProperty('display', 'block');
+        }
+        const emailDisplay = document.getElementById(this.emailDisplayId);
+        if (emailDisplay && this.recipientEmail) {
+            emailDisplay.textContent = this.recipientEmail;
+        }
+    }
+
+    validate() {
+        const errorMsg = document.getElementById(this.errorMsgId);
+        if (!this._codeSent) {
+            errorMsg.textContent = this.t('Download:email.sendFirst', 'Please request a verification code first.');
+            errorMsg.style.display = 'block';
+            return 'no-code-sent';
+        }
+        const otp = document.getElementById(this.otpInputId)?.value.trim();
+        if (!/^\d{6}$/.test(otp)) {
+            errorMsg.textContent = this.t('Download:email.invalidCode', 'Please enter the 6-digit code from your email.');
+            errorMsg.style.display = 'block';
+            return 'invalid-code';
+        }
+        errorMsg.style.display = 'none';
+        return null;
+    }
+
+    async apply() {
+        this._otp = document.getElementById(this.otpInputId)?.value.trim();
+        if (this.verifyEndpoint) {
+            const response = await fetch(this.verifyEndpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: this.recipientEmail, link: this.shareLink, otp: this._otp }),
+            });
+            const errorMsg = document.getElementById(this.errorMsgId);
+            if (response.status === 429) {
+                if (errorMsg) {
+                    errorMsg.textContent = this.t('Download:auth.rateLimited', 'Too many failed attempts. Please try again in 5 minutes.');
+                    errorMsg.style.display = 'block';
+                }
+                throw new Error('Rate limited');
+            }
+            if (!response.ok) {
+                if (errorMsg) {
+                    errorMsg.textContent = this.t('Download:auth.failed', 'Authentication failed. Please try again.');
+                    errorMsg.style.display = 'block';
+                }
+                throw new Error('OTP verification failed');
+            }
+        }
+        this.onAccepted?.(this._otp);
+    }
+
+    focus() {
+        document.getElementById(this.otpInputId)?.focus();
+    }
+
+    async _sendCode() {
+        const errorMsg  = document.getElementById(this.errorMsgId);
+        const statusMsg = document.getElementById(this.statusMsgId);
+        const sendBtn   = document.getElementById(this.sendBtnId);
+        const originalContent = sendBtn.innerHTML;
+        sendBtn.disabled = true;
+        sendBtn.innerHTML = `<span class="auth-gate-spinner" style="border-color:rgba(255,255,255,0.4);border-top-color:white;"></span><span>${this.t('Download:email.sending', 'Sending…')}</span>`;
+        try {
+            const resp = await fetch(this.otpRequestUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: this.recipientEmail, link: this.shareLink }),
+            });
+            if (resp.ok) {
+                sendBtn.innerHTML = originalContent;
+                document.getElementById(this.otpSectionId)?.style.setProperty('display', 'block');
+                this._codeSent = true;
+                if (statusMsg) {
+                    statusMsg.textContent = this.t('Download:email.codeSent', 'Code sent! Please check your email.');
+                    statusMsg.style.display = 'block';
+                }
+                if (errorMsg) errorMsg.style.display = 'none';
+            } else {
+                const data = await resp.json().catch(() => ({}));
+                if (errorMsg) {
+                    errorMsg.textContent = data.error || this.t('Download:email.sendFailed', 'Failed to send code. Please try again.');
+                    errorMsg.style.display = 'block';
+                }
+                sendBtn.innerHTML = originalContent;
+                sendBtn.disabled = false;
+            }
+        } catch (_e) {
+            if (errorMsg) {
+                errorMsg.textContent = this.t('Download:email.sendError', 'Network error. Please try again.');
+                errorMsg.style.display = 'block';
+            }
+            sendBtn.innerHTML = originalContent;
+            sendBtn.disabled = false;
+        }
+    }
+}
+EmailGate.HEADER_OTP     = 'X-FFL-EmailOTP';
+EmailGate.HEADER_ADDRESS = 'X-FFL-EmailAddress';
+EmailGate.HEADER_LINK    = 'X-FFL-EmailLink';
+
 class DownloadManager {
     constructor(options = {}) {
         // Configuration
@@ -53,9 +546,7 @@ class DownloadManager {
         this.statusDetails = options.statusDetails || '#status-details';
         this.progressInfo = options.progressInfo || '#progress-info';
         this.retryLink = options.retryLink || '#retry-link';
-        this.completeBlock = options.completeBlock || '#completeBlock';
         this.completeStatusHeading = options.completeStatusHeading || null;
-        this.downloadBlock = options.downloadBlock || '#downloadBlock';
         this.downloadLink = options.downloadLink || '#download-link';
         this.filenameInput = options.filenameInput || '#filename';
         
@@ -72,6 +563,9 @@ class DownloadManager {
         // E2E encryption configuration
         this.e2eeEnabled = options.e2eeEnabled || false;
         this.httpDecryptor = null;
+
+        // Auth headers (e.g. X-FFL-Pickup for pickup code auth)
+        this.authHeaders = options.authHeaders || null;
 
         // State tracking
         this.downloadStarted = false;
@@ -348,7 +842,6 @@ class DownloadManager {
         if (this.checksumVerified) {
             this.showChecksumVerifiedMessage();
         }
-        this.showCompleteBlock();
 
         // Notify server that client has received all bytes.
         // Mirrors WebRTC.js _downloadComplete() POST to /complete.
@@ -1112,6 +1605,11 @@ class DownloadManager {
             wantRange = true;
             this.log('DownloadManager', `Resume request: Range bytes=${resume.rangeStart}-, skipBytes=${resume.skipBytes || 0}`);
         }
+        if (this.authHeaders) {
+            for (const [key, value] of Object.entries(this.authHeaders)) {
+                headers.set(key, value);
+            }
+        }
 
         // This fetch will trigger ProgressServiceWorker if SW is available.
         const response = await fetch(urlPath, { headers, cache: 'no-cache' });
@@ -1264,7 +1762,8 @@ class DownloadManager {
         writer = null,
         progressSwSupported = false,
         resumeConfig = null,
-        forceWriter = false
+        forceWriter = false,
+        forceNativeLink = false
     } = {}) {
         if (this.downloadTriggeredOnce) {
             this.log('DownloadManager', 'Download already triggered, ignoring duplicate request');
@@ -1276,12 +1775,28 @@ class DownloadManager {
             hasWriter: !!writer,
             progressSwSupported,
             hasResumeConfig: !!resumeConfig,
-            forceWriter
+            forceWriter,
+            forceNativeLink
         });
 
         const downloadUrl = new URL(url, location.origin);
         this.ensureDownloadId(downloadUrl);
         this.log('DownloadManager', 'Download URL with token:', downloadUrl.href);
+
+        if (forceNativeLink) {
+            this.log('DownloadManager', 'BRANCH: forceNativeLink → native <a> download (cookie auth only, no SW header injection)');
+            this.handleDownloadStarted(this.activeDlId, this.totalBytesHint || 0, 0);
+            this.triggerNativeDownloadLink(downloadUrl.pathname + downloadUrl.search);
+            return;
+        }
+
+        if (this.authHeaders && navigator.serviceWorker && navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage({
+                type: 'auth-headers',
+                downloadId: this.activeDlId,
+                headers: this.authHeaders
+            });
+        }
 
         if (progressSwSupported) {
             // Case A: Service Worker is available
@@ -1381,17 +1896,6 @@ class DownloadManager {
         // User will see "check your downloads" UI via adaptive unlock
     }
 
-    showCompleteBlock() {
-        const completeBlock = $(this.completeBlock);
-        const downloadBlock = $(this.downloadBlock);
-        if (completeBlock.length) {
-            completeBlock.show();
-        }
-        if (downloadBlock.length) {
-            downloadBlock.hide();
-        }
-    }
-    
     // InApp Guard integration methods
     isRestrictedEnvironment() {
         // Check if InAppGuard is available and if download is restricted
@@ -1587,6 +2091,7 @@ class DownloadManager {
         // Extract writer as first-class parameter
         const writer = options.writer || null;
         const forceWriter = options.forceWriter || false;
+        const forceNativeLink = options.forceNativeLink || false;
 
         const resumeConfig = this.setResumeConfig(options.resume);
         if (resumeConfig) {
@@ -1654,7 +2159,8 @@ class DownloadManager {
             writer,
             progressSwSupported,
             resumeConfig,
-            forceWriter
+            forceWriter,
+            forceNativeLink
         });
     }
 }

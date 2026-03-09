@@ -70,7 +70,48 @@
             "solution2Text": "使用",
             "solution2Stable": "以稳定下载大型加密档案",
             "solution3": "<strong>等待：</strong>下载可能仍在后台进行中"
-        }
+        },
+        "enterKey": "请输入加密密钥",
+        "invalidKeyLength": "无效的加密密钥长度。需要 32 字节的 AES-256 密钥（Base64 为 44 个字符）。",
+        "invalidKeyLengthDecoded": "无效的加密密钥长度。需要 32 字节的 AES-256 密钥。"
+    },
+    "pickup": {
+        "title": "🔑 需要取件码",
+        "description": "发件人要求输入 6 位数取件码才能下载此档案。",
+        "placeholder": "6 位数码",
+        "button": "继续",
+        "invalidCode": "请输入有效的 6 位数字码。",
+        "wrongCode": "取件码错误，请确认后再试。"
+    },
+    "pubkey": {
+        "title": "🔐 需要私钥",
+        "description": "此文件受您的公钥保护。请上传您的私钥文件（.fflkey）以解锁。",
+        "selectFile": "📁 选择 .fflkey 文件",
+        "noFile": "请选择您的 .fflkey 私钥文件。",
+        "readError": "无法读取密钥文件。",
+        "invalidPem": "无效的密钥文件 — 需要 PKCS#8 格式的私钥（.fflkey）。",
+        "base64Error": "无效的密钥文件（Base64 解码失败）。",
+        "invalidFormat": "无效的私钥 — 格式错误或非 RSA-OAEP 密钥。",
+        "decryptError": "解密失败 — 私钥不正确。",
+        "authFailed": "验证失败 — 请确认您的密钥。"
+    },
+    "email": {
+        "title": "📧 需要电子邮件验证",
+        "description": "点击「发送验证码」以接收一次性验证码至您的电子邮件地址。",
+        "sendCode": "发送验证码",
+        "codeSent": "验证码已发送！请查看您的邮件。",
+        "placeholder": "6位数字验证码",
+        "invalidCode": "请输入邮件中收到的6位数字验证码。",
+        "sendFirst": "请先请求验证码。",
+        "sendFailed": "发送失败，请重试。",
+        "sendError": "网络错误，请重试。",
+        "sending": "发送中…"
+    },
+    "auth": {
+        "failed": "验证失败，请重试。",
+        "verifying": "验证中…",
+        "unlockButton": "继续",
+        "rateLimited": "尝试次数过多，请 5 分钟后再试。"
     },
     "downloadFooter":{
         "message": "附注：祝您有美好的一天！在以下网址下载您的免费档案分享应用程式",

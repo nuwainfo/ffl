@@ -510,3 +510,41 @@ class MbedTLSBackend(CryptoBackend):
             pem = key.decode("utf-8") if isinstance(key, bytes) else key
             return self._parsePrivateKeyPem(pem)
         raise TypeError("Unsupported RSA private key type")
+
+    def serializeRSAPrivateKeyPKCS8(self, privateKey) -> str:
+        """Wrap PKCS#1 RSA private key (from mbedtls) in PKCS#8 container and return PEM."""
+        key = self._ensurePrivateKey(privateKey)
+        pkcs1Der = self._pemToDer(key.pem)
+        pkcs8Der = self._wrapPkcs1InPkcs8(pkcs1Der)
+        return self._pkcs8DerToPem(pkcs8Der)
+
+    @staticmethod
+    def _wrapPkcs1InPkcs8(pkcs1Der: bytes) -> bytes:
+        """Wrap a PKCS#1 RSA private key DER blob in an unencrypted PKCS#8 SEQUENCE."""
+        # RSA algorithm OID (1.2.840.113549.1.1.1) followed by NULL
+        rsaAlgId = bytes([
+            0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01,
+            0x05, 0x00
+        ])
+        algIdSeq = MbedTLSBackend._derWrap(0x30, rsaAlgId)
+        version = bytes([0x02, 0x01, 0x00])        # INTEGER 0
+        octetStr = MbedTLSBackend._derWrap(0x04, pkcs1Der)
+        return MbedTLSBackend._derWrap(0x30, version + algIdSeq + octetStr)
+
+    @staticmethod
+    def _derWrap(tag: int, data: bytes) -> bytes:
+        """Wrap data with a DER tag and length."""
+        length = len(data)
+        if length < 0x80:
+            lenBytes = bytes([length])
+        elif length < 0x100:
+            lenBytes = bytes([0x81, length])
+        else:
+            lenBytes = bytes([0x82, length >> 8, length & 0xff])
+        return bytes([tag]) + lenBytes + data
+
+    @staticmethod
+    def _pkcs8DerToPem(pkcs8Der: bytes) -> str:
+        b64 = base64.b64encode(pkcs8Der).decode()
+        lines = [b64[i:i + 64] for i in range(0, len(b64), 64)]
+        return '-----BEGIN PRIVATE KEY-----\n' + '\n'.join(lines) + '\n-----END PRIVATE KEY-----\n'

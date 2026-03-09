@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-01-22 15:39+0800\n"
+"POT-Creation-Date: 2026-03-09 15:51+0800\n"
 "PO-Revision-Date: 2025-12-21 08:43+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -17,6 +17,14 @@ msgstr ""
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.17.0\n"
+
+#, python-brace-format
+msgid "Authentication enabled - Username: {authUser}\n"
+msgstr "已启用身份验证 - 使用者名称：{authUser}\n"
+
+#, python-brace-format
+msgid "Pickup code: {code}\n"
+msgstr "取件码：{code}\n"
 
 msgid "Opening invite page in browser..."
 msgstr "正在浏览器中开启邀请页面..."
@@ -115,10 +123,6 @@ msgstr "VFS 伺服器已成功启动！\n"
 msgid "Please share the URI below to access the {type} remotely:\n"
 msgstr "请分享以下 URI 以远程访问{type}：\n"
 
-#, python-brace-format
-msgid "🔐 Authentication enabled - Username: {authUser}\n"
-msgstr "🔐 已启用身份验证 - 用户名：{authUser}\n"
-
 msgid ""
 "VFS server is running on loopback (127.0.0.1) - only accessible from this"
 " machine."
@@ -188,10 +192,6 @@ msgid ""
 "Please share the link below with the person you'd like to share the file "
 "with."
 msgstr "请将以下连结分享给您想要分享档案的人。"
-
-#, python-brace-format
-msgid "Authentication enabled - Username: {authUser}\n"
-msgstr "已启用身份验证 - 使用者名称：{authUser}\n"
 
 msgid ""
 "Please keep the application running so the recipient can download the "
@@ -330,6 +330,38 @@ msgstr "架构：{system} {release} {machine} - {version} ({processor})"
 msgid "Support: {supportURL}"
 msgstr "支援：{supportURL}"
 
+msgid ""
+"Recipient verification mode. 'pickup': 6-digit code required to download;"
+" 'pubkey': RSA public-key challenge required; 'pubkey+pickup': both "
+"required; 'email': one-time code sent to recipient's email"
+msgstr ""
+"收件人验证模式。'pickup'：下载需要 6 位数取件码；'pubkey'：需要 RSA "
+"公钥验证；'pubkey+pickup'：两者皆需要；'email'：发送一次性验证码到收件人邮箱"
+
+#, python-brace-format
+msgid ""
+"Custom {n}-digit pickup code (use with --recipient-auth pickup or "
+"pubkey+pickup)"
+msgstr "自定义 {n} 位数取件码（与 --recipient-auth pickup 或 pubkey+pickup 搭配使用）"
+
+#, python-brace-format
+msgid ""
+"Path to recipient's RSA public key file ({ext}). Required with "
+"--recipient-auth pubkey or pubkey+pickup"
+msgstr "收件人 RSA 公钥文件路径（{ext}）。使用 --recipient-auth pubkey 或 pubkey+pickup 时必填"
+
+msgid ""
+"Recipient email address for OTP verification (implies --recipient-auth "
+"email)"
+msgstr "用于 OTP 验证的收件人邮箱地址（隐含 --recipient-auth email）"
+
+msgid ""
+"Base URL for OTP email API (e.g. https://myserver.com/api). Required for "
+"--recipient-auth email"
+msgstr ""
+"OTP 邮箱 API 的基础 URL（例如 https://myserver.com/api）。使用 --recipient-auth email"
+" 时必填"
+
 msgid "Choose a file or folder you want to share (use '-' for stdin)"
 msgstr "选择要分享的文件或文件夹（使用 '-' 表示标准输入）"
 
@@ -426,7 +458,9 @@ msgid ""
 "Format: http://[user:pass@]host:port/path (e.g., "
 "http://app:token@127.0.0.1:12345/events). Auth credentials are optional "
 "but recommended."
-msgstr "用于将事件转发到父进程或外部服务的 Webhook URL。格式：http://[user:pass@]host:port/path（例如：http://app:token@127.0.0.1:12345/events）。认证凭据是可选的，但建议使用。"
+msgstr ""
+"用于将事件转发到父进程或外部服务的 Webhook "
+"URL。格式：http://[user:pass@]host:port/path（例如：http://app:token@127.0.0.1:12345/events）。认证凭据是可选的，但建议使用。"
 
 msgid "FastFileLink makes file sharing fast, simple, and secure."
 msgstr "快档连结 让档案分享快速、简单且安全。"
@@ -454,6 +488,18 @@ msgstr "继续未完成的下载（类似 curl -C），否则覆写现有档案"
 msgid "Password for HTTP Basic Authentication"
 msgstr "HTTP 基本验证的密码"
 
+msgid "Recipient verification mode when downloading a protected file"
+msgstr "下载受保护文件时的收件人验证模式"
+
+msgid ""
+"Pickup code to present when downloading (use with --recipient-auth pickup"
+" or pubkey+pickup)"
+msgstr "下载时提供的取件码（与 --recipient-auth pickup 或 pubkey+pickup 搭配使用）"
+
+#, python-brace-format
+msgid "Path to recipient's RSA private key file ({ext}) for pubkey auth"
+msgstr "用于公钥验证的收件人 RSA 私钥文件路径（{ext}）"
+
 msgid "Upgrade to latest version or specified version"
 msgstr "升级到最新版本或指定版本"
 
@@ -465,9 +511,59 @@ msgstr "要升级的目标二进位档路径（用于开发模式），或版本
 msgid "Target version when binary path is specified (default: latest)"
 msgstr "指定二进位档路径时的目标版本（预设：最新）"
 
+msgid "Generate an RSA-2048 keypair for --recipient-auth pubkey"
+msgstr "为 --recipient-auth pubkey 生成 RSA-2048 密钥对"
+
+#, python-brace-format
+msgid ""
+"Base name for keypair files (default: recipient → recipient{pub} + "
+"recipient{priv})"
+msgstr "密钥对文件的基础名称（默认：recipient → recipient{pub} + recipient{priv}）"
+
+msgid ""
+"Share the generated private key immediately after generation (private key"
+" can only be downloaded once, then auto-deleted; recommended: add "
+"--recipient-auth pickup or --recipient-auth pubkey)"
+msgstr ""
+"生成后立即分享私钥（私钥只能下载一次，之后自动删除；建议加上 --recipient-auth pickup 或 --recipient-auth"
+" pubkey）"
+
+msgid "Output link and settings to a JSON file (use with --share)"
+msgstr "将链接和设置输出到 JSON 文件（与 --share 搭配使用）"
+
 #, python-brace-format
 msgid "Error: Invalid proxy format: {proxy}"
 msgstr "错误：无效的代理格式：{proxy}"
+
+msgid "Generated RSA-2048 keypair:"
+msgstr "已生成 RSA-2048 密钥对："
+
+#, python-brace-format
+msgid "  Private key : {path}"
+msgstr "  私钥：{path}"
+
+#, python-brace-format
+msgid "  Public key  : {path}  ← share with sender"
+msgstr "  公钥：{path}  ← 分享给发件人"
+
+msgid "Share the public key file with the sender who will use:"
+msgstr "将公钥文件分享给发件人，对方将使用："
+
+#, python-brace-format
+msgid "  ffl share file.bin --recipient-auth pubkey --recipient-public-key {pub}"
+msgstr "  ffl share file.bin --recipient-auth pubkey --recipient-public-key {pub}"
+
+#, python-brace-format
+msgid "Private key deleted: {path}"
+msgstr "私钥已删除：{path}"
+
+msgid "Sharing private key (download once, then auto-deleted)."
+msgstr "正在分享私钥（只能下载一次，之后自动删除）。"
+
+msgid ""
+"Tip: use --recipient-auth pickup or --recipient-auth pubkey to restrict "
+"who can download.\n"
+msgstr "提示：使用 --recipient-auth pickup 或 --recipient-auth pubkey 限制谁可以下载。\n"
 
 msgid "Error: --upload option requires Upload addon (addons/Upload.py)"
 msgstr "错误：--upload 选项需要 Upload 附加元件（addons/Upload.py）"
@@ -503,6 +599,39 @@ msgid ""
 "Use --auth-password to enable authentication (username defaults to "
 "'{defaultUser}' if not specified)"
 msgstr "使用 --auth-password 启用身份验证（如果未指定，使用者名称预设为 '{defaultUser}'）"
+
+#, python-brace-format
+msgid "Error: --pickup-code must be exactly {n} digits"
+msgstr "错误：--pickup-code 必须恰好 {n} 位数"
+
+msgid "Error: --recipient-email is required with --recipient-auth email"
+msgstr "错误：使用 --recipient-auth email 时必须提供 --recipient-email"
+
+msgid "Use: --recipient-auth email --recipient-email user@example.com"
+msgstr "使用方式：--recipient-auth email --recipient-email user@example.com"
+
+msgid "Error: --recipient-auth email requires an OTP API server"
+msgstr "错误：--recipient-auth email 需要 OTP API 服务器"
+
+msgid "Use --recipient-otp-api-base to specify one"
+msgstr "使用 --recipient-otp-api-base 指定一个"
+
+#, python-brace-format
+msgid "Error: --recipient-public-key is required with --recipient-auth {mode}"
+msgstr "错误：使用 --recipient-auth {mode} 时必须提供 --recipient-public-key"
+
+#, python-brace-format
+msgid "Use --recipient-public-key {name}{ext}"
+msgstr "使用方式：--recipient-public-key {name}{ext}"
+
+msgid ""
+"Error: --recipient-public-key requires --recipient-auth pubkey or "
+"pubkey+pickup"
+msgstr "错误：--recipient-public-key 需要 --recipient-auth pubkey 或 pubkey+pickup"
+
+#, python-brace-format
+msgid "Error: public key file not found: {path}"
+msgstr "错误：找不到公钥文件：{path}"
 
 msgid "Error: --vfs cannot be used with --upload"
 msgstr "错误：--vfs 不能与 --upload 一起使用"
@@ -843,6 +972,9 @@ msgstr "档案已下载"
 msgid "Getting file metadata"
 msgstr "正在取得档案中继资料"
 
+msgid "Checksum verified"
+msgstr "校验码已验证"
+
 msgid ""
 "\n"
 "⚠️  This file is encrypted. Please enter the encryption key:"
@@ -899,20 +1031,19 @@ msgstr "不支援 WebRTC，使用 HTTP 下载..."
 msgid "Attempting WebRTC download..."
 msgstr "正在尝试 WebRTC 下载..."
 
+#~ msgid "🔐 Authentication enabled - Username: {authUser}\n"
+#~ msgstr "🔐 已启用身份验证 - 用户名：{authUser}\n"
 
+#~ msgid ""
+#~ "Recipient verification mode. 'pickup': 6-digit"
+#~ " code required to download"
+#~ msgstr "收件人验证模式。'pickup'：下载需要 6 位数取件码"
 
+#~ msgid "Custom {n}-digit pickup code (only valid with --recipient-auth pickup)"
+#~ msgstr "自定义 {n} 位数取件码（仅适用于 --recipient-auth pickup）"
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+#~ msgid ""
+#~ "Pickup code to present when downloading"
+#~ " (use with --recipient-auth pickup)"
+#~ msgstr "下载时提供的取件码（与 --recipient-auth pickup 搭配使用）"
 

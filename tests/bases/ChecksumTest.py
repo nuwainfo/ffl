@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from ..CoreTestBase import FastFileLinkTestBase
+from ..CoreTestBase import FastFileLinkTestBase, LOCAL_TEST_SERVER_URL
 from ..BrowserTestBase import BrowserTestBase
 
 
@@ -154,7 +154,7 @@ class ChecksumTest(ChecksumAssertionsMixin, FastFileLinkTestBase):
             uid = [segment for segment in urlparse(shareLink).path.split('/') if segment][-1]
 
             checksumResponse = requests.get(
-                f'http://localhost:5000/{uid}/checksum',
+                f'{LOCAL_TEST_SERVER_URL}/{uid}/checksum',
                 timeout=30
             )
             self.assertEqual(checksumResponse.status_code, 200)

@@ -33,6 +33,12 @@ import psutil
 
 
 # ---------------------------
+# Test server
+# ---------------------------
+LOCAL_TEST_SERVER_PORT = 5000
+LOCAL_TEST_SERVER_URL = f'http://localhost:{LOCAL_TEST_SERVER_PORT}'
+
+# ---------------------------
 # File I/O helpers
 # ---------------------------
 def generateRandomFile(path, sizeBytes):
@@ -258,6 +264,27 @@ class FastFileLinkTestBase(unittest.TestCase):
         if requireReady:
             raise AssertionError(f"Checksum should be ready, got {lastResponseData}")
         return lastResponseData if lastResponseData is not None else {'ready': False}
+
+    def _generateKeypair(self, name='recipient'):
+        """Generate a keypair via the CLI keypair subcommand.
+
+        Returns (privKeyPath, pubKeyPath) as absolute paths in tempDir.
+        """
+        basePath = os.path.join(self.tempDir, name)
+        privKeyPath = f"{basePath}.fflkey"
+        pubKeyPath = f"{basePath}.fflpub"
+        projectRoot = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        result = subprocess.run(
+            [sys.executable, "Core.py", "--cli", "keygen", "--name", basePath],
+            cwd=projectRoot,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        self.assertEqual(result.returncode, 0, f"keypair command failed:\n{result.stderr}\n{result.stdout}")
+        self.assertTrue(os.path.exists(privKeyPath), f"Private key file not created: {privKeyPath}")
+        self.assertTrue(os.path.exists(pubKeyPath), f"Public key file not created: {pubKeyPath}")
+        return privKeyPath, pubKeyPath
 
     def downloadFileWithRequests(self, shareLink, outputPath, expectedFileName=None, headers=None, expectedStatus=200):
         """
@@ -528,19 +555,19 @@ class FastFileLinkTestBase(unittest.TestCase):
 
             print(f"[Test] Starting test server: {testServerPath}")
 
-            # Check if port 5000 is already in use
+            # Check if port is already in use
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            result = sock.connect_ex(('localhost', 5000))
+            result = sock.connect_ex(('localhost', LOCAL_TEST_SERVER_PORT))
             sock.close()
 
             if result == 0:
-                print(f"[Test] Port 5000 is already in use, attempting to kill the process...")
+                print(f"[Test] Port {LOCAL_TEST_SERVER_PORT} is already in use, attempting to kill the process...")
 
                 for conn in psutil.net_connections(kind='inet'):
-                    if conn.laddr.port == 5000 and conn.status == psutil.CONN_LISTEN:
+                    if conn.laddr.port == LOCAL_TEST_SERVER_PORT and conn.status == psutil.CONN_LISTEN:
                         try:
                             proc = psutil.Process(conn.pid)
-                            print(f"[Test] Killing process on port 5000: PID {conn.pid} ({proc.name()})")
+                            print(f"[Test] Killing process on port {LOCAL_TEST_SERVER_PORT}: PID {conn.pid} ({proc.name()})")
                             proc.terminate()
                             proc.wait(timeout=3)
                         except Exception as e:
@@ -558,7 +585,7 @@ class FastFileLinkTestBase(unittest.TestCase):
 
             # Start test server process with UTF-8 environment and correct working directory
             testServerProcess = subprocess.Popen(
-                [sys.executable, testServerScript, "--host", "localhost", "--port", "5000"],
+                [sys.executable, testServerScript, "--host", "localhost", "--port", str(LOCAL_TEST_SERVER_PORT)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -587,7 +614,7 @@ class FastFileLinkTestBase(unittest.TestCase):
                 try:
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     sock.settimeout(1)
-                    result = sock.connect_ex(('localhost', 5000))
+                    result = sock.connect_ex(('localhost', LOCAL_TEST_SERVER_PORT))
                     sock.close()
 
                     if result == 0: # Port is open
@@ -612,7 +639,7 @@ class FastFileLinkTestBase(unittest.TestCase):
                     print(f"[Test] Test server stderr:\n{stderr[:1000]}...")
                 raise AssertionError("Test server failed to start within 15 seconds")
 
-            print(f"[Test] Test server started successfully on localhost:5000")
+            print(f"[Test] Test server started successfully on {LOCAL_TEST_SERVER_URL}")
             return testServerProcess
 
         except Exception as e:
@@ -742,8 +769,8 @@ class FastFileLinkTestBase(unittest.TestCase):
 
             # Add test server environment variable if using test server
             if useTestServer:
-                env['FILESHARE_TEST'] = 'http://localhost:5000'
-                print(f"[Test] Using test server: FILESHARE_TEST=http://localhost:5000")
+                env['FILESHARE_TEST'] = LOCAL_TEST_SERVER_URL
+                print(f"[Test] Using test server: FILESHARE_TEST={LOCAL_TEST_SERVER_URL}")
 
             # Add extra environment variables if provided
             if extraEnvVars:

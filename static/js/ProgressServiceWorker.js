@@ -163,6 +163,9 @@ function getFileSize(upstream, url) {
 // E2EE decryption context storage (download ID -> context)
 const e2eeContexts = new Map();
 
+// Auth headers storage (download ID -> headers object)
+const authHeadersMap = new Map();
+
 function parseContentRange(header) {
     if (!header) {
         return null;
@@ -184,23 +187,31 @@ function parseContentRange(header) {
     };
 }
 
-function buildResumeAwareRequest(request, resumeConfig) {
-    if (
-        !resumeConfig ||
-        typeof resumeConfig.rangeStart !== 'number' ||
-        resumeConfig.rangeStart <= 0
-    ) {
+function buildResumeAwareRequest(request, resumeConfig, authHeaders) {
+    const needsRange = resumeConfig &&
+        typeof resumeConfig.rangeStart === 'number' &&
+        resumeConfig.rangeStart > 0;
+    const needsAuthHeaders = authHeaders && Object.keys(authHeaders).length > 0;
+
+    if (!needsRange && !needsAuthHeaders) {
         return request;
     }
 
     const headers = new Headers(request.headers);
-    headers.set('Range', `bytes=${resumeConfig.rangeStart}-`);
-    headers.set('Cache-Control', 'no-cache');
+    if (needsRange) {
+        headers.set('Range', `bytes=${resumeConfig.rangeStart}-`);
+        headers.set('Cache-Control', 'no-cache');
+    }
+    if (needsAuthHeaders) {
+        for (const [key, value] of Object.entries(authHeaders)) {
+            headers.set(key, value);
+        }
+    }
 
     return new Request(request, { headers });
 }
 
-// Message handler for E2EE context registration
+// Message handler for E2EE context and auth headers registration
 self.addEventListener('message', (event) => {
     log('[ProgressSW] Message received:', event.data?.type);
 
@@ -212,6 +223,14 @@ self.addEventListener('message', (event) => {
             e2eeContexts.set(downloadId, context);
         } else {
             log('[ProgressSW] Invalid E2EE context message - missing downloadId or context');
+        }
+    }
+
+    if (event.data && event.data.type === 'auth-headers') {
+        const { downloadId, headers } = event.data;
+        log('[ProgressSW] Auth headers message - downloadId:', downloadId);
+        if (downloadId && headers) {
+            authHeadersMap.set(downloadId, headers);
         }
     }
 });
@@ -289,8 +308,9 @@ async function handlePassthroughForResume(event, url, downloadId, resumeConfig) 
     log('[ProgressSW] handlePassthroughForResume for ID:', downloadId, 'config:', resumeConfig);
 
     try {
-        // Build request with Range header using helper
-        const request = buildResumeAwareRequest(event.request, resumeConfig);
+        // Build request with Range header and auth headers using helper
+        const authHeaders = authHeadersMap.get(downloadId) || null;
+        const request = buildResumeAwareRequest(event.request, resumeConfig, authHeaders);
         log('[ProgressSW] Passthrough resume - built request with Range:', request.headers.get('Range'));
 
         const upstream = await fetch(request);
@@ -360,7 +380,8 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
         });
     }
 
-    const request = buildResumeAwareRequest(event.request, resumeConfig);
+    const authHeaders = authHeadersMap.get(downloadId) || null;
+    const request = buildResumeAwareRequest(event.request, resumeConfig, authHeaders);
 
     // Log the actual request being made
     log('[ProgressSW] Fetching URL:', request.url);

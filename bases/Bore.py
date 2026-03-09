@@ -42,6 +42,8 @@ logger = getLogger(__name__)
 HTTPS_PORT = 443 # Port used when in HTTPS mode
 MAX_FRAME_LENGTH = 256
 NETWORK_TIMEOUT = 60 # seconds
+LOCAL_CONNECT_RETRY_TIMEOUT = 5.0 # seconds
+LOCAL_CONNECT_RETRY_INTERVAL = 0.1 # seconds
 
 BORE_DEBUG = os.getenv('BORE_DEBUG', False)
 BORE_VERBOSE = os.getenv('BORE_VERBOSE', False)
@@ -196,6 +198,43 @@ class BoreClient:
         """Add a task to the running tasks set with proper cleanup callback."""
         self.runningTasks.add(task)
         task.add_done_callback(self.removeRunningTask)
+
+    @staticmethod
+    def _isLocalConnectRetryable(error):
+        """Return True when local loopback connection failure is transient."""
+        if isinstance(error, ConnectionRefusedError):
+            return True
+
+        if isinstance(error, OSError):
+            # Linux/macOS: 111/61, Windows: 10061
+            return error.errno in (111, 61, 10061)
+
+        return False
+
+    async def _connectLocalService(self):
+        """
+        Connect to local service with short retries.
+        This absorbs startup races where the tunnel receives traffic before
+        the local HTTP server starts listening.
+        """
+        deadline = asyncio.get_running_loop().time() + LOCAL_CONNECT_RETRY_TIMEOUT
+        lastError = None
+
+        while True:
+            try:
+                return await asyncio.wait_for(
+                    asyncio.open_connection(self.localhost, self.localPort),
+                    NETWORK_TIMEOUT,
+                )
+            except Exception as e:
+                lastError = e
+                if not self._isLocalConnectRetryable(e):
+                    raise
+
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise lastError
+
+                await asyncio.sleep(LOCAL_CONNECT_RETRY_INTERVAL)
 
     def removeRunningTask(self, task):
         """Safely remove a task from running tasks set."""
@@ -535,10 +574,7 @@ class BoreClient:
 
             # 4. Connect to local service
             try:
-                localReader, localWriter = await asyncio.wait_for(
-                    asyncio.open_connection(self.localhost, self.localPort),
-                    NETWORK_TIMEOUT,
-                )
+                localReader, localWriter = await self._connectLocalService()
                 logger.info(f"Local service connected at {self.localhost}:{self.localPort}")
             except Exception as e:
                 logger.error(f"Local connect error: {e}")

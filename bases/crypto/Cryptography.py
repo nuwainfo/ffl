@@ -280,7 +280,8 @@ class CryptographyBackend(CryptoBackend):
 
     def decryptRSAOAEP(self, privateKey, ciphertext):
         """Decrypt data with RSA-OAEP"""
-        plaintext = privateKey.decrypt(
+        key = self._ensureRSAPrivateKey(privateKey)
+        plaintext = key.decrypt(
             ciphertext,
             asymPadding.OAEP(
                 mgf=asymPadding.MGF1(algorithm=self.hashes.SHA256()),
@@ -289,3 +290,19 @@ class CryptographyBackend(CryptoBackend):
             )
         )
         return plaintext
+
+    def _ensureRSAPrivateKey(self, privateKey):
+        """Accept private key object or PEM string."""
+        if isinstance(privateKey, (str, bytes)):
+            pemBytes = privateKey.encode() if isinstance(privateKey, str) else privateKey
+            return self.serialization.load_pem_private_key(pemBytes, password=None)
+        return privateKey
+
+    def serializeRSAPrivateKeyPKCS8(self, privateKey) -> str:
+        """Serialize RSA private key to unencrypted PKCS#8 PEM format"""
+        pemBytes = privateKey.private_bytes(
+            encoding=self.serialization.Encoding.PEM,
+            format=self.serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=self.serialization.NoEncryption()
+        )
+        return pemBytes.decode('utf-8')

@@ -836,7 +836,7 @@ class DownloadUIManager {
             return;
         }
 
-        const verifiedText = 'verified';
+        const verifiedText = this.t('Download:client.checksum.verified', 'verified');
 
         if (typeof FFLChecksum !== 'undefined' && typeof FFLChecksum.showVerifiedBadge === 'function') {
             FFLChecksum.showVerifiedBadge({
@@ -887,9 +887,11 @@ class FallbackManager {
         fileSize,
         uid,
         downloadUrl,
+        authHeaders,
         log,
         t,
         forceWriter,
+        forceNativeLink,
         // Callbacks for external state
         getWritePump,
         getBytesReceived,
@@ -905,9 +907,11 @@ class FallbackManager {
         this.fileSize = fileSize;
         this.uid = uid;
         this.downloadUrl = downloadUrl;
+        this.authHeaders = authHeaders || null;
         this.log = log;
         this.t = t;
         this.forceWriter = forceWriter || false;
+        this.forceNativeLink = forceNativeLink || false;
 
         // Callbacks
         this.getWritePump = getWritePump;
@@ -996,6 +1000,7 @@ class FallbackManager {
             logFunction: this.log,
             uid: this.uid,
             e2eeEnabled: e2eeEnabledValue,
+            authHeaders: this.authHeaders,
             progressBar: document.getElementById('downloadProgress'),
             statusHeading: '#download-message',
             statusDetails: '#status-details',
@@ -1050,11 +1055,12 @@ class FallbackManager {
         // Calculate resume options
         const resumeOptions = this._calculateResumeOptions(actualBytesWritten);
 
-        this.log("Fallback", `Starting DownloadManager with writer: ${writePump ? 'YES' : 'NO'}, resume: ${resumeOptions ? 'YES' : 'NO'}, forceWriter: ${this.forceWriter}`);
+        this.log("Fallback", `Starting DownloadManager with writer: ${writePump ? 'YES' : 'NO'}, resume: ${resumeOptions ? 'YES' : 'NO'}, forceWriter: ${this.forceWriter}, forceNativeLink: ${this.forceNativeLink}`);
         this.downloadManager.startDownload({
             writer: writePump ? writePump.writer : null,
             resume: resumeOptions,
-            forceWriter: this.forceWriter
+            forceWriter: this.forceWriter,
+            forceNativeLink: this.forceNativeLink
         });
     }
 
@@ -1341,6 +1347,15 @@ class WebRTCManager {
             downloadButton: config.downloadButton
         };
 
+        // Pickup code authentication (appended as ?code= to offer and download URLs)
+        this.pickupCode = config.pickupCode || null;
+
+        // Pubkey proof (base64-encoded decrypted challenge; appended as ?proof= to auth-gated URLs)
+        this.pubkeyProof = config.pubkeyProof || null;
+
+        // Force native <a download> link instead of SW/writer paths (e.g. ?native=true in URL)
+        this.forceNativeLink = config.forceNativeLink || false;
+
         // Configuration
         this.defaultFallbackMs = config.defaultFallbackMs || 30000;
         this.stallDetectionMs = config.stallDetectionMs || 12000;
@@ -1441,9 +1456,26 @@ class WebRTCManager {
         } catch (error) {
             this.log("WebRTCManager", `Fatal error: ${error.message}`);
             this.log("WebRTCManager", `Stack: ${error.stack}`);
-            // Fallback to HTTP download
-            window.location.href = this.endpoints.download;
+            // Fallback to HTTP download with auth headers
+            const fallbackDm = new DownloadManager({
+                debug: DEBUG,
+                logFunction: this.log,
+                uid: this.uid,
+                authHeaders: this.authHeaders
+            });
+            fallbackDm.startDownload({ forceNativeLink: true });
         }
+    }
+
+    get authHeaders() {
+        const headers = {};
+        if (this.pickupCode) {
+            headers[PickupCodeGate.HEADER] = this.pickupCode;
+        }
+        if (this.pubkeyProof) {
+            headers[PubkeyGate.HEADER] = this.pubkeyProof;
+        }
+        return headers;
     }
 
     /**
@@ -1540,9 +1572,11 @@ class WebRTCManager {
             fileSize: this.fileSize,
             uid: this.uid,
             downloadUrl: this.endpoints.download,
+            authHeaders: this.authHeaders,
             log: this.log,
             t: this.t,
             forceWriter: forceWriter,
+            forceNativeLink: this.forceNativeLink,
             getWritePump: () => this.writePump,
             getBytesReceived: () => this.bytesReceived,
             getDownloadCompleted: () => this.downloadCompleted,
@@ -1651,14 +1685,14 @@ class WebRTCManager {
 
         try {
             let offerURL = this.endpoints.offer;
-            const debugParams = this.debugConfig.buildOfferDebugParams();
 
+            const debugParams = this.debugConfig.buildOfferDebugParams();
             if (debugParams) {
                 offerURL += '?' + debugParams;
-                this.log("WebRTC", `Using debug offer URL: ${offerURL}`);
+                this.log("WebRTC", `Using offer URL: ${offerURL}`);
             }
 
-            offerResponse = await fetch(offerURL);
+            offerResponse = await fetch(offerURL, { headers: this.authHeaders });
             this.log("WebRTC", `Got response: ${offerResponse.status} ${offerResponse.statusText}`);
         } catch (err) {
             this.log("WebRTC", "Failed to fetch offer:", err);

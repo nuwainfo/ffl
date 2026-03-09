@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-01-22 15:39+0800\n"
+"POT-Creation-Date: 2026-03-09 15:51+0800\n"
 "PO-Revision-Date: 2025-12-18 10:23+0800\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -37,6 +37,9 @@ msgid ""
 "fell back to Relayed P2P. However, it was aborted because the Free "
 "version only supports files smaller than {size}MB when using Relayed P2P."
 "\n"
+msgstr ""
+
+msgid "Please report this issue and serial number to us by email."
 msgstr ""
 
 msgid "You need to use this feature after login. (Please run ffl login)"
@@ -143,19 +146,105 @@ msgid ""
 " with 'cool' as UID)"
 msgstr ""
 
-msgid "Error: --alias with --upload is under development and not yet supported."
-msgstr ""
-
-msgid ""
-"Error: HTTP Basic Authentication (--auth-user/--auth-password) with "
-"--upload is under development and not yet supported."
-msgstr ""
-
 msgid "GUI.py requires Upload addon (addons/Upload.py) to function properly"
 msgstr ""
 
 #, python-brace-format
 msgid "Loading advanced arguments from: {argsFile}"
+msgstr ""
+
+#, python-brace-format
+msgid "One-time pickup code: {pickupCode}"
+msgstr ""
+
+msgid "One-time pickup code (auto)"
+msgstr ""
+
+msgid "One-time pickup code"
+msgstr ""
+
+msgid "Email OTP"
+msgstr ""
+
+msgid "Recipient key file"
+msgstr ""
+
+msgid "Recipient key file + pickup code"
+msgstr ""
+
+msgid "auto"
+msgstr ""
+
+msgid "Verify Recipient"
+msgstr ""
+
+msgid ""
+"Choose how the recipient must verify before downloading.\n"
+"This applies only to the current share and is not saved in Preferences."
+msgstr ""
+
+msgid "Verification Method"
+msgstr ""
+
+msgid "Email verification (OTP)"
+msgstr ""
+
+msgid "Leave pickup code blank to let FastFileLink generate one."
+msgstr ""
+
+msgid "Pickup code:"
+msgstr ""
+
+msgid "Recipient email:"
+msgstr ""
+
+#, python-brace-format
+msgid "Recipient key file ({ext}):"
+msgstr ""
+
+msgid "Browse"
+msgstr ""
+
+msgid "OK"
+msgstr ""
+
+msgid "Cancel"
+msgstr ""
+
+msgid "Choose recipient key file"
+msgstr ""
+
+#, python-brace-format
+msgid "FastFileLink public key (*{ext})|*{ext}|All files (*.*)|*.*"
+msgstr ""
+
+#, python-brace-format
+msgid "Pickup code must be exactly {n} digits."
+msgstr ""
+
+msgid "Validation Error"
+msgstr ""
+
+msgid "Recipient email cannot be empty."
+msgstr ""
+
+msgid "Please enter a valid email address."
+msgstr ""
+
+msgid "Recipient key file cannot be empty."
+msgstr ""
+
+msgid "Recipient key file was not found."
+msgstr ""
+
+#, python-brace-format
+msgid "Edit: {summary}"
+msgstr ""
+
+msgid "Verify recipient for this share"
+msgstr ""
+
+msgid "Click to change recipient verification settings."
 msgstr ""
 
 msgid "📁Select Folder"
@@ -165,9 +254,6 @@ msgid "Choose This Folder"
 msgstr ""
 
 msgid "Choose File"
-msgstr ""
-
-msgid "Cancel"
 msgstr ""
 
 msgid ""
@@ -340,13 +426,7 @@ msgstr ""
 msgid "    Password:"
 msgstr ""
 
-msgid "OK"
-msgstr ""
-
 msgid "Username cannot be empty."
-msgstr ""
-
-msgid "Validation Error"
 msgstr ""
 
 msgid "Password cannot be empty."
@@ -763,40 +843,14 @@ msgid ""
 "upload."
 msgstr ""
 
+#~ msgid ""
+#~ "Error: --alias with --upload is under"
+#~ " development and not yet supported."
+#~ msgstr ""
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+#~ msgid ""
+#~ "Error: HTTP Basic Authentication (--auth-"
+#~ "user/--auth-password) with --upload is "
+#~ "under development and not yet supported."
+#~ msgstr ""
 

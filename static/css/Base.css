@@ -109,64 +109,37 @@
 }
 
 .copyLinkIcon {
-
     display: inline-flex;
     align-items: center;
-
     overflow: hidden;
-
     width: 24px;
     transition: width 0.25s ease;
-
 }
-
-/* icon */
 
 .copyIcon {
-
     flex-shrink: 0;
-
     opacity: 1;
     transition: opacity 0.15s ease;
-
 }
-
-/* copied text */
 
 .copyFeedbackText {
-
     margin-left: 0;
-
     white-space: nowrap;
-
     opacity: 0;
     transition: opacity 0.15s ease;
-
     font-size: 14px;
-
 }
-
-/* 點擊後狀態 */
 
 .copyLinkIcon.copied {
-
     width: 70px;
-
 }
 
-/* icon 消失 */
-
 .copyLinkIcon.copied .copyIcon {
-
     opacity: 0;
     width: 0;
     margin: 0;
 }
 
-/* 文字出現 */
-
 .copyLinkIcon.copied .copyFeedbackText {
-
     opacity: 1;
-
 }

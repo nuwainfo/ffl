@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-01-22 15:39+0800\n"
+"POT-Creation-Date: 2026-03-09 15:51+0800\n"
 "PO-Revision-Date: 2025-12-21 14:22+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -45,6 +45,9 @@ msgid ""
 msgstr ""
 "一个对等端无法建立装置对装置的 P2P 连线，因此退回到中继 P2P。但由于免费版本在使用中继 P2P 时仅支援小于 {size}MB "
 "的档案，因此已中止。\n"
+
+msgid "Please report this issue and serial number to us by email."
+msgstr "请通过电子邮件向我们报告此问题及序列号。"
 
 msgid "You need to use this feature after login. (Please run ffl login)"
 msgstr "您需要在登入后才能使用此功能。（请执行 ffl login）"
@@ -150,20 +153,108 @@ msgid ""
 " with 'cool' as UID)"
 msgstr "使用自订别名作为分享连结的 UID（例如：--alias cool 会建立以 'cool' 为 UID 的连结）"
 
-msgid "Error: --alias with --upload is under development and not yet supported."
-msgstr "错误：--alias 搭配 --upload 正在开发中，尚未支援。"
-
-msgid ""
-"Error: HTTP Basic Authentication (--auth-user/--auth-password) with "
-"--upload is under development and not yet supported."
-msgstr "错误：HTTP 基本认证（--auth-user/--auth-password）搭配 --upload 正在开发中，尚未支援。"
-
 msgid "GUI.py requires Upload addon (addons/Upload.py) to function properly"
 msgstr "GUI.py 需要 Upload 附加元件（addons/Upload.py）才能正常运作"
 
 #, python-brace-format
 msgid "Loading advanced arguments from: {argsFile}"
 msgstr "正在从以下位置载入进阶参数：{argsFile}"
+
+#, python-brace-format
+msgid "One-time pickup code: {pickupCode}"
+msgstr "一次性取件码：{pickupCode}"
+
+msgid "One-time pickup code (auto)"
+msgstr "一次性取件码（自动）"
+
+msgid "One-time pickup code"
+msgstr "一次性取件码"
+
+msgid "Email OTP"
+msgstr "Email 邮箱一次性验证码"
+
+msgid "Recipient key file"
+msgstr "收件人密钥文件"
+
+msgid "Recipient key file + pickup code"
+msgstr "收件人密钥文件 + 取件码"
+
+msgid "auto"
+msgstr "自动"
+
+msgid "Verify Recipient"
+msgstr "验证收件人"
+
+msgid ""
+"Choose how the recipient must verify before downloading.\n"
+"This applies only to the current share and is not saved in Preferences."
+msgstr ""
+"选择收件人下载前的验证方式。\n"
+"此设置仅适用于本次分享，不会保存至偏好设置中。"
+
+msgid "Verification Method"
+msgstr "验证方式"
+
+msgid "Email verification (OTP)"
+msgstr "Email 邮箱验证（OTP）"
+
+msgid "Leave pickup code blank to let FastFileLink generate one."
+msgstr "留空取件码栏位，让 快档连结 自动生成。"
+
+msgid "Pickup code:"
+msgstr "取件码："
+
+msgid "Recipient email:"
+msgstr "收件人 Email 邮箱："
+
+#, python-brace-format
+msgid "Recipient key file ({ext}):"
+msgstr "收件人密钥文件（{ext}）："
+
+msgid "Browse"
+msgstr "浏览"
+
+msgid "OK"
+msgstr "确定"
+
+msgid "Cancel"
+msgstr "取消"
+
+msgid "Choose recipient key file"
+msgstr "选择收件人密钥文件"
+
+#, python-brace-format
+msgid "FastFileLink public key (*{ext})|*{ext}|All files (*.*)|*.*"
+msgstr "快档连结 公钥 (*{ext})|*{ext}|所有文件 (*.*)|*.*"
+
+#, python-brace-format
+msgid "Pickup code must be exactly {n} digits."
+msgstr "取件码必须恰好为 {n} 位数字。"
+
+msgid "Validation Error"
+msgstr "验证错误"
+
+msgid "Recipient email cannot be empty."
+msgstr "收件人 Email 邮箱不能为空。"
+
+msgid "Please enter a valid email address."
+msgstr "请输入有效的 Email 邮箱地址。"
+
+msgid "Recipient key file cannot be empty."
+msgstr "收件人密钥文件不能为空。"
+
+msgid "Recipient key file was not found."
+msgstr "找不到收件人密钥文件。"
+
+#, python-brace-format
+msgid "Edit: {summary}"
+msgstr "编辑：{summary}"
+
+msgid "Verify recipient for this share"
+msgstr "验证本次分享的收件人"
+
+msgid "Click to change recipient verification settings."
+msgstr "点击以更改收件人验证设置。"
 
 msgid "📁Select Folder"
 msgstr "📁选择资料夹"
@@ -173,9 +264,6 @@ msgstr "选择此资料夹"
 
 msgid "Choose File"
 msgstr "选择档案"
-
-msgid "Cancel"
-msgstr "取消"
 
 msgid ""
 "Tip: Click 'Choose This Folder' to select current folder; 'Choose File' "
@@ -410,14 +498,8 @@ msgstr "    输入您能记住并分享的自定义密码。"
 msgid "    Password:"
 msgstr "    密码："
 
-msgid "OK"
-msgstr "确定"
-
 msgid "Username cannot be empty."
 msgstr "用户名不能为空。"
-
-msgid "Validation Error"
-msgstr "验证错误"
 
 msgid "Password cannot be empty."
 msgstr "密码不能为空。"
@@ -857,20 +939,14 @@ msgid ""
 "upload."
 msgstr "侦测到 UPLOAD_METHOD 环境变数，使用 {mode} 方法上传。"
 
+#~ msgid ""
+#~ "Error: --alias with --upload is under"
+#~ " development and not yet supported."
+#~ msgstr "错误：--alias 搭配 --upload 正在开发中，尚未支援。"
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+#~ msgid ""
+#~ "Error: HTTP Basic Authentication (--auth-"
+#~ "user/--auth-password) with --upload is "
+#~ "under development and not yet supported."
+#~ msgstr "错误：HTTP 基本认证（--auth-user/--auth-password）搭配 --upload 正在开发中，尚未支援。"
 

@@ -57,6 +57,8 @@ from bases.Utils import (
 )
 from bases.Readers import SourceReader, FolderChangedException
 from bases.Tor import verifyTorProxy
+from bases.Auth import RecipientAuth, PUBKEY_PUBLIC_EXT, PUBKEY_PRIVATE_EXT
+from bases.crypto import CryptoInterface
 from bases.VFS import VFSServer
 from bases.I18n import _
 
@@ -176,7 +178,12 @@ def promptAuthEnabled(authUser, authPassword):
     flushPrint(_('Authentication enabled - Username: {authUser}\n').format(authUser=authUser))
 
 
-def onShareLinkCreate(args, link, filePath, fileSize, tunnelType, e2ee, reader, **kwargs):
+def promptRecipientAuthInfo(recipientAuth):
+    if recipientAuth.requiresPickup():
+        flushPrint(_('Pickup code: {code}\n').format(code=recipientAuth.pickupCode))
+
+
+def onShareLinkCreate(args, link, filePath, fileSize, tunnelType, e2ee, reader, recipientAuth=None, **kwargs):
     """Handle share link creation - invite, QR code, and JSON writing"""
     # Handle --invite flag
     if args.invite:
@@ -208,6 +215,8 @@ def onShareLinkCreate(args, link, filePath, fileSize, tunnelType, e2ee, reader, 
 
         # Get content name (VFS mode has reader=None, use basename)
         contentName = reader.contentName if reader else os.path.basename(filePath)
+        pickupCode = recipientAuth.pickupCode if recipientAuth and recipientAuth.requiresPickup() else None
+        pubkeyEnabled = recipientAuth.requiresPubkey() if recipientAuth else False
 
         outputData = {
             "file": filePath,
@@ -217,6 +226,8 @@ def onShareLinkCreate(args, link, filePath, fileSize, tunnelType, e2ee, reader, 
             "tunnel_type": tunnelType or "default",
             "link": link,
             "e2ee": e2ee,
+            "pickup_code": pickupCode,
+            "pubkey_enabled": pubkeyEnabled,
             "user": {
                 "user": user.name,
                 "email": user.email,
@@ -259,7 +270,20 @@ def processUpload(args, reader, proxyConfig: ProxyConfig):
     )
 
     authUser, authPassword = determineAuthentication(args)
-    publishPromptCallback = lambda uploadResult: promptAuthEnabled(authUser, authPassword) if authPassword else None
+    recipientAuth = RecipientAuth.create(
+        args.recipientAuth,
+        getattr(args, 'recipientPublicKey', None),
+        getattr(args, 'pickupCode', None),
+        recipientEmail=getattr(args, 'recipientEmail', None),
+    )
+
+    def handlePublishPrompt(uploadResult):
+        if authPassword:
+            promptAuthEnabled(authUser, authPassword)
+        if recipientAuth.isEnabled():
+            promptRecipientAuthInfo(recipientAuth)
+
+    publishPromptCallback = handlePublishPrompt if (authPassword or recipientAuth.isEnabled()) else None
 
     # Inform GUI users about upload resumability
     if not isCLIMode():
@@ -282,6 +306,13 @@ def processUpload(args, reader, proxyConfig: ProxyConfig):
             if authPassword:
                 extraArgs['authUser'] = authUser
                 extraArgs['authPassword'] = authPassword
+
+            if recipientAuth.isEnabled():
+                extraArgs['pickupCode'] = recipientAuth.pickupCode
+            if recipientAuth.requiresPubkey():
+                extraArgs['recipientPublicKey'] = recipientAuth.publicKeyPem
+            if recipientAuth.requiresEmail():
+                extraArgs['recipientEmail'] = recipientAuth.recipientEmail
 
             if resume:
                 # Resume mode: use resume() instead of tell()
@@ -432,6 +463,7 @@ def processUpload(args, reader, proxyConfig: ProxyConfig):
                 tunnelType=None,
                 e2ee=e2eeEnabled,
                 reader=reader,
+                recipientAuth=recipientAuth,
             )
             return UploadProcessor(uploadMethod=uploadMethod, uid=uid, exitCode=0)
         else:
@@ -630,6 +662,17 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
             domain, tunnelLink = tunnelRunner.start(port)
             link = f"{tunnelLink}{uid}"
 
+            # Determine recipient auth mode (P2P only; pull-upload uses server-side auth)
+            otpAPIBase = getattr(args, 'recipientOTPAPIBase', None)
+            recipientAuth = RecipientAuth.create(
+                args.recipientAuth,
+                getattr(args, 'recipientPublicKey', None),
+                getattr(args, 'pickupCode', None),
+                recipientEmail=getattr(args, 'recipientEmail', None),
+                otpRequestUrl=f'{otpAPIBase}/otp/email/request/' if otpAPIBase else None,
+                otpVerifyUrl=f'{otpAPIBase}/otp/email/verify/' if otpAPIBase else None,
+            )
+
             # Determine handler class and setup link
             if uploadProcessor:
                 try:
@@ -653,6 +696,7 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
                     tunnelType=tunnelType,
                     e2ee=e2eeEnabled,
                     reader=reader,
+                    recipientAuth=recipientAuth,
                 )
 
                 flushPrint(_('Please keep the application running so the recipient can download the file.'))
@@ -683,6 +727,9 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
                 if authPassword:
                     promptAuthEnabled(authUser, authPassword)
 
+                if recipientAuth.isEnabled():
+                    promptRecipientAuthInfo(recipientAuth)
+
                 # WebRTC default state: disabled by --force-relay flag
                 defaultWebRTC = not args.forceRelay
 
@@ -695,6 +742,7 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
                     defaultWebRTC=defaultWebRTC,
                     e2eeEnabled=e2eeEnabled,
                     torEnabled=torDetected,
+                    recipientAuth=recipientAuth,
                 )
 
                 # Create server with enhanced handler and WebRTC manager
@@ -727,6 +775,7 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
                     tunnelType=tunnelType,
                     e2ee=e2eeEnabled,
                     reader=reader,
+                    recipientAuth=recipientAuth,
                 )
                 return 0
 
@@ -757,7 +806,16 @@ def processDownload(args):
         # Create downloader and download file
         downloader = WebRTCDownloader(loggerCallback=flushPrint)
         resume = args.resume if hasattr(args, 'resume') else False
-        outputPath = downloader.downloadFile(args.url, args.output, credentials, resume=resume)
+        pickupCode = args.pickupCode if hasattr(args, 'pickupCode') else None
+        recipientPrivateKey = args.recipientPrivateKey if hasattr(args, 'recipientPrivateKey') else None
+        outputPath = downloader.downloadFile(
+            args.url,
+            args.output,
+            credentials,
+            resume=resume,
+            pickupCode=pickupCode,
+            recipientPrivateKey=recipientPrivateKey
+        )
 
         # Don't print success message - progress bar already shows completion
         logger.debug(f"File downloaded successfully: {outputPath}")
@@ -843,7 +901,7 @@ def runCLIMain():
         return 0
 
     # Process arguments and handle non-share commands
-    commandResult = processArgumentsAndCommands(args)
+    commandResult = processArgumentsAndCommands(args, shareSubparser=shareSubparser)
     if commandResult is not None:
         return commandResult
 

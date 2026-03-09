@@ -31,6 +31,8 @@ from bases.Settings import DEFAULT_AUTH_USER_NAME, DEFAULT_UPLOAD_DURATION, Sett
 from bases.Utils import flushPrint, checkVersionCompatibility, getEnv, parseProxyString, setupProxyEnvironment
 from bases.Hook import HookClient, HookFileWriter, forwardEventToHook
 from bases.Upgrade import performUpgrade
+from bases.Auth import PICKUP_CODE_LENGTH, PUBKEY_PUBLIC_EXT, PUBKEY_PRIVATE_EXT
+from bases.crypto import CryptoInterface
 from bases.I18n import _
 
 logger = getLogger(__name__)
@@ -219,6 +221,52 @@ def showVersion():
     flushPrint(_('Support: {supportURL}').format(supportURL=supportURL))
 
 
+def _addRecipientAuthArguments(parser):
+    """Add --recipient-auth and all related arguments to a parser (share and keygen subparsers)."""
+    parser.add_argument(
+        "--recipient-auth",
+        choices=['pickup', 'pubkey', 'pubkey+pickup', 'email'],
+        default=None,
+        help=_(
+            "Recipient verification mode. "
+            "'pickup': 6-digit code required to download; "
+            "'pubkey': RSA public-key challenge required; "
+            "'pubkey+pickup': both required; "
+            "'email': one-time code sent to recipient's email"
+        ),
+        dest="recipientAuth"
+    )
+    parser.add_argument(
+        "--pickup-code",
+        help=_("Custom {n}-digit pickup code (use with --recipient-auth pickup or pubkey+pickup)").format(
+            n=PICKUP_CODE_LENGTH),
+        metavar="CODE",
+        dest="pickupCode"
+    )
+    parser.add_argument(
+        "--recipient-public-key",
+        help=_(
+            "Path to recipient's RSA public key file ({ext}). "
+            "Required with --recipient-auth pubkey or pubkey+pickup"
+        ).format(ext=PUBKEY_PUBLIC_EXT),
+        metavar="FILE",
+        dest="recipientPublicKey"
+    )
+    parser.add_argument(
+        "--recipient-email",
+        help=_("Recipient email address for OTP verification (implies --recipient-auth email)"),
+        metavar="EMAIL",
+        dest="recipientEmail"
+    )
+    parser.add_argument(
+        "--recipient-otp-api-base",
+        help=_("Base URL for OTP email API (e.g. https://myserver.com/api). Required for --recipient-auth email"),
+        metavar="URL",
+        default=None,
+        dest="recipientOTPAPIBase"
+    )
+
+
 def configureCLIParser():
     """Configure the parser for CLI mode with multi-phase command support using global parent approach
 
@@ -338,6 +386,8 @@ def configureCLIParser():
             metavar="PASSWORD",
             dest="authPassword"
         )
+    
+        _addRecipientAuthArguments(parser)
         parser.add_argument(
             "--force-relay",
             action="store_true",
@@ -497,6 +547,27 @@ def configureCLIParser():
         metavar="PASSWORD",
         dest="authPassword"
     )
+    downloadSubparser.add_argument(
+        "--recipient-auth",
+        choices=['pickup', 'pubkey', 'pubkey+pickup'],
+        default=None,
+        help=_("Recipient verification mode when downloading a protected file"),
+        dest="recipientAuth"
+    )
+    downloadSubparser.add_argument(
+        "--pickup-code",
+        help=_("Pickup code to present when downloading (use with --recipient-auth pickup or pubkey+pickup)"),
+        metavar="CODE",
+        dest="pickupCode"
+    )
+    downloadSubparser.add_argument(
+        "--recipient-private-key",
+        help=_(
+            "Path to recipient's RSA private key file ({ext}) for pubkey auth"
+        ).format(ext=PUBKEY_PRIVATE_EXT),
+        metavar="FILE",
+        dest="recipientPrivateKey"
+    )
 
     # Upgrade command for self-updating
     upgradeSubparser = subparsers.add_parser(
@@ -516,13 +587,47 @@ def configureCLIParser():
         help=_("Target version when binary path is specified (default: latest)")
     )
 
+    # Keypair generation command
+    keygenSubparser = subparsers.add_parser(
+        'keygen',
+        help=_('Generate an RSA-2048 keypair for --recipient-auth pubkey'),
+        parents=[globalsParent],
+        exit_on_error=False
+    )
+    keygenSubparser.add_argument(
+        "--name",
+        default="recipient",
+        help=_("Base name for keypair files (default: recipient → recipient{pub} + recipient{priv})").format(
+            pub=PUBKEY_PUBLIC_EXT, priv=PUBKEY_PRIVATE_EXT),
+        metavar="NAME",
+        dest="keypairName"
+    )
+    keygenSubparser.add_argument(
+        "--share",
+        action="store_true",
+        default=False,
+        help=_(
+            "Share the generated private key immediately after generation "
+            "(private key can only be downloaded once, then auto-deleted; "
+            "recommended: add --recipient-auth pickup or --recipient-auth pubkey)"
+        ),
+        dest="keypairShare"
+    )
+    keygenSubparser.add_argument(
+        "--json",
+        metavar="JSON_FILE",
+        help=_("Output link and settings to a JSON file (use with --share)"),
+    )
+
+    _addRecipientAuthArguments(keygenSubparser)
+
     # Let addons create their command parsers (same pattern - inherit globalsParent)
     for cmdName, cmdConfig in commandRegistry.items():
         cmdParser = subparsers.add_parser(cmdName, help=cmdConfig['help'], parents=[globalsParent], exit_on_error=False)
         cmdConfig['setupFunction'](cmdParser)
 
     # Collect all valid subcommand names (including core commands)
-    commandNames = {'share', 'download', 'upgrade', *commandRegistry.keys()}
+    commandNames = {'share', 'download', 'upgrade', 'keygen', *commandRegistry.keys()}
     return parser, globalsParent, commandNames, shareSubparser
 
 
@@ -608,7 +713,76 @@ def processGlobalArguments(globalArgs):
     return result
 
 
-def processArgumentsAndCommands(args):
+def _handleKeygenCommand(args, shareSubparser):
+    """Generate RSA-2048 keypair files for --recipient-auth pubkey."""
+    name = getattr(args, 'keypairName', None) or 'recipient'
+    privPath = f"{name}{PUBKEY_PRIVATE_EXT}"
+    pubPath = f"{name}{PUBKEY_PUBLIC_EXT}"
+
+    cryptoInterface = CryptoInterface()
+    privKey, pubKey = cryptoInterface.generateRSAKeyPair()
+    privPem = cryptoInterface.serializeRSAPrivateKeyPKCS8(privKey)
+    pubPem = cryptoInterface.serializeRSAPublicKey(pubKey)
+
+    with open(privPath, 'w', encoding='utf-8') as f:
+        f.write(privPem)
+    with open(pubPath, 'w', encoding='utf-8') as f:
+        f.write(pubPem)
+
+    flushPrint(_('Generated RSA-2048 keypair:'))
+    flushPrint(_('  Private key : {path}').format(path=privPath))
+    flushPrint(_('  Public key  : {path}  ← share with sender').format(path=pubPath))
+
+    if not getattr(args, 'keypairShare', False):
+        flushPrint(_('Share the public key file with the sender who will use:'))
+        flushPrint(_('  ffl share file.bin --recipient-auth pubkey --recipient-public-key {pub}').format(pub=pubPath))
+        return 0
+
+    # --share mode: fill all share arg defaults from shareSubparser, then overlay
+    # keypair-specific values and force constraints. This way new share args
+    # automatically get their correct defaults without manual maintenance here.
+    keypairJson = args.json
+    keypairRecipientAuth = args.recipientAuth
+    keypairPickupCode = getattr(args, 'pickupCode', None)
+    keypairRecipientPublicKey = getattr(args, 'recipientPublicKey', None)
+    keypairRecipientEmail = getattr(args, 'recipientEmail', None)
+    keypairRecipientOTPAPIBase = getattr(args, 'recipientOTPAPIBase', None)
+
+    shareArgs = shareSubparser.parse_args([privPath])
+    args.__dict__.update(vars(shareArgs))
+
+    args.maxDownloads = 1  # forced: private key is one-time use
+    args.json = keypairJson
+    args.recipientAuth = keypairRecipientAuth
+    args.pickupCode = keypairPickupCode
+    args.recipientPublicKey = keypairRecipientPublicKey
+    args.recipientEmail = keypairRecipientEmail
+    args.recipientOTPAPIBase = keypairRecipientOTPAPIBase
+
+    # Validate share arguments now that defaults are set
+    validationResult = validateShareArguments(args)
+    if validationResult is not None:
+        return validationResult
+
+    # Delete private key file from disk after successful download
+    def deletePrivKeyAfterDownload(**kwargs):
+        try:
+            os.remove(privPath)
+            flushPrint(_('Private key deleted: {path}').format(path=privPath))
+        except OSError as e:
+            logger.warning(f"Failed to delete private key {privPath}: {e}")
+
+    FFLEvent.downloadCompleted.subscribe(deletePrivKeyAfterDownload)
+
+    flushPrint(_('Sharing private key (download once, then auto-deleted).'))
+    if not getattr(args, 'recipientAuth', None):
+        flushPrint(_('Tip: use --recipient-auth pickup or --recipient-auth pubkey to restrict who can download.\n'))
+    else:
+        flushPrint('')
+    return None  # hand off to processSharing
+
+
+def processArgumentsAndCommands(args, shareSubparser=None):
     """
     Process parsed arguments and handle command execution through addons.
     This handles all commands except 'share' (which is handled by processFileSharing).
@@ -619,6 +793,10 @@ def processArgumentsAndCommands(args):
     """
     # Handle core upgrade command
     command = getattr(args, 'command', None)
+
+    if command == 'keygen':
+        return _handleKeygenCommand(args, shareSubparser)
+
     if command == 'upgrade':
         # Parse arguments: support both "upgrade <version>" and "upgrade <binary_path> <version>"
         target = getattr(args, 'target', None)
@@ -812,6 +990,48 @@ def validateShareArguments(args):
             'Use --auth-password to enable authentication '
             '(username defaults to \'{defaultUser}\' if not specified)'
         ).format(defaultUser=DEFAULT_AUTH_USER_NAME))
+        return 1
+
+    if args.pickupCode:
+        if not args.pickupCode.isdigit() or len(args.pickupCode) != PICKUP_CODE_LENGTH:
+            flushPrint(_('Error: --pickup-code must be exactly {n} digits').format(n=PICKUP_CODE_LENGTH))
+            return 1
+            
+        # Auto-infer --recipient-auth pickup when --pickup-code is provided without a mode
+        if args.recipientAuth is None:
+            args.recipientAuth = 'pickup'
+
+    # Auto-infer --recipient-auth email when --recipient-email is provided
+    if args.recipientEmail and args.recipientAuth != 'email':
+        args.recipientAuth = 'email'
+
+    # Validate email auth options
+    if args.recipientAuth == 'email' and not args.recipientEmail:
+        flushPrint(_('Error: --recipient-email is required with --recipient-auth email'))
+        flushPrint(_('Use: --recipient-auth email --recipient-email user@example.com'))
+        return 1
+
+    if args.recipientAuth == 'email' and not args.recipientOTPAPIBase:
+        flushPrint(_('Error: --recipient-auth email requires an OTP API server'))
+        flushPrint(_('Use --recipient-otp-api-base to specify one'))
+        return 1
+        
+    # Validate pubkey auth options
+    pubkeyMode = args.recipientAuth in ('pubkey', 'pubkey+pickup')
+    recipientPublicKey = getattr(args, 'recipientPublicKey', None)
+    if pubkeyMode and not recipientPublicKey:
+        flushPrint(_('Error: --recipient-public-key is required with --recipient-auth {mode}').format(
+            mode=args.recipientAuth))
+        flushPrint(_('Use --recipient-public-key {name}{ext}').format(
+            name='alice', ext=PUBKEY_PUBLIC_EXT))
+        return 1
+        
+    if recipientPublicKey and not pubkeyMode:
+        flushPrint(_('Error: --recipient-public-key requires --recipient-auth pubkey or pubkey+pickup'))
+        return 1
+        
+    if recipientPublicKey and not os.path.exists(recipientPublicKey):
+        flushPrint(_('Error: public key file not found: {path}').format(path=recipientPublicKey))
         return 1
 
     # Validate --vfs argument

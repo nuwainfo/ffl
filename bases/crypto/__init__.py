@@ -117,6 +117,11 @@ class CryptoBackend(ABC):
         """Decrypt data with RSA-OAEP, returns plaintext bytes"""
         pass
 
+    @abstractmethod
+    def serializeRSAPrivateKeyPKCS8(self, privateKey) -> str:
+        """Serialize RSA private key to unencrypted PKCS#8 PEM string (Web Crypto API compatible)"""
+        pass
+
 
 class CryptoInterface:
     """Main crypto interface with automatic backend selection"""

@@ -70,7 +70,48 @@
             "solution2Text": "使用",
             "solution2Stable": "以穩定下載大型加密檔案",
             "solution3": "<strong>等待：</strong>下載可能仍在背景進行中"
-        }
+        },
+        "enterKey": "請輸入加密金鑰",
+        "invalidKeyLength": "無效的加密金鑰長度。需要 32 位元組的 AES-256 金鑰（Base64 為 44 個字元）。",
+        "invalidKeyLengthDecoded": "無效的加密金鑰長度。需要 32 位元組的 AES-256 金鑰。"
+    },
+    "pickup": {
+        "title": "🔑 需要取件碼",
+        "description": "寄件者要求輸入 6 位數取件碼才能下載此檔案。",
+        "placeholder": "6 位數碼",
+        "button": "繼續",
+        "invalidCode": "請輸入有效的 6 位數字碼。",
+        "wrongCode": "取件碼錯誤，請確認後再試。"
+    },
+    "pubkey": {
+        "title": "🔐 需要私鑰",
+        "description": "此檔案受您的公鑰保護。請上傳您的私鑰檔案（.fflkey）以解鎖。",
+        "selectFile": "📁 選擇 .fflkey 檔案",
+        "noFile": "請選擇您的 .fflkey 私鑰檔案。",
+        "readError": "無法讀取金鑰檔案。",
+        "invalidPem": "無效的金鑰檔案 — 需要 PKCS#8 格式的私鑰（.fflkey）。",
+        "base64Error": "無效的金鑰檔案（Base64 解碼失敗）。",
+        "invalidFormat": "無效的私鑰 — 格式錯誤或非 RSA-OAEP 金鑰。",
+        "decryptError": "解密失敗 — 私鑰不正確。",
+        "authFailed": "驗證失敗 — 請確認您的金鑰。"
+    },
+    "email": {
+        "title": "📧 需要電子郵件驗證",
+        "description": "點擊「發送驗證碼」以接收一次性驗證碼至您的電子郵件地址。",
+        "sendCode": "發送驗證碼",
+        "codeSent": "驗證碼已發送！請查看您的郵件。",
+        "placeholder": "6位數字驗證碼",
+        "invalidCode": "請輸入郵件中收到的6位數字驗證碼。",
+        "sendFirst": "請先請求驗證碼。",
+        "sendFailed": "發送失敗，請重試。",
+        "sendError": "網路錯誤，請重試。",
+        "sending": "發送中…"
+    },
+    "auth": {
+        "failed": "驗證失敗，請再試一次。",
+        "verifying": "驗證中…",
+        "unlockButton": "繼續",
+        "rateLimited": "嘗試次數過多，請 5 分鐘後再試。"
     },
     "downloadFooter":{
         "message": "附註：祝您有美好的一天！在以下網址下載您的免費檔案分享應用程式",
