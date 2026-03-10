@@ -239,6 +239,60 @@ class FastFileLinkTestBase(unittest.TestCase):
             raise AssertionError(f"Failed to parse checksum from b2sum output: {output}")
         return checksum
 
+    def _provisionLocalTestServerCredential(self):
+        """Write deterministic credentials that match the localhost test server's seeded device keypair."""
+        if not self._testConfigDir:
+            print("[Test] Skipping localhost credential provisioning: test config directory is not initialized")
+            return
+
+        fixturePath = os.path.join(os.path.dirname(__file__), "fixtures", "FreeKeypair.json")
+        if not os.path.exists(fixturePath):
+            print(f"[Test] Skipping localhost credential provisioning: fixture not found at {fixturePath}")
+            return
+
+        repoRoot = os.path.join(os.path.dirname(__file__), "..")
+        sys.path.insert(0, repoRoot)
+        try:
+            try:
+                from addons.auth.CredentialStore import CredentialStore
+                from addons.auth.Device import Device
+                from bases.crypto import CryptoInterface
+            except ImportError as e:
+                print(f"[Test] Skipping localhost credential provisioning: auth modules unavailable ({e})")
+                return
+
+            with open(fixturePath, "r", encoding="utf-8") as fixtureFile:
+                fixture = json.load(fixtureFile)
+
+            deviceId = Device.generateId()
+            publicDeviceId = hashlib.blake2b(deviceId.encode(), digest_size=16).hexdigest()
+
+            crypto = CryptoInterface()
+            clientPrivateKey = fixture["privateKey"]
+            clientPublicKey = crypto.derivePublicKeyFromPrivate(clientPrivateKey)
+            if not clientPublicKey:
+                print("[Test] Skipping localhost credential provisioning: failed to derive public key from fixture")
+                return
+
+            credentialStore = CredentialStore(crypto, storageDir=self._testConfigDir)
+            success = credentialStore.saveCredentials(
+                deviceId=deviceId,
+                publicDeviceId=publicDeviceId,
+                email=fixture["email"],
+                clientPrivateKey=clientPrivateKey,
+                clientPublicKey=clientPublicKey,
+                serialNumber=fixture["serialNumber"],
+                serverPublicKey=fixture["serverPublicKey"]
+            )
+            if not success:
+                print("[Test] Skipping localhost credential provisioning: failed to write credential")
+                return
+
+            print(f"[Test] Provisioned localhost test credential at {credentialStore.credentialFilePath}")
+        finally:
+            if sys.path and sys.path[0] == repoRoot:
+                sys.path.pop(0)
+
     def _fetchChecksumData(self, shareLink, requireReady=True, retries=10, retryInterval=0.2):
         checksumUrl = self._getChecksumUrl(shareLink)
         lastResponseData = None
@@ -704,6 +758,7 @@ class FastFileLinkTestBase(unittest.TestCase):
         # Start test server if requested
         testServerProcess = None
         if useTestServer:
+            self._provisionLocalTestServerCredential()
             testServerProcess = self._startTestServer()
 
         try:

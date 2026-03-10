@@ -53,7 +53,8 @@ class ChecksumTest(ChecksumAssertionsMixin, FastFileLinkTestBase):
         shareLink = self._startFastFileLink(p2p=True)
 
         beforeData = self._fetchChecksumData(shareLink, requireReady=False)
-        self.assertEqual(beforeData, {'ready': False}, "Checksum should be unavailable before any full transfer")
+        self.assertFalse(beforeData.get('ready'), "Checksum should be unavailable before any full transfer")
+        self.assertEqual(beforeData.get('algorithm'), 'blake2b')
 
         downloadedPath = self._getDownloadedFilePath("checksum_http.bin")
         transferChecksum = self.downloadFileWithRequests(shareLink, downloadedPath)
@@ -84,7 +85,8 @@ class ChecksumTest(ChecksumAssertionsMixin, FastFileLinkTestBase):
                         outputFile.write(chunk)
 
         checksumData = self._fetchChecksumData(shareLink, requireReady=False)
-        self.assertEqual(checksumData, {'ready': False}, "Partial transfer should not mark checksum as ready")
+        self.assertFalse(checksumData.get('ready'), "Partial transfer should not mark checksum as ready")
+        self.assertEqual(checksumData.get('algorithm'), 'blake2b')
 
     def testChecksumMatchesCiphertextWhenE2EEEnabled(self):
         """With --e2ee, checksum should represent encrypted transport bytes."""

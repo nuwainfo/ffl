@@ -319,6 +319,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             '/checksum': self._handleChecksum,
             '/static/index.html': self._handleStaticIndex,
             '/static/js/ProgressServiceWorker.js': self._handleProgressServiceWorker,
+            '/static/js/Checksum.js': self._handleChecksumScript,
             '/static/js/E2EE.js': self._handleE2EEScript,
             '/offer': self._handleWebRTCOffer,
             '/candidate': self._handleWebRTCCandidatePolling,
@@ -1435,6 +1436,11 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         # Service worker requires special headers
         requestHeaders = {'Service-Worker': 'script', 'Cache-Control': 'no-cache', 'Service-Worker-Allowed': '/'}
         self._handleStaticScript("/static/js/ProgressServiceWorker.js", requestHeaders)
+
+    def _handleChecksumScript(self, args):
+        """Handle Checksum.js - proxy from remote or serve locally.
+        Required for same-origin importScripts() in ProgressServiceWorker.js."""
+        self._handleStaticScript("/static/js/Checksum.js")
 
     def _handleE2EEScript(self, args):
         """Handle E2EE.js - proxy from remote or serve locally"""
