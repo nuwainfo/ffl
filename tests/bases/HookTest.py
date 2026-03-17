@@ -33,6 +33,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 from bases.Hook import HookServer, HookClient, HookError, HookAuthError
+from bases.crypto import CryptoInterface
+from bases.E2EE import StreamDecryptor
 from ..CoreTestBase import FastFileLinkTestBase
 
 
@@ -441,40 +443,32 @@ class HookFunctionalTest(FastFileLinkTestBase):
             hookServer.server_close()
             hookThread.join(timeout=5)
 
-    def testHookPreviewStyleEndpointsFromShareManifest(self):
-        """Verify hook-based /manifest, /file, /thumb endpoints work with hash parameters."""
-        registerEvents = []
-        endpointRequests = []
-        outputCapture = {}
+    def _startPreviewHookServer(self, state, encryptResponse=False, includeFileEndpoint=False):
+        """Create and start a local HTTP server for preview-style hook endpoint tests.
 
-        sharedFolder = os.path.join(self.tempDir, "hook_preview_folder")
-        os.makedirs(sharedFolder, exist_ok=True)
-        nestedFolder = os.path.join(sharedFolder, "nested")
-        os.makedirs(nestedFolder, exist_ok=True)
+        Handles POST /events for hook registration and share-link events, and GET
+        endpoints for /manifest, /thumb, and optionally /file.
 
-        file1Path = os.path.join(sharedFolder, "hello.txt")
-        file2Path = os.path.join(nestedFolder, "info.json")
-        file1Content = b"hello from hook preview test\n"
-        file2Content = b'{"name":"hook","ok":true}\n'
+        Args:
+            state: Mutable dict populated as events arrive. Required keys:
+                   'registerEvents' (list), 'endpointRequests' (list),
+                   'shareManifest' (list), 'shareLink' (str),
+                   'sharedRoot' (str|None), 'fakeThumbBytes' (bytes)
+            encryptResponse: Set encryptResponse flag on all registered GET routes.
+            includeFileEndpoint: Also register and serve the /file endpoint.
 
-        with open(file1Path, "wb") as fileHandle:
-            fileHandle.write(file1Content)
-        with open(file2Path, "wb") as fileHandle:
-            fileHandle.write(file2Content)
-
-        originalTestFile = self.testFilePath
-        originalFileSize = self.originalFileSize
-        self.testFilePath = sharedFolder
-        self.originalFileSize = -1
-
+        Returns:
+            (hookServer, hookThread, hookUrl)
+        """
         authUser = 'ffl'
         authPassword = 'test-hook-token'
         authHeader = f"Basic {base64.b64encode(f'{authUser}:{authPassword}'.encode()).decode()}"
+        fakeThumbBytes = state['fakeThumbBytes']
 
-        fakeThumbBytes = b"\x89PNG\r\n\x1a\nHOOK-THUMB"
-        shareManifest = []
-        shareLink = ''
-        sharedRoot = None
+        routePaths = ['/manifest', '/thumb']
+        if includeFileEndpoint:
+            routePaths.append('/file')
+        routes = [{'method': 'GET', 'path': p, 'encryptResponse': encryptResponse} for p in routePaths]
 
         class LocalHookServerHandler(BaseHTTPRequestHandler):
             def log_message(self, format, *args):
@@ -490,10 +484,6 @@ class HookFunctionalTest(FastFileLinkTestBase):
                 self.end_headers()
 
             def do_POST(self):
-                nonlocal shareManifest
-                nonlocal shareLink
-                nonlocal sharedRoot
-
                 if not self._checkAuth():
                     self._sendAuthChallenge()
                     return
@@ -507,24 +497,17 @@ class HookFunctionalTest(FastFileLinkTestBase):
 
                 contentLength = int(self.headers.get('Content-Length', 0))
                 requestData = json.loads(self.rfile.read(contentLength)) if contentLength else {}
-
                 eventName = requestData.get('event')
                 eventData = requestData.get('data', {})
 
                 if eventName == '/hook/server/endpoints/register':
-                    registerEvents.append(eventData)
-                    responseData = {
-                        'routes': [
-                            {'method': 'GET', 'path': '/manifest'},
-                            {'method': 'GET', 'path': '/file'},
-                            {'method': 'GET', 'path': '/thumb'},
-                        ]
-                    }
+                    state['registerEvents'].append(eventData)
+                    responseData = {'routes': routes}
                 else:
                     if eventName == '/share/link/create':
-                        shareManifest = eventData.get('manifest', [])
-                        shareLink = eventData.get('link', '')
-                        sharedRoot = eventData.get('filePath')
+                        state['shareManifest'] = eventData.get('manifest', [])
+                        state['shareLink'] = eventData.get('link', '')
+                        state['sharedRoot'] = eventData.get('filePath')
                     responseData = {'status': 'ok'}
 
                 responseBody = json.dumps(responseData).encode('utf-8')
@@ -541,22 +524,20 @@ class HookFunctionalTest(FastFileLinkTestBase):
 
                 parsed = urlparse(self.path)
                 args = parse_qs(parsed.query)
+                shareManifest = state['shareManifest']
+                sharedRoot = state['sharedRoot']
+                shareLink = state['shareLink']
 
-                uid = ''
-                if shareLink:
-                    uid = urlparse(shareLink).path.strip('/').split('/')[0]
-
+                uid = urlparse(shareLink).path.strip('/').split('/')[0] if shareLink else ''
                 previewEntries = []
                 fileIndex = 0
                 for item in shareManifest:
                     if item.get('isDir', False):
                         continue
-
                     arcname = item.get('arcname', '')
                     mimeType, _encoding = mimetypes.guess_type(arcname)
                     if not mimeType:
                         mimeType = 'application/octet-stream'
-
                     previewEntries.append({
                         'index': fileIndex,
                         'segmentIndex': item.get('index', 0),
@@ -578,7 +559,7 @@ class HookFunctionalTest(FastFileLinkTestBase):
                 }
 
                 if parsed.path == '/manifest':
-                    endpointRequests.append({'path': '/manifest'})
+                    state['endpointRequests'].append({'path': '/manifest'})
                     body = json.dumps(previewManifest).encode('utf-8')
                     self.send_response(HTTPStatus.OK)
                     self.send_header('Content-Type', 'application/json; charset=utf-8')
@@ -587,8 +568,17 @@ class HookFunctionalTest(FastFileLinkTestBase):
                     self.wfile.write(body)
                     return
 
-                if parsed.path == '/file':
-                    endpointRequests.append({'path': '/file', 'args': args})
+                if parsed.path == '/thumb':
+                    state['endpointRequests'].append({'path': '/thumb', 'args': args})
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header('Content-Type', 'image/png')
+                    self.send_header('Content-Length', str(len(fakeThumbBytes)))
+                    self.end_headers()
+                    self.wfile.write(fakeThumbBytes)
+                    return
+
+                if includeFileEndpoint and parsed.path == '/file':
+                    state['endpointRequests'].append({'path': '/file', 'args': args})
                     hashValue = args.get('hash', [None])[0]
                     if not hashValue:
                         self.send_response(HTTPStatus.BAD_REQUEST)
@@ -596,25 +586,18 @@ class HookFunctionalTest(FastFileLinkTestBase):
                         self.end_headers()
                         return
 
-                    entries = previewManifest.get('entries', [])
-                    selectedEntry = None
-                    for item in entries:
-                        if item.get('hash') == hashValue:
-                            selectedEntry = item
-                            break
-
+                    selectedEntry = next((e for e in previewManifest['entries'] if e.get('hash') == hashValue), None)
                     if not selectedEntry or not sharedRoot:
                         self.send_response(HTTPStatus.NOT_FOUND)
                         self.send_header('Content-Length', '0')
                         self.end_headers()
                         return
 
-                    relativeName = selectedEntry.get('name', '')
+                    relativeName = selectedEntry['name']
                     sharedRootName = os.path.basename(os.path.normpath(sharedRoot))
                     if relativeName.startswith(f"{sharedRootName}/"):
                         relativeName = relativeName[len(sharedRootName) + 1:]
-                    relativeName = relativeName.replace('/', os.sep)
-                    filePath = os.path.join(sharedRoot, relativeName)
+                    filePath = os.path.join(sharedRoot, relativeName.replace('/', os.sep))
                     if not os.path.exists(filePath):
                         self.send_response(HTTPStatus.NOT_FOUND)
                         self.send_header('Content-Length', '0')
@@ -623,21 +606,11 @@ class HookFunctionalTest(FastFileLinkTestBase):
 
                     with open(filePath, 'rb') as fileHandle:
                         fileBody = fileHandle.read()
-
                     self.send_response(HTTPStatus.OK)
                     self.send_header('Content-Type', selectedEntry.get('mime', 'application/octet-stream'))
                     self.send_header('Content-Length', str(len(fileBody)))
                     self.end_headers()
                     self.wfile.write(fileBody)
-                    return
-
-                if parsed.path == '/thumb':
-                    endpointRequests.append({'path': '/thumb', 'args': args})
-                    self.send_response(HTTPStatus.OK)
-                    self.send_header('Content-Type', 'image/png')
-                    self.send_header('Content-Length', str(len(fakeThumbBytes)))
-                    self.end_headers()
-                    self.wfile.write(fakeThumbBytes)
                     return
 
                 self.send_response(HTTPStatus.NOT_FOUND)
@@ -648,6 +621,37 @@ class HookFunctionalTest(FastFileLinkTestBase):
         hookThread = threading.Thread(target=hookServer.serve_forever, daemon=True)
         hookThread.start()
         hookUrl = f"http://{authUser}:{authPassword}@127.0.0.1:{hookServer.server_address[1]}/events"
+        return hookServer, hookThread, hookUrl
+
+    def testHookPreviewStyleEndpointsFromShareManifest(self):
+        """Verify hook-based /manifest, /file, /thumb endpoints work with hash parameters."""
+        state = {
+            'registerEvents': [],
+            'endpointRequests': [],
+            'shareManifest': [],
+            'shareLink': '',
+            'sharedRoot': None,
+            'fakeThumbBytes': b"\x89PNG\r\n\x1a\nHOOK-THUMB",
+        }
+        outputCapture = {}
+
+        sharedFolder = os.path.join(self.tempDir, "hook_preview_folder")
+        os.makedirs(sharedFolder, exist_ok=True)
+        nestedFolder = os.path.join(sharedFolder, "nested")
+        os.makedirs(nestedFolder, exist_ok=True)
+        with open(os.path.join(sharedFolder, "hello.txt"), "wb") as fileHandle:
+            fileHandle.write(b"hello from hook preview test\n")
+        with open(os.path.join(nestedFolder, "info.json"), "wb") as fileHandle:
+            fileHandle.write(b'{"name":"hook","ok":true}\n')
+
+        originalTestFile = self.testFilePath
+        originalFileSize = self.originalFileSize
+        self.testFilePath = sharedFolder
+        self.originalFileSize = -1
+
+        hookServer, hookThread, hookUrl = self._startPreviewHookServer(
+            state, encryptResponse=False, includeFileEndpoint=True
+        )
 
         try:
             self._startFastFileLink(
@@ -664,11 +668,10 @@ class HookFunctionalTest(FastFileLinkTestBase):
 
             manifestReady = False
             for retryIndex in range(10):
-                if shareManifest:
+                if state['shareManifest']:
                     manifestReady = True
                     break
                 time.sleep(0.5)
-
             self.assertTrue(manifestReady, "shareLinkCreate hook payload should include raw manifest entries")
 
             manifestResponse = requests.get(f"{shareLink}/manifest", timeout=30)
@@ -693,11 +696,11 @@ class HookFunctionalTest(FastFileLinkTestBase):
 
             thumbResponse = requests.get(f"{shareLink}/thumb?hash={fileHash}", timeout=30)
             self.assertEqual(thumbResponse.status_code, 200)
-            self.assertEqual(thumbResponse.content, fakeThumbBytes)
+            self.assertEqual(thumbResponse.content, state['fakeThumbBytes'])
             self.assertIn('image/png', thumbResponse.headers.get('Content-Type', ''))
 
-            self.assertGreaterEqual(len(registerEvents), 1)
-            pathRequests = [entry.get('path') for entry in endpointRequests]
+            self.assertGreaterEqual(len(state['registerEvents']), 1)
+            pathRequests = [entry.get('path') for entry in state['endpointRequests']]
             self.assertIn('/manifest', pathRequests)
             self.assertIn('/file', pathRequests)
             self.assertIn('/thumb', pathRequests)
@@ -708,6 +711,128 @@ class HookFunctionalTest(FastFileLinkTestBase):
             hookThread.join(timeout=5)
             self.testFilePath = originalTestFile
             self.originalFileSize = originalFileSize
+
+    def testHookPreviewStyleEndpointsWithE2EE(self):
+        """Verify hook-based /manifest and /thumb endpoints with encryptResponse:true are E2EE-encrypted."""
+        state = {
+            'registerEvents': [],
+            'endpointRequests': [],
+            'shareManifest': [],
+            'shareLink': '',
+            'sharedRoot': None,
+            'fakeThumbBytes': b"\x89PNG\r\n\x1a\nHOOK-THUMB",
+        }
+        outputCapture = {}
+
+        sharedFolder = os.path.join(self.tempDir, "hook_e2ee_folder")
+        os.makedirs(sharedFolder, exist_ok=True)
+        with open(os.path.join(sharedFolder, "hello.txt"), "wb") as fileHandle:
+            fileHandle.write(b"hello from e2ee hook test\n")
+
+        originalTestFile = self.testFilePath
+        originalFileSize = self.originalFileSize
+        self.testFilePath = sharedFolder
+        self.originalFileSize = -1
+
+        hookServer, hookThread, hookUrl = self._startPreviewHookServer(
+            state, encryptResponse=True, includeFileEndpoint=False
+        )
+
+        try:
+            self._startFastFileLink(
+                p2p=True,
+                captureOutputIn=outputCapture,
+                extraEnvVars={"DISABLE_ADDONS": "Preview"},
+                extraArgs=["--e2ee", "--hook", hookUrl, "--timeout", "30", "--log-level", "DEBUG"]
+            )
+
+            with open(self.jsonOutputPath, 'r', encoding='utf-8') as jsonFile:
+                shareInfo = json.load(jsonFile)
+
+            shareLink = shareInfo["link"].rstrip('/')
+
+            manifestReady = False
+            for retryIndex in range(10):
+                if state['shareManifest']:
+                    manifestReady = True
+                    break
+                time.sleep(0.5)
+            self.assertTrue(manifestReady, "shareLinkCreate hook payload should include raw manifest entries")
+
+            # E2EE key exchange
+            crypto = CryptoInterface()
+            privKey, pubKey = crypto.generateRSAKeyPair()
+            pubKeyPem = crypto.serializeRSAPublicKey(pubKey)
+
+            e2eeManifestResponse = requests.get(f"{shareLink}/e2ee/manifest", timeout=30)
+            self.assertEqual(e2eeManifestResponse.status_code, 200)
+            chunkSize = e2eeManifestResponse.json().get('chunkSize', 0)
+            self.assertGreater(chunkSize, 0)
+
+            initResponse = requests.post(f"{shareLink}/e2ee/init", json={"publicKey": pubKeyPem}, timeout=30)
+            self.assertEqual(initResponse.status_code, 200)
+            initData = initResponse.json()
+            contentKey = crypto.decryptRSAOAEP(privKey, base64.b64decode(initData['wrappedContentKey']))
+            nonceBase = crypto.decryptRSAOAEP(privKey, base64.b64decode(initData['nonceBase']))
+
+            # Decrypt /manifest
+            encManifestBytes = requests.get(f"{shareLink}/manifest", timeout=30).content
+            with self.assertRaises(Exception):
+                json.loads(encManifestBytes)
+            manifestData = self._decryptE2EEResponse(encManifestBytes, "manifest", contentKey, nonceBase, chunkSize)
+            self.assertGreater(manifestData.get('count', 0), 0)
+
+            # Decrypt /thumb
+            fileHash = manifestData['entries'][0]['hash']
+            encThumbBytes = requests.get(f"{shareLink}/thumb?hash={fileHash}", timeout=30).content
+            self.assertNotEqual(encThumbBytes[:4], b'\x89PNG')
+            thumbStreamId = f"thumb/{fileHash}"
+            decryptedThumb = self._decryptE2EEResponse(encThumbBytes, thumbStreamId, contentKey, nonceBase, chunkSize)
+            self.assertEqual(decryptedThumb, state['fakeThumbBytes'])
+
+            self.assertGreaterEqual(len(state['registerEvents']), 1)
+
+        finally:
+            hookServer.shutdown()
+            hookServer.server_close()
+            hookThread.join(timeout=5)
+            self.testFilePath = originalTestFile
+            self.originalFileSize = originalFileSize
+
+    def _decryptE2EEResponse(self, encryptedBytes, streamId, contentKey, nonceBase, chunkSize):
+        """Fetch tags from the running FFL server and decrypt an encrypted hook response.
+
+        Args:
+            encryptedBytes: Raw ciphertext returned by the hook endpoint.
+            streamId: Stream identifier used when encrypting (e.g. "manifest", "thumb/<hash>").
+            contentKey: AES-256 content key (decrypted from RSA-OAEP wrapping).
+            nonceBase: GCM nonce base (decrypted from RSA-OAEP wrapping).
+            chunkSize: Encryption chunk size from /e2ee/manifest.
+
+        Returns:
+            Decrypted payload — bytes for binary content, parsed dict/list for JSON.
+        """
+        numChunks = max(1, (len(encryptedBytes) + chunkSize - 1) // chunkSize)
+        with open(self.jsonOutputPath, 'r', encoding='utf-8') as jsonFile:
+            shareLink = json.load(jsonFile)['link'].rstrip('/')
+        tagsResponse = requests.get(
+            f"{shareLink}/e2ee/tags",
+            params={"streamId": streamId, "start": "0", "count": str(numChunks)},
+            timeout=30,
+        )
+        self.assertEqual(tagsResponse.status_code, 200)
+        tags = tagsResponse.json()['tags']
+        self.assertEqual(len(tags), numChunks)
+
+        decryptor = StreamDecryptor(contentKey, nonceBase, streamId, len(encryptedBytes))
+        plaintext = b''.join(
+            decryptor.decryptChunk(i, encryptedBytes[i * chunkSize:(i + 1) * chunkSize], base64.b64decode(tags[i]['tag']))
+            for i in range(numChunks)
+        )
+        try:
+            return json.loads(plaintext)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return plaintext
 
 
 if __name__ == '__main__':

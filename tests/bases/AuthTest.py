@@ -36,7 +36,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from bases.crypto import CryptoInterface
 
 from ..BrowserTestBase import BrowserTestBase
-from ..CoreTestBase import FastFileLinkTestBase
+from ..CoreTestBase import FastFileLinkTestBase, IMAPTestMixin
 
 _EMAIL_AUTH_VARS = ('FFL_TEST_EMAIL', 'FFL_TEST_IMAP_HOST', 'FFL_TEST_IMAP_PASSWORD')
 SKIP_EMAIL_AUTH_TEST = not all(v in os.environ for v in _EMAIL_AUTH_VARS)
@@ -49,6 +49,23 @@ def _decryptRsaChallenge(encryptedChallengeB64, privKeyPath):
     with open(privKeyPath, 'r', encoding='utf-8') as f:
         privKeyPem = f.read()
     return base64.b64encode(CryptoInterface().decryptRSAOAEP(privKeyPem, challengeCiphertext)).decode()
+
+
+def _resolveProofFromChecksumData(checksumData, privKeyPath):
+    encryptedChallenges = checksumData.get('encrypted_challenges') or []
+
+    seenChallenges = set()
+    for challengeValue in encryptedChallenges:
+        if not challengeValue or challengeValue in seenChallenges:
+            continue
+
+        seenChallenges.add(challengeValue)
+        try:
+            return _decryptRsaChallenge(challengeValue, privKeyPath)
+        except Exception:
+            pass
+
+    raise AssertionError("encrypted_challenges not found or private key does not match any published challenge")
 
 
 class AuthTest(FastFileLinkTestBase):
@@ -107,15 +124,12 @@ class AuthTest(FastFileLinkTestBase):
         return self._updateCapturedOutput(outputCapture)
 
     def _resolveProofForDownload(self, shareLink, privKeyPath):
-        """Fetch /checksum JSON, decrypt encrypted_challenge with privKeyPath, return base64 proof."""
+        """Fetch /checksum JSON, decrypt encrypted_challenges with privKeyPath, return base64 proof."""
         checksumUrl = shareLink.rstrip('/') + '/checksum'
         response = requests.get(checksumUrl, timeout=15)
         response.raise_for_status()
         data = response.json()
-        encryptedChallengeB64 = data.get('encrypted_challenge')
-        self.assertIsNotNone(encryptedChallengeB64, "encrypted_challenge not found in /checksum response")
-        self.assertTrue(encryptedChallengeB64, "encrypted_challenge is empty in /checksum response")
-        return _decryptRsaChallenge(encryptedChallengeB64, privKeyPath)
+        return _resolveProofFromChecksumData(data, privKeyPath)
 
     def testPickupCodeCSPRNGGenerated(self):
         """No --pickup-code → JSON has a 6-digit numeric code in pickup_code."""
@@ -138,6 +152,41 @@ class AuthTest(FastFileLinkTestBase):
         pickupCode = shareInfo.get("pickup_code")
         self.assertEqual(pickupCode, customCode, f"Expected pickup_code '{customCode}', got: {pickupCode!r}")
         print(f"[Test] PASS: --pickup-code alone implicitly enables pickup auth: {pickupCode}")
+
+    def testRecipientPublicKeyImpliesRecipientAuth(self):
+        """--recipient-public-key alone (no --recipient-auth) ??implicitly enables pubkey auth."""
+        privKeyPath, pubKeyPath = self._generateKeypair('alice_pubkey_implied')
+        extraArgs = ["--recipient-public-key", pubKeyPath, "--timeout", "30"]
+        shareLink, shareInfo = self._startAndGetShareInfo(extraArgs)
+
+        self.assertTrue(shareInfo.get("pubkey_enabled"), "JSON should have pubkey_enabled=True")
+        proof = self._resolveProofForDownload(shareLink, privKeyPath)
+        downloadUrl = self._buildDownloadUrl(shareLink)
+        downloadedFilePath = self._getDownloadedFilePath("pubkey_implied_download.bin")
+        transferChecksum = self.downloadFileWithRequests(
+            downloadUrl, downloadedFilePath, headers=self._makeAuthHeaders(proof=proof))
+        self._verifyDownloadedFile(downloadedFilePath, transferChecksum=transferChecksum)
+        print("[Test] PASS: --recipient-public-key alone implicitly enables pubkey auth")
+
+    def testRecipientPublicKeyAndPickupCodeImplyCombinedRecipientAuth(self):
+        """--recipient-public-key + --pickup-code (no --recipient-auth) ??implicitly enables pubkey+pickup."""
+        privKeyPath, pubKeyPath = self._generateKeypair('alice_pubkey_pickup_implied')
+        pickupCode = "246810"
+        extraArgs = ["--recipient-public-key", pubKeyPath, "--pickup-code", pickupCode, "--timeout", "30"]
+        shareLink, shareInfo = self._startAndGetShareInfo(extraArgs)
+
+        self.assertTrue(shareInfo.get("pubkey_enabled"), "JSON should have pubkey_enabled=True")
+        self.assertEqual(shareInfo.get("pickup_code"), pickupCode, "JSON should contain pickup_code")
+        proof = self._resolveProofForDownload(shareLink, privKeyPath)
+        downloadUrl = self._buildDownloadUrl(shareLink)
+        downloadedFilePath = self._getDownloadedFilePath("pubkey_pickup_implied_download.bin")
+        transferChecksum = self.downloadFileWithRequests(
+            downloadUrl,
+            downloadedFilePath,
+            headers=self._makeAuthHeaders(proof=proof, code=pickupCode),
+        )
+        self._verifyDownloadedFile(downloadedFilePath, transferChecksum=transferChecksum)
+        print("[Test] PASS: --recipient-public-key with --pickup-code implicitly enables pubkey+pickup auth")
 
     def testWebRTCPickupCodeAllows(self):
         """WebRTC download with correct pickup code → file downloaded and integrity verified."""
@@ -229,6 +278,24 @@ class AuthTest(FastFileLinkTestBase):
             downloadUrl, downloadedFilePath, headers=self._makeAuthHeaders(proof=proof))
         self._verifyDownloadedFile(downloadedFilePath, transferChecksum=transferChecksum)
         print(f"[Test] PASS: Correct pubkey proof allowed download with intact file")
+
+    def testPubkeyAllowsAnyConfiguredRecipientKey(self):
+        """GET /download with a proof derived from any configured public key ??200."""
+        firstPrivKeyPath, firstPubKeyPath = self._generateKeypair('alice_multi_pubkey')
+        secondPrivKeyPath, secondPubKeyPath = self._generateKeypair('bob_multi_pubkey')
+        extraArgs = [
+            "--recipient-auth", "pubkey",
+            "--recipient-public-key", f"{firstPubKeyPath},{secondPubKeyPath}",
+            "--timeout", "30"
+        ]
+        shareLink, shareInfo = self._startAndGetShareInfo(extraArgs)
+        proof = self._resolveProofForDownload(shareLink, secondPrivKeyPath)
+        downloadUrl = self._buildDownloadUrl(shareLink)
+        downloadedFilePath = self._getDownloadedFilePath("pubkey_multi_download.bin")
+        transferChecksum = self.downloadFileWithRequests(
+            downloadUrl, downloadedFilePath, headers=self._makeAuthHeaders(proof=proof))
+        self._verifyDownloadedFile(downloadedFilePath, transferChecksum=transferChecksum)
+        print(f"[Test] PASS: Second configured pubkey recipient downloaded successfully")
 
     def testWebRTCPubkeyAllowsCorrectKey(self):
         """CLI download with --recipient-private-key → WebRTC resolves proof, file downloaded."""
@@ -381,19 +448,34 @@ class AuthTest(FastFileLinkTestBase):
         print(f"[Test] PASS: Cookie session supports multiple Range requests")
 
     def testCookieSessionClaimed(self):
-        """POST /auth twice with correct code → second call returns 401 (already claimed)."""
+        """POST /auth stays valid for the same session, while a new client is still rejected."""
         correctCode = "999000"
         extraArgs = ["--recipient-auth", "pickup", "--pickup-code", correctCode, "--timeout", "15"]
         shareLink, shareInfo = self._startAndGetShareInfo(extraArgs)
 
         authUrl = self._buildAuthUrl(shareLink)
-        r1 = requests.post(authUrl, headers=self._makeAuthHeaders(code=correctCode), timeout=10)
+        session = requests.Session()
+
+        r1 = session.post(authUrl, headers=self._makeAuthHeaders(code=correctCode), timeout=10)
         self.assertEqual(r1.status_code, 204, f"First /auth should succeed, got {r1.status_code}")
 
-        r2 = requests.post(authUrl, headers=self._makeAuthHeaders(code=correctCode), timeout=10)
-        self.assertEqual(r2.status_code, 401,
-                         f"Second /auth should fail (already claimed), got {r2.status_code}")
-        print(f"[Test] PASS: Second POST /auth returns 401 (already claimed)")
+        r2 = session.post(authUrl, headers=self._makeAuthHeaders(code=correctCode), timeout=10)
+        self.assertEqual(r2.status_code, 204,
+                         f"Second /auth in same session should remain valid, got {r2.status_code}")
+
+        r3 = requests.post(authUrl, headers=self._makeAuthHeaders(code=correctCode), timeout=10)
+        self.assertEqual(r3.status_code, 401,
+                         f"Fresh client should still fail after claim, got {r3.status_code}")
+
+        downloadUrl = self._buildDownloadUrl(shareLink)
+        r4 = session.get(downloadUrl, timeout=10)
+        self.assertEqual(r4.status_code, 200,
+                         f"Expected 200 for download after repeated same-session auth, got {r4.status_code}")
+
+        r5 = session.get(downloadUrl, timeout=10)
+        self.assertEqual(r5.status_code, 200,
+                         f"Expected 200 for repeat download in same session, got {r5.status_code}")
+        print(f"[Test] PASS: Same-session POST /auth remains reusable, new client is still blocked")
 
     def testCookiePubkeySession(self):
         """POST /auth with X-FFL-Proof → cookie → GET /download (cookie only) → 200."""
@@ -597,20 +679,20 @@ class AuthUploadTest(_UploadAuthMixin, FastFileLinkTestBase):
         super().__init__(methodName, fileSizeBytes=512 * 1024)
 
     def _resolveProofForUpload(self, shareLink, privKeyPath):
-        """Poll /checksum until encrypted_challenge is available, decrypt, return base64 proof."""
+        """Poll /checksum until encrypted_challenges is available, decrypt, return base64 proof."""
         checksumUrl = shareLink.split('?')[0].rstrip('/') + '/checksum'
         startTime = time.time()
         while time.time() - startTime < 90:
             try:
                 response = requests.get(checksumUrl, timeout=5)
                 if response.status_code == 200:
-                    encryptedChallengeB64 = response.json().get('encrypted_challenge')
-                    if encryptedChallengeB64:
-                        return _decryptRsaChallenge(encryptedChallengeB64, privKeyPath)
+                    data = response.json()
+                    if data.get('encrypted_challenges'):
+                        return _resolveProofFromChecksumData(data, privKeyPath)
             except Exception:
                 pass
             time.sleep(1)
-        raise AssertionError(f"encrypted_challenge not available at {checksumUrl} within 90s")
+        raise AssertionError(f"encrypted_challenges not available at {checksumUrl} within 90s")
 
     def _startUploadWithPubkeyAndWait(self, keypairName):
         """Generate keypair, upload with pubkey auth, wait for Caddy to enforce it.
@@ -699,6 +781,23 @@ class AuthUploadTest(_UploadAuthMixin, FastFileLinkTestBase):
         self._verifyDownloadedFile(downloadedFilePath, transferChecksum=transferChecksum)
         print(f"[Test] PASS: Upload pubkey download with correct proof succeeds with intact file")
 
+    def testUploadPubkeyAllowsAnyConfiguredRecipientKey(self):
+        """Caddy /download accepts a proof from any configured recipient public key."""
+        firstPrivKeyPath, firstPubKeyPath = self._generateKeypair('upload_pubkey_multi_alice')
+        secondPrivKeyPath, secondPubKeyPath = self._generateKeypair('upload_pubkey_multi_bob')
+        shareLink, shareInfo = self._startUploadAndGetInfo([
+            '--recipient-auth', 'pubkey',
+            '--recipient-public-key', f'{firstPubKeyPath},{secondPubKeyPath}',
+        ])
+        downloadUrl = self._buildDownloadUrl(shareLink)
+        self._waitForAuthActive(downloadUrl)
+        proof = self._resolveProofForUpload(shareLink, secondPrivKeyPath)
+        downloadedFilePath = self._getDownloadedFilePath("upload_pubkey_multi_download.bin")
+        transferChecksum = self.downloadFileWithRequests(
+            downloadUrl, downloadedFilePath, headers={'X-FFL-Proof': proof})
+        self._verifyDownloadedFile(downloadedFilePath, transferChecksum=transferChecksum)
+        print(f"[Test] PASS: Upload pubkey download succeeded with second configured key")
+
     def testUploadPubkeyBlocksWrongProof(self):
         """Caddy /download with wrong X-FFL-Proof → 401 Unauthorized."""
         privKeyPath, shareLink, downloadUrl = self._startUploadWithPubkeyAndWait('upload_pubkey_wrong')
@@ -751,46 +850,83 @@ class AuthUploadTest(_UploadAuthMixin, FastFileLinkTestBase):
         self.assertIn('EMAIL_REQUIRED = true', htmlContent,
                       'EMAIL_REQUIRED should be true in FileDownloading.html — '
                       'check that recipientEmail is passed to end() in PushUpload.execute()')
-        self.assertIn(f'RECIPIENT_EMAIL = "{recipientEmail}"', htmlContent,
-                      f'RECIPIENT_EMAIL should be "{recipientEmail}" in FileDownloading.html')
-        print(f'[Test] PASS: EMAIL_REQUIRED=true and RECIPIENT_EMAIL rendered correctly in HTML')
+        self.assertIn(f'RECIPIENT_EMAILS = ["{recipientEmail}"]', htmlContent,
+                      f'RECIPIENT_EMAILS should contain "{recipientEmail}" in FileDownloading.html')
+        print(f'[Test] PASS: EMAIL_REQUIRED=true and RECIPIENT_EMAILS rendered correctly in HTML')
 
 
 class _GateBrowserMixin:
     """Mixin for auth gate browser tests — provides _openAndWaitForGate."""
 
     def _openAndWaitForGate(self, driver, url, gateId='pickupGate'):
-        """Navigate to url, wait for page ready, then wait for gateId to be visible."""
+        """Navigate to url, wait for page ready, then wait for gateId to be CSS-visible.
+
+        Uses a JS getComputedStyle check rather than Selenium's is_displayed() because
+        headless Chrome on Linux can report elements as not displayed even when the inline
+        style explicitly sets display:block (e.g. when a sibling contains a file input).
+        """
         driver.get(url)
         WebDriverWait(driver, 10).until(
             lambda d: d.execute_script("return document.readyState") == "complete"
         )
-        WebDriverWait(driver, 15).until(
-            EC.visibility_of_element_located((By.ID, gateId))
-        )
-
+        try:
+            WebDriverWait(driver, 15).until(
+                lambda d: d.execute_script(
+                    "const el = document.getElementById(arguments[0]);"
+                    "if (!el) return false;"
+                    "const s = window.getComputedStyle(el);"
+                    "return s.display !== 'none' && s.visibility !== 'hidden'"
+                    "       && parseFloat(s.opacity || '1') > 0;",
+                    gateId
+                )
+            )
+        except Exception:
+            try:
+                for entry in driver.get_log('browser'):
+                    print(f"[Browser] {entry['level']}: {entry['message']}")
+            except Exception:
+                pass
+            raise
 
 class _EmailBrowserMixin:
     """Mixin for email OTP gate browser tests."""
 
     OTP_ERROR_ELEMENT_ID = 'unlock-error-message'
 
-    def _openEmailGateAndRequestOTP(self, driver, shareLink):
-        """Open email gate, assert display state, click Send Code, wait for OTP input section."""
+    def _openEmailGate(self, driver, shareLink, recipientEmail=None):
+        """Open email gate, assert display state, and set email input when multi-recipient UI is shown."""
         self._openAndWaitForGate(driver, shareLink, gateId='emailGate')
-        emailDisplay = driver.find_element(By.ID, 'email-address-display')
-        self.assertEqual(emailDisplay.text, self.TEST_EMAIL,
-                         f'Email display mismatch: {emailDisplay.text!r}')
         downloadBlock = driver.find_element(By.ID, 'downloadBlock')
         self.assertEqual(downloadBlock.get_attribute('style'), 'display: none;',
                          'downloadBlock should be hidden while email gate is shown')
+        if recipientEmail is None:
+            emailDisplay = WebDriverWait(driver, 10).until(
+                lambda d: d.find_element(By.ID, 'email-address-display') if d.find_element(By.ID, 'email-address-display').text else None
+            )
+            self.assertEqual(emailDisplay.text, self.TEST_EMAIL,
+                             f'Email display mismatch: {emailDisplay.text!r}')
+            return
+
+        emailInput = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.ID, 'email-address-input'))
+        )
+        emailInput.clear()
+        emailInput.send_keys(recipientEmail)
+
+    def _requestEmailOTP(self, driver, gateWaitTimeout=15):
+        """Click Send Code and wait for OTP input section to appear."""
         sendBtn = WebDriverWait(driver, 10).until(
             EC.element_to_be_clickable((By.ID, 'email-send-btn'))
         )
         sendBtn.click()
-        WebDriverWait(driver, 15).until(
+        WebDriverWait(driver, gateWaitTimeout).until(
             EC.visibility_of_element_located((By.ID, 'email-otp-section'))
         )
+
+    def _openEmailGateAndRequestOTP(self, driver, shareLink):
+        """Open email gate, assert display state, click Send Code, wait for OTP input section."""
+        self._openEmailGate(driver, shareLink)
+        self._requestEmailOTP(driver)
 
     def _submitOTPAndVerifyAccepted(self, driver, otp, gateWaitTimeout=15):
         """Enter otp, submit, assert gate disappears without error."""
@@ -830,19 +966,24 @@ class AuthUploadBrowserTest(_UploadAuthMixin, _GateBrowserMixin, BrowserTestBase
         # 512 KB — fast upload and browser download
         super().__init__(methodName, fileSizeBytes=512 * 1024)
 
-    def _startUploadPickupBrowserTest(self, code):
-        """Upload file with pickup auth, wait for Caddy to enforce it, return (shareLink, driver)."""
+    def _startUploadPickupBrowserTest(self, code, browser='chrome'):
+        """Upload file with pickup auth, wait for Caddy to enforce it, return (shareLink, driver, downloadDir)."""
         shareLink, shareInfo = self._startUploadAndGetInfo(
             ["--recipient-auth", "pickup", "--pickup-code", code]
         )
         self._waitForAuthActive(self._buildDownloadUrl(shareLink))
-        driver = self._setupChromeDriver(self.chromeDownloadDir)
+        if browser == 'firefox':
+            downloadDir = self.firefoxDownloadDir
+            driver = self._setupFirefoxDriver(downloadDir)
+        else:
+            downloadDir = self.chromeDownloadDir
+            driver = self._setupChromeDriver(downloadDir)
         self.activeDrivers.append(driver)
-        return shareLink, driver
+        return shareLink, driver, downloadDir
 
     def testBrowserUploadPickupCodeRequired(self):
         """Upload: browser shows pickup gate, download does not auto-start."""
-        shareLink, driver = self._startUploadPickupBrowserTest("482952")
+        shareLink, driver, downloadDir = self._startUploadPickupBrowserTest("482952")
         try:
             print(f"[Test] Navigating to Caddy download page: {shareLink}")
             self._openAndWaitForGate(driver, shareLink)
@@ -858,11 +999,14 @@ class AuthUploadBrowserTest(_UploadAuthMixin, _GateBrowserMixin, BrowserTestBase
 
     def testBrowserUploadPickupCodeWrongCodeRejected(self):
         """Upload: wrong pickup code → error message shown, gate remains."""
-        shareLink, driver = self._startUploadPickupBrowserTest("617294")
+        shareLink, driver, downloadDir = self._startUploadPickupBrowserTest("617294")
         try:
             self._openAndWaitForGate(driver, shareLink)
 
-            driver.find_element(By.ID, 'pickup-code-input').send_keys("000000")
+            codeInput = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.ID, 'pickup-code-input'))
+            )
+            codeInput.send_keys("000000")
             driver.find_element(By.ID, 'unlock-btn').click()
             print(f"[Test] Submitted wrong pickup code: 000000")
 
@@ -882,7 +1026,7 @@ class AuthUploadBrowserTest(_UploadAuthMixin, _GateBrowserMixin, BrowserTestBase
     def testBrowserUploadPickupCodeAllows(self):
         """Upload: correct pickup code → download completes, file integrity verified."""
         code = "617295"
-        shareLink, driver = self._startUploadPickupBrowserTest(code)
+        shareLink, driver, downloadDir = self._startUploadPickupBrowserTest(code, browser='firefox')
         try:
             print(f"[Test] Navigating to Caddy download page: {shareLink}")
             self._openAndWaitForGate(driver, shareLink)
@@ -897,8 +1041,7 @@ class AuthUploadBrowserTest(_UploadAuthMixin, _GateBrowserMixin, BrowserTestBase
                 EC.invisibility_of_element_located((By.ID, 'pickupGate'))
             )
 
-            # Wait for download to complete
-            downloadedFile = self._waitForDownload(self.chromeDownloadDir, 'testfile.bin', driver=driver)
+            downloadedFile = self._waitForDownload(downloadDir, 'testfile.bin', driver=driver)
             self._verifyDownloadedFile(downloadedFile)
             print(f"[Test] PASS: Correct pickup code in browser allowed full upload download")
         finally:
@@ -982,6 +1125,14 @@ class AuthBrowserTest(_GateBrowserMixin, BrowserTestBase):
         """
         correctCode = "248135"
         privKeyPath, pubKeyPath = self._generateKeypair('alice_native')
+
+        # Set up Chrome before starting the FFL process so the driver's cold-start time
+        # (undetected_chromedriver can be slow on first run) does not consume the server's
+        # absolute 60-second timeout, which would cause a 502 when Chrome finally navigates.
+        driver = self._setupChromeDriver(self.chromeDownloadDir)
+        if 'JENKINS_HOME' in os.environ:
+            self._injectPerformanceTimelineMonitor(driver)
+
         shareLink = self._startFastFileLink(
             p2p=True,
             extraArgs=[
@@ -993,15 +1144,18 @@ class AuthBrowserTest(_GateBrowserMixin, BrowserTestBase):
             extraEnvVars={"DISABLE_WEBRTC": "True"}
         )
 
-        driver = self._setupChromeDriver(self.chromeDownloadDir)
-        self.activeDrivers.append(driver)
-
         try:
             pageUrl = shareLink + '?native=true'
             print(f"[Test] Navigating to: {pageUrl}")
             self._openAndWaitForGate(driver, pageUrl)
             WebDriverWait(driver, 10).until(
-                EC.visibility_of_element_located((By.ID, 'pubkeyGate'))
+                lambda d: d.execute_script(
+                    "const el = document.getElementById('pubkeyGate');"
+                    "if (!el) return false;"
+                    "const s = window.getComputedStyle(el);"
+                    "return s.display !== 'none' && s.visibility !== 'hidden'"
+                    "       && parseFloat(s.opacity || '1') > 0;"
+                )
             )
             print(f"[Test] Both pickup and pubkey gates visible")
 
@@ -1033,11 +1187,22 @@ class AuthBrowserTest(_GateBrowserMixin, BrowserTestBase):
 
             print(f"[Test] PASS: pubkey+pickup with ?native=true completed download via native link")
         finally:
+            # Always print the FFL process log so we can diagnose crashes
+            if self._procLogFile and self.procLogPath:
+                try:
+                    self._procLogFile.flush()
+                    with open(self.procLogPath, 'r', encoding='utf-8', errors='replace') as f:
+                        procLog = f.read()
+                    print(f"[Test] FFL process log:\n{procLog}")
+                except Exception as e:
+                    print(f"[Test] Could not read process log: {e}")
+            if self.coreProcess:
+                print(f"[Test] FFL process exit code: {self.coreProcess.poll()}")
             self._terminateProcess()
 
 
 @unittest.skipIf(SKIP_EMAIL_AUTH_TEST, 'FFL_TEST_EMAIL, FFL_TEST_IMAP_HOST, FFL_TEST_IMAP_PASSWORD env vars not set')
-class EmailAuthBrowserTest(_EmailBrowserMixin, _GateBrowserMixin, BrowserTestBase):
+class EmailAuthBrowserTest(IMAPTestMixin, _EmailBrowserMixin, _GateBrowserMixin, BrowserTestBase):
     """Browser tests for --recipient-auth email gate (P2P).
 
     Shares a file with email OTP auth, navigates to the page in a browser,
@@ -1058,58 +1223,18 @@ class EmailAuthBrowserTest(_EmailBrowserMixin, _GateBrowserMixin, BrowserTestBas
     def setUp(self):
         super().setUp()
         self.TEST_EMAIL = os.environ['FFL_TEST_EMAIL']
+        self.IMAP_EMAIL = self.TEST_EMAIL
         self.IMAP_HOST = os.environ['FFL_TEST_IMAP_HOST']
         self.IMAP_PORT = int(os.environ.get('FFL_TEST_IMAP_PORT', '993'))
         self.IMAP_PASSWORD = os.environ['FFL_TEST_IMAP_PASSWORD']
 
-    def _startEmailShare(self, timeout='120'):
+    def _startEmailShare(self, timeout='120', recipientEmail=None):
         """Start P2P share with email auth, return shareLink."""
         return self._startFastFileLink(
             p2p=True,
-            extraArgs=['--recipient-auth', 'email', '--recipient-email', self.TEST_EMAIL,
+            extraArgs=['--recipient-auth', 'email', '--recipient-email', recipientEmail or self.TEST_EMAIL,
                        '--timeout', timeout],
         )
-
-    def _deleteTestEmails(self):
-        """Delete all existing FastFileLink emails from the IMAP inbox to avoid stale OTPs."""
-        try:
-            with imaplib.IMAP4_SSL(self.IMAP_HOST, self.IMAP_PORT) as imap:
-                imap.login(self.TEST_EMAIL, self.IMAP_PASSWORD)
-                imap.select('INBOX')
-                _, msgIds = imap.search(None, 'SUBJECT', 'FastFileLink')
-                for msgId in msgIds[0].split():
-                    imap.store(msgId, '+FLAGS', '\\Deleted')
-                imap.expunge()
-        except Exception as e:
-            print(f'[Test] Warning: could not clean IMAP inbox: {e}')
-
-    def _fetchOTPFromEmail(self, timeout=90):
-        """Poll IMAP until a FastFileLink OTP email arrives; return the 6-digit code."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            try:
-                with imaplib.IMAP4_SSL(self.IMAP_HOST, self.IMAP_PORT) as imap:
-                    imap.login(self.TEST_EMAIL, self.IMAP_PASSWORD)
-                    imap.select('INBOX')
-                    _, msgIds = imap.search(None, 'UNSEEN', 'SUBJECT', 'FastFileLink')
-                    for msgId in reversed(msgIds[0].split()):
-                        _, data = imap.fetch(msgId, '(RFC822)')
-                        msg = email_lib.message_from_bytes(data[0][1])
-                        body = ''
-                        if msg.is_multipart():
-                            for part in msg.walk():
-                                if part.get_content_type() == 'text/plain':
-                                    body = part.get_payload(decode=True).decode(errors='replace')
-                                    break
-                        else:
-                            body = msg.get_payload(decode=True).decode(errors='replace')
-                        match = re.search(r'\b(\d{6})\b', body)
-                        if match:
-                            return match.group(1)
-            except Exception as e:
-                print(f'[Test] IMAP poll error: {e}')
-            time.sleep(5)
-        raise TimeoutError(f'OTP email not received within {timeout}s')
 
     def testBrowserEmailGateShownAndDownloadWorks(self):
         """Email auth: gate shown → Send Code → IMAP fetch OTP → enter → download completes."""
@@ -1146,6 +1271,37 @@ class EmailAuthBrowserTest(_EmailBrowserMixin, _GateBrowserMixin, BrowserTestBas
         finally:
             self._terminateProcess()
 
+    def testBrowserEmailGateRejectsUnlistedAddressThenAllowsListedAddress(self):
+        """Email auth with multiple recipients: reject unlisted address, then allow a listed address."""
+        self._deleteTestEmails()
+        shareLink = self._startEmailShare(
+            timeout='120',
+            recipientEmail=f'{self.TEST_EMAIL},someoneelse@example.com'
+        )
+        driver = self._setupChromeDriver(self.chromeDownloadDir)
+        self.activeDrivers.append(driver)
+        try:
+            self._openEmailGate(driver, shareLink, recipientEmail='intruder@example.com')
+            driver.find_element(By.ID, 'email-send-btn').click()
+            errorEl = WebDriverWait(driver, 10).until(
+                EC.visibility_of_element_located((By.ID, 'email-error-message'))
+            )
+            self.assertIn('not allowed', errorEl.text.lower())
+            self.assertFalse(
+                driver.find_element(By.ID, 'email-otp-section').is_displayed(),
+                'OTP section should stay hidden for an unlisted email address'
+            )
+
+            self._openEmailGate(driver, shareLink, recipientEmail=self.TEST_EMAIL)
+            self._requestEmailOTP(driver)
+            otp = self._fetchOTPFromEmail(timeout=90)
+            self._submitOTPAndVerifyAccepted(driver, otp)
+            downloadedFile = self._waitForDownload(self.chromeDownloadDir, 'testfile.bin', driver=driver)
+            self._verifyDownloadedFile(downloadedFile)
+            print('[Test] PASS: Multi-email allowlist rejected unlisted address and allowed listed address')
+        finally:
+            self._terminateProcess()
+
 
 @unittest.skipIf(SKIP_EMAIL_AUTH_TEST, 'FFL_TEST_EMAIL, FFL_TEST_IMAP_HOST, FFL_TEST_IMAP_PASSWORD env vars not set')
 class EmailAuthUploadBrowserTest(_UploadAuthMixin, EmailAuthBrowserTest):
@@ -1156,18 +1312,19 @@ class EmailAuthUploadBrowserTest(_UploadAuthMixin, EmailAuthBrowserTest):
     def __init__(self, methodName='runTest'):
         super().__init__(methodName)
 
-    def _startUploadEmailShare(self):
+    def _startUploadEmailShare(self, recipientEmail=None):
         """Upload file with email auth, return (shareLink, shareInfo)."""
         return self._startUploadAndGetInfo([
             '--recipient-auth', 'email',
-            '--recipient-email', self.TEST_EMAIL,
+            '--recipient-email', recipientEmail or self.TEST_EMAIL,
         ])
 
     def testBrowserUploadEmailGateShownAndDownloadWorks(self):
         """Upload email auth: email gate shown, correct OTP → download completes."""
         self._deleteTestEmails()
         shareLink, shareInfo = self._startUploadEmailShare()
-        driver = self._setupChromeDriver(self.chromeDownloadDir)
+        downloadDir = self.firefoxDownloadDir
+        driver = self._setupFirefoxDriver(downloadDir)
         self.activeDrivers.append(driver)
         try:
             print(f'[Test] Navigating to Caddy download page: {shareLink}')
@@ -1177,14 +1334,14 @@ class EmailAuthUploadBrowserTest(_UploadAuthMixin, EmailAuthBrowserTest):
             print(f'[Test] Received OTP via IMAP: {otp}')
             print('[Test] Submitted OTP, waiting for gate to resolve')
             self._submitOTPAndVerifyAccepted(driver, otp, gateWaitTimeout=20)
-            downloadedFile = self._waitForDownload(self.chromeDownloadDir, 'testfile.bin', driver=driver)
+            downloadedFile = self._waitForDownload(downloadDir, 'testfile.bin', driver=driver)
             self._verifyDownloadedFile(downloadedFile)
             print('[Test] PASS: Upload email OTP gate allowed full download, file integrity verified')
         finally:
             self._terminateProcess()
 
-    def testBrowserUploadEmailGateWrongOTPRejected(self):
-        """Upload email auth: wrong OTP → error shown, gate remains."""
+    def testBrowserEmailGateWrongOTPRejected(self):
+        """Upload email auth: wrong OTP → error message shown, gate remains."""
         self._deleteTestEmails()
         shareLink, shareInfo = self._startUploadEmailShare()
         driver = self._setupChromeDriver(self.chromeDownloadDir)
@@ -1195,5 +1352,35 @@ class EmailAuthUploadBrowserTest(_UploadAuthMixin, EmailAuthBrowserTest):
             print('[Test] Submitted wrong OTP: 000000')
             self._submitWrongOTPAndVerifyRejected(driver, errorWaitTimeout=15)
             print('[Test] PASS: Wrong OTP shows error, gate remains visible')
+        finally:
+            self._terminateProcess()
+
+    def testBrowserUploadEmailGateRejectsUnlistedAddressThenAllowsListedAddress(self):
+        """Upload email auth with multiple recipients: reject unlisted address, then allow a listed address."""
+        self._deleteTestEmails()
+        shareLink, shareInfo = self._startUploadEmailShare(
+            recipientEmail=f'{self.TEST_EMAIL},someoneelse@example.com'
+        )
+        driver = self._setupChromeDriver(self.chromeDownloadDir)
+        self.activeDrivers.append(driver)
+        try:
+            self._openEmailGate(driver, shareLink, recipientEmail='intruder@example.com')
+            driver.find_element(By.ID, 'email-send-btn').click()
+            errorEl = WebDriverWait(driver, 10).until(
+                EC.visibility_of_element_located((By.ID, 'email-error-message'))
+            )
+            self.assertIn('not allowed', errorEl.text.lower())
+            self.assertFalse(
+                driver.find_element(By.ID, 'email-otp-section').is_displayed(),
+                'OTP section should stay hidden for an unlisted email address'
+            )
+
+            self._openEmailGate(driver, shareLink, recipientEmail=self.TEST_EMAIL)
+            self._requestEmailOTP(driver)
+            otp = self._fetchOTPFromEmail(timeout=90)
+            self._submitOTPAndVerifyAccepted(driver, otp, gateWaitTimeout=20)
+            downloadedFile = self._waitForDownload(self.chromeDownloadDir, 'testfile.bin', driver=driver)
+            self._verifyDownloadedFile(downloadedFile)
+            print('[Test] PASS: Upload multi-email allowlist rejected unlisted address and allowed listed address')
         finally:
             self._terminateProcess()

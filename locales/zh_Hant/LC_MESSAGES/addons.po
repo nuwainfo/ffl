@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-03-09 15:51+0800\n"
+"POT-Creation-Date: 2026-03-16 14:32+0800\n"
 "PO-Revision-Date: 2025-12-21 14:22+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -153,6 +153,15 @@ msgid ""
 " with 'cool' as UID)"
 msgstr "使用自訂別名作為分享連結的 UID（例如：--alias cool 會建立以 'cool' 為 UID 的連結）"
 
+msgid ""
+"Send email receipt notification when download completes. Omit value to "
+"use your account email (requires non-free account). Accepts one or more "
+"addresses separated by commas."
+msgstr ""
+
+msgid "Error: --receipt without email requires a registered (non-free) account"
+msgstr ""
+
 msgid "GUI.py requires Upload addon (addons/Upload.py) to function properly"
 msgstr "GUI.py 需要 Upload 附加元件（addons/Upload.py）才能正常運作"
 
@@ -204,15 +213,69 @@ msgstr "留空取件碼欄位，讓 快檔連結 自動產生。"
 msgid "Pickup code:"
 msgstr "取件碼："
 
-msgid "Recipient email:"
+msgid "Recipient email(s):"
 msgstr "收件人 Email 信箱："
 
+msgid "Email address"
+msgstr "Email 信箱地址"
+
+msgid "Add"
+msgstr "新增"
+
+msgid "Edit"
+msgstr "編輯"
+
+msgid "Remove"
+msgstr "移除"
+
+msgid "Clear"
+msgstr "清除"
+
 #, python-brace-format
-msgid "Recipient key file ({ext}):"
+msgid "Recipient key file(s) ({ext}):"
 msgstr "收件人金鑰檔案（{ext}）："
 
-msgid "Browse"
-msgstr "瀏覽"
+msgid "Public key file"
+msgstr "公鑰檔案"
+
+msgid "Add Files"
+msgstr "新增檔案"
+
+msgid "Sender Notifications"
+msgstr "寄件人通知"
+
+msgid "Request receipt email notification"
+msgstr "請求回條 Email 通知"
+
+msgid "Registered users only."
+msgstr "僅限已登錄使用者。"
+
+msgid "Receipt email(s), separated by commas:"
+msgstr "回條 Email 信箱（可多筆，以逗號分隔）："
+
+msgid "Ask receiver to confirm receipt"
+msgstr "要求接收者確認收件"
+
+msgid "Leave the message blank to use the default confirmation message."
+msgstr "留空訊息欄位以使用預設確認訊息。"
+
+msgid "Message to receiver:"
+msgstr "給接收者的訊息："
+
+msgid "Receipt email"
+msgstr "回條 Email"
+
+msgid "Receipt email: account email"
+msgstr "回條 Email：帳號 Email"
+
+msgid "Receipt confirmation: custom message"
+msgstr "回條確認：自訂訊息"
+
+msgid "Receipt confirmation"
+msgstr "回條確認"
+
+msgid "Please enter valid receipt email address(es)."
+msgstr "請輸入有效的回條 Email 信箱地址。"
 
 msgid "OK"
 msgstr "確定"
@@ -237,18 +300,22 @@ msgstr "驗證錯誤"
 msgid "Recipient email cannot be empty."
 msgstr "收件人 Email 信箱不能為空。"
 
-msgid "Please enter a valid email address."
+msgid "Please enter valid email address(es)."
 msgstr "請輸入有效的 Email 信箱地址。"
 
 msgid "Recipient key file cannot be empty."
 msgstr "收件人金鑰檔案不能為空。"
 
-msgid "Recipient key file was not found."
-msgstr "找不到收件人金鑰檔案。"
+msgid "One or more recipient key files were not found."
+msgstr "找不到一個或多個收件人金鑰檔案。"
 
 #, python-brace-format
 msgid "Edit: {summary}"
 msgstr "編輯：{summary}"
+
+#, python-brace-format
+msgid " (+{count} more)"
+msgstr "（+{count} 更多）"
 
 msgid "Verify recipient for this share"
 msgstr "驗證本次分享的收件人"
@@ -938,6 +1005,65 @@ msgid ""
 "UPLOAD_METHOD environment variable detected, using {mode} method to "
 "upload."
 msgstr "偵測到 UPLOAD_METHOD 環境變數，使用 {mode} 方法上傳。"
+
+msgid "💡 No account? Register at https://fastfilelink.com/#pricing"
+msgstr "💡 沒有帳號？請至 https://fastfilelink.com/#pricing 註冊"
+
+msgid "Please input your email:"
+msgstr "請輸入您的電子郵件："
+
+msgid "Email: "
+msgstr "電子郵件："
+
+msgid "Email cannot be empty"
+msgstr "電子郵件不能為空"
+
+msgid "OTP page should open automatically in browser"
+msgstr "OTP 頁面應已在瀏覽器中自動開啟"
+
+msgid "Please input OTP in the web page..."
+msgstr "請在網頁中輸入 OTP 驗證碼..."
+
+msgid "[CLI-AUTH] Please check your email for OTP code"
+msgstr "[CLI-AUTH] 請查看您的電子郵件以獲取 OTP 驗證碼"
+
+#, python-brace-format
+msgid "Please manually visit: {browserUrl}"
+msgstr "請手動前往：{browserUrl}"
+
+msgid "Enter OTP code: "
+msgstr "輸入 OTP 驗證碼："
+
+msgid "[ERROR] OTP code cannot be empty. Please try again."
+msgstr "[錯誤] OTP 驗證碼不能為空，請再試一次。"
+
+msgid "[OK] OTP verification successful"
+msgstr "[成功] OTP 驗證成功"
+
+#, python-brace-format
+msgid "[ERROR] {message}"
+msgstr "[錯誤] {message}"
+
+msgid "Invalid OTP code"
+msgstr "無效的 OTP 驗證碼"
+
+msgid "   Please try again..."
+msgstr "   請再試一次..."
+
+#~ msgid "Browse"
+#~ msgstr "瀏覽"
+
+#~ msgid "Recipient email:"
+#~ msgstr "收件人 Email 信箱："
+
+#~ msgid "Recipient key file ({ext}):"
+#~ msgstr "收件人金鑰檔案（{ext}）："
+
+#~ msgid "Please enter a valid email address."
+#~ msgstr "請輸入有效的 Email 信箱地址。"
+
+#~ msgid "Recipient key file was not found."
+#~ msgstr "找不到收件人金鑰檔案。"
 
 #~ msgid ""
 #~ "Error: --alias with --upload is under"

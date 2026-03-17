@@ -43,6 +43,13 @@
     "complete": {
         "title": "✅ Download complete!"
     },
+    "receiptConfirm": {
+        "sendButton": "Send Confirmation",
+        "skipButton": "Skip",
+        "thanks": "Thank you! Your confirmation has been sent.",
+        "sending": "Sending…",
+        "placeholder": "Confirmed, thanks!"
+    },
     "closeTab": "Close this tab",
     "e2ee": {
         "title": "🔒 This file is encrypted",
@@ -105,7 +112,9 @@
         "sendFirst": "Please request a verification code first.",
         "sendFailed": "Failed to send code. Please try again.",
         "sendError": "Network error. Please try again.",
-        "sending": "Sending…"
+        "sending": "Sending…",
+        "enterAddress": "Please enter your email address first.",
+        "notAllowed": "This email address is not allowed to download this file."
     },
     "auth": {
         "failed": "Authentication failed. Please try again.",

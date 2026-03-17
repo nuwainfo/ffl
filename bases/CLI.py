@@ -31,7 +31,7 @@ from bases.Settings import DEFAULT_AUTH_USER_NAME, DEFAULT_UPLOAD_DURATION, Sett
 from bases.Utils import flushPrint, checkVersionCompatibility, getEnv, parseProxyString, setupProxyEnvironment
 from bases.Hook import HookClient, HookFileWriter, forwardEventToHook
 from bases.Upgrade import performUpgrade
-from bases.Auth import PICKUP_CODE_LENGTH, PUBKEY_PUBLIC_EXT, PUBKEY_PRIVATE_EXT
+from bases.Auth import PICKUP_CODE_LENGTH, PUBKEY_PUBLIC_EXT, PUBKEY_PRIVATE_EXT, RecipientAuth
 from bases.crypto import CryptoInterface
 from bases.I18n import _
 
@@ -246,16 +246,16 @@ def _addRecipientAuthArguments(parser):
     parser.add_argument(
         "--recipient-public-key",
         help=_(
-            "Path to recipient's RSA public key file ({ext}). "
-            "Required with --recipient-auth pubkey or pubkey+pickup"
+            "Path to recipient RSA public key file ({ext}), or a comma-separated list of paths "
+            "(implies --recipient-auth pubkey; with --pickup-code, implies pubkey+pickup)"
         ).format(ext=PUBKEY_PUBLIC_EXT),
         metavar="FILE",
         dest="recipientPublicKey"
     )
     parser.add_argument(
         "--recipient-email",
-        help=_("Recipient email address for OTP verification (implies --recipient-auth email)"),
-        metavar="EMAIL",
+        help=_("Recipient email address, or a comma-separated list of email addresses, for OTP verification (implies --recipient-auth email)"),
+        metavar="EMAILS",
         dest="recipientEmail"
     )
     parser.add_argument(
@@ -992,6 +992,8 @@ def validateShareArguments(args):
         ).format(defaultUser=DEFAULT_AUTH_USER_NAME))
         return 1
 
+    originalRecipientAuth = args.recipientAuth
+
     if args.pickupCode:
         if not args.pickupCode.isdigit() or len(args.pickupCode) != PICKUP_CODE_LENGTH:
             flushPrint(_('Error: --pickup-code must be exactly {n} digits').format(n=PICKUP_CODE_LENGTH))
@@ -1001,12 +1003,19 @@ def validateShareArguments(args):
         if args.recipientAuth is None:
             args.recipientAuth = 'pickup'
 
+    recipientPublicKey = getattr(args, 'recipientPublicKey', None)
+
+    # Auto-infer --recipient-auth pubkey/pubkey+pickup when --recipient-public-key is provided
+    if recipientPublicKey and originalRecipientAuth is None:
+        args.recipientAuth = 'pubkey+pickup' if args.pickupCode else 'pubkey'
+
     # Auto-infer --recipient-auth email when --recipient-email is provided
     if args.recipientEmail and args.recipientAuth != 'email':
         args.recipientAuth = 'email'
 
     # Validate email auth options
-    if args.recipientAuth == 'email' and not args.recipientEmail:
+    recipientEmails = RecipientAuth.parseRecipientValues(args.recipientEmail, normalizer=RecipientAuth.normalizeEmail)
+    if args.recipientAuth == 'email' and not recipientEmails:
         flushPrint(_('Error: --recipient-email is required with --recipient-auth email'))
         flushPrint(_('Use: --recipient-auth email --recipient-email user@example.com'))
         return 1
@@ -1018,7 +1027,7 @@ def validateShareArguments(args):
         
     # Validate pubkey auth options
     pubkeyMode = args.recipientAuth in ('pubkey', 'pubkey+pickup')
-    recipientPublicKey = getattr(args, 'recipientPublicKey', None)
+    recipientPublicKeys = RecipientAuth.parseRecipientValues(recipientPublicKey)
     if pubkeyMode and not recipientPublicKey:
         flushPrint(_('Error: --recipient-public-key is required with --recipient-auth {mode}').format(
             mode=args.recipientAuth))
@@ -1029,10 +1038,11 @@ def validateShareArguments(args):
     if recipientPublicKey and not pubkeyMode:
         flushPrint(_('Error: --recipient-public-key requires --recipient-auth pubkey or pubkey+pickup'))
         return 1
-        
-    if recipientPublicKey and not os.path.exists(recipientPublicKey):
-        flushPrint(_('Error: public key file not found: {path}').format(path=recipientPublicKey))
-        return 1
+
+    for publicKeyPath in recipientPublicKeys:
+        if not os.path.exists(publicKeyPath):
+            flushPrint(_('Error: public key file not found: {path}').format(path=publicKeyPath))
+            return 1
 
     # Validate --vfs argument
     if args.vfs:

@@ -43,6 +43,13 @@
     "complete": {
         "title": "✅ 下载完成！"
     },
+    "receiptConfirm": {
+        "sendButton": "发送确认",
+        "skipButton": "跳过",
+        "thanks": "感谢！您的确认已发送。",
+        "sending": "发送中…",
+        "placeholder": "已确认，谢谢！"
+    },
     "closeTab": "关闭此分页",
     "e2ee": {
         "title": "🔒 此档案已加密",
@@ -105,7 +112,9 @@
         "sendFirst": "请先请求验证码。",
         "sendFailed": "发送失败，请重试。",
         "sendError": "网络错误，请重试。",
-        "sending": "发送中…"
+        "sending": "发送中…",
+        "enterAddress": "请先输入您的电子邮件地址。",
+        "notAllowed": "此电子邮件地址无权下载此文件。"
     },
     "auth": {
         "failed": "验证失败，请重试。",

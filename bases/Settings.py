@@ -47,12 +47,17 @@ INVITE_URL = 'https://fastfilelink.com/invite'
 # Default copyright for open source users
 COPYRIGHT = 'Copyright (c) 2025 FastFileLink Contributors. Licensed under Apache-2.0.'
 
-# Default footer message HTML for open source users (entire HTML block)
-FOOTER_MESSAGE_HTML = """<span data-i18n="Download:downloadFooter.message">
-PS: Wishing you a great day! Download your free file sharing app at</span>
-<a href="https://github.com/nuwainfo/ffl" target="_blank">GitHub</a>
-<span data-i18n="Common:period">.</span>
-"""
+# Default download note for open source users (complete HTML block placed into {{ DOWNLOAD_NOTE_HTML }})
+DOWNLOAD_NOTE = (
+    '<div class="border-button">'
+    '<p style="font-size: 14px; margin-top: 10px; line-height: 1.2;">'
+    '<span data-i18n="Download:downloadFooter.message">'
+    'PS: Wishing you a great day! Download your free file sharing app at</span> '
+    '<a href="https://github.com/nuwainfo/ffl" target="_blank">GitHub</a>'
+    '<span data-i18n="Common:period">.</span>'
+    '</p></div>'
+)
+
 
 
 # Noop marker for babel extraction - allows babel to extract string literals
@@ -384,12 +389,13 @@ class SettingsGetter(Singleton):
         """
         return COPYRIGHT
 
-    def getFooterMessageHTML(self):
+    def getDownloadNote(self):
         """
-        Get footer message HTML. Returns the current FOOTER_MESSAGE_HTML value.
-        Features addon may overwrite FOOTER_MESSAGE_HTML based on user level or GUI support.
+        Get the download note HTML block placed into {{ DOWNLOAD_NOTE_HTML }}.
+        Returns the current DOWNLOAD_NOTE value.
+        Features addon may overwrite DOWNLOAD_NOTE based on user level.
         """
-        return FOOTER_MESSAGE_HTML
+        return DOWNLOAD_NOTE
 
     def getStaticServer(self):
         """
@@ -397,3 +403,4 @@ class SettingsGetter(Singleton):
         Features addon may overwrite STATIC_SERVER based on user level or GUI support.
         """
         return STATIC_SERVER
+

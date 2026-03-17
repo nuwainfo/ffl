@@ -863,7 +863,20 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         self.wfile.write(message)
 
     def _createAuthSession(self) -> None:
-        """Create a download session and respond 204 + Set-Cookie, or 401 if already claimed."""
+        """Create a download session or reuse the caller's existing valid session.
+
+        This keeps browser-side auth retries idempotent: if the same client already
+        holds a valid `ffl_dlk` cookie, return 204 again instead of failing with an
+        "already claimed" error. A different client without that cookie still cannot
+        claim the single-use session after the first successful auth.
+        """
+        existingDlk = self._parseCookie('ffl_dlk')
+        if existingDlk and self.server.downloadSessionStore.validate(existingDlk):
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
+
         try:
             dlk = self.server.downloadSessionStore.create()
         except RuntimeError:
@@ -888,7 +901,10 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         recipientAuth = self.server.config.recipientAuth
         if not email or not otp or not recipientAuth or not recipientAuth.otpVerifyUrl:
             return False
-            
+
+        if not recipientAuth.isAllowedEmail(email):
+            return False
+
         try:
             resp = requests.post(
                 recipientAuth.otpVerifyUrl,
@@ -911,12 +927,22 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             self.send_error(400, 'Email auth not enabled')
             return
 
-        email = data.get('email') or recipientAuth.recipientEmail
+        email = data.get('email') or recipientAuth.getPrimaryRecipientEmail()
+        if not recipientAuth.isAllowedEmail(email):
+            body = json.dumps({'error': 'This email address is not allowed to download this file.'}).encode('utf-8')
+            self.send_response(HTTPStatus.FORBIDDEN)
+            self.send_header('Content-type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         link = data.get('link', '')
+        language = data.get('language')
         try:
             resp = requests.post(
                 recipientAuth.otpRequestUrl,
-                json={'email': email, 'link': link},
+                json={'email': email, 'link': link, 'language': language},
                 timeout=10
             )
             self.send_response(resp.status_code)
@@ -977,7 +1003,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             return
 
         if recipientAuth.requiresEmail():
-            if self._verifyEmailOTP(emailAddr or recipientAuth.recipientEmail, emailOtp, emailLink):
+            if self._verifyEmailOTP(emailAddr or recipientAuth.getPrimaryRecipientEmail(), emailOtp, emailLink):
                 rateLimiter.recordSuccess('email')
                 self._createAuthSession()
             elif rateLimiter.isLocked('email'):
@@ -1021,7 +1047,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         # Direct header auth (curl / CLI path) — verify first, then rate-limit
         if recipientAuth.requiresEmail():
             emailOtp = self.headers.get('X-FFL-EmailOTP')
-            emailAddr = self.headers.get('X-FFL-EmailAddress') or recipientAuth.recipientEmail
+            emailAddr = self.headers.get('X-FFL-EmailAddress') or recipientAuth.getPrimaryRecipientEmail()
             emailLink = self.headers.get('X-FFL-EmailLink')
             ok = self._verifyEmailOTP(emailAddr, emailOtp, emailLink)
         else:
@@ -1230,123 +1256,126 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             # Always clean up the completion event (covers exception / connection-reset paths)
             self.server.httpDownloadCompleteEvents.pop(self._downloadId, None)
 
+    def _transformStaticIndexContent(self, content: bytes, args) -> bytes:
+        """
+        Apply all template placeholder substitutions to index.html content.
+
+        Addon-wrapped subclasses (e.g. Brand) override this method to fill the
+        generic extension-point placeholders before delegating to super(), whose
+        .replace() calls then become no-ops for already-filled slots.
+        """
+        settingsGetter = SettingsGetter.getInstance()
+
+        # Static asset server URL
+        content = content.replace(b'{{ STATIC_SERVER }}', settingsGetter.getStaticServer().encode())
+
+        # Generic extension points — defaults applied here; addon overrides fill these first
+        content = (content
+            .replace(b'{{ EXTRA_HEAD_STYLES }}', b'')
+            .replace(b'{{ PAGE_HEADER }}', b'')
+            .replace(b'{{ DOWNLOAD_CONTAINER_CLASS }}', b'main-banner')
+            .replace(b'{{ TITLE_PRIMARY_CLASS }}', b'')
+            .replace(b'{{ TITLE_ACCENT_CLASS }}', b'')
+            .replace(b'{{ PAGE_FOOTER_NOTE }}', b'')
+            .replace(b'{{ DOWNLOAD_NOTE_HTML }}', settingsGetter.getDownloadNote().encode())
+            .replace(b'{{ RECEIPT_CONFIRM_MESSAGE }}', b'null'))
+
+        # UID
+        content = content.replace(b'uid=****', self.server.uid.encode())
+
+        # File metadata
+        path, name, size, ctype, reader = self._getFileInfo(quoteName=False)
+        content = content.replace(b'{{ fileName }}', name.encode())
+        content = content.replace(b'{{ fileSize }}', str(size if size is not None else -1).encode())
+
+        # Auth gate placeholders
+        recipientAuth = self.server.config.recipientAuth
+        pickupRequired = b'true' if recipientAuth and recipientAuth.requiresPickup() else b'false'
+        pubkeyRequired = b'true' if recipientAuth and recipientAuth.requiresPubkey() else b'false'
+        pubkeyChallenges = []
+        if recipientAuth and recipientAuth.requiresPubkey():
+            pubkeyChallenges = [
+                base64.b64encode(challengeCiphertext).decode('ascii')
+                for challengeCiphertext in recipientAuth.getChallengeCiphertexts()
+            ]
+
+        emailRequired = b'true' if recipientAuth and recipientAuth.requiresEmail() else b'false'
+        recipientEmails = list(recipientAuth.recipientEmails) if recipientAuth else []
+        content = content.replace(b'{{ PICKUP_REQUIRED }}', pickupRequired)
+        content = content.replace(b'{{ PUBKEY_REQUIRED }}', pubkeyRequired)
+        content = content.replace(b'{{ PUBKEY_CHALLENGES }}', json.dumps(pubkeyChallenges).encode('utf-8'))
+        content = content.replace(b'{{ EMAIL_REQUIRED }}', emailRequired)
+        content = content.replace(b'{{ RECIPIENT_EMAILS }}', json.dumps(recipientEmails).encode('utf-8'))
+
+        # Copyright
+        content = content.replace(b'{{ COPYRIGHT }}', settingsGetter.getCopyright().encode())
+
+        # Debug and WebRTC flags
+        # Priority: 1. URL param  2. Server config  3. Environment variable
+        debugEnabled = os.getenv('JS_DEBUG', None) == 'True'
+        serverDebugEnabled = os.getenv('JS_LOG_TO_SERVER_DEBUG', None) == 'True'
+        webrtcDisabled = os.getenv('DISABLE_WEBRTC', None) == 'True'
+        streamSaverBlob = os.getenv('STREAMSAVER_BLOB', None) == 'True'
+        webrtcDisabledDetermined = False
+
+        if args:
+            # Check debug parameter: ?debug=yes/1/true/on/server
+            debugParam = args.get('debug', [None])[0]
+            if debugParam:
+                if debugParam.lower() == 'server':
+                    serverDebugEnabled = True
+                elif self.parseURLBooleanParam(debugParam):
+                    debugEnabled = True
+
+            # Check webrtc parameter: ?webrtc=no/0/false/off/yes/1/true/on
+            webrtcParam = args.get('webrtc', [None])[0]
+            if webrtcParam:
+                webrtcValue = self.parseURLBooleanParam(webrtcParam)
+                if webrtcValue is False:
+                    webrtcDisabled = True
+                elif webrtcValue is True:
+                    webrtcDisabled = False
+                else:
+                    pass # If webrtcResult is None (unrecognized value), keep current state
+
+                webrtcDisabledDetermined = True
+
+        if not webrtcDisabledDetermined and not self.server.config.defaultWebRTC:
+            webrtcDisabled = True
+
+        if debugEnabled:
+            content = content.replace(b'const DEBUG = false;', b'const DEBUG = true;')
+        if webrtcDisabled:
+            content = content.replace(b'const DISABLE_WEBRTC = false;', b'const DISABLE_WEBRTC = true;')
+        if serverDebugEnabled:
+            content = content.replace(b'const SERVER_DEBUG = false;', b'const SERVER_DEBUG = true;')
+            
+        if streamSaverBlob:
+            content = content.replace(b'{{ STREAMSAVER_BLOB }}', b'1')
+        else:
+            content = content.replace(b'{{ STREAMSAVER_BLOB }}', b'0')
+
+        if self.server.config.torEnabled:
+            # Use slow polling to increase stability
+            content = content.replace(
+                b'const STATUS_POLLING_SECONDS = 2;', b'const STATUS_POLLING_SECONDS = 5;'
+            )
+
+        return content
+
     def _handleStaticIndex(self, args):
         try:
             with open(self.translate_path('/static/index.html'), 'rb') as f:
                 content = f.read()
 
-                # Replace STATIC_SERVER
-                settingsGetter = SettingsGetter.getInstance()
-                staticServer = settingsGetter.getStaticServer()
-                content = content.replace(b'{{ STATIC_SERVER }}', staticServer.encode())
-
-                # Replace UID placeholder
-                content = content.replace(b'uid=****', self.server.uid.encode())
-
-                # Replace file_name, file_size placeholder
-                path, name, size, ctype, reader = self._getFileInfo(quoteName=False)
-                content = content.replace(b'{{ fileName }}', name.encode())
-                content = content.replace(b'{{ fileSize }}', str(size if size is not None else -1).encode())
-
-                # Replace PICKUP_REQUIRED / PUBKEY_REQUIRED / EMAIL_REQUIRED placeholders
-                recipientAuth = self.server.config.recipientAuth
-                pickupRequired = b'true' if recipientAuth and recipientAuth.requiresPickup() else b'false'
-                pubkeyRequired = b'true' if recipientAuth and recipientAuth.requiresPubkey() else b'false'
-                pubkeyChallenge = (
-                    base64.b64encode(recipientAuth.challengeCiphertext)
-                    if recipientAuth and recipientAuth.challengeCiphertext
-                    else b''
-                )
-                emailRequired = b'true' if recipientAuth and recipientAuth.requiresEmail() else b'false'
-                recipientEmail = (recipientAuth.recipientEmail or '').encode() if recipientAuth else b''
-                content = content.replace(b'{{ PICKUP_REQUIRED }}', pickupRequired)
-                content = content.replace(b'{{ PUBKEY_REQUIRED }}', pubkeyRequired)
-                content = content.replace(b'{{ PUBKEY_CHALLENGE }}', pubkeyChallenge)
-                content = content.replace(b'{{ EMAIL_REQUIRED }}', emailRequired)
-                content = content.replace(b'{{ RECIPIENT_EMAIL }}', recipientEmail)
-
-                # Replace COPYRIGHT placeholder
-                settingsGetter = SettingsGetter.getInstance()
-                copyright = settingsGetter.getCopyright()
-                content = content.replace(b'{{ COPYRIGHT }}', copyright.encode())
-
-                # Replace FOOTER_MESSAGE_HTML placeholder
-                footerMessageHTML = settingsGetter.getFooterMessageHTML()
-                content = content.replace(b'{{ FOOTER_MESSAGE_HTML }}', footerMessageHTML.encode())
-
-                # Check for debug mode from environment variable or URL parameter
-                # WebRTC priority system (highest to lowest priority), and other settings the same priority design:
-                # 1. URL parameter (?webrtc=yes/no/1/0/true/false/on/off)
-                # 2. Server defaultWebRTC setting (default WebRTC state from --force-relay/Tor mode)
-                # 3. DISABLE_WEBRTC environment variable
-                debugEnabled = os.getenv('JS_DEBUG', None) == 'True'
-                serverDebugEnabled = os.getenv('JS_LOG_TO_SERVER_DEBUG', None) == 'True'
-                webrtcDisabled = os.getenv('DISABLE_WEBRTC', None) == 'True'
-                streamSaverBlob = os.getenv('STREAMSAVER_BLOB', None) == 'True'
-
-                webrtcDisabledDetermined = False
-
-                # Parse URL parameters for runtime control
-                # These is priority 1, so overwrite environment variables setting.
-                if args:
-                    # Check debug parameter: ?debug=yes/1/true/on/server
-                    debugParam = args.get('debug', [None])[0]
-                    if debugParam:
-                        debugValue = debugParam.lower()
-                        if debugValue == 'server':
-                            # Enable server-side logging only if both URL param and env var are set
-                            serverDebugEnabled = True
-                        else:
-                            if self.parseURLBooleanParam(debugParam):
-                                debugEnabled = True
-
-                    # Check webrtc parameter: ?webrtc=no/0/false/off/yes/1/true/on
-                    webrtcParam = args.get('webrtc', [None])[0]
-                    if webrtcParam:
-                        webrtcValue = self.parseURLBooleanParam(webrtcParam)
-                        if webrtcValue is False:
-                            webrtcDisabled = True
-                        elif webrtcValue is True:
-                            webrtcDisabled = False
-                        else:
-                            pass # If webrtcResult is None (unrecognized value), keep current state
-
-                        webrtcDisabledDetermined = True
-
-                # Apply priority system for WebRTC
-                if not webrtcDisabledDetermined: # No URL parameter override
-                    # Priority 2: Server defaultWebRTC setting
-                    if not self.server.config.defaultWebRTC:
-                        webrtcDisabled = True
-
-                # Use default from environment variable (Priority 3)
-                webrtcDisabledDetermined = True
-
-                # Apply JavaScript variable replacements
-                if debugEnabled:
-                    content = content.replace(b'const DEBUG = false;', b'const DEBUG = true;')
-                if webrtcDisabled:
-                    content = content.replace(b'const DISABLE_WEBRTC = false;', b'const DISABLE_WEBRTC = true;')
-                if serverDebugEnabled:
-                    content = content.replace(b'const SERVER_DEBUG = false;', b'const SERVER_DEBUG = true;')
-                if streamSaverBlob:
-                    content = content.replace(b'{{ STREAMSAVER_BLOB }}', b'1')
-                else:
-                    content = content.replace(b'{{ STREAMSAVER_BLOB }}', b'0')
-
-                if self.server.config.torEnabled:
-                    # Use slow polling to increase stability
-                    content = content.replace(
-                        b'const STATUS_POLLING_SECONDS = 2;', b'const STATUS_POLLING_SECONDS = 5;'
-                    )
+            content = self._transformStaticIndexContent(content, args)
 
             f = io.BytesIO(content)
             try:
                 if self.range:
                     start, end = self.range
-                    fullContent = f.read() # This is ok because static index.html is small.
+                    fullContent = f.read()
                     end = end if end else len(fullContent) - 1
-
                     self.send_response(HTTPStatus.PARTIAL_CONTENT)
                     self.send_header("Content-Length", str(end - start + 1))
                     self.send_header('Content-Range', f'bytes {start}-{end}/{len(fullContent)}')
@@ -1476,10 +1505,14 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             recipientAuth = self.server.config.recipientAuth
             if recipientAuth and recipientAuth.requiresPubkey():
                 # Expose the RSA-OAEP challenge for CLI clients downloading via P2P.
-                # The browser gets this challenge baked into index.html as PUBKEY_CHALLENGE
+                # The browser gets these challenges baked into index.html as PUBKEY_CHALLENGES
                 # at serve time; CLI clients (ffl download <url>) cannot render HTML, so they
                 # fetch /checksum to retrieve it dynamically and decrypt it with their private key.
-                responseData['encrypted_challenge'] = base64.b64encode(recipientAuth.challengeCiphertext).decode()
+                encryptedChallenges = [
+                    base64.b64encode(challengeCiphertext).decode()
+                    for challengeCiphertext in recipientAuth.getChallengeCiphertexts()
+                ]
+                responseData['encrypted_challenges'] = encryptedChallenges
                 
             responseBody = json.dumps(responseData).encode('utf-8')
 
@@ -1649,10 +1682,16 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         - WebRTC P2P: payload contains peerId, unblocks sendFile() completion wait
         - HTTP relay:  payload contains downloadId, unblocks _waitForHTTPDownloadComplete()
         """
+        clientInfo = {
+            'userAgent': self.headers.get('User-Agent', 'Unknown'),
+            'domain': self.headers.get('Host', 'Unknown'),
+        }
+
         if 'peerId' in data:
             self.server.webRTC.runAsync(
                 self.server.webRTC.notifyDownloadComplete(data), wait=False, name="notifyDownloadComplete"
             )
+            FFLEvent.receiptCreated.trigger(downloadId=data['peerId'], connectionType='webrtc', clientInfo=clientInfo)
 
         downloadId = data.get('downloadId')
         if downloadId:
@@ -1660,10 +1699,16 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             if event:
                 event.set()
                 logger.debug(f"HTTP download complete ACK received for {downloadId[:8]}")
+                FFLEvent.receiptCreated.trigger(downloadId=downloadId, connectionType='http', clientInfo=clientInfo)
             else:
                 logger.debug(f"HTTP download complete ACK: unknown downloadId {downloadId[:8]}")
 
-        self._sendBytes(b"OK")
+        payload, contentType = self._buildDownloadCompleteResponse(data)
+        self._sendBytes(payload, contentType)
+
+    def _buildDownloadCompleteResponse(self, data):
+        """Return (payload, contentType) for the /complete response. Override to customise."""
+        return b"OK", "text/plain; charset=utf-8"
 
     def _handleDebugLog(self, data):
         """

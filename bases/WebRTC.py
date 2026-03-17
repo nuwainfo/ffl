@@ -2402,28 +2402,35 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
 
     def _fetchChecksumData(self, urlInfo) -> dict:
         """Fetch /checksum once. Always returns a dict with at least 'algorithm'.
-        Also contains 'encrypted_challenge' when pubkey auth is enabled on the server."""
+        Also contains 'encrypted_challenges' when pubkey auth is enabled on the server."""
         checksumURL = self._buildURL(urlInfo.baseURL, "checksum")
         response = requests.get(checksumURL, timeout=15)
         response.raise_for_status()
         return response.json()
 
     def _resolveProof(self, checksumData: dict, recipientPrivateKeySpec: Optional[str]) -> Optional[str]:
-        """Decrypt RSA-OAEP challenge from checksumData['encrypted_challenge'], return base64 proof."""
+        """Decrypt an RSA-OAEP challenge from checksumData['encrypted_challenges'], return base64 proof."""
         if not recipientPrivateKeySpec:
             return None
 
-        encryptedChallengeB64 = checksumData.get('encrypted_challenge')
-        if not encryptedChallengeB64:
+        encryptedChallenges = checksumData.get('encrypted_challenges') or []
+
+        if not encryptedChallenges:
             return None
 
-        challengeCiphertext = base64.b64decode(encryptedChallengeB64)
         with open(recipientPrivateKeySpec, 'r', encoding='utf-8') as f:
             privKeyPem = f.read()
 
         crypto = CryptoInterface()
-        challenge = crypto.decryptRSAOAEP(privKeyPem, challengeCiphertext)
-        return base64.b64encode(challenge).decode()
+        for encryptedChallenge in encryptedChallenges:
+            try:
+                challengeCiphertext = base64.b64decode(encryptedChallenge)
+                challenge = crypto.decryptRSAOAEP(privKeyPem, challengeCiphertext)
+                return base64.b64encode(challenge).decode()
+            except Exception:
+                logger.debug('Recipient private key did not match one pubkey challenge')
+
+        return None
 
     def downloadFile(
         self,
@@ -2441,7 +2448,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         except (ValueError, requests.exceptions.RequestException) as e:
             raise RuntimeError(f"Invalid download URL: {e}")
 
-        # Fetch /checksum once — provides encrypted_challenge (for pubkey proof) and algorithm (for hasher)
+        # Fetch /checksum once — provides encrypted_challenges (for pubkey proof) and algorithm (for hasher)
         checksumData = {} if urlInfo.isGenericURL else self._fetchChecksumData(urlInfo)
         proof = self._resolveProof(checksumData, recipientPrivateKey)
         checksumAlgorithm = checksumData.get('algorithm', DEFAULT_CHECKSUM_ALGORITHM)

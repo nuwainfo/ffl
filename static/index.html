@@ -42,6 +42,9 @@ Licensed under Apache-2.0 license.
     <!-- Preview Components (File hint + ZIP preview) -->
     <link rel="stylesheet" href="{{ STATIC_SERVER }}/static/css/Preview.css">
 
+    <!-- Extra head styles: injected by addons at serve time, empty by default -->
+    {{ EXTRA_HEAD_STYLES }}
+
     <!-- i18next internationalization scripts -->
     <script src="https://unpkg.com/i18next@25.5.2/dist/umd/i18next.js"></script>
     <script src="https://unpkg.com/i18next-http-backend@3.0.2/i18nextHttpBackend.js"></script>
@@ -50,14 +53,16 @@ Licensed under Apache-2.0 license.
     <script src="{{ STATIC_SERVER }}/static/js/FFLI18n.js"></script>
 </head>
     <body>
-        <div id="pricing" class="main-banner wow fadeIn pricing-tables">
+        <!-- Page header: injected by addons at serve time, empty by default -->
+        {{ PAGE_HEADER }}
+        <div id="pricing" class="{{ DOWNLOAD_CONTAINER_CLASS }} wow fadeIn pricing-tables">
             <div class="container">
                 <div class="right-image wow fadeInRight row">
                     <div class="col-lg-8 offset-lg-2">
                         <div class="section-heading">
                             <h4>
-                                <span data-i18n="Download:title">Downloading</span>
-                                <em><span data-i18n="Download:file">File</span></em>
+                                <span data-i18n="Download:title" class="{{ TITLE_PRIMARY_CLASS }}">Downloading</span>
+                                <em><span data-i18n="Download:file" class="{{ TITLE_ACCENT_CLASS }}">File</span></em>
                                 <i id="file-info-icon" class="fas fa-info-circle"
                                    style="margin-left: 8px; margin-right: 8px; color: #007bff; cursor: help; font-size: 0.8em;"></i>
                                 <i id="file-preview-btn" class="fas fa-eye"
@@ -131,6 +136,11 @@ Licensed under Apache-2.0 license.
                                             Click "Send Code" to receive a one-time verification code at your email address.
                                         </p>
                                         <p id="email-address-display" class="auth-gate-email-display"></p>
+                                        <div id="email-address-input-section" style="display: none;">
+                                            <input type="email" id="email-address-input" class="auth-gate-code-input"
+                                                   placeholder="your@email.com"
+                                                   inputmode="email">
+                                        </div>
                                         <button id="email-send-btn" type="button" class="auth-gate-send-btn"
                                                 data-i18n="Download:email.sendCode">Send Code</button>
                                         <div id="email-otp-section" style="display: none;">
@@ -230,16 +240,24 @@ Licensed under Apache-2.0 license.
                                     </div>
                                 </div>
 
+                                <!-- Receipt confirm dialog (shown after download when --receipt-confirm is active) -->
+                                <div id="receipt-confirm-dialog" style="display:none; margin-top: 20px; padding: 16px; border: 1px solid #dee2e6; border-radius: 8px; background: #f8f9fa;">
+                                    <p id="receipt-confirm-sender-msg" style="margin-bottom: 12px; font-size: 14px; color: #333;"></p>
+                                    <textarea id="receipt-confirm-reply" rows="3" style="width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #ced4da; border-radius: 4px; font-size: 14px; resize: vertical;" placeholder="Confirmed, thanks!" data-i18n="[placeholder]Download:receiptConfirm.placeholder"></textarea>
+                                    <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                                        <button id="receipt-confirm-send-btn" class="btn btn-primary btn-sm" data-i18n="Download:receiptConfirm.sendButton">Send Confirmation</button>
+                                        <button id="receipt-confirm-skip-btn" class="btn btn-secondary btn-sm" data-i18n="Download:receiptConfirm.skipButton">Skip</button>
+                                        <span id="receipt-confirm-spinner" style="display:none; font-size:13px; color:#6b7280;"></span>
+                                    </div>
+                                </div>
+                                <div id="receipt-confirm-thanks" style="display:none; margin-top: 20px; padding: 12px 16px; border-radius: 8px; background: #d4edda; color: #155724; font-size: 14px;" data-i18n="Download:receiptConfirm.thanks">Thank you! Your confirmation has been sent.</div>
+
                                 <!-- Hidden file metadata -->
                                 <p id="fileName" style="display:none;">{{ fileName }}</p>
                                 <p id="fileSize" style="display:none;">{{ fileSize }}</p>
 
-                                <!-- Always visible footer message -->
-                                <div class="border-button">
-                                    <p style="font-size: 14px; margin-top: 10px; line-height: 1.2;">
-                                        {{ FOOTER_MESSAGE_HTML }}
-                                    </p>
-                                </div>
+                                <!-- Download note: injected by addons, default footer message otherwise -->
+                                {{ DOWNLOAD_NOTE_HTML }}
 
                             </div><!-- /#downloadBlock -->
                         </div>
@@ -296,6 +314,8 @@ Licensed under Apache-2.0 license.
             <div class="container">
                 <div class="row">
                     <div class="col-lg-12">
+                        <!-- Footer note: injected by addons at serve time, empty by default -->
+                        <p class="footer-context page-footer-note">{{ PAGE_FOOTER_NOTE }}</p>
                         <div class="copyright-text">
                             <p>
                                 <span>{{ COPYRIGHT }}</span>
@@ -465,10 +485,20 @@ Licensed under Apache-2.0 license.
             // Auth state — rendered by Server.py at serve time
             const PICKUP_REQUIRED = {{ PICKUP_REQUIRED }};
             const PUBKEY_REQUIRED = {{ PUBKEY_REQUIRED }};
-            const PUBKEY_CHALLENGE = "{{ PUBKEY_CHALLENGE }}";
+            const PUBKEY_CHALLENGES = {{ PUBKEY_CHALLENGES }};
             const EMAIL_REQUIRED = {{ EMAIL_REQUIRED }};
-            const RECIPIENT_EMAIL = "{{ RECIPIENT_EMAIL }}";
+            const RECIPIENT_EMAILS = {{ RECIPIENT_EMAILS }};
+            const RECEIPT_CONFIRM_MESSAGE = {{ RECEIPT_CONFIRM_MESSAGE }};
             const OTP_REQUEST_URL = "/uid=****/email/request";
+
+            // Show the receipt confirm dialog after download completes.
+            // Called by WebRTC.js and DownloadManager.js when POST /complete returns confirmRequired.
+            const receiptConfirmationUI = RECEIPT_CONFIRM_MESSAGE !== null ? new ReceiptConfirmationUI({
+                endpoint: '/uid=****/receipt/confirm',
+                message: RECEIPT_CONFIRM_MESSAGE,
+                logFunction: log,
+                tFunction: t,
+            }) : null;
 
             const forceNativeLink = parseBooleanParam(new URLSearchParams(window.location.search).get('native'));
 
@@ -477,7 +507,7 @@ Licensed under Apache-2.0 license.
             let emailOtp = null;
 
             const authGateRegistry = new AuthGateRegistry({
-                inputIds: ['pickup-code-input', 'email-otp-input'],
+                inputIds: ['pickup-code-input', 'email-address-input', 'email-otp-input'],
                 authEndpoint: '/uid=****/auth',
                 authErrorMsgId: 'unlock-error-message',
                 onUnlockedCallback: () => {
@@ -503,7 +533,7 @@ Licensed under Apache-2.0 license.
                 authGateRegistry.registerGate(new PubkeyGate({
                     containerId: 'pubkeyGate',
                     t: window.t,
-                    challenge: PUBKEY_CHALLENGE,
+                    challenges: PUBKEY_CHALLENGES,
                     verifyEndpoint: '/uid=****/auth',
                     onAccepted: (proof) => {
                         pubkeyProof = proof;
@@ -516,7 +546,7 @@ Licensed under Apache-2.0 license.
                 authGateRegistry.registerGate(new EmailGate({
                     containerId: 'emailGate',
                     t: window.t,
-                    recipientEmail: RECIPIENT_EMAIL,
+                    recipientEmails: RECIPIENT_EMAILS,
                     otpRequestUrl: OTP_REQUEST_URL,
                     shareLink: window.location.href,
                     onAccepted: (otp) => {
@@ -579,6 +609,9 @@ Licensed under Apache-2.0 license.
                     // Functions
                     log: log,
                     t: t,
+
+                    // Receipt confirmation dialog
+                    receiptConfirmationUI: receiptConfirmationUI,
 
                     // DOM Elements
                     progressBar: document.getElementById('downloadProgress'),

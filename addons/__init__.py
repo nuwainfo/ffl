@@ -25,10 +25,11 @@
 addons = [
     'API', # API integration
     'Features', # User features and registration
+    'Brand', # White-label brand customization
     'Upload', # Core upload functionality
     'Tunnels', # Network tunneling capabilities
     'GUI', # GUI interface - loaded last as it may depend on other addons
-    'Preview', # ZIP file browsing and preview    
+    'Preview', # ZIP file browsing and preview
 ]
 
 # I18n support for addons domain

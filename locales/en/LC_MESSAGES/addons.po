@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-03-09 15:51+0800\n"
+"POT-Creation-Date: 2026-03-16 14:32+0800\n"
 "PO-Revision-Date: 2025-12-18 10:23+0800\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -146,6 +146,15 @@ msgid ""
 " with 'cool' as UID)"
 msgstr ""
 
+msgid ""
+"Send email receipt notification when download completes. Omit value to "
+"use your account email (requires non-free account). Accepts one or more "
+"addresses separated by commas."
+msgstr ""
+
+msgid "Error: --receipt without email requires a registered (non-free) account"
+msgstr ""
+
 msgid "GUI.py requires Upload addon (addons/Upload.py) to function properly"
 msgstr ""
 
@@ -195,14 +204,68 @@ msgstr ""
 msgid "Pickup code:"
 msgstr ""
 
-msgid "Recipient email:"
+msgid "Recipient email(s):"
+msgstr ""
+
+msgid "Email address"
+msgstr ""
+
+msgid "Add"
+msgstr ""
+
+msgid "Edit"
+msgstr ""
+
+msgid "Remove"
+msgstr ""
+
+msgid "Clear"
 msgstr ""
 
 #, python-brace-format
-msgid "Recipient key file ({ext}):"
+msgid "Recipient key file(s) ({ext}):"
 msgstr ""
 
-msgid "Browse"
+msgid "Public key file"
+msgstr ""
+
+msgid "Add Files"
+msgstr ""
+
+msgid "Sender Notifications"
+msgstr ""
+
+msgid "Request receipt email notification"
+msgstr ""
+
+msgid "Registered users only."
+msgstr ""
+
+msgid "Receipt email(s), separated by commas:"
+msgstr ""
+
+msgid "Ask receiver to confirm receipt"
+msgstr ""
+
+msgid "Leave the message blank to use the default confirmation message."
+msgstr ""
+
+msgid "Message to receiver:"
+msgstr ""
+
+msgid "Receipt email"
+msgstr ""
+
+msgid "Receipt email: account email"
+msgstr ""
+
+msgid "Receipt confirmation: custom message"
+msgstr ""
+
+msgid "Receipt confirmation"
+msgstr ""
+
+msgid "Please enter valid receipt email address(es)."
 msgstr ""
 
 msgid "OK"
@@ -228,17 +291,21 @@ msgstr ""
 msgid "Recipient email cannot be empty."
 msgstr ""
 
-msgid "Please enter a valid email address."
+msgid "Please enter valid email address(es)."
 msgstr ""
 
 msgid "Recipient key file cannot be empty."
 msgstr ""
 
-msgid "Recipient key file was not found."
+msgid "One or more recipient key files were not found."
 msgstr ""
 
 #, python-brace-format
 msgid "Edit: {summary}"
+msgstr ""
+
+#, python-brace-format
+msgid " (+{count} more)"
 msgstr ""
 
 msgid "Verify recipient for this share"
@@ -842,6 +909,65 @@ msgid ""
 "UPLOAD_METHOD environment variable detected, using {mode} method to "
 "upload."
 msgstr ""
+
+msgid "💡 No account? Register at https://fastfilelink.com/#pricing"
+msgstr ""
+
+msgid "Please input your email:"
+msgstr ""
+
+msgid "Email: "
+msgstr ""
+
+msgid "Email cannot be empty"
+msgstr ""
+
+msgid "OTP page should open automatically in browser"
+msgstr ""
+
+msgid "Please input OTP in the web page..."
+msgstr ""
+
+msgid "[CLI-AUTH] Please check your email for OTP code"
+msgstr ""
+
+#, python-brace-format
+msgid "Please manually visit: {browserUrl}"
+msgstr ""
+
+msgid "Enter OTP code: "
+msgstr ""
+
+msgid "[ERROR] OTP code cannot be empty. Please try again."
+msgstr ""
+
+msgid "[OK] OTP verification successful"
+msgstr ""
+
+#, python-brace-format
+msgid "[ERROR] {message}"
+msgstr ""
+
+msgid "Invalid OTP code"
+msgstr ""
+
+msgid "   Please try again..."
+msgstr ""
+
+#~ msgid "Browse"
+#~ msgstr ""
+
+#~ msgid "Recipient email:"
+#~ msgstr ""
+
+#~ msgid "Recipient key file ({ext}):"
+#~ msgstr ""
+
+#~ msgid "Please enter a valid email address."
+#~ msgstr ""
+
+#~ msgid "Recipient key file was not found."
+#~ msgstr ""
 
 #~ msgid ""
 #~ "Error: --alias with --upload is under"

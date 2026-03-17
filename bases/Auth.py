@@ -22,7 +22,7 @@ import secrets
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Callable, Optional, Tuple
 
 from bases.crypto import CryptoInterface
 
@@ -44,12 +44,48 @@ class RecipientAuthMode(Enum):
 class RecipientAuth:
     mode: RecipientAuthMode = RecipientAuthMode.NONE
     pickupCode: Optional[str] = None
-    publicKeyPem: Optional[str] = None         # Recipient's RSA public key PEM (SPKI)
-    challenge: Optional[bytes] = None          # 32-byte server-generated challenge
-    challengeCiphertext: Optional[bytes] = None  # RSA-OAEP(challenge) embedded in HTML
-    recipientEmail: Optional[str] = None       # Email address for OTP auth
-    otpRequestUrl: Optional[str] = None        # FFL API URL: POST {email, link} → sends OTP
-    otpVerifyUrl: Optional[str] = None         # FFL API URL: POST {email, otp, link} → verificationToken
+    publicKeyPems: Tuple[str, ...] = ()
+    challenges: Tuple[bytes, ...] = ()
+    challengeCiphertexts: Tuple[bytes, ...] = ()
+    recipientEmails: Tuple[str, ...] = ()
+    otpRequestUrl: Optional[str] = None        # FFL API URL: POST {email, link} sends OTP
+    otpVerifyUrl: Optional[str] = None         # FFL API URL: POST {email, otp, link} verificationToken
+
+    @classmethod
+    def parseRecipientValues(
+        cls,
+        rawValue: Optional[str],
+        normalizer: Optional[Callable[[str], str]] = None,
+    ) -> Tuple[str, ...]:
+        if not rawValue:
+            return ()
+
+        values = []
+        seenValues = set()
+
+        for rawPart in rawValue.split(','):
+            value = rawPart.strip()
+            if not value:
+                continue
+
+            normalizedValue = normalizer(value) if normalizer else value
+            if normalizedValue in seenValues:
+                continue
+
+            seenValues.add(normalizedValue)
+            values.append(normalizedValue)
+
+        return tuple(values)
+
+    @classmethod
+    def normalizeEmail(cls, email: str) -> str:
+        return email.strip().lower()
+
+    @classmethod
+    def serializeRecipientValues(cls, values: Tuple[str, ...]) -> Optional[str]:
+        if not values:
+            return None
+        return ','.join(values)
 
     @classmethod
     def create(cls, mode: Optional[str], publicKeyPath: Optional[str] = None, pickupCode: Optional[str] = None,
@@ -57,21 +93,31 @@ class RecipientAuth:
                otpVerifyUrl: Optional[str] = None) -> 'RecipientAuth':
         """Factory: construct a RecipientAuth from explicit configuration values."""
         if mode == 'email':
+            recipientEmails = cls.parseRecipientValues(recipientEmail, normalizer=cls.normalizeEmail)
             return cls(
                 mode=RecipientAuthMode.EMAIL,
-                recipientEmail=recipientEmail,
+                recipientEmails=recipientEmails,
                 otpRequestUrl=otpRequestUrl,
                 otpVerifyUrl=otpVerifyUrl,
             )
 
         if mode in ('pubkey', 'pubkey+pickup'):
-            with open(publicKeyPath, 'r', encoding='utf-8') as f:
-                publicKeyPem = f.read()
-                
             crypto = CryptoInterface()
-            publicKey = crypto.loadRSAPublicKeyFromPEM(publicKeyPem)
-            challenge = cls.generateChallenge()
-            challengeCiphertext = crypto.encryptRSAOAEP(publicKey, challenge)
+            publicKeyPaths = cls.parseRecipientValues(publicKeyPath)
+            publicKeyPems = []
+            challenges = []
+            challengeCiphertexts = []
+
+            for path in publicKeyPaths:
+                with open(path, 'r', encoding='utf-8') as f:
+                    publicKeyPem = f.read()
+
+                publicKey = crypto.loadRSAPublicKeyFromPEM(publicKeyPem)
+                challenge = cls.generateChallenge()
+                challengeCiphertext = crypto.encryptRSAOAEP(publicKey, challenge)
+                publicKeyPems.append(publicKeyPem)
+                challenges.append(challenge)
+                challengeCiphertexts.append(challengeCiphertext)
 
             authMode = RecipientAuthMode.PUBKEY if mode == 'pubkey' else RecipientAuthMode.PUBKEY_PICKUP
             resolvedPickupCode = pickupCode or (cls.generatePickupCode() if authMode == RecipientAuthMode.PUBKEY_PICKUP else None)
@@ -79,9 +125,9 @@ class RecipientAuth:
             return cls(
                 mode=authMode,
                 pickupCode=resolvedPickupCode,
-                publicKeyPem=publicKeyPem,
-                challenge=challenge,
-                challengeCiphertext=challengeCiphertext,
+                publicKeyPems=tuple(publicKeyPems),
+                challenges=tuple(challenges),
+                challengeCiphertexts=tuple(challengeCiphertexts),
             )
 
         if mode == 'pickup':
@@ -111,6 +157,36 @@ class RecipientAuth:
     def requiresEmail(self) -> bool:
         return self.mode == RecipientAuthMode.EMAIL
 
+    def hasMultipleRecipientEmails(self) -> bool:
+        return len(self.recipientEmails) > 1
+
+    def getRecipientEmailPayload(self) -> Optional[str]:
+        return self.serializeRecipientValues(self.recipientEmails)
+
+    def getPrimaryRecipientEmail(self) -> Optional[str]:
+        if not self.recipientEmails:
+            return None
+        return self.recipientEmails[0]
+
+    def getPublicKeyPayload(self) -> Optional[str]:
+        return self.serializeRecipientValues(self.publicKeyPems)
+
+    def getChallenges(self) -> Tuple[bytes, ...]:
+        return self.challenges
+
+    def getChallengeCiphertexts(self) -> Tuple[bytes, ...]:
+        return self.challengeCiphertexts
+
+    def isAllowedEmail(self, email: Optional[str]) -> bool:
+        if not self.requiresEmail():
+            return True
+
+        normalizedEmail = self.normalizeEmail(email or '')
+        if not normalizedEmail:
+            return False
+
+        return normalizedEmail in {self.normalizeEmail(allowedEmail) for allowedEmail in self.recipientEmails}
+
     def verify(self, code: Optional[str] = None, proof: Optional[str] = None) -> bool:
         """Return True if all required credentials are valid. No-op when not enabled."""
         if not self.isEnabled():
@@ -139,14 +215,13 @@ class RecipientAuth:
         return self._verifyProof(proof)
 
     def _verifyProof(self, proof: Optional[str]) -> bool:
-        """Verify base64-encoded decrypted challenge matches stored challenge."""
-        if not proof or not self.challenge:
+        """Verify base64-encoded decrypted challenge matches any stored challenge."""
+        challengeValues = self.getChallenges()
+        if not proof or not challengeValues:
             return False
-            
+
         try:
             proofBytes = base64.b64decode(proof)
-            return secrets.compare_digest(proofBytes, self.challenge)
+            return any(secrets.compare_digest(proofBytes, challengeValue) for challengeValue in challengeValues)
         except Exception:
             return False
-
-

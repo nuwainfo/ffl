@@ -16,7 +16,7 @@
 .dropdown-content a {
     display: flex !important;               /* 使用 flex 對齊 */
     align-items: center !important;         /* 垂直置中 */
-    justify-content: center !important;     /* 水平置中 */
+    justify-content: left !important;     /* 水平置中 */
     padding: 10px 16px;          /* 用 padding 控制高度，響應式 */
     color: #007bff !important;
     text-decoration: none;

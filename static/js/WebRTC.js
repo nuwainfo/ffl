@@ -836,7 +836,7 @@ class DownloadUIManager {
             return;
         }
 
-        const verifiedText = this.t('Download:client.checksum.verified', 'verified');
+        const verifiedText = this.t('Download:checksum.verified', 'verified');
 
         if (typeof FFLChecksum !== 'undefined' && typeof FFLChecksum.showVerifiedBadge === 'function') {
             FFLChecksum.showVerifiedBadge({
@@ -1001,6 +1001,7 @@ class FallbackManager {
             uid: this.uid,
             e2eeEnabled: e2eeEnabledValue,
             authHeaders: this.authHeaders,
+            receiptConfirmationUI: this.receiptConfirmationUI,
             progressBar: document.getElementById('downloadProgress'),
             statusHeading: '#download-message',
             statusDetails: '#status-details',
@@ -1403,6 +1404,7 @@ class WebRTCManager {
         this.dc = null;
         this.peerId = null;
         this.cleanupConnectionsCallback = null;
+        this.receiptConfirmationUI = config.receiptConfirmationUI || null;
     }
 
     /**
@@ -1461,7 +1463,8 @@ class WebRTCManager {
                 debug: DEBUG,
                 logFunction: this.log,
                 uid: this.uid,
-                authHeaders: this.authHeaders
+                authHeaders: this.authHeaders,
+                receiptConfirmationUI: this.receiptConfirmationUI,
             });
             fallbackDm.startDownload({ forceNativeLink: true });
         }
@@ -2482,8 +2485,12 @@ class WebRTCManager {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ peerId: this.peerId, receivedBytes: this.bytesReceived }),
-            }).then(() => {
+            }).then(async response => {
                 this.log("Signal", "Successfully notified server of completion");
+                const data = await response.json().catch(() => null);
+                if (data && data.confirmRequired && this.receiptConfirmationUI) {
+                    this.receiptConfirmationUI.show(data.message);
+                }
             }).catch(err => {
                 this.log("Signal", `Failed to notify server of completion: ${err}`);
             });

@@ -33,7 +33,72 @@ except ImportError:
 logger = getLogger(__name__, version=PUBLIC_VERSION)
 
 
-class BabelI18nManager(Singleton):
+class I18nLanguageMixin:
+    """Shared language normalization and environment override handling."""
+
+    def _mapBabelLocaleToLanguageCode(self, babelLocale):
+        """
+        Map babel Locale object to our language code format.
+
+        Args:
+            babelLocale: babel.Locale object
+
+        Returns:
+            Language code string (e.g., 'en', 'zh_Hant', 'zh_Hans')
+        """
+        if babelLocale.language == 'zh':
+            if babelLocale.script == 'Hant' or babelLocale.territory in ('TW', 'HK', 'MO'):
+                return 'zh_Hant'
+                
+            if babelLocale.script == 'Hans' or babelLocale.territory in ('CN', 'SG'):
+                return 'zh_Hans'
+                
+            return 'zh_Hans'
+
+        return babelLocale.language
+
+    def _normalizeLanguageCode(self, code):
+        """
+        Normalize language code to standard format using babel when available.
+
+        Examples:
+            'zh-hant' -> 'zh_Hant'
+            'zh-tw' -> 'zh_Hant'
+            'en' -> 'en'
+        """
+        if not code:
+            return self.DEFAULT_LANGUAGE
+
+        if BABEL_AVAILABLE:
+            try:
+                babelLocale = Locale.parse(code, sep='_')
+                return self._mapBabelLocaleToLanguageCode(babelLocale)
+            except (UnknownLocaleError, ValueError):
+                pass
+
+        normalized = code.lower().replace('-', '_')
+
+        if normalized in ('zh_hant', 'zh_tw', 'zh_hk', 'zh_mo'):
+            return 'zh_Hant'
+            
+        if normalized in ('zh_hans', 'zh_cn', 'zh_sg'):
+            return 'zh_Hans'
+            
+        if normalized.startswith('en'):
+            return 'en'
+
+        return code
+
+    def _getEnvironmentLanguage(self):
+        """Return normalized language from FFL_LANGUAGE environment variable if present."""
+        environmentLanguage = os.getenv('FFL_LANGUAGE')
+        if not environmentLanguage:
+            return None
+
+        return self._normalizeLanguageCode(environmentLanguage)
+
+
+class BabelI18nManager(I18nLanguageMixin, Singleton):
     """
     Internationalization manager using gettext for Python backend translations.
     Manages language preferences, translation loading, and provides translation functions.
@@ -76,6 +141,12 @@ class BabelI18nManager(Singleton):
 
     def _loadOrDetectLanguage(self):
         """Load saved language preference or detect from OS"""
+        environmentLanguage = self._getEnvironmentLanguage()
+        if environmentLanguage:
+            self.currentLanguage = environmentLanguage
+            logger.debug(f"Loaded language preference from FFL_LANGUAGE: {self.currentLanguage}")
+            return
+
         config = self._loadConfig(useDefault=False)
 
         if config and 'language' in config:
@@ -95,30 +166,6 @@ class BabelI18nManager(Singleton):
         if self.currentLanguage not in self.SUPPORTED_LANGUAGES:
             logger.warning(f"Unsupported language '{self.currentLanguage}', falling back to {self.DEFAULT_LANGUAGE}")
             self.currentLanguage = self.DEFAULT_LANGUAGE
-
-    def _mapBabelLocaleToLanguageCode(self, babelLocale):
-        """
-        Map babel Locale object to our language code format.
-
-        Args:
-            babelLocale: babel.Locale object
-
-        Returns:
-            Language code string (e.g., 'en', 'zh_Hant', 'zh_Hans')
-        """
-        # Handle Chinese variants based on script or territory
-        if babelLocale.language == 'zh':
-            # Traditional Chinese: script=Hant or territories TW, HK, MO
-            if babelLocale.script == 'Hant' or babelLocale.territory in ('TW', 'HK', 'MO'):
-                return 'zh_Hant'
-            # Simplified Chinese: script=Hans or territories CN, SG
-            elif babelLocale.script == 'Hans' or babelLocale.territory in ('CN', 'SG'):
-                return 'zh_Hans'
-            # Default to Simplified if no script/territory info
-            return 'zh_Hans'
-
-        # For other languages, return the language code
-        return babelLocale.language
 
     def _detectOSLanguage(self):
         """Detect OS default language using locale and babel normalization"""
@@ -281,39 +328,6 @@ class BabelI18nManager(Singleton):
 
         logger.info(f"Language changed to: {normalizedLang}")
 
-    def _normalizeLanguageCode(self, code):
-        """
-        Normalize language code to standard format using babel.
-
-        Examples:
-            'zh-hant' -> 'zh_Hant'
-            'zh-tw' -> 'zh_Hant'
-            'en' -> 'en'
-        """
-        if not code:
-            return self.DEFAULT_LANGUAGE
-
-        try:
-            # Try parsing with babel (handles both '-' and '_' separators)
-            babelLocale = Locale.parse(code, sep='_')
-
-            # Use the shared mapping logic
-            return self._mapBabelLocaleToLanguageCode(babelLocale)
-
-        except (UnknownLocaleError, ValueError):
-            # If babel can't parse it, try simple normalization
-            normalized = code.lower().replace('-', '_')
-
-            # Direct match for common patterns
-            if normalized in ('zh_hant', 'zh_tw', 'zh_hk', 'zh_mo'):
-                return 'zh_Hant'
-            elif normalized in ('zh_hans', 'zh_cn', 'zh_sg'):
-                return 'zh_Hans'
-            elif normalized.startswith('en'):
-                return 'en'
-            else:
-                return code
-
     def getLanguage(self):
         """Get current language code"""
         return self.currentLanguage
@@ -323,7 +337,7 @@ class BabelI18nManager(Singleton):
         return self.SUPPORTED_LANGUAGES.copy()
 
 
-class DummyI18nManager(Singleton):
+class DummyI18nManager(I18nLanguageMixin, Singleton):
     """
     Dummy I18nManager for when babel is not available.
     Always uses English language and returns messages unchanged.
@@ -334,8 +348,8 @@ class DummyI18nManager(Singleton):
 
     def initialize(self):
         """Initialize dummy manager with English only"""
-        self.currentLanguage = self.DEFAULT_LANGUAGE
-        logger.debug("DummyI18nManager initialized (babel not available, using English only)")
+        self.currentLanguage = self._getEnvironmentLanguage() or self.DEFAULT_LANGUAGE
+        logger.debug(f"DummyI18nManager initialized with language: {self.currentLanguage}")
 
     def _(self, message, domain=None):
         """Return message unchanged (no translation)"""

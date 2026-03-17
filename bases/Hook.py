@@ -59,6 +59,8 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 import requests
 
+from http import HTTPStatus
+
 from bases.Kernel import getLogger, FFLEvent, Event
 from bases.Server import AuthMixin, HTTPAuth
 
@@ -615,7 +617,7 @@ class HookEndpointRouter:
         if not path.startswith('/') or '?' in path or '*' in path:
             return None
 
-        return {'method': method, 'path': path}
+        return {'method': method, 'path': path, 'encryptResponse': bool(route.get('encryptResponse', False))}
 
     @classmethod
     def _fetchRoutes(cls, server, hookClient: HookClient) -> list:
@@ -644,6 +646,56 @@ class HookEndpointRouter:
             logger.warning(f"Hook endpoint registration failed: {e}")
 
         return routes
+
+    @staticmethod
+    def _computeStreamId(path: str, args) -> str:
+        """Derive a stable stream ID from a hook endpoint path and its query args.
+
+        If a 'hash' query parameter is present it is appended so that different
+        resources served from the same path get distinct tag namespaces.
+
+        Examples:
+            /thumb?hash=abc  → "thumb/abc"
+            /file?hash=abc   → "file/abc"
+            /manifest        → "manifest"
+        """
+        pathSegment = path.lstrip('/')
+        hashValue = None
+        if args:
+            hashList = args.get('hash')
+            if hashList:
+                hashValue = hashList[0] if isinstance(hashList, list) else hashList
+        if hashValue:
+            return f"{pathSegment}/{hashValue}"
+        return pathSegment
+
+    @classmethod
+    def _encryptAndSendHookResponse(cls, handler, data: bytes, streamId: str, contentType: str):
+        """Encrypt hook response data with the server's E2EE manager and send to client."""
+        originalSize = len(data)
+        e2eeManager = handler.server.e2eeManager
+        encryptor = e2eeManager.createEncryptor(
+            filename=streamId,
+            filesize=originalSize,
+            startChunkIndex=0,
+            saveTags=True,
+            streamId=streamId,
+        )
+        chunkSize = e2eeManager.chunkSize
+        encryptedChunks = []
+        offset = 0
+        while offset < originalSize:
+            chunk = data[offset:offset + chunkSize]
+            encryptedChunks.append(encryptor.encryptChunk(chunk))
+            offset += chunkSize
+        encryptedData = b''.join(encryptedChunks)
+
+        handler.send_response(HTTPStatus.OK)
+        handler.send_header('Content-Type', contentType)
+        handler.send_header('Content-Length', str(len(encryptedData)))
+        handler.send_header('Cache-Control', 'no-cache')
+        handler.end_headers()
+        handler.wfile.write(encryptedData)
 
     @staticmethod
     def _buildProxyURL(hookClient: HookClient, path: str, args=None) -> str:
@@ -696,7 +748,16 @@ class HookEndpointRouter:
             handler.wfile.write(body)
 
     @classmethod
-    def _proxyRequest(cls, handler, hookClient: HookClient, method: str, path: str, args=None, body=None):
+    def _proxyRequest(
+        cls,
+        handler,
+        hookClient: HookClient,
+        method: str,
+        path: str,
+        args=None,
+        body=None,
+        encryptResponse: bool = False
+    ):
         try:
             url = cls._buildProxyURL(hookClient, path, args=args)
             requestHeaders = cls._buildForwardHeaders(handler)
@@ -713,7 +774,20 @@ class HookEndpointRouter:
                 requestArgs['json'] = HookEventSerializer.makeJsonSafe(body if body is not None else {})
 
             response = requests.request(method, **requestArgs)
-            cls._sendProxyResponse(handler, method, response)
+
+            serverObj = getattr(handler, 'server', None)
+            e2eeManager = getattr(serverObj, 'e2eeManager', None)
+            e2eeEnabled = getattr(getattr(serverObj, 'config', None), 'e2eeEnabled', False)
+
+            if (
+                encryptResponse and method != 'HEAD' and response.status_code == 200 and e2eeManager is not None and
+                e2eeEnabled
+            ):
+                streamId = cls._computeStreamId(path, args)
+                contentType = response.headers.get('Content-Type', 'application/octet-stream')
+                cls._encryptAndSendHookResponse(handler, response.content, streamId, contentType)
+            else:
+                cls._sendProxyResponse(handler, method, response)
         except requests.exceptions.RequestException as e:
             handler.send_error(502, f'Hook endpoint request failed: {e}')
         except Exception as e:
@@ -726,15 +800,18 @@ class HookEndpointRouter:
         for route in routes:
             method = route['method']
             path = route['path']
+            encryptResp = route.get('encryptResponse', False)
 
             if method == 'GET':
                 getPathMap[path] = (
-                    lambda args, _path=path: cls._proxyRequest(handler, hookClient, 'GET', _path, args=args)
+                    lambda args, _path=path, _enc=encryptResp: cls.
+                    _proxyRequest(handler, hookClient, 'GET', _path, args=args, encryptResponse=_enc)
                 )
                 headPathMap[path] = (lambda _path=path: cls._proxyRequest(handler, hookClient, 'HEAD', _path, args={}))
             elif method == 'POST':
                 postPathMap[path] = (
-                    lambda data, _path=path: cls._proxyRequest(handler, hookClient, 'POST', _path, body=data)
+                    lambda data, _path=path, _enc=encryptResp: cls.
+                    _proxyRequest(handler, hookClient, 'POST', _path, body=data, encryptResponse=_enc)
                 )
             elif method == 'HEAD':
                 headPathMap[path] = (lambda _path=path: cls._proxyRequest(handler, hookClient, 'HEAD', _path))

@@ -43,6 +43,13 @@
     "complete": {
         "title": "✅ 下載完成！"
     },
+    "receiptConfirm": {
+        "sendButton": "傳送確認",
+        "skipButton": "略過",
+        "thanks": "感謝！您的確認已送出。",
+        "sending": "傳送中…",
+        "placeholder": "已確認，謝謝！"
+    },
     "closeTab": "關閉此分頁",
     "e2ee": {
         "title": "🔒 此檔案已加密",
@@ -105,7 +112,9 @@
         "sendFirst": "請先請求驗證碼。",
         "sendFailed": "發送失敗，請重試。",
         "sendError": "網路錯誤，請重試。",
-        "sending": "發送中…"
+        "sending": "發送中…",
+        "enterAddress": "請先輸入您的電子郵件地址。",
+        "notAllowed": "此電子郵件地址無權下載此檔案。"
     },
     "auth": {
         "failed": "驗證失敗，請再試一次。",

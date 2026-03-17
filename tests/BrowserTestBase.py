@@ -145,23 +145,54 @@ class BrowserTestBase(FastFileLinkTestBase):
             options.add_argument('--disable-features=BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights')
             options.add_argument(f'--unsafely-treat-insecure-origin-as-secure={staticServer}')
             options.add_argument('--disable-web-security')
-
-        driver = uc.Chrome(options=options, version_main=144)
-        try:
-            driver.execute_cdp_cmd(
-                "Page.setDownloadBehavior", {
-                    "behavior": "allow",
-                    "downloadPath": downloadDir,
-                    "eventsEnabled": True
-                }
-            )
-            driver.execute_cdp_cmd("Network.enable", {})
-            driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
-        except Exception as e:
-            print(f"[Test] Warning: Failed to set download behavior via CDP: {e}")
+        
+        if os.getenv('CHROME_DRIVER_VERSION', ''):
+            driver = uc.Chrome(options=options, version_main=int(os.environ['CHROME_DRIVER_VERSION']))
+        else:
+            driver = uc.Chrome(options=options)
+            
+        self._configureChromeDownloadBehavior(driver, downloadDir)
 
         self.activeDrivers.append(driver)
         return driver
+
+    def _configureChromeDownloadBehavior(self, driver, downloadDir):
+        """Configure Chrome downloads using both new and legacy CDP APIs."""
+        behaviorSet = False
+
+        for command in ("Browser.setDownloadBehavior", "Page.setDownloadBehavior"):
+            try:
+                driver.execute_cdp_cmd(
+                    command,
+                    {
+                        "behavior": "allow",
+                        "downloadPath": downloadDir,
+                        "eventsEnabled": True
+                    }
+                )
+                print(f"[Test] Configured Chrome download behavior via {command}")
+                behaviorSet = True
+            except Exception as e:
+                print(f"[Test] Warning: Failed to set download behavior via {command}: {e}")
+
+        try:
+            driver.execute_cdp_cmd("Network.enable", {})
+            driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
+        except Exception as e:
+            print(f"[Test] Warning: Failed to configure Chrome network CDP: {e}")
+
+        if not behaviorSet:
+            print("[Test] Warning: Chrome download behavior was not configured via CDP")
+
+    def _isChromeDriver(self, driver):
+        """Return True when the supplied Selenium driver is Chrome-based."""
+        if not driver:
+            return False
+
+        try:
+            return 'chrome' in driver.capabilities.get('browserName', '').lower()
+        except Exception:
+            return False
 
     def _setupFirefoxDriver(self, downloadDir):
         """Setup Firefox WebDriver with get-gecko-driver"""
@@ -522,7 +553,7 @@ class BrowserTestBase(FastFileLinkTestBase):
                 # Firefox and other browsers don't support get_log('performance')
                 print(f"[Test] Performance logs not available for this browser: {e}")
 
-        if True: #not downloadedFile:
+        if not downloadedFile:
             if driver:
                 # 如果超時或失敗時，再抓一次，常常能看到 targetDestroyed
                 self._drainAndPrintTargetEvents(driver)

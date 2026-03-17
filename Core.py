@@ -310,9 +310,9 @@ def processUpload(args, reader, proxyConfig: ProxyConfig):
             if recipientAuth.isEnabled():
                 extraArgs['pickupCode'] = recipientAuth.pickupCode
             if recipientAuth.requiresPubkey():
-                extraArgs['recipientPublicKey'] = recipientAuth.publicKeyPem
+                extraArgs['recipientPublicKey'] = recipientAuth.publicKeyPems
             if recipientAuth.requiresEmail():
-                extraArgs['recipientEmail'] = recipientAuth.recipientEmail
+                extraArgs['recipientEmail'] = recipientAuth.recipientEmails
 
             if resume:
                 # Resume mode: use resume() instead of tell()

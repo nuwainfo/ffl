@@ -101,7 +101,6 @@ class CachingMixin:
 
     # Class-level registry to track all instances for cleanup
     _instances = []
-    _shutdownSubscribed = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -114,10 +113,8 @@ class CachingMixin:
         # Register this instance for shutdown cleanup
         CachingMixin._instances.append(self)
 
-        # Subscribe to shutdown event (do this only once for the class)
-        if not CachingMixin._shutdownSubscribed:
-            FFLEvent.applicationShutdown.subscribe(CachingMixin._cleanupAllInstances)
-            CachingMixin._shutdownSubscribed = True
+        # Subscribe to shutdown event - subscribe() is idempotent (skips if already connected)
+        FFLEvent.applicationShutdown.subscribe(CachingMixin._cleanupAllInstances)
 
     @classmethod
     def _cleanupAllInstances(cls, **kwargs):

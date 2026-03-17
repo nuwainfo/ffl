@@ -82,7 +82,7 @@ class AuthGateRegistry {
             btn.disabled = true;
             originalContent = btn.innerHTML;
             const spinnerHtml = '<span class="auth-gate-spinner"></span>';
-            const label = dmT('Download:auth.verifying', 'Verifying…');
+            const label = dmT('Download:auth.verifying', 'Verifying...');
             btn.innerHTML = `${spinnerHtml}<span>${label}</span>`;
         }
         try {
@@ -139,16 +139,6 @@ class AuthGateRegistry {
 /**
  * PickupCodeGate — auth gate for 6-digit pickup code.
  * Implements the { validate(), apply(), focus() } interface for AuthGateRegistry.
- *
- * options:
- *   codeInputId    — id of the code <input>  (default: 'pickup-code-input')
- *   errorMsgId     — id of the error element (default: 'pickup-error-message')
- *   verifyEndpoint — string; when provided, verifies the code server-side before accepting it.
- *                    GET: appends ?verify=code to the URL (e.g. Caddy file_server).
- *                    POST: sends { verify: 'code' } in the JSON body (e.g. P2P Python server).
- *   verifyMethod   — 'GET' or 'POST' (default 'POST')
- *   onAccepted     — callback(code: string) invoked after the gate passes
- *   t              — translation function (key, defaultValue) → string
  */
 class PickupCodeGate {
     constructor(options = {}) {
@@ -221,19 +211,6 @@ PickupCodeGate.HEADER = 'X-FFL-Pickup';
 
 /**
  * PubkeyGate — RSA-OAEP challenge-response authentication gate.
- *
- * Options:
- *   fileInputId    — id of the <input type="file"> element (default 'pubkey-file-input')
- *   fileLabelId    — id of the label/span element showing file name (default 'pubkey-file-label')
- *   errorMsgId     — id of error <p> element (default 'pubkey-error-message')
- *   containerId    — id of gate wrapper div (shown by show())
- *   challenge      — base64-encoded RSA-OAEP ciphertext (server-generated)
- *   verifyEndpoint — URL to verify the proof (optional).
- *                    GET: appends ?verify=proof (e.g. Caddy file_server auth endpoint).
- *                    POST: sends { verify: 'proof' } in JSON body (e.g. P2P Python server).
- *   verifyMethod   — 'GET' or 'POST' (default 'POST')
- *   onAccepted     — callback(proof: string) invoked after the gate passes
- *   t              — translation function (key, defaultValue) → string
  */
 class PubkeyGate {
     constructor(options = {}) {
@@ -241,7 +218,7 @@ class PubkeyGate {
         this.fileLabelId    = options.fileLabelId  || 'pubkey-file-label';
         this.errorMsgId     = options.errorMsgId   || 'pubkey-error-message';
         this.containerId    = options.containerId  || null;
-        this.challenge      = options.challenge;
+        this.challenges     = Array.isArray(options.challenges) ? options.challenges : [];
         this.verifyEndpoint = options.verifyEndpoint || null;
         this.verifyMethod   = options.verifyMethod || 'POST';
         this.onAccepted     = options.onAccepted   || null;
@@ -321,18 +298,26 @@ class PubkeyGate {
             err.style.display = 'block';
             throw e;
         }
-        const ciphertextBytes = Uint8Array.from(atob(this.challenge), c => c.charCodeAt(0));
-        let plaintext;
-        try {
-            plaintext = await crypto.subtle.decrypt(
-                { name: 'RSA-OAEP' }, privateKey, ciphertextBytes.buffer
-            );
-        } catch (e) {
+
+        let proof = null;
+        for (const challenge of this.challenges) {
+            const ciphertextBytes = Uint8Array.from(atob(challenge), c => c.charCodeAt(0));
+            try {
+                const plaintext = await crypto.subtle.decrypt(
+                    { name: 'RSA-OAEP' }, privateKey, ciphertextBytes.buffer
+                );
+                proof = btoa(String.fromCharCode(...new Uint8Array(plaintext)));
+                break;
+            } catch (_e) {
+            }
+        }
+
+        if (!proof) {
             err.textContent = this.t('Download:pubkey.decryptError', 'Decryption failed — wrong private key.');
             err.style.display = 'block';
-            throw e;
+            throw new Error('decrypt-failed');
         }
-        const proof = btoa(String.fromCharCode(...new Uint8Array(plaintext)));
+
         if (this.verifyEndpoint) {
             let url = this.verifyEndpoint;
             const fetchOptions = { method: this.verifyMethod, headers: { [PubkeyGate.HEADER]: proof } };
@@ -376,32 +361,21 @@ PubkeyGate.HEADER = 'X-FFL-Proof';
  *   5. validate() checks the format; apply() stores the OTP.
  *   6. authHeaders carries X-FFL-EmailOTP / X-FFL-EmailAddress / X-FFL-EmailLink
  *      to the auth endpoint (P2P: POST /{uid}/auth → Python server calls FFL API).
- *
- * Options:
- *   containerId       — id of the gate wrapper div
- *   sendBtnId         — id of the "Send Code" button (default: 'email-send-btn')
- *   otpSectionId      — id of the OTP input section shown after send (default: 'email-otp-section')
- *   otpInputId        — id of the OTP <input> (default: 'email-otp-input')
- *   emailDisplayId    — id of the element showing the recipient email (default: 'email-address-display')
- *   statusMsgId       — id of the success/info message element (default: 'email-status-message')
- *   errorMsgId        — id of error <p> (default: 'email-error-message')
- *   recipientEmail    — pre-configured recipient email address
- *   otpRequestUrl     — full URL for POST {email, link} to trigger OTP send
- *   shareLink         — the share link used as the OTP binding key (window.location.href)
- *   onAccepted        — callback(otp: string) invoked after gate passes
- *   t                 — translation function
  */
 class EmailGate {
     constructor(options = {}) {
         this.containerId    = options.containerId    || null;
         this.sendBtnId      = options.sendBtnId      || 'email-send-btn';
+        this.emailInputSectionId = options.emailInputSectionId || 'email-address-input-section';
+        this.emailInputId   = options.emailInputId   || 'email-address-input';
         this.otpSectionId   = options.otpSectionId   || 'email-otp-section';
         this.otpInputId     = options.otpInputId     || 'email-otp-input';
         this.emailDisplayId = options.emailDisplayId || 'email-address-display';
         this.statusMsgId    = options.statusMsgId    || 'email-status-message';
         this.errorMsgId     = options.errorMsgId     || 'email-error-message';
-        this.recipientEmail = options.recipientEmail || '';
+        this.recipientEmails = Array.isArray(options.recipientEmails) ? options.recipientEmails : [];
         this.otpRequestUrl  = options.otpRequestUrl  || null;
+        this.allowlistVerifyEndpoint = options.allowlistVerifyEndpoint || null;
         this.verifyEndpoint = options.verifyEndpoint || null;
         this.shareLink      = options.shareLink      || window.location.href;
         this.onAccepted     = options.onAccepted     || null;
@@ -416,9 +390,10 @@ class EmailGate {
     }
 
     get authHeaders() {
+        const email = this._resolveRecipientEmail();
         return this._otp ? {
             [EmailGate.HEADER_OTP]:     this._otp,
-            [EmailGate.HEADER_ADDRESS]: this.recipientEmail,
+            [EmailGate.HEADER_ADDRESS]: email,
             [EmailGate.HEADER_LINK]:    this.shareLink,
         } : {};
     }
@@ -428,13 +403,34 @@ class EmailGate {
             document.getElementById(this.containerId)?.style.setProperty('display', 'block');
         }
         const emailDisplay = document.getElementById(this.emailDisplayId);
-        if (emailDisplay && this.recipientEmail) {
-            emailDisplay.textContent = this.recipientEmail;
+        const emailInputSection = document.getElementById(this.emailInputSectionId);
+        if (emailDisplay) {
+            if (this.recipientEmails.length === 1) {
+                emailDisplay.textContent = this.recipientEmails[0];
+                emailDisplay.style.display = 'block';
+            } else {
+                emailDisplay.textContent = '';
+                emailDisplay.style.display = 'none';
+            }
+        }
+        if (emailInputSection) {
+            emailInputSection.style.display = this.recipientEmails.length > 1 ? 'block' : 'none';
         }
     }
 
     validate() {
         const errorMsg = document.getElementById(this.errorMsgId);
+        const email = this._resolveRecipientEmail();
+        if (!email) {
+            errorMsg.textContent = this.t('Download:email.enterAddress', 'Please enter your email address first.');
+            errorMsg.style.display = 'block';
+            return 'missing-email';
+        }
+        if (!this._isAllowedEmail(email)) {
+            errorMsg.textContent = this.t('Download:email.notAllowed', 'This email address is not allowed to download this file.');
+            errorMsg.style.display = 'block';
+            return 'email-not-allowed';
+        }
         if (!this._codeSent) {
             errorMsg.textContent = this.t('Download:email.sendFirst', 'Please request a verification code first.');
             errorMsg.style.display = 'block';
@@ -451,12 +447,13 @@ class EmailGate {
     }
 
     async apply() {
+        const recipientEmail = this._resolveRecipientEmail();
         this._otp = document.getElementById(this.otpInputId)?.value.trim();
         if (this.verifyEndpoint) {
             const response = await fetch(this.verifyEndpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email: this.recipientEmail, link: this.shareLink, otp: this._otp }),
+                body: JSON.stringify({ email: recipientEmail, link: this.shareLink, otp: this._otp }),
             });
             const errorMsg = document.getElementById(this.errorMsgId);
             if (response.status === 429) {
@@ -474,25 +471,62 @@ class EmailGate {
                 throw new Error('OTP verification failed');
             }
         }
-        this.onAccepted?.(this._otp);
+        this.onAccepted?.(this._otp, recipientEmail, this.shareLink);
     }
 
     focus() {
-        document.getElementById(this.otpInputId)?.focus();
+        const focusTargetId = this.recipientEmails.length > 1 ? this.emailInputId : this.otpInputId;
+        document.getElementById(focusTargetId)?.focus();
     }
 
     async _sendCode() {
         const errorMsg  = document.getElementById(this.errorMsgId);
         const statusMsg = document.getElementById(this.statusMsgId);
         const sendBtn   = document.getElementById(this.sendBtnId);
+        const email = this._resolveRecipientEmail();
+        if (!email) {
+            if (errorMsg) {
+                errorMsg.textContent = this.t('Download:email.enterAddress', 'Please enter your email address first.');
+                errorMsg.style.display = 'block';
+            }
+            return;
+        }
+        if (!this._isAllowedEmail(email)) {
+            if (errorMsg) {
+                errorMsg.textContent = this.t('Download:email.notAllowed', 'This email address is not allowed to download this file.');
+                errorMsg.style.display = 'block';
+            }
+            return;
+        }
+
         const originalContent = sendBtn.innerHTML;
         sendBtn.disabled = true;
-        sendBtn.innerHTML = `<span class="auth-gate-spinner" style="border-color:rgba(255,255,255,0.4);border-top-color:white;"></span><span>${this.t('Download:email.sending', 'Sending…')}</span>`;
+        sendBtn.innerHTML = `<span class="auth-gate-spinner" style="border-color:rgba(255,255,255,0.4);border-top-color:white;"></span><span>${this.t('Download:email.sending', 'Sending...')}</span>`;
         try {
+            if (this.allowlistVerifyEndpoint) {
+                const allowlistResponse = await fetch(this.allowlistVerifyEndpoint, {
+                    method: 'GET',
+                    headers: { [EmailGate.HEADER_ADDRESS]: email },
+                });
+                if (!allowlistResponse.ok) {
+                    if (errorMsg) {
+                        errorMsg.textContent = this.t('Download:email.notAllowed', 'This email address is not allowed to download this file.');
+                        errorMsg.style.display = 'block';
+                    }
+                    sendBtn.innerHTML = originalContent;
+                    sendBtn.disabled = false;
+                    return;
+                }
+            }
+
             const resp = await fetch(this.otpRequestUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email: this.recipientEmail, link: this.shareLink }),
+                body: JSON.stringify({
+                    email,
+                    link: this.shareLink,
+                    language: this._resolveLanguage(),
+                }),
             });
             if (resp.ok) {
                 sendBtn.innerHTML = originalContent;
@@ -502,7 +536,9 @@ class EmailGate {
                     statusMsg.textContent = this.t('Download:email.codeSent', 'Code sent! Please check your email.');
                     statusMsg.style.display = 'block';
                 }
-                if (errorMsg) errorMsg.style.display = 'none';
+                if (errorMsg) {
+                    errorMsg.style.display = 'none';
+                }
             } else {
                 const data = await resp.json().catch(() => ({}));
                 if (errorMsg) {
@@ -521,10 +557,126 @@ class EmailGate {
             sendBtn.disabled = false;
         }
     }
+
+    _resolveRecipientEmail() {
+        if (this.recipientEmails.length === 1) {
+            return this.recipientEmails[0];
+        }
+
+        const emailInput = document.getElementById(this.emailInputId);
+        return emailInput ? emailInput.value.trim().toLowerCase() : '';
+    }
+
+    _resolveLanguage() {
+        const resolvedLanguage = window.i18next?.resolvedLanguage || window.i18next?.language;
+        if (resolvedLanguage) {
+            return resolvedLanguage;
+        }
+
+        if (typeof navigator !== 'undefined' && navigator.language) {
+            return navigator.language;
+        }
+
+        return 'en';
+    }
+
+    _isAllowedEmail(email) {
+        const normalizedEmail = (email || '').trim().toLowerCase();
+        if (!normalizedEmail) {
+            return false;
+        }
+        return this.recipientEmails.map(candidate => candidate.toLowerCase()).includes(normalizedEmail);
+    }
 }
 EmailGate.HEADER_OTP     = 'X-FFL-EmailOTP';
 EmailGate.HEADER_ADDRESS = 'X-FFL-EmailAddress';
 EmailGate.HEADER_LINK    = 'X-FFL-EmailLink';
+
+/**
+ * ReceiptConfirmationUI — post-download dialog that asks the receiver to send a receipt.
+ *
+ * Usage:
+ *   const rc = new ReceiptConfirmationUI({
+ *       endpoint: '/uid=xxxx/receipt/confirm',
+ *       message:  'Please confirm you received the file.',   // optional override
+ *       dialogId: 'receipt-confirm-dialog',                  // optional
+ *   });
+ *   rc.show(serverMessage);   // called from /complete response handler
+ */
+class ReceiptConfirmationUI {
+    constructor(options = {}) {
+        this.endpoint  = options.endpoint  || null;
+        this.message   = options.message   || null;
+        this.dialogId  = options.dialogId  || 'receipt-confirm-dialog';
+        this._log      = options.logFunction || dmLog;
+        this._t        = options.tFunction   || dmT;
+        this._bound    = false;
+    }
+
+    show(message) {
+        const dialog = document.getElementById(this.dialogId);
+        if (!dialog) return;
+
+        const msgEl = document.getElementById('receipt-confirm-sender-msg');
+        if (msgEl) msgEl.textContent = message || this.message || '';
+
+        dialog.style.display = 'block';
+
+        if (!this._bound) {
+            this._bound = true;
+            this._bindButtons();
+        }
+    }
+
+    _bindButtons() {
+        const sendBtn  = document.getElementById('receipt-confirm-send-btn');
+        const skipBtn  = document.getElementById('receipt-confirm-skip-btn');
+
+        const hideDialog = () => {
+            const dialog = document.getElementById(this.dialogId);
+            if (dialog) dialog.style.display = 'none';
+        };
+
+        const showThanks = () => {
+            const thanks = document.getElementById('receipt-confirm-thanks');
+            if (thanks) thanks.style.display = 'block';
+        };
+
+        if (sendBtn) {
+            sendBtn.addEventListener('click', async () => {
+                const reply   = (document.getElementById('receipt-confirm-reply')?.value || '').trim();
+                const spinner = document.getElementById('receipt-confirm-spinner');
+
+                sendBtn.disabled = true;
+                if (skipBtn) skipBtn.disabled = true;
+                if (spinner) {
+                    spinner.textContent = this._t('Download:receiptConfirm.sending', 'Sending…');
+                    spinner.style.display = 'inline';
+                }
+
+                if (this.endpoint) {
+                    try {
+                        await fetch(this.endpoint, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ message: reply }),
+                        });
+                    } catch (e) {
+                        this._log('ReceiptConfirm', 'Failed to send confirmation: ' + e);
+                    }
+                }
+
+                if (spinner) spinner.style.display = 'none';
+                hideDialog();
+                showThanks();
+            });
+        }
+
+        if (skipBtn) {
+            skipBtn.addEventListener('click', () => hideDialog());
+        }
+    }
+}
 
 class DownloadManager {
     constructor(options = {}) {
@@ -602,6 +754,9 @@ class DownloadManager {
         
         // Configurable delay calculation function
         this.calculateDelayMs = options.calculateDelayMs || this.defaultCalculateDelayMs.bind(this);
+
+        // Receipt confirmation dialog (optional — set to a ReceiptConfirmationUI instance)
+        this.receiptConfirmationUI = options.receiptConfirmationUI || null;
 
         // Callback functions for external integration
         this.onServiceWorkerReadyCallback = options.onServiceWorkerReadyCallback || null;
@@ -853,6 +1008,11 @@ class DownloadManager {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ downloadId: this.serverDownloadId, receivedBytes: resolvedTotal || 0 }),
+            }).then(async response => {
+                const data = await response.json().catch(() => null);
+                if (data && data.confirmRequired && this.receiptConfirmationUI) {
+                    this.receiptConfirmationUI.show(data.message);
+                }
             }).catch(err => {
                 this.log('DownloadManager', `Failed to notify server of HTTP completion: ${err}`);
             });

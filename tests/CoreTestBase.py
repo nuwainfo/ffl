@@ -17,9 +17,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import email as email_lib
 import hashlib
+import imaplib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -1379,3 +1382,90 @@ class FastFileLinkTestBase(unittest.TestCase):
             os.environ[key] = originalValue
         elif key in os.environ:
             del os.environ[key]
+
+
+# ---------------------------
+# IMAP test helpers
+# ---------------------------
+class IMAPTestMixin:
+    """Mixin for tests that need to read email via IMAP.
+
+    Subclasses must set before use:
+        self.IMAP_EMAIL    — the mailbox login address
+        self.IMAP_HOST     — IMAP server hostname
+        self.IMAP_PORT     — IMAP port (default: 993)
+        self.IMAP_PASSWORD — IMAP account password
+    """
+
+    IMAP_EMAIL = None
+    IMAP_HOST = None
+    IMAP_PORT = 993
+    IMAP_PASSWORD = None
+
+    def _connectIMAP(self):
+        """Return an authenticated, INBOX-selected IMAP4_SSL connection."""
+        imap = imaplib.IMAP4_SSL(self.IMAP_HOST, self.IMAP_PORT)
+        imap.login(self.IMAP_EMAIL, self.IMAP_PASSWORD)
+        imap.select('INBOX')
+        return imap
+
+    @staticmethod
+    def _extractBody(msg):
+        """Return the plain-text body of an email.Message object."""
+        if msg.is_multipart():
+            for part in msg.walk():
+                if part.get_content_type() == 'text/plain':
+                    return part.get_payload(decode=True).decode(errors='replace')
+            return ''
+        return msg.get_payload(decode=True).decode(errors='replace')
+
+    def _deleteEmailsBySubject(self, subjectKeyword):
+        """Delete all inbox messages whose subject contains *subjectKeyword*."""
+        try:
+            with self._connectIMAP() as imap:
+                _, msgIds = imap.search(None, 'SUBJECT', f'"{subjectKeyword}"')
+                for msgId in msgIds[0].split():
+                    imap.store(msgId, '+FLAGS', '\\Deleted')
+                imap.expunge()
+        except Exception as e:
+            print(f'[Test] Warning: could not clean IMAP inbox: {e}')
+
+    def _deleteTestEmails(self):
+        """Delete all FastFileLink emails from the inbox (convenience wrapper)."""
+        self._deleteEmailsBySubject('FastFileLink')
+
+    def _pollInbox(self, subjectKeyword, timeout, extractFn):
+        """Poll IMAP until *extractFn* returns a truthy value or *timeout* expires.
+
+        *extractFn(body: str) -> value* is called for each matching unseen message.
+        Returns the first truthy value returned by *extractFn*.
+        Raises TimeoutError if nothing is found within *timeout* seconds.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                with self._connectIMAP() as imap:
+                    _, msgIds = imap.search(None, 'UNSEEN', 'SUBJECT', f'"{subjectKeyword}"')
+                    for msgId in reversed(msgIds[0].split()):
+                        _, data = imap.fetch(msgId, '(RFC822)')
+                        msg = email_lib.message_from_bytes(data[0][1])
+                        body = self._extractBody(msg)
+                        result = extractFn(body)
+                        if result:
+                            return result
+            except Exception as e:
+                print(f'[Test] IMAP poll error: {e}')
+            time.sleep(5)
+        raise TimeoutError(f'Expected email with subject "{subjectKeyword}" not received within {timeout}s')
+
+    def _fetchEmailBody(self, subjectKeyword, timeout=90):
+        """Return the plain-text body of the first matching unseen email."""
+        return self._pollInbox(subjectKeyword, timeout, lambda body: body or None)
+
+    def _fetchOTPFromEmail(self, timeout=90):
+        """Poll IMAP until a FastFileLink OTP email arrives; return the 6-digit code."""
+        def extractOTP(body):
+            match = re.search(r'\b(\d{6})\b', body)
+            return match.group(1) if match else None
+
+        return self._pollInbox('FastFileLink', timeout, extractOTP)

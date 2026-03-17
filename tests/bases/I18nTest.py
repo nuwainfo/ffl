@@ -21,6 +21,10 @@ import subprocess
 import unittest
 import json
 
+from unittest.mock import patch
+
+from bases.I18n import BabelI18nManager, DummyI18nManager
+from bases.Kernel import StorageLocator
 from tests.CoreTestBase import FastFileLinkTestBase
 
 
@@ -36,6 +40,7 @@ class I18nTest(FastFileLinkTestBase):
 
     def setUp(self):
         """Set up the test environment with zh_Hant language"""
+        self._savedStorageLocator = StorageLocator._instances.get(StorageLocator)
         super().setUp()
 
         # Create i18n.json config file in test config directory
@@ -50,6 +55,14 @@ class I18nTest(FastFileLinkTestBase):
 
         print(f"[Test] Created i18n config: {i18nConfigPath}")
         print(f"[Test] Test config directory: {self.testConfigDir}")
+
+    def tearDown(self):
+        BabelI18nManager._instances.pop(BabelI18nManager, None)
+        DummyI18nManager._instances.pop(DummyI18nManager, None)
+        StorageLocator._instances.pop(StorageLocator, None)
+        if self._savedStorageLocator is not None:
+            StorageLocator._instances[StorageLocator] = self._savedStorageLocator
+        super().tearDown()
 
     def _decodeOutput(self, rawBytes):
         """
@@ -162,6 +175,30 @@ class I18nTest(FastFileLinkTestBase):
 
         self._assertChineseStrings(helpOutput, expectedChineseStrings, "help output")
         print(f"[Test] [OK] Help translation test passed")
+
+    def testEnvironmentLanguageOverridesStoredConfig(self):
+        """FFL_LANGUAGE should override i18n.json during manager initialization."""
+        print("\n[Test] Testing FFL_LANGUAGE override over i18n.json...")
+
+        with patch.dict(os.environ, {'FFL_STORAGE_LOCATION': self.testConfigDir, 'FFL_LANGUAGE': 'en'}, clear=False):
+            BabelI18nManager._instances.pop(BabelI18nManager, None)
+            StorageLocator._instances.pop(StorageLocator, None)
+
+            language = BabelI18nManager.getInstance().getLanguage()
+
+        self.assertEqual(language, 'en')
+        print(f"[Test] [OK] FFL_LANGUAGE override applied: {language}")
+
+    def testDummyManagerSupportsEnvironmentLanguage(self):
+        """DummyI18nManager should also expose FFL_LANGUAGE when set."""
+        print("\n[Test] Testing DummyI18nManager FFL_LANGUAGE support...")
+
+        with patch.dict(os.environ, {'FFL_LANGUAGE': 'zh_Hant'}, clear=False):
+            DummyI18nManager._instances.pop(DummyI18nManager, None)
+            dummyLanguage = DummyI18nManager.getInstance().getLanguage()
+
+        self.assertEqual(dummyLanguage, 'zh_Hant')
+        print(f"[Test] [OK] DummyI18nManager returned env language: {dummyLanguage}")
 
     def testP2PWithTranslation(self):
         """Test P2P mode with Chinese translation"""

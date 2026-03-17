@@ -599,12 +599,15 @@ class E2EEBrowserTest(ResumeBrowserTestBase):
             jsonOutputPath = os.path.join(self.tempDir, "share_info.json")
 
             if 'JENKINS_HOME' in os.environ and browserName == 'chrome':
-                # Jenkins + Chrome, streamsaver got 
-                # {'method': 'Network.loadingFailed', 'params': {'canceled': True, 'errorText': 'net::ERR_ABORTED'... }, 
+                # Jenkins + Chrome, streamsaver got
+                # {'method': 'Network.loadingFailed', 'params': {'canceled': True, 'errorText': 'net::ERR_ABORTED'... },
                 # unknown why...:(
+                # STREAMSAVER_BLOB is only needed for WebRTC mode; HTTP fallback (DISABLE_WEBRTC) works without it
+                # and enabling it breaks E2EE decryption on HTTP fallback.
                 if not extraEnvVars:
                     extraEnvVars = {}
-                extraEnvVars.update({'STREAMSAVER_BLOB': 'True'}) 
+                if not extraEnvVars.get('DISABLE_WEBRTC'):
+                    extraEnvVars.update({'STREAMSAVER_BLOB': 'True'})
 
             # Start FastFileLink with E2E encryption enabled
             outputCapture = {}
@@ -622,6 +625,11 @@ class E2EEBrowserTest(ResumeBrowserTestBase):
                 if browserName == 'chrome':
                     downloadDir = self._getBrowserDownloadDir('chrome', idx)
                     driver = self._setupChromeDriver(downloadDir)
+                    # E2EE HTTP mode uses StreamSaver's service worker for decryption regardless of file size.
+                    # Pre-warm the mitm iframe/service worker on Jenkins to avoid the race condition where
+                    # the service worker isn't registered before E2EE.js starts streaming decrypted chunks.
+                    if 'JENKINS_HOME' in os.environ:
+                        self._injectStreamSaverMitmPrewarm(driver)
                 elif browserName == 'firefox':
                     downloadDir = self._getBrowserDownloadDir('firefox', idx)
                     driver = self._setupFirefoxDriver(downloadDir)
