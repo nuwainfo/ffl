@@ -23,6 +23,7 @@ import unittest
 import subprocess
 import json
 import sys
+import zipfile
 
 import requests
 
@@ -1084,6 +1085,98 @@ class CLIArgumentParsingTest(unittest.TestCase):
                     )
 
                     print(f"✓ {description}: Found error output with code {returnCode}")
+
+
+class MultiFileShareTest(FastFileLinkTestBase):
+    """Functional tests for sharing multiple files via CLI positional arguments or @filelist.txt."""
+
+    def setUp(self):
+        super().setUp()
+        self.testFile2 = os.path.join(self.tempDir, "second_file.txt")
+        self.testFile3 = os.path.join(self.tempDir, "third_file.bin")
+        with open(self.testFile2, 'w', encoding='utf-8') as f:
+            f.write("Second test file\n")
+        with open(self.testFile3, 'wb') as f:
+            f.write(os.urandom(32 * 1024))
+        self.originalFileSize = -1
+
+    def _downloadAndVerifyZip(self, shareLink, expectedBasenames):
+        """Download the shared ZIP and assert all expected filenames are present."""
+        downloadedPath = self._getDownloadedFilePath("multi_share.zip")
+        self.downloadFileWithRequests(shareLink, downloadedPath)
+        self.assertTrue(os.path.exists(downloadedPath), "Downloaded ZIP should exist")
+        with zipfile.ZipFile(downloadedPath) as zf:
+            basenames = {os.path.basename(name) for name in zf.namelist() if not name.endswith('/')}
+            for expected in expectedBasenames:
+                self.assertIn(expected, basenames,
+                    f"Expected '{expected}' in ZIP contents, got: {sorted(basenames)}")
+
+    def testShareMultipleFilesViaArgs(self):
+        """Test sharing multiple files as additional CLI positional arguments."""
+        extraArgs = [self.testFile2, self.testFile3]
+        shareLink = self._startFastFileLink(p2p=True, extraArgs=extraArgs)
+        self._downloadAndVerifyZip(shareLink, [
+            os.path.basename(self.testFilePath),
+            os.path.basename(self.testFile2),
+            os.path.basename(self.testFile3),
+        ])
+
+    def testShareMultipleFilesViaFileList(self):
+        """Test sharing multiple files via @filelist.txt syntax."""
+        fileListPath = os.path.join(self.tempDir, "share_list.txt")
+        with open(fileListPath, 'w', encoding='utf-8') as f:
+            f.write(self.testFilePath + '\n')
+            f.write(self.testFile2 + '\n')
+            f.write(self.testFile3 + '\n')
+
+        savedTestFilePath = self.testFilePath
+        self.testFilePath = '@' + fileListPath
+        try:
+            shareLink = self._startFastFileLink(p2p=True)
+            self._downloadAndVerifyZip(shareLink, [
+                os.path.basename(savedTestFilePath),
+                os.path.basename(self.testFile2),
+                os.path.basename(self.testFile3),
+            ])
+        finally:
+            self.testFilePath = savedTestFilePath
+
+    def testShareMixedFilesAndFolders(self):
+        """Test sharing a mix of files and folders via CLI positional arguments."""
+        # Create a folder with nested files
+        subDir = os.path.join(self.tempDir, "subdir")
+        os.makedirs(subDir)
+        nestedFile1 = os.path.join(subDir, "nested_a.txt")
+        nestedFile2 = os.path.join(subDir, "nested_b.bin")
+        with open(nestedFile1, 'w', encoding='utf-8') as f:
+            f.write("Nested file A\n")
+        with open(nestedFile2, 'wb') as f:
+            f.write(os.urandom(16 * 1024))
+
+        # Share: file1, subdir (folder), file3
+        extraArgs = [self.testFile2, subDir]
+        shareLink = self._startFastFileLink(p2p=True, extraArgs=extraArgs)
+
+        downloadedPath = self._getDownloadedFilePath("mixed_share.zip")
+        self.downloadFileWithRequests(shareLink, downloadedPath)
+        self.assertTrue(os.path.exists(downloadedPath), "Downloaded ZIP should exist")
+
+        with zipfile.ZipFile(downloadedPath) as zf:
+            allNames = zf.namelist()
+            print(f"[Test] ZIP contents: {sorted(allNames)}")
+            basenames = {os.path.basename(name) for name in allNames if not name.endswith('/')}
+
+            # Top-level files
+            self.assertIn(os.path.basename(self.testFilePath), basenames,
+                f"Expected testFilePath basename in ZIP, got: {sorted(basenames)}")
+            self.assertIn(os.path.basename(self.testFile2), basenames,
+                f"Expected testFile2 basename in ZIP, got: {sorted(basenames)}")
+
+            # Files from inside the folder
+            self.assertIn("nested_a.txt", basenames,
+                f"Expected 'nested_a.txt' from subdir in ZIP, got: {sorted(basenames)}")
+            self.assertIn("nested_b.bin", basenames,
+                f"Expected 'nested_b.bin' from subdir in ZIP, got: {sorted(basenames)}")
 
 
 if __name__ == '__main__':

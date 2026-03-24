@@ -9,8 +9,11 @@ Licensed under Apache-2.0 license.
     <meta name="comment" content="The template was modified by Nuwainfo.com"/>
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"/>
-    <meta name="description" content="None"/>
+    <meta name="description" content="{{ metaDescription }}"/>
     <meta name="author" content=""/>
+    <meta property="og:title" content="{{ ogTitle }}"/>
+    <meta property="og:description" content="{{ metaDescription }}"/>
+    <meta property="og:type" content="{{ ogType }}"/>
     <link rel="preconnect" href="https://fonts.googleapis.com"/>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin=""/>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@100;300;400;500;700;900&amp;display=swap"
@@ -89,6 +92,15 @@ Licensed under Apache-2.0 license.
                             </a>
                             <a id="copy-link-btn" href="#" class="open-browser-btn" style="margin-top: 8px;">
                                 <i class="fas fa-copy"></i> <span data-i18n="Download:warning.copyButton">Copy Link</span>
+                            </a>
+                            <a id="play-here-btn-video" href="#" class="open-browser-btn play-here-btn" style="display: none; margin-top: 8px;">
+                                <i class="fas fa-play-circle"></i> <span data-i18n="Download:warning.watchButton">Watch Video Here</span>
+                            </a>
+                            <a id="play-here-btn-audio" href="#" class="open-browser-btn play-here-btn" style="display: none; margin-top: 8px;">
+                                <i class="fas fa-headphones"></i> <span data-i18n="Download:warning.listenButton">Listen Here</span>
+                            </a>
+                            <a id="play-here-btn-image" href="#" class="open-browser-btn play-here-btn" style="display: none; margin-top: 8px;">
+                                <i class="fas fa-eye"></i> <span data-i18n="Download:warning.viewButton">View Image Here</span>
                             </a>
                         </div>
 
@@ -255,6 +267,7 @@ Licensed under Apache-2.0 license.
                                 <!-- Hidden file metadata -->
                                 <p id="fileName" style="display:none;">{{ fileName }}</p>
                                 <p id="fileSize" style="display:none;">{{ fileSize }}</p>
+                                <p id="fileContentType" style="display:none;">{{ fileContentType }}</p>
 
                                 <!-- Download note: injected by addons, default footer message otherwise -->
                                 {{ DOWNLOAD_NOTE_HTML }}
@@ -450,7 +463,8 @@ Licensed under Apache-2.0 license.
             // Initialize InApp Guard using centralized function
             SKIP_WEBRTC_DUE_TO_RESTRICTION = InAppGuard.initInAppGuardUI({
                 log: log,
-                skipVariableName: 'SKIP_WEBRTC_DUE_TO_RESTRICTION'
+                skipVariableName: 'SKIP_WEBRTC_DUE_TO_RESTRICTION',
+                contentType: document.getElementById('fileContentType')?.textContent || ''
             });            
         </script>
 

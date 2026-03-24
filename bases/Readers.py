@@ -35,7 +35,7 @@ from enum import Enum, auto
 from typing import Iterator, Optional
 
 from bases.Kernel import getLogger, FFLEvent
-from bases.FileSystems import HTTPFileSystem, LocalFileSystem
+from bases.FileSystems import ExcludeFilter, HTTPFileSystem, LocalFileSystem, VirtualFileSystem
 
 logger = getLogger(__name__)
 
@@ -689,16 +689,17 @@ class SourceReader:
         return False
 
     @classmethod
-    def build(cls, path: str, fileName: str = None, compression: str = None) -> 'SourceReader':
+    def build(cls, path, fileName: str = None, compression: str = None, excludeFilter: ExcludeFilter = None) -> 'SourceReader':
         """
-        Factory method to create appropriate SourceReader
+        Factory method to create appropriate SourceReader.
 
         Args:
-            path: File or directory path, "-" for stdin, or vfs:// URI for remote VFS
-            fileName: Custom download filename (default: original filename for files,
-                       foldername.zip for folders, stdin-YYYYMMDD-HHMMSS.bin for stdin)
-            compression: For directories - "store" (no compression) or "deflate" (compressed)
-                        If None, uses FOLDER_COMPRESSION environment variable (default: "store")
+            path: One of:
+                  - str: single file/folder path, "-" for stdin, or "vfs://" URI
+                  - list[str]: multiple file/folder paths → packaged as VirtualFileSystem ZIP
+            fileName: Custom download filename
+            compression: "store" or "deflate" (default: READER_FOLDER_COMPRESSION env var → "store")
+            excludeFilter: Optional filter to exclude files/dirs by name during walk
 
         Returns:
             SourceReader: Appropriate reader for the path type
@@ -707,20 +708,27 @@ class SourceReader:
         if path == "-":
             return StdinSourceReader(path, fileName=fileName)
 
-        # Create appropriate FileSystem
-        if path.startswith("vfs://"):
-            fileSystem = HTTPFileSystem(path)
+        # Determine FileSystem
+        flatRoot = False
+
+        if isinstance(path, list):
+            if not path:
+                raise ValueError("Path list is empty")
+
+            fileSystem = VirtualFileSystem(path, rootName="archive", excludeFilter=excludeFilter)
+            flatRoot = True
+        elif path.startswith("vfs://"):
+            fileSystem = HTTPFileSystem(path, excludeFilter=excludeFilter)
         else:
-            fileSystem = LocalFileSystem(path)
+            fileSystem = LocalFileSystem(path, excludeFilter=excludeFilter)
 
         # Use FileSystem to determine file vs directory
         if fileSystem.rootIsDir:
             # Directory: create ZIP
             if compression is None:
                 compression = os.getenv('READER_FOLDER_COMPRESSION', 'store')
-
             return ZipDirSourceReader(
-                fileSystem.rootPath, fileName=fileName, compression=compression, fileSystem=fileSystem
+                fileSystem.rootPath, fileName=fileName, compression=compression, fileSystem=fileSystem, flatRoot=flatRoot
             )
 
         # Single file
@@ -1365,7 +1373,7 @@ class ZipDirSourceReader(CachingMixin, SourceReader):
             folder = 'archive'
         return f"{folder}.zip"
 
-    def __init__(self, path: str, fileName=None, compression: str = "store", strictMode: bool = None, fileSystem=None):
+    def __init__(self, path: str, fileName=None, compression: str = "store", strictMode: bool = None, fileSystem=None, flatRoot: bool = False):
         """
         Initialize ZIP directory reader
 
@@ -1376,6 +1384,8 @@ class ZipDirSourceReader(CachingMixin, SourceReader):
             strictMode: If True, abort on file size/mtime changes during streaming.
                        If None, defaults to True for store mode, False for deflate mode.
             fileSystem: FileSystem instance (default: LocalFileSystem)
+            flatRoot: If True, entries are placed at ZIP root (no root folder prefix).
+                      Use for multi-file archives where a synthetic root name is meaningless.
         """
         if fileSystem is None:
             fileSystem = LocalFileSystem(path)
@@ -1395,6 +1405,8 @@ class ZipDirSourceReader(CachingMixin, SourceReader):
             self.strictMode = (compression == "store")
         else:
             self.strictMode = strictMode
+
+        self.flatRoot = flatRoot
 
         super().__init__(path, fileName) # CachingMixin -> SourceReader
         self.path = self.fileSystem.normPath(self.path) # Normalize path
@@ -1613,7 +1625,7 @@ class ZipDirSourceReader(CachingMixin, SourceReader):
         bytesWritten = 0
 
         try:
-            with self.fileSystem.open(entry['path']) as f:
+            with self.fileSystem.open(entry['fsPath']) as f:
                 while True:
                     data = f.read(chunkSize)
                     if not data:
@@ -1655,7 +1667,7 @@ class ZipDirSourceReader(CachingMixin, SourceReader):
         compressedSize = 0
 
         try:
-            with self.fileSystem.open(entry['path']) as f:
+            with self.fileSystem.open(entry['fsPath']) as f:
                 while True:
                     data = f.read(chunkSize)
                     if not data:
@@ -1784,8 +1796,12 @@ class ZipDirSourceReader(CachingMixin, SourceReader):
 
             # Compute relative directory path for arcname
             relDir = self.fileSystem.relPath(dirPath, rootPath)
-            arcDir = (rootName + ("/" + relDir if relDir else "")).replace("\\", "/")
-            if not arcDir.endswith("/"):
+            if self.flatRoot:
+                arcDir = (relDir + "/" if relDir else "").replace("\\", "/")
+            else:
+                arcDir = (rootName + ("/" + relDir if relDir else "")).replace("\\", "/")
+                
+            if arcDir and not arcDir.endswith("/"):
                 arcDir += "/"
 
             # Add subdirectory entries.
@@ -1809,12 +1825,14 @@ class ZipDirSourceReader(CachingMixin, SourceReader):
             for f in fileNames:
                 fileFullPath = self.fileSystem.joinPath(dirPath, f)
                 relFile = self.fileSystem.relPath(fileFullPath, rootPath)
-                arcname = f"{rootName}/{relFile}".replace("\\", "/")
+                arcname = (relFile if self.flatRoot else f"{rootName}/{relFile}").replace("\\", "/")
+                realOsPath = self.fileSystem.realPath(fileFullPath)
 
                 try:
                     stat = self.fileSystem.stat(fileFullPath)
                     entries.append({
-                        'path': fileFullPath,
+                        'path': realOsPath,
+                        'fsPath': fileFullPath,
                         'arcname': arcname,
                         'isDir': False,
                         'size': stat.size,
@@ -1824,7 +1842,8 @@ class ZipDirSourceReader(CachingMixin, SourceReader):
                     logger.warning("Cannot access file %s: %s", fileFullPath, e)
                     # Add entry anyway for deflate mode compatibility
                     entries.append({
-                        'path': fileFullPath,
+                        'path': realOsPath,
+                        'fsPath': fileFullPath,
                         'arcname': arcname,
                         'isDir': False,
                         'size': 0,
@@ -2153,6 +2172,7 @@ class ZipDirSourceReader(CachingMixin, SourceReader):
             return # Skip directories
 
         path = entry['path']
+        fsPath = entry.get('fsPath', path)
         expectedSize = entry['size']
         expectedMtime = entry.get('mtime')
 
@@ -2165,7 +2185,7 @@ class ZipDirSourceReader(CachingMixin, SourceReader):
                 logger.warning(msg)
 
         try:
-            stat = self.fileSystem.stat(path)
+            stat = self.fileSystem.stat(fsPath)
             currentSize = stat.size
             currentMtime = stat.mtime
 
@@ -2403,7 +2423,7 @@ class ZipDirSourceReader(CachingMixin, SourceReader):
                 self._recordCrc(entry, 0)
             return
 
-        path = entry['path']
+        path = entry.get('fsPath', entry['path'])
 
         # Only compute CRC if reading from start (skip==0)
         # This avoids incorrect CRC for partial reads during resume
@@ -2488,7 +2508,7 @@ class ZipDirSourceReader(CachingMixin, SourceReader):
             return 0
 
         # Compute CRC by reading file
-        path = entry['path']
+        path = entry.get('fsPath', entry['path'])
         crc = 0
 
         try:

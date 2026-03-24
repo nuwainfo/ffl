@@ -540,8 +540,15 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             # Unknown size - use chunked transfer encoding
             self.send_header("Transfer-Encoding", "chunked")
 
-        self.send_header("Content-type", ctype)
-        self.send_header("Content-Disposition", f"attachment; filename={name}")
+        args = parse_qs(self.path.split('?')[1]) if '?' in self.path else {}
+        viewMode = self.parseURLBooleanParam(args.get('view', [None])[0]) is True
+        if viewMode:
+            mediaType = self.guess_type(name)
+            self.send_header("Content-type", mediaType)
+            self.send_header("Content-Disposition", f"inline; filename={name}")
+        else:
+            self.send_header("Content-type", ctype)
+            self.send_header("Content-Disposition", f"attachment; filename={name}")
         self.end_headers()
 
     # Add HTTP HEAD to let server can get Content-Disposition without triggered download
@@ -1151,8 +1158,14 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                     # For unknown size (stdin, ZIP deflate), use chunked transfer encoding
                     self.send_header("Transfer-Encoding", "chunked")
 
-            self.send_header("Content-type", ctype)
-            self.send_header("Content-Disposition", f"attachment; filename={quote(name)}")
+            viewMode = self.parseURLBooleanParam(args.get('view', [None])[0]) is True if args else False
+            if viewMode:
+                mediaType = self.guess_type(name)
+                self.send_header("Content-type", mediaType)
+                self.send_header("Content-Disposition", f"inline; filename={quote(name)}")
+            else:
+                self.send_header("Content-type", ctype)
+                self.send_header("Content-Disposition", f"attachment; filename={quote(name)}")
             self.end_headers()
 
             written += start
@@ -1287,6 +1300,30 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         path, name, size, ctype, reader = self._getFileInfo(quoteName=False)
         content = content.replace(b'{{ fileName }}', name.encode())
         content = content.replace(b'{{ fileSize }}', str(size if size is not None else -1).encode())
+        
+        mediaContentType = self.guess_type(name) or ctype or ''
+        content = content.replace(b'{{ fileContentType }}', mediaContentType.encode())
+
+        # Open Graph / meta tags for rich link previews (e.g. LINE, iMessage)
+        sizeDisplay = formatSize(size) if size else ''
+        ogTitle = f'{name} ({sizeDisplay})' if sizeDisplay else name
+        mediaType = mediaContentType.split('/')[0] if mediaContentType else ''
+        if mediaType == 'video':
+            metaDescription = _('Tap to watch {fileName}').format(fileName=name)
+            ogType = 'video.other'
+        elif mediaType == 'audio':
+            metaDescription = _('Tap to listen to {fileName}').format(fileName=name)
+            ogType = 'music.song'
+        elif mediaType == 'image':
+            metaDescription = _('Tap to view {fileName}').format(fileName=name)
+            ogType = 'article'
+        else:
+            metaDescription = _('Tap to download {fileName}').format(fileName=name)
+            ogType = 'article'
+            
+        content = content.replace(b'{{ ogTitle }}', ogTitle.encode())
+        content = content.replace(b'{{ metaDescription }}', metaDescription.encode())
+        content = content.replace(b'{{ ogType }}', ogType.encode())
 
         # Auth gate placeholders
         recipientAuth = self.server.config.recipientAuth
@@ -1659,10 +1696,14 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 logger.exception(e)
                 self.send_error(500, str(e))
 
-    def _sendBytes(self, payload: bytes, ctype: str = "text/plain; charset=utf-8"):
+    def _sendBytes(self, payload: bytes, ctype: str = "text/plain; charset=utf-8", extraHeaders: dict = None):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(payload)))
+        if extraHeaders:
+            for key, value in extraHeaders.items():
+                self.send_header(key, value)
+                
         self.end_headers()
         self.wfile.write(payload)
 
@@ -1687,7 +1728,10 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             'domain': self.headers.get('Host', 'Unknown'),
         }
 
+        connectionType = None
+
         if 'peerId' in data:
+            connectionType = 'webrtc'
             self.server.webRTC.runAsync(
                 self.server.webRTC.notifyDownloadComplete(data), wait=False, name="notifyDownloadComplete"
             )
@@ -1695,6 +1739,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
         downloadId = data.get('downloadId')
         if downloadId:
+            connectionType = 'relay'
             event = self.server.httpDownloadCompleteEvents.get(downloadId)
             if event:
                 event.set()
@@ -1704,7 +1749,9 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 logger.debug(f"HTTP download complete ACK: unknown downloadId {downloadId[:8]}")
 
         payload, contentType = self._buildDownloadCompleteResponse(data)
-        self._sendBytes(payload, contentType)
+        
+        extraHeaders = {'FFL-CompleteType': connectionType} if connectionType else None
+        self._sendBytes(payload, contentType, extraHeaders)
 
     def _buildDownloadCompleteResponse(self, data):
         """Return (payload, contentType) for the /complete response. Override to customise."""

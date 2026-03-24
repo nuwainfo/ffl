@@ -45,7 +45,7 @@ SUPPORT_URL = 'https://github.com/nuwainfo/ffl/discussions'
 INVITE_URL = 'https://fastfilelink.com/invite'
 
 # Default copyright for open source users
-COPYRIGHT = 'Copyright (c) 2025 FastFileLink Contributors. Licensed under Apache-2.0.'
+COPYRIGHT = 'Copyright (c) 2026 FastFileLink Contributors. Licensed under Apache-2.0.'
 
 # Default download note for open source users (complete HTML block placed into {{ DOWNLOAD_NOTE_HTML }})
 DOWNLOAD_NOTE = (
@@ -57,7 +57,6 @@ DOWNLOAD_NOTE = (
     '<span data-i18n="Common:period">.</span>'
     '</p></div>'
 )
-
 
 
 # Noop marker for babel extraction - allows babel to extract string literals
@@ -403,4 +402,3 @@ class SettingsGetter(Singleton):
         Features addon may overwrite STATIC_SERVER based on user level or GUI support.
         """
         return STATIC_SERVER
-

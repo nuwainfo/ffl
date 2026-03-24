@@ -56,6 +56,7 @@ from bases.Utils import (
     copy2Clipboard, flushPrint, getLogger, getAvailablePort, sendException, validateCompatibleWithServer, ProxyConfig
 )
 from bases.Readers import SourceReader, FolderChangedException
+from bases.FileSystems import ExcludeFilter
 from bases.Tor import verifyTorProxy
 from bases.Auth import RecipientAuth, PUBKEY_PUBLIC_EXT, PUBKEY_PRIVATE_EXT
 from bases.crypto import CryptoInterface
@@ -313,6 +314,10 @@ def processUpload(args, reader, proxyConfig: ProxyConfig):
                 extraArgs['recipientPublicKey'] = recipientAuth.publicKeyPems
             if recipientAuth.requiresEmail():
                 extraArgs['recipientEmail'] = recipientAuth.recipientEmails
+            if getattr(args, 'receipt', None) is not None:
+                extraArgs['receipt'] = args.receipt
+            if getattr(args, 'receiptConfirm', None) is not None:
+                extraArgs['receiptConfirm'] = args.receiptConfirm
 
             if resume:
                 # Resume mode: use resume() instead of tell()
@@ -554,8 +559,11 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
         int: Exit code (0 for success, 1 for error)
     """
     # Argument predicates.
-    # Allow "-" for stdin and vfs:// URIs, otherwise check file existence
-    if args.file != "-" and not args.file.startswith("vfs://") and not os.path.exists(args.file):
+    # Allow "-" for stdin and vfs:// URIs, otherwise check file existence.
+    # Lists are already validated path-by-path in CLI.py.
+    isLocalPath = not isinstance(args.file, list) and args.file != "-" and not args.file.startswith("vfs://")
+    
+    if isLocalPath and not os.path.exists(args.file):
         flushPrint(_('{file} does not exist!').format(file=f'"{args.file}"'))
         return 1
 
@@ -588,11 +596,12 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
 
         # Get size using Reader abstraction (supports both files and folders)
         # Reader will use its own default if args.fileName is None
-        reader = SourceReader.build(args.file, fileName=args.fileName)
+        excludeFilter = ExcludeFilter(args.exclude) if args.exclude else None
+        reader = SourceReader.build(args.file, fileName=args.fileName, excludeFilter=excludeFilter)
         size = reader.size # None means unknown size (e.g., stdin)
 
         # Hint user about folder content change detection for strict mode
-        if args.file != "-" and os.path.isdir(args.file):
+        if isLocalPath and os.path.isdir(args.file):
             flushPrint(_('📁 Sharing folder as ZIP - please keep folder contents unchanged during transfer\n'))
 
         # Show E2EE status if enabled (first line, before establishing tunnel)
@@ -882,9 +891,20 @@ def runCLIMain():
 
     # Phase 3: Final parsing with subcommand determined
     try:
-        args = parser.parse_args(argv)
+        args, unknownArgs = parser.parse_known_args(argv)
     except argparse.ArgumentError as e:
         parser.error(str(e))
+
+    # Collect any extra positional arguments (files after optional args like --json)
+    # and append them to args.file for multi-file sharing support
+    if unknownArgs:
+        extraFiles = [a for a in unknownArgs if not a.startswith('-')]
+        unrecognizedFlags = [a for a in unknownArgs if a.startswith('-')]
+        if unrecognizedFlags:
+            parser.error(f"unrecognized arguments: {' '.join(unrecognizedFlags)}")
+        if extraFiles and getattr(args, 'command', None) == 'share':
+            existingFiles = args.file if isinstance(args.file, list) else ([args.file] if args.file else [])
+            args.file = existingFiles + extraFiles
 
     # Ensure we have a command after parsing
     if args.command is None:
@@ -896,7 +916,7 @@ def runCLIMain():
         return processDownload(args)
 
     # Special validation for share command - must have file argument
-    if args.command == 'share' and args.file is None:
+    if args.command == 'share' and not args.file:
         parser.print_help()
         return 0
 

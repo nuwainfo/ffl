@@ -6,7 +6,10 @@
         "title": "下载在此浏览器中可能无法正常运作",
         "text": "要下载此档案，请在您的浏览器中开启此连结。",
         "button": "在浏览器中下载",
-        "copyButton": "复制连结"
+        "copyButton": "复制连结",
+        "watchButton": "在此观看影片",
+        "listenButton": "在此聆听音频",
+        "viewButton": "在此查看图片"
     },
     "progress": {
         "preparing": "准备下载中...",

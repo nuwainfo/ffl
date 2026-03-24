@@ -19,10 +19,12 @@
 
 import os
 import re
-import time
-import platform
-import threading
 import json
+import platform
+import shutil
+import subprocess
+import threading
+import time
 
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -146,8 +148,10 @@ class BrowserTestBase(FastFileLinkTestBase):
             options.add_argument(f'--unsafely-treat-insecure-origin-as-secure={staticServer}')
             options.add_argument('--disable-web-security')
         
-        if os.getenv('CHROME_DRIVER_VERSION', ''):
-            driver = uc.Chrome(options=options, version_main=int(os.environ['CHROME_DRIVER_VERSION']))
+        versionMain = self._getChromeDriverVersionMain()
+        if versionMain is not None:
+            print(f"[Test] Using ChromeDriver major version {versionMain}")
+            driver = uc.Chrome(options=options, version_main=versionMain)
         else:
             driver = uc.Chrome(options=options)
             
@@ -155,6 +159,43 @@ class BrowserTestBase(FastFileLinkTestBase):
 
         self.activeDrivers.append(driver)
         return driver
+
+    def _getChromeDriverVersionMain(self):
+        """Match ChromeDriver major version to the locally installed browser when possible."""
+        configuredVersion = os.getenv('CHROME_DRIVER_VERSION', '').strip()
+        if configuredVersion:
+            return int(configuredVersion)
+
+        chromeBinaries = [
+            os.getenv('CHROME_BIN'),
+            shutil.which('google-chrome-stable'),
+            shutil.which('google-chrome'),
+            shutil.which('chrome'),
+            shutil.which('chromium-browser'),
+            shutil.which('chromium'),
+        ]
+
+        for chromeBinary in chromeBinaries:
+            if not chromeBinary:
+                continue
+
+            try:
+                result = subprocess.run(
+                    [chromeBinary, '--version'],
+                    capture_output=True,
+                    check=True,
+                    text=True,
+                )
+            except Exception as e:
+                print(f"[Test] Warning: Failed to inspect Chrome binary {chromeBinary}: {e}")
+                continue
+
+            versionOutput = (result.stdout or result.stderr or '').strip()
+            match = re.search(r'(\d+)\.\d+\.\d+\.\d+', versionOutput)
+            if match:
+                return int(match.group(1))
+
+        return None
 
     def _configureChromeDownloadBehavior(self, driver, downloadDir):
         """Configure Chrome downloads using both new and legacy CDP APIs."""

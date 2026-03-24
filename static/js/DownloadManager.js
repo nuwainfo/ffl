@@ -628,6 +628,23 @@ class ReceiptConfirmationUI {
         }
     }
 
+    async sendNotification(message) {
+        if (!this.endpoint) {
+            return;
+        }
+
+        try {
+            await fetch(this.endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message }),
+            });
+        } catch (e) {
+            this._log('ReceiptConfirm', 'Failed to send notification: ' + e);
+            throw e;
+        }
+    }
+
     _bindButtons() {
         const sendBtn  = document.getElementById('receipt-confirm-send-btn');
         const skipBtn  = document.getElementById('receipt-confirm-skip-btn');
@@ -656,11 +673,7 @@ class ReceiptConfirmationUI {
 
                 if (this.endpoint) {
                     try {
-                        await fetch(this.endpoint, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ message: reply }),
-                        });
+                        await this.sendNotification(reply);
                     } catch (e) {
                         this._log('ReceiptConfirm', 'Failed to send confirmation: ' + e);
                     }
@@ -1010,7 +1023,7 @@ class DownloadManager {
                 body: JSON.stringify({ downloadId: this.serverDownloadId, receivedBytes: resolvedTotal || 0 }),
             }).then(async response => {
                 const data = await response.json().catch(() => null);
-                if (data && data.confirmRequired && this.receiptConfirmationUI) {
+                if (this.receiptConfirmationUI && data && data.confirmRequired) {
                     this.receiptConfirmationUI.show(data.message);
                 }
             }).catch(err => {

@@ -52,3 +52,11 @@
     transform: translateY(-1px); /* Slight lift on hover */
     box-shadow: 0 5px 12px rgba(0, 0, 0, 0.3);
 }
+.inapp-warning .play-here-btn {
+    background: #fff;
+    border-color: #fff;
+    color: #1a7f37;
+}
+.inapp-warning .play-here-btn:hover {
+    color: #145d28;
+}

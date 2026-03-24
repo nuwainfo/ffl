@@ -6,7 +6,10 @@
         "title": "Download may not work in this browser",
         "text": "To download this file, please open this link in your browser.",
         "button": "Download in Browser",
-        "copyButton": "Copy Link"
+        "copyButton": "Copy Link",
+        "watchButton": "Watch Video Here",
+        "listenButton": "Listen Here",
+        "viewButton": "View Image Here"
     },
     "progress": {
         "preparing": "Preparing download...",

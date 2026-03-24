@@ -1061,3 +1061,19 @@ msgstr "正在嘗試 WebRTC 下載..."
 #~ "verification (implies --recipient-auth email)"
 #~ msgstr "用於 OTP 驗證的收件人信箱地址（隱含 --recipient-auth email）"
 
+
+#, python-brace-format
+msgid "Tap to watch {fileName}"
+msgstr "點擊觀看 {fileName}"
+
+#, python-brace-format
+msgid "Tap to listen to {fileName}"
+msgstr "點擊聆聽 {fileName}"
+
+#, python-brace-format
+msgid "Tap to view {fileName}"
+msgstr "點擊檢視 {fileName}"
+
+#, python-brace-format
+msgid "Tap to download {fileName}"
+msgstr "點擊下載 {fileName}"

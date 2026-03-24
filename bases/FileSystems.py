@@ -27,9 +27,11 @@ This allows Readers to work with both local and remote filesystems without chang
 """
 
 import base64
+import fnmatch
 import io
 import os
 import json
+import re
 import threading
 import stat as _stat
 
@@ -45,6 +47,35 @@ logger = getLogger(__name__)
 
 # Transfer chunk size for HTTP reads
 HTTP_READ_CHUNK = 1024 * 1024 # 1 MB
+
+
+class ExcludeFilter:
+    """
+    Name-based exclude filter supporting glob patterns and regex.
+
+    Patterns are comma-separated. Each entry is either:
+    - a glob pattern  (e.g. "*.log", "fixtures", ".svn")
+    - a regex prefixed with "re:" (e.g. "re:^\\..*", "re:\\.tmp$")
+
+    Matching is done against the entry name only (not the full path).
+    Invalid regex patterns raise re.error at construction time (fail fast).
+    """
+
+    def __init__(self, patterns: str):
+        self._matchers = []
+        for pattern in (p.strip() for p in patterns.split(',') if p.strip()):
+            if pattern.startswith('re:'):
+                compiled = re.compile(pattern[3:])
+                self._matchers.append(compiled.search)
+            else:
+                self._matchers.append(lambda name, pat=pattern: fnmatch.fnmatch(name, pat))
+
+    def matches(self, name: str) -> bool:
+        """Return True if name matches any exclude pattern."""
+        return any(m(name) for m in self._matchers)
+
+    def __bool__(self) -> bool:
+        return bool(self._matchers)
 
 
 @dataclass
@@ -104,22 +135,28 @@ class FileSystem(Protocol):
     def dirName(self, path: str) -> str:
         ...
 
+    def realPath(self, path: str) -> Optional[str]:
+        """Return the real OS path for direct file access, or None if not applicable."""
+        ...
 
-class LocalFileSystem:
+
+class LocalFileSystem(FileSystem):
     """
     Local filesystem backend.
 
     Wraps os.* calls to provide FileSystem interface for local directories.
     """
 
-    def __init__(self, root: str):
+    def __init__(self, root: str, excludeFilter: ExcludeFilter = None):
         """
         Initialize LocalFileSystem.
 
         Args:
             root: Absolute or relative path to root directory
+            excludeFilter: Optional filter applied during walk()
         """
         self.root = os.path.abspath(root)
+        self._excludeFilter = excludeFilter
 
         logger.debug(f"LocalFileSystem initialized: {self.root}")
 
@@ -147,7 +184,13 @@ class LocalFileSystem:
         Yields:
             (dirpath, dirnames, filenames) tuples
         """
-        yield from os.walk(top)
+        if not self._excludeFilter:
+            yield from os.walk(top)
+            return
+            
+        for dirPath, dirNames, fileNames in os.walk(top):
+            dirNames[:] = [d for d in dirNames if not self._excludeFilter.matches(d)]
+            yield dirPath, dirNames, [f for f in fileNames if not self._excludeFilter.matches(f)]
 
     def stat(self, path: str) -> Stat:
         """
@@ -214,6 +257,9 @@ class LocalFileSystem:
     def dirName(self, path: str) -> str:
         """Get directory name of path"""
         return os.path.dirname(path)
+
+    def realPath(self, path: str) -> str:
+        return path
 
 
 class HttpSession:
@@ -561,7 +607,7 @@ class _ThreadLocalSession(threading.local):
         self.session = None
 
 
-class HTTPFileSystem:
+class HTTPFileSystem(FileSystem):
     """
     Remote filesystem over HTTP (VFS protocol).
 
@@ -577,7 +623,7 @@ class HTTPFileSystem:
     - Path/stat caches are shared (read-heavy, write-once pattern)
     """
 
-    def __init__(self, vfsUri: str, timeout: float = 30.0):
+    def __init__(self, vfsUri: str, timeout: float = 30.0, excludeFilter: ExcludeFilter = None):
         """
         Initialize HTTPFileSystem.
 
@@ -631,6 +677,8 @@ class HTTPFileSystem:
             raise RuntimeError("Server did not provide rootId")
 
         self._rootIsDir = meta.get("rootIsDir", True) # True = directory, False = single file
+
+        self._excludeFilter = excludeFilter
 
         # Caches
         self._pathToId: Dict[str, str] = {"/": self._rootId}
@@ -740,6 +788,10 @@ class HTTPFileSystem:
         if "/" not in path or path == "/":
             return "/"
         return "/".join(path.split("/")[:-1]) or "/"
+
+    def realPath(self, path: str) -> None:
+        logger.debug("[HTTPFileSystem] realPath not supported for remote filesystem: %s", path)
+        return None
 
     def _idForPath(self, path: str) -> str:
         """
@@ -854,14 +906,18 @@ class HTTPFileSystem:
             files = []
 
             for entry in entries:
-                childPath = self._joinPath(dirPath, entry["name"])
+                name = entry["name"]
+                if self._excludeFilter and self._excludeFilter.matches(name):
+                    continue
+                    
+                childPath = self._joinPath(dirPath, name)
                 self._pathToId[childPath] = entry["id"]
 
                 if entry.get("isDir"):
-                    dirs.append(entry["name"])
+                    dirs.append(name)
                     stack.append((childPath, entry["id"]))
                 else:
-                    files.append(entry["name"])
+                    files.append(name)
                     # Seed stat cache from list response
                     mtime = entry.get("mtime")
                     self._statCache[entry["id"]] = Stat(
@@ -909,3 +965,225 @@ class HTTPFileSystem:
             HttpFile(self._session, fileId, stat.size),
             buffer_size=256 * 1024 # 256 KB buffer
         )
+
+
+class VirtualFileSystem(FileSystem):
+    """
+    Virtual filesystem presenting multiple files and/or folders as a single directory.
+
+    Acts as a virtual mapping layer: it maps virtual POSIX paths (/<rootName>/...)
+    to real paths in a backing FileSystem, then delegates all file I/O
+    (stat, open, walk, exists, isDir, isFile, getSize) to that backing FS.
+
+    By default the backing FS is a LocalFileSystem. Any other FileSystem implementation
+    (e.g. HTTPFileSystem) can be supplied instead.
+
+    Duplicate basenames among top-level entries are resolved by appending _1, _2, etc.
+    Directory entries are recursively walked via the backing FS.
+
+    Compatible with ZipDirSourceReader (implements the FileSystem protocol).
+    """
+
+    def __init__(self, filePaths: list, rootName: str = "archive", backingFS: FileSystem = None, excludeFilter: ExcludeFilter = None):
+        """
+        Initialize VirtualFileSystem.
+
+        Args:
+            filePaths: Paths (in the backing FS namespace) to include as top-level entries.
+                       For the default LocalFileSystem these should be absolute OS paths.
+            rootName:  Name of the virtual root directory (becomes the ZIP root folder name).
+            backingFS: FileSystem used for all real I/O.
+                       Defaults to LocalFileSystem; paths are made absolute automatically.
+            excludeFilter: Optional filter applied to top-level entries and during walk().
+        """
+        self._rootName = rootName
+
+        if backingFS is None:
+            # Default: local filesystem; normalise paths to absolute
+            self._backingFS: FileSystem = LocalFileSystem(os.path.abspath("."), excludeFilter=excludeFilter)
+            filePaths = [os.path.abspath(p) for p in filePaths]
+        else:
+            self._backingFS = backingFS
+
+        if excludeFilter:
+            filePaths = [p for p in filePaths if not excludeFilter.matches(self._backingFS.baseName(self._backingFS.normPath(p)))]
+
+        self._filePaths = list(filePaths)
+
+        self._fileEntries: Dict[str, str] = {}  # virtualName -> backingFS path (file)
+        self._dirEntries: Dict[str, str] = {}   # virtualName -> backingFS path (dir)
+        self._buildEntries()
+        logger.debug(
+            f"VirtualFileSystem initialized: {len(self._fileEntries)} files, "
+            f"{len(self._dirEntries)} dirs as '{rootName}/'"
+        )
+
+    @property
+    def _root(self) -> str:
+        """Virtual root path: /<rootName>"""
+        return "/" + self._rootName
+
+    def _buildEntries(self):
+        """Build separate file and directory entry maps, resolving duplicate basenames."""
+        seenNames: Dict[str, int] = {}
+        for path in self._filePaths:
+            name = self._backingFS.baseName(self._backingFS.normPath(path))
+            base, ext = os.path.splitext(name)
+            if name in seenNames:
+                seenNames[name] += 1
+                name = f"{base}_{seenNames[name]}{ext}"
+            else:
+                seenNames[name] = 0
+
+            if self._backingFS.isDir(path):
+                self._dirEntries[name] = path
+            else:
+                self._fileEntries[name] = path
+
+    def rootName(self) -> str:
+        return self._rootName
+
+    @property
+    def rootPath(self) -> str:
+        return self._root
+
+    @property
+    def rootIsDir(self) -> bool:
+        return True
+
+    def walk(self, top: str) -> Iterable[Tuple[str, List[str], List[str]]]:
+        """
+        Walk the virtual directory tree.
+
+        Root level yields top-level file entries and directory entries.
+        Each directory entry is recursively walked via the backing FS, with
+        paths remapped to virtual POSIX paths under /<rootName>/<dirName>/.
+        """
+        if self._normPath(top) != self._root:
+            return
+
+        yield (self._root, sorted(self._dirEntries.keys()), sorted(self._fileEntries.keys()))
+
+        for virtualDirName in sorted(self._dirEntries.keys()):
+            actualDirPath = self._dirEntries[virtualDirName]
+            virtualDirRoot = self._root + "/" + virtualDirName
+            for dirpath, dirnames, filenames in self._backingFS.walk(actualDirPath):
+                relToActual = self._backingFS.relPath(dirpath, actualDirPath)
+                if relToActual == "":
+                    virtualPath = virtualDirRoot
+                else:
+                    # Convert backing-FS separators to POSIX for virtual namespace
+                    virtualPath = virtualDirRoot + "/" + relToActual.replace(os.sep, "/")
+                    
+                yield (virtualPath, sorted(dirnames), sorted(filenames))
+
+    def stat(self, path: str) -> Stat:
+        return self._backingFS.stat(self._resolveActualPath(path))
+
+    def open(self, path: str) -> BinaryIO:
+        return self._backingFS.open(self._resolveActualPath(path))
+
+    def exists(self, path: str) -> bool:
+        if self._normPath(path) == self._root:
+            return True
+            
+        actualPath = self._tryResolveActualPath(path)
+        return actualPath is not None and self._backingFS.exists(actualPath)
+
+    def isFile(self, path: str) -> bool:
+        if self._normPath(path) == self._root:
+            return False
+            
+        actualPath = self._tryResolveActualPath(path)
+        return actualPath is not None and self._backingFS.isFile(actualPath)
+
+    def isDir(self, path: str) -> bool:
+        if self._normPath(path) == self._root:
+            return True
+            
+        actualPath = self._tryResolveActualPath(path)
+        return actualPath is not None and self._backingFS.isDir(actualPath)
+
+    def getSize(self, path: str) -> int:
+        return self._backingFS.getSize(self._resolveActualPath(path))
+
+    def joinPath(self, parent: str, name: str) -> str:
+        return self._normPath(parent).rstrip("/") + "/" + name
+
+    def relPath(self, path: str, base: str) -> str:
+        path = self._normPath(path)
+        base = self._normPath(base).rstrip("/")
+        if path == base:
+            return ""
+            
+        prefix = base + "/"
+        if path.startswith(prefix):
+            return path[len(prefix):]
+            
+        return path.lstrip("/")
+
+    def normPath(self, path: str) -> str:
+        return self._normPath(path)
+
+    def baseName(self, path: str) -> str:
+        return self._normPath(path).rstrip("/").rsplit("/", 1)[-1]
+
+    def dirName(self, path: str) -> str:
+        path = self._normPath(path).rstrip("/")
+        if "/" not in path:
+            return "/"
+
+        return path.rsplit("/", 1)[0] or "/"
+
+    def realPath(self, path: str) -> Optional[str]:
+        actualPath = self._tryResolveActualPath(path)
+        if actualPath is None:
+            return None
+            
+        return self._backingFS.realPath(actualPath)
+
+    def _normPath(self, path: str) -> str:
+        """Normalise a virtual POSIX path to /<rootName>/... form."""
+        path = (path or "").strip()
+        if not path or path in (".", "/", self._rootName, self._root):
+            return self._root
+            
+        if not path.startswith("/"):
+            return self._root + "/" + path
+            
+        return path
+
+    def _tryResolveActualPath(self, virtualPath: str) -> Optional[str]:
+        """
+        Resolve a virtual POSIX path to the backing-FS path, or None if not found.
+        Does not handle the virtual root itself — callers check that separately.
+        """
+        normalizedPath = self._normPath(virtualPath)
+        prefix = self._root + "/"
+        if not normalizedPath.startswith(prefix):
+            return None
+
+        remainder = normalizedPath[len(prefix):]
+        parts = remainder.split("/", 1)
+        topName = parts[0]
+
+        if len(parts) == 1:
+            return self._fileEntries.get(topName) or self._dirEntries.get(topName)
+
+        if topName not in self._dirEntries:
+            return None
+
+        actualPath = self._dirEntries[topName]
+        for segment in parts[1].split("/"):
+            if segment:
+                actualPath = self._backingFS.joinPath(actualPath, segment)
+                
+        return actualPath
+
+    def _resolveActualPath(self, virtualPath: str) -> str:
+        """Resolve a virtual POSIX path to the backing-FS path, or raise FileNotFoundError."""
+        actualPath = self._tryResolveActualPath(virtualPath)
+        if actualPath is None:
+            raise FileNotFoundError(f"Virtual path not found: {virtualPath}")
+            
+        return actualPath

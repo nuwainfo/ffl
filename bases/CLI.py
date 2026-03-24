@@ -312,8 +312,11 @@ def configureCLIParser():
         parser.add_argument(
             "file",
             metavar="FILE_OR_FOLDER",
-            help=_("Choose a file or folder you want to share (use '-' for stdin)"),
-            nargs='?'
+            help=_(
+                "File(s) or folder to share. Use '-' for stdin, '@filelist.txt' to read paths "
+                "from a file. Multiple files can be specified: file1 file2 file3"
+            ),
+            nargs='*'
         )
         parser.add_argument(
             "--name", "-n",
@@ -321,6 +324,15 @@ def configureCLIParser():
             help=_("Specify custom download filename (default: original filename for files, "
                    "folder.zip for folders, stdin-YYYYMMDD-HHMMSS.bin for stdin)"),
             dest="fileName"
+        )
+        parser.add_argument(
+            "--exclude",
+            metavar="PATTERNS",
+            help=_(
+                "Comma-separated patterns to exclude files/folders by name (e.g. '*.log,.svn,__pycache__'). "
+                "Prefix with 're:' for regex (e.g. 're:\\.tmp$'). Applies at any depth."
+            ),
+            default=None
         )
 
         # Upload mode - optional parameter (always available, but requires Upload addon)
@@ -937,6 +949,34 @@ def preprocessArguments(argv, commandNames, shareSubparser, globalsParent):
     return argv
 
 
+def _expandFileList(fileListPath: str):
+    """
+    Read paths from a filelist file, return list of absolute paths.
+    Returns None and prints an error message on failure.
+    """
+    if not os.path.exists(fileListPath):
+        flushPrint(_('Error: file list not found: {path}').format(path=fileListPath))
+        return None
+
+    baseDir = os.path.dirname(os.path.abspath(fileListPath))
+    paths = []
+    with open(fileListPath, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if not os.path.isabs(line):
+                line = os.path.join(baseDir, line)
+            paths.append(line)
+
+    if not paths:
+        flushPrint(_('Error: file list is empty: {path}').format(path=fileListPath))
+        return None
+
+    logger.debug(f"Expanded file list: {fileListPath} → {len(paths)} paths")
+    return paths
+
+
 def validateShareArguments(args):
     """
     Validate arguments specifically for the share command.
@@ -947,6 +987,28 @@ def validateShareArguments(args):
     """
     # Get settings for validation
     settingsGetter = SettingsGetter.getInstance()
+
+    # Normalize file argument: list (from nargs='*') → None / str / list[str]
+    #   0 items  → None
+    #   1 item, starts with '@' → expand filelist → list[str]
+    #   1 item, normal path    → str  (unchanged, single-file fast path)
+    #   2+ items               → list[str] of absolute paths
+    files = args.file if isinstance(args.file, list) else ([args.file] if args.file else [])
+    if len(files) == 0:
+        args.file = None
+    elif len(files) == 1:
+        singlePath = files[0]
+        
+        if singlePath.startswith('@'):
+            expanded = _expandFileList(singlePath[1:])
+            if expanded is None:
+                return 1
+                
+            args.file = expanded  # list[str]
+        else:
+            args.file = singlePath  # str
+    else:
+        args.file = [os.path.abspath(p) for p in files]  # list[str]
 
     # Check if --upload was used without Upload addon
     if args.upload and not settingsGetter.hasUploadSupport():
@@ -1052,7 +1114,12 @@ def validateShareArguments(args):
             flushPrint(_('VFS mode is only for P2P sharing. Remove --upload to use --vfs'))
             return 1
 
-        # --vfs requires a file or folder (not stdin)
+        # --vfs requires a single file or folder (not stdin or multiple paths)
+        if isinstance(args.file, list):
+            flushPrint(_('Error: --vfs does not support multiple files'))
+            flushPrint(_('Please specify a single file or folder path for VFS mode'))
+            return 1
+
         if args.file == "-":
             flushPrint(_('Error: --vfs does not support stdin input'))
             flushPrint(_('Please specify a file or folder path instead of "-"'))

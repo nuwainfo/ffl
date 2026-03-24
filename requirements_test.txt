@@ -15,3 +15,6 @@ requests_mock
 flask
 pyseto
 
+#Wrap exe
+httpx
+paramiko

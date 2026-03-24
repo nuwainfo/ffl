@@ -83,8 +83,21 @@
         const isFromAndroidAppReferrer = !!(doc.referrer && doc.referrer.indexOf('android-app://') === 0);
         const isFromIOSAppReferrer = !!(doc.referrer && doc.referrer.indexOf('ios-app://') === 0);
 
-        const isStandaloneMode = (nav.standalone === true) || 
+        const isStandaloneMode = (nav.standalone === true) ||
                                  (win.matchMedia && win.matchMedia('(display-mode: standalone)').matches);
+
+        // URL parameter override for local testing (?inapp=1, ?inapp=android, ?inapp=ios)
+        const inappParam = (function() {
+            try {
+                return new URLSearchParams(win.location ? win.location.search : '').get('inapp');
+            } catch (e) { return null; }
+        })();
+        const forceInApp = !!(inappParam !== null && inappParam !== '0' && inappParam !== 'false');
+        const forceAndroid = inappParam === 'android';
+        const forceIOS = inappParam === 'ios';
+        if (forceInApp) {
+            log("InAppGuard", `[TEST MODE] Forced in-app browser via ?inapp=${inappParam}`);
+        }
 
         // Download capability detection
         const hasFileSystemAccessAPI = typeof win.showSaveFilePicker === 'function';
@@ -102,7 +115,10 @@
         }
 
         function isNotStandaloneBrowser() {
-            if (isStandaloneMode) 
+            if (forceInApp)
+                return true;
+                
+            if (isStandaloneMode)
                 return false;
             
             if (hasAndroidWebViewBrand) 
@@ -122,8 +138,11 @@
         }
 
         function isDownloadLikelyBlocked() {
+            if (forceInApp)
+                return true;
+
             const notStandalone = isNotStandaloneBrowser();
-            
+
             log("InAppGuard", `Download detection - notStandalone: ${notStandalone}, hasFileSystemAccessAPI: ${hasFileSystemAccessAPI}, hasInAppToken: ${hasInAppToken}`);
             
             // If we're in a known problematic WebView/in-app environment, block regardless of API support
@@ -169,8 +188,8 @@
             
             const env = {
                 userAgent: ua,
-                isAndroid: isAndroid,
-                isIOS: isIOS,
+                isAndroid: forceAndroid || isAndroid,
+                isIOS: forceIOS || isIOS,
                 hasAndroidWebViewBrand: hasAndroidWebViewBrand,
                 hasAndroidWVToken: hasAndroidWVToken,
                 isLikelyIOSWebView: isLikelyIOSWebView,
@@ -302,6 +321,31 @@
             return fallbackOpen();
         }
 
+        function isMediaFile(contentType) {
+            if (!contentType)
+                return false;
+                
+            const type = contentType.split(';')[0].trim().toLowerCase();
+            return type.startsWith('video/') || type.startsWith('audio/') || type.startsWith('image/');
+        }
+
+        function getMediaType(contentType) {
+            if (!contentType)
+                return null;
+                
+            const type = contentType.split(';')[0].trim().toLowerCase();
+            if (type.startsWith('video/'))
+                return 'video';
+                
+            if (type.startsWith('audio/'))
+                return 'audio';
+                
+            if (type.startsWith('image/'))
+                return 'image';
+                
+            return null;
+        }
+
         function getRecommendedBrowser() {
             if (ENV.isIOS) 
                 return iagT('Download:inappguard.browsers.safari', 'Safari');
@@ -367,6 +411,7 @@
         function initInAppGuardUI(options = {}) {
             const logger = options.log || log; // Use existing log or provided log
             const skipVariableName = options.skipVariableName || 'skipDownloadDueToRestriction';
+            const contentType = options.contentType || '';
 
             logger('[FastFileLink]', 'InApp Guard initialized');
             logger('[FastFileLink]', 'Environment:', {
@@ -411,6 +456,29 @@
                         });
                     }
 
+                    // Set up "Watch/Play Here" button for media files
+                    if (contentType && isMediaFile(contentType)) {
+                        const mediaType = getMediaType(contentType);
+                        const playHereBtn = document.getElementById('play-here-btn-' + mediaType);
+                        if (playHereBtn) {
+                            playHereBtn.style.display = 'inline-block';
+                            playHereBtn.addEventListener('click', function(e) {
+                                e.preventDefault();
+                                logger('[FastFileLink]', 'User clicked "Play Here" for media type:', mediaType);
+
+                                // Build the inline streaming URL (?view=1 → Content-Disposition: inline)
+                                const currentPath = win.location ? win.location.pathname : '';
+                                const basePath = currentPath.endsWith('/') ? currentPath.slice(0, -1) : currentPath;
+                                const mediaUrl = win.location ? win.location.origin + basePath + '/download?view=1' : '';
+
+                                // Navigate to the inline URL — in-app browser hands off to native player
+                                if (mediaUrl) {
+                                    win.location.href = mediaUrl;
+                                }
+                            });
+                        }
+                    }
+
                     // Show the warning
                     warningElement.style.display = 'block';
 
@@ -444,6 +512,8 @@
             copyLinkToClipboard: copyLinkToClipboard,
             getRecommendedBrowser: getRecommendedBrowser,
             getRestrictedMessage: getRestrictedMessage,
+            isMediaFile: isMediaFile,
+            getMediaType: getMediaType,
             initInAppGuardUI: initInAppGuardUI
         };
     })();

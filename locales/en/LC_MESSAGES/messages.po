@@ -1019,3 +1019,19 @@ msgstr ""
 #~ "verification (implies --recipient-auth email)"
 #~ msgstr ""
 
+
+#, python-brace-format
+msgid "Tap to watch {fileName}"
+msgstr ""
+
+#, python-brace-format
+msgid "Tap to listen to {fileName}"
+msgstr ""
+
+#, python-brace-format
+msgid "Tap to view {fileName}"
+msgstr ""
+
+#, python-brace-format
+msgid "Tap to download {fileName}"
+msgstr ""

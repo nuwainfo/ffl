@@ -6,7 +6,10 @@
         "title": "下載在此瀏覽器中可能無法正常運作",
         "text": "要下載此檔案，請在您的瀏覽器中開啟此連結。",
         "button": "在瀏覽器中下載",
-        "copyButton": "複製連結"
+        "copyButton": "複製連結",
+        "watchButton": "在此觀看影片",
+        "listenButton": "在此聆聽音訊",
+        "viewButton": "在此檢視圖片"
     },
     "progress": {
         "preparing": "準備下載中...",

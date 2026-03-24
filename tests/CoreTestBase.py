@@ -248,9 +248,16 @@ class FastFileLinkTestBase(unittest.TestCase):
             print("[Test] Skipping localhost credential provisioning: test config directory is not initialized")
             return
 
-        fixturePath = os.path.join(os.path.dirname(__file__), "fixtures", "FreeKeypair.json")
-        if not os.path.exists(fixturePath):
-            print(f"[Test] Skipping localhost credential provisioning: fixture not found at {fixturePath}")
+        fixtureCandidates = [
+            os.path.join(os.path.dirname(__file__), "fixtures", "FreeKeypair.json"),
+            os.path.join(os.path.dirname(__file__), "..", "FreeKeypair.json"),
+        ]
+        fixturePath = next((path for path in fixtureCandidates if os.path.exists(path)), None)
+        if not fixturePath:
+            print(
+                "[Test] Skipping localhost credential provisioning: "
+                f"fixture not found in {fixtureCandidates}"
+            )
             return
 
         repoRoot = os.path.join(os.path.dirname(__file__), "..")
@@ -824,6 +831,14 @@ class FastFileLinkTestBase(unittest.TestCase):
 
             # Add environment variable to force output flushing
             env['PYTHONUNBUFFERED'] = '1'
+
+            # Auto-detect Xvfb display for wx support on Linux (when DISPLAY not already set)
+            if sys.platform.startswith('linux') and 'DISPLAY' not in env:
+                import glob as _glob
+                for xLock in sorted(_glob.glob('/tmp/.X*-lock')):
+                    displayNum = xLock.replace('/tmp/.X', '').replace('-lock', '')
+                    env['DISPLAY'] = f':{displayNum}'
+                    break
 
             # Add test server environment variable if using test server
             if useTestServer:
