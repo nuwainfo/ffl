@@ -828,6 +828,25 @@ def registerHookEndpointsForHandler(handler, server, hookClient: HookClient, get
     )
 
 
+_hookResponseHandlers: dict = {}
+
+
+def registerHookResponseHandler(eventName: str, handler) -> None:
+    """Register a response handler for a specific event forwarded via hook.
+
+    When a HookClient forwards an event that has a registered handler, the event
+    is sent with expectResponse=True and the handler is called with the response.
+    For HookFileWriter senders the event is always fire-and-forget regardless.
+
+    Handler signature: handler(hookSender: HookClient, eventData: dict, response: dict) -> None
+
+    Args:
+        eventName: Event name key (e.g. UploadEvent.uploadTell.key)
+        handler:   Callable invoked with (hookSender, eventData, response)
+    """
+    _hookResponseHandlers[eventName] = handler
+
+
 def forwardEventToHook(hookSender, eventName, **eventData):
     if eventName == FFLEvent.serverEndpointsRegister.key:
         if isinstance(hookSender, HookClient):
@@ -841,4 +860,9 @@ def forwardEventToHook(hookSender, eventName, **eventData):
             )
         return
 
-    hookSender.sendEvent(eventName, eventData)
+    responseHandler = _hookResponseHandlers.get(eventName)
+    if responseHandler and isinstance(hookSender, HookClient):
+        response = hookSender.sendEvent(eventName, eventData, expectResponse=True)
+        responseHandler(hookSender, eventData, response or {})
+    else:
+        hookSender.sendEvent(eventName, eventData)

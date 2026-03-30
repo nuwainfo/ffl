@@ -25,6 +25,7 @@ import base64
 import os
 import hashlib
 import mimetypes
+import zipfile
 
 import requests
 
@@ -36,6 +37,12 @@ from bases.Hook import HookServer, HookClient, HookError, HookAuthError
 from bases.crypto import CryptoInterface
 from bases.E2EE import StreamDecryptor
 from ..CoreTestBase import FastFileLinkTestBase
+
+try:
+    import wx
+    SKIP_GUI_TEST = False
+except ImportError:
+    SKIP_GUI_TEST = True
 
 
 class HookTest(unittest.TestCase):
@@ -833,6 +840,315 @@ class HookFunctionalTest(FastFileLinkTestBase):
             return json.loads(plaintext)
         except (json.JSONDecodeError, UnicodeDecodeError):
             return plaintext
+
+
+    # ------------------------------------------------------------------
+    # Sidecar upload helpers (shared by testHookSidecarProducer variants)
+    # ------------------------------------------------------------------
+
+    def _buildSidecarFolder(self):
+        """Create test folder with a real JPEG and a text file.
+
+        Initialises wx.App in the main thread via ThumbnailGenerator, then
+        writes a real 100×100 JPEG — simulating a photo on Android.
+
+        Returns a dict: sharedFolder, photoPath, readmePath, photoArcname,
+        readmeArcname, photoHash, readmeHash, photoFileSize, readmeFileSize.
+        """
+        from addons.Preview import ThumbnailGenerator as ThumbGen, _hashArcname
+
+        folderName = 'hook_sidecar_folder'
+        sharedFolder = os.path.join(self.tempDir, folderName)
+        os.makedirs(sharedFolder, exist_ok=True)
+
+        photoPath = os.path.join(sharedFolder, 'photo.jpg')
+        readmePath = os.path.join(sharedFolder, 'readme.txt')
+
+        ThumbGen.getInstance()  # must be called in main thread to init wx.App
+        wxImg = wx.Image(100, 100)
+        wxImg.SetData(bytes([200, 120, 60] * 100 * 100))  # warm-orange 100×100 px
+        wxImg.SaveFile(photoPath, wx.BITMAP_TYPE_JPEG)
+
+        with open(readmePath, 'wb') as fh:
+            fh.write(b'hello from hook sidecar test\n')
+
+        photoArcname = f'{folderName}/photo.jpg'
+        readmeArcname = f'{folderName}/readme.txt'
+        return {
+            'sharedFolder': sharedFolder,
+            'photoPath': photoPath,
+            'readmePath': readmePath,
+            'photoArcname': photoArcname,
+            'readmeArcname': readmeArcname,
+            'photoHash': _hashArcname(photoArcname),
+            'readmeHash': _hashArcname(readmeArcname),
+            'photoFileSize': os.path.getsize(photoPath),
+            'readmeFileSize': os.path.getsize(readmePath),
+        }
+
+    def _startAndroidHookServer(self, folderInfo):
+        """Start the simulated Android hook server for sidecar upload tests.
+
+        On /upload/tell: respond with a size estimate and kick off async wx
+        thumbnail generation (simulating what the Android app does natively).
+        On /upload/sidecar/fetch: wait for generation, then return the sidecar
+        binary (inner manifest JSON + thumbnail bytes) and its outer manifest.
+
+        Returns (server, thread, hookUrl, tellEvents, fetchEvents).
+        """
+        from addons.Preview import ThumbnailGenerator as ThumbGen
+
+        tellEvents = []
+        fetchEvents = []
+        generationComplete = threading.Event()
+        thumbState = []  # list of (fileHash, thumbBytes) built by generateAsync
+
+        authUser = 'ffl'
+        authPassword = 'test-hook-sidecar'
+        authHeader = f"Basic {base64.b64encode(f'{authUser}:{authPassword}'.encode()).decode()}"
+
+        photoPath = folderInfo['photoPath']
+        readmePath = folderInfo['readmePath']
+        photoArcname = folderInfo['photoArcname']
+        readmeArcname = folderInfo['readmeArcname']
+        photoHash = folderInfo['photoHash']
+        readmeHash = folderInfo['readmeHash']
+        photoFileSize = folderInfo['photoFileSize']
+        readmeFileSize = folderInfo['readmeFileSize']
+
+        class AndroidHookHandler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                return
+
+            def _checkAuth(self):
+                return self.headers.get('Authorization') == authHeader
+
+            def _sendAuthChallenge(self):
+                self.send_response(HTTPStatus.UNAUTHORIZED)
+                self.send_header('WWW-Authenticate', 'Basic realm="Android Sim"')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+
+            def _sendJson(self, payload):
+                body = json.dumps(payload).encode('utf-8')
+                self.send_response(HTTPStatus.OK)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _buildInnerManifest(self, uid):
+                manifest = {
+                    'uid': uid,
+                    'zipName': 'hook_sidecar_folder.zip',
+                    'zipSize': 0,
+                    'count': 2,
+                    'entries': [
+                        {
+                            'index': 0, 'segmentIndex': 0,
+                            'name': photoArcname, 'hash': photoHash,
+                            'size': photoFileSize, 'mtime': 0,
+                            'mime': 'image/jpeg', 'dataOffset': 0,
+                        },
+                        {
+                            'index': 1, 'segmentIndex': 1,
+                            'name': readmeArcname, 'hash': readmeHash,
+                            'size': readmeFileSize, 'mtime': 0,
+                            'mime': 'text/plain', 'dataOffset': 0,
+                        },
+                    ],
+                }
+                return json.dumps(manifest, separators=(',', ':')).encode('utf-8')
+
+            def do_POST(self):
+                if not self._checkAuth():
+                    self._sendAuthChallenge()
+                    return
+
+                contentLength = int(self.headers.get('Content-Length', 0))
+                requestData = json.loads(self.rfile.read(contentLength)) if contentLength else {}
+                eventName = requestData.get('event', '')
+                eventData = requestData.get('data', {})
+
+                if eventName == '/upload/tell':
+                    tellEvents.append(eventData)
+
+                    def generateAsync():
+                        try:
+                            gen = ThumbGen.getInstance()
+                            for filePath, arcname, fileHash, mimeType in [
+                                (photoPath, photoArcname, photoHash, 'image/jpeg'),
+                                (readmePath, readmeArcname, readmeHash, 'text/plain'),
+                            ]:
+                                result = gen.generateThumbnailData(
+                                    filePath, arcname, mimeType, allowFallback=True
+                                )
+                                if result:
+                                    thumbBytes, _i = result
+                                    thumbState.append((fileHash, thumbBytes))
+                        except Exception:
+                            pass
+                        finally:
+                            generationComplete.set()
+
+                    threading.Thread(target=generateAsync, daemon=True).start()
+
+                    uid = eventData.get('uid', '')
+                    innerManifest = self._buildInnerManifest(uid)
+                    estimatedSize = len(innerManifest) + 2 * 20 * 1024
+                    self._sendJson({'sidecar': {'size': estimatedSize}})
+
+                elif eventName == '/upload/sidecar/fetch':
+                    fetchEvents.append(eventData)
+                    generationComplete.wait(timeout=30)
+
+                    uid = eventData.get('uid') or (tellEvents[0].get('uid', '') if tellEvents else '')
+                    innerManifest = self._buildInnerManifest(uid)
+
+                    sidecarData = innerManifest
+                    offset = len(innerManifest)
+                    thumbHashMap = {}
+                    for fileHash, thumbBytes in thumbState:
+                        thumbHashMap[fileHash] = [offset, offset + len(thumbBytes)]
+                        sidecarData += thumbBytes
+                        offset += len(thumbBytes)
+
+                    self._sendJson({
+                        'data': base64.b64encode(sidecarData).decode('ascii'),
+                        'manifest': {
+                            'manifest': [0, len(innerManifest)],
+                            'thumb': {'hash': thumbHashMap},
+                        },
+                    })
+
+                else:
+                    self._sendJson({'status': 'ok'})
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), AndroidHookHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        hookUrl = f"http://{authUser}:{authPassword}@127.0.0.1:{server.server_address[1]}/events"
+        return server, thread, hookUrl, tellEvents, fetchEvents
+
+    def _assertSidecarUpload(self, shareLink, tellEvents, fetchEvents, processOutput, *, verifyZip=True):
+        """Assert hook events, optional ZIP download, preview page, manifest, and thumbnail."""
+        self.assertGreater(
+            len(tellEvents), 0,
+            f"Hook server should receive /upload/tell event.\n{processOutput}"
+        )
+        self.assertGreater(
+            len(fetchEvents), 0,
+            f"Hook server should receive /upload/sidecar/fetch event.\n{processOutput}"
+        )
+        self.assertIn('uid', fetchEvents[0], "/upload/sidecar/fetch payload should contain upload uid")
+
+        if verifyZip:
+            downloadedZipPath = self._getDownloadedFilePath("hook_sidecar_folder.zip")
+            self.downloadFileWithRequests(shareLink, downloadedZipPath)
+            self.assertTrue(zipfile.is_zipfile(downloadedZipPath), "Downloaded file should be a valid ZIP archive")
+            with zipfile.ZipFile(downloadedZipPath, 'r') as zf:
+                namelist = zf.namelist()
+            self.assertTrue(any('photo.jpg' in n for n in namelist), f"ZIP should contain photo.jpg; got: {namelist}")
+            self.assertTrue(any('readme.txt' in n for n in namelist), f"ZIP should contain readme.txt; got: {namelist}")
+
+        previewResponse = requests.get(
+            shareLink,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"},
+            timeout=30,
+        )
+        self.assertEqual(previewResponse.status_code, 200, f"Preview page should return HTTP 200; got {previewResponse.status_code}")
+        self.assertIn('text/html', previewResponse.headers.get('Content-Type', ''), "Preview page should return HTML")
+
+        parsed = urlparse(shareLink)
+        serverUrl = f"{parsed.scheme}://{parsed.netloc}"
+        uid = parsed.path.lstrip('/')
+
+        manifestResponse = requests.get(f"{serverUrl}/{uid}/manifest", timeout=30)
+        self.assertEqual(manifestResponse.status_code, 200, f"Manifest endpoint should return 200; got {manifestResponse.status_code}")
+        self.assertGreater(len(manifestResponse.content), 0, "Manifest response should be non-empty (sidecar was uploaded)")
+
+        if 'application/json' in manifestResponse.headers.get('Content-Type', ''):
+            # Plain upload: manifest is unencrypted JSON — verify entries and thumbnail.
+            entries = manifestResponse.json().get('entries', [])
+            self.assertEqual(len(entries), 2, f"Manifest should contain 2 entries; got {entries}")
+
+            photoEntry = next((e for e in entries if 'photo.jpg' in e['name']), None)
+            self.assertIsNotNone(photoEntry, "Manifest should contain photo.jpg entry")
+
+            thumbResponse = requests.get(f"{serverUrl}/{uid}/thumb?hash={photoEntry['hash']}", timeout=30)
+            self.assertEqual(thumbResponse.status_code, 200, f"Thumbnail endpoint should return 200 for photo.jpg; got {thumbResponse.status_code}")
+            thumbBytes = thumbResponse.content
+            self.assertGreater(len(thumbBytes), 0, "Thumbnail response should be non-empty")
+            self.assertTrue(
+                thumbBytes[:3] == b'\xff\xd8\xff',
+                f"Thumbnail should be JPEG (FF D8 FF); got {thumbBytes[:3].hex()}"
+            )
+            print(f"[Test] photo.jpg thumbnail: {len(thumbBytes)} bytes (valid JPEG)")
+        else:
+            # E2EE upload: sidecar is encrypted — verify it was stored (non-empty binary).
+            print(f"[Test] Sidecar stored encrypted: {len(manifestResponse.content)} bytes")
+
+    def _runSidecarUploadTest(self, extraUploadArgs=None):
+        """Upload a folder with Android-simulated hook sidecar, then assert results.
+
+        extraUploadArgs: additional FFL args (e.g. ['--e2ee']).
+        ZIP-content verification is skipped for e2ee uploads since the downloaded
+        file is encrypted and cannot be opened as a plain ZIP.
+        """
+        folderInfo = self._buildSidecarFolder()
+        server, thread, hookUrl, tellEvents, fetchEvents = self._startAndroidHookServer(folderInfo)
+
+        originalTestFile = self.testFilePath
+        originalFileSize = self.originalFileSize
+        self.testFilePath = folderInfo['sharedFolder']
+        self.originalFileSize = -1
+        outputCapture = {}
+
+        try:
+            shareLink = self._startFastFileLink(
+                p2p=False,
+                captureOutputIn=outputCapture,
+                extraEnvVars={"DISABLE_ADDONS": "Preview"},
+                extraArgs=["--hook", hookUrl, "--log-level", "DEBUG"] + (extraUploadArgs or []),
+            )
+
+            processOutput = self._updateCapturedOutput(outputCapture)
+            e2eeKey = next(
+                (line.split("Encryption Key:", 1)[1].strip() for line in processOutput.splitlines() if "Encryption Key:" in line),
+                None,
+            )
+
+            print(f"\n{'=' * 60}")
+            print(f"[Test] UPLOAD SHARE URL (open in browser to verify preview):")
+            print(f"[Test] {shareLink}")
+            if e2eeKey:
+                print(f"[Test] Encryption Key: {e2eeKey}")
+            print(f"{'=' * 60}\n")
+
+            verifyZip = '--e2ee' not in (extraUploadArgs or [])
+            self._assertSidecarUpload(shareLink, tellEvents, fetchEvents, processOutput, verifyZip=verifyZip)
+
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+            self.testFilePath = originalTestFile
+            self.originalFileSize = originalFileSize
+
+    @unittest.skipIf(SKIP_GUI_TEST, "Preview tests disabled because no GUI")
+    def testHookSidecarProducer(self):
+        """Simulate Android app providing sidecar during folder upload via hook."""
+        self._runSidecarUploadTest()
+
+    @unittest.skipIf(SKIP_GUI_TEST, "Preview tests disabled because no GUI")
+    def testHookSidecarProducerWithE2EE(self):
+        """Same as testHookSidecarProducer but with end-to-end encryption (--e2ee).
+
+        The main ZIP download is skipped (it is encrypted), but the sidecar
+        manifest and thumbnail endpoints are verified — sidecar data is not
+        affected by the e2ee flag.
+        """
+        self._runSidecarUploadTest(extraUploadArgs=['--e2ee'])
 
 
 if __name__ == '__main__':

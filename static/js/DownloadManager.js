@@ -382,6 +382,7 @@ class EmailGate {
         this.t              = options.t              || dmT;
         this._otp           = null;
         this._codeSent      = false;
+        this._verificationToken = null;
 
         const sendBtn = document.getElementById(this.sendBtnId);
         if (sendBtn) {
@@ -449,6 +450,7 @@ class EmailGate {
     async apply() {
         const recipientEmail = this._resolveRecipientEmail();
         this._otp = document.getElementById(this.otpInputId)?.value.trim();
+        this._verificationToken = null;
         if (this.verifyEndpoint) {
             const response = await fetch(this.verifyEndpoint, {
                 method: 'POST',
@@ -470,8 +472,10 @@ class EmailGate {
                 }
                 throw new Error('OTP verification failed');
             }
+            const responseData = await response.json().catch(() => ({}));
+            this._verificationToken = responseData.verificationToken || null;
         }
-        this.onAccepted?.(this._otp, recipientEmail, this.shareLink);
+        this.onAccepted?.(this._otp, recipientEmail, this.shareLink, this._verificationToken);
     }
 
     focus() {

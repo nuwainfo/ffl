@@ -885,8 +885,202 @@ class HTTPDecryptor {
     }
 }
 
+// ========== Upload Encryption Support ==========
+
+class TusEncryptedFileSource {
+    constructor(file, encryptor) {
+        this.file = file;
+        this.encryptor = encryptor;
+        this.size = file.size;
+    }
+
+    async slice(start, end) {
+        if (start >= this.file.size) {
+            return { done: true, value: null };
+        }
+
+        const safeEnd = Math.min(end, this.file.size);
+        const chunkIndex = Math.floor(start / this.encryptor.chunkSize);
+        const plaintextBytes = new Uint8Array(await this.file.slice(start, safeEnd).arrayBuffer());
+        const encryptedChunk = await this.encryptor.encryptChunk(plaintextBytes, chunkIndex);
+
+        return {
+            done: safeEnd >= this.file.size,
+            value: new Blob([encryptedChunk.ciphertext], { type: 'application/octet-stream' })
+        };
+    }
+
+    close() {
+        // Blob-backed source does not hold external resources.
+    }
+}
+
+class TusUploadEncryptor {
+    constructor({ contentKey, nonceBase, filename, filesize, chunkSize, tags = [] }) {
+        this.contentKey = contentKey;
+        this.nonceBase = nonceBase;
+        this.filename = filename;
+        this.filesize = filesize;
+        this.chunkSize = chunkSize;
+        this._cryptoKeyPromise = TusUploadEncryptor.importAESGCMKey(contentKey, ['encrypt']);
+        this._tagMap = new Map();
+
+        if (Array.isArray(tags)) {
+            for (const entry of tags) {
+                if (entry && Number.isInteger(entry.chunkIndex) && typeof entry.tag === 'string') {
+                    this._tagMap.set(entry.chunkIndex, entry.tag);
+                }
+            }
+        }
+    }
+
+    async encryptChunk(plaintextBytes, chunkIndex) {
+        const cryptoKey = await this._cryptoKeyPromise;
+        const nonce = buildNonce(this.nonceBase, chunkIndex);
+        const aad = buildAADStructFormat(this.filename, this.filesize, chunkIndex);
+        const ciphertextWithTag = await crypto.subtle.encrypt(
+            {
+                name: 'AES-GCM',
+                iv: nonce,
+                tagLength: 128,
+                additionalData: aad
+            },
+            cryptoKey,
+            plaintextBytes
+        );
+        const encryptedBytes = new Uint8Array(ciphertextWithTag);
+        const tagBase64 = bytesToBase64(encryptedBytes.slice(encryptedBytes.length - 16));
+        this._tagMap.set(chunkIndex, tagBase64);
+        return {
+            ciphertext: encryptedBytes.slice(0, encryptedBytes.length - 16),
+            tag: encryptedBytes.slice(encryptedBytes.length - 16)
+        };
+    }
+
+    getTagEntries() {
+        return Array.from(this._tagMap.entries())
+            .sort((left, right) => left[0] - right[0])
+            .map(([chunkIndex, tag]) => ({ chunkIndex, tag }));
+    }
+
+    async exportMetadata() {
+        const tags = this.getTagEntries();
+        const expectedTagCount = Math.max(1, Math.ceil(this.filesize / this.chunkSize));
+        if (tags.length !== expectedTagCount) {
+            throw new Error(`Missing encrypted chunk tags. Expected ${expectedTagCount}, got ${tags.length}.`);
+        }
+
+        for (let index = 0; index < tags.length; index += 1) {
+            if (tags[index].chunkIndex !== index) {
+                throw new Error(`Missing encrypted tag for chunk ${index}.`);
+            }
+        }
+
+        return {
+            filename: this.filename,
+            filesize: this.filesize,
+            chunkSize: this.chunkSize,
+            nonceBase: bytesToBase64(this.nonceBase),
+            commitment: await TusUploadEncryptor.buildKeyCommitment(
+                this.contentKey,
+                this.chunkSize,
+                this.filesize,
+                this.filename
+            ),
+            tags
+        };
+    }
+
+    static async importAESGCMKey(contentKey, usage = ['encrypt']) {
+        return await crypto.subtle.importKey(
+            'raw',
+            contentKey,
+            { name: 'AES-GCM' },
+            false,
+            usage
+        );
+    }
+
+    static generateUploadKeyMaterial() {
+        const contentKey = new Uint8Array(32);
+        const nonceBase = new Uint8Array(12);
+        crypto.getRandomValues(contentKey);
+        crypto.getRandomValues(nonceBase);
+
+        return {
+            contentKey,
+            nonceBase,
+            contentKeyBase64: bytesToBase64(contentKey),
+            nonceBaseBase64: bytesToBase64(nonceBase)
+        };
+    }
+
+    static async buildKeyCommitment(contentKey, chunkSize, filesize, filename) {
+        const commitPrefix = encodeText('commit');
+        const algoPrefix = encodeText('AES-256-GCM');
+        const chunkSizeBytes = new Uint8Array(8);
+        const filesizeBytes = new Uint8Array(8);
+        new DataView(chunkSizeBytes.buffer).setBigUint64(0, BigInt(chunkSize), false);
+        new DataView(filesizeBytes.buffer).setBigUint64(0, BigInt(filesize), false);
+        const filenameBytes = encodeText(filename);
+
+        const message = new Uint8Array(
+            commitPrefix.length + algoPrefix.length + chunkSizeBytes.length + filesizeBytes.length + filenameBytes.length
+        );
+
+        let offset = 0;
+        message.set(commitPrefix, offset);
+        offset += commitPrefix.length;
+        message.set(algoPrefix, offset);
+        offset += algoPrefix.length;
+        message.set(chunkSizeBytes, offset);
+        offset += chunkSizeBytes.length;
+        message.set(filesizeBytes, offset);
+        offset += filesizeBytes.length;
+        message.set(filenameBytes, offset);
+
+        const commitKey = await deriveHKDF(contentKey, 'commit-hmac', 'key-commitment-v1', 32);
+        const hmacKey = await crypto.subtle.importKey(
+            'raw',
+            commitKey,
+            { name: 'HMAC', hash: 'SHA-256' },
+            false,
+            ['sign']
+        );
+        const signature = await crypto.subtle.sign('HMAC', hmacKey, message);
+        return bytesToBase64(new Uint8Array(signature));
+    }
+
+    static createFileReader(encryptor) {
+        return {
+            openFile(input) {
+                return Promise.resolve(new TusEncryptedFileSource(input, encryptor));
+            }
+        };
+    }
+
+    static createUpload(file, options) {
+        const encryptor = new TusUploadEncryptor({
+            contentKey: options.contentKey,
+            nonceBase: options.nonceBase,
+            filename: file.name,
+            filesize: file.size,
+            chunkSize: options.chunkSize,
+            tags: options.tags || []
+        });
+
+        return {
+            input: file,
+            encryptor,
+            fileReader: TusUploadEncryptor.createFileReader(encryptor),
+        };
+    }
+}
+
+
 // Export to global scope (works in both window and Service Worker contexts)
 const globalScope = typeof window !== 'undefined' ? window : self;
 globalScope.E2EEManager = E2EEManager;
 globalScope.WebRTCDecryptor = WebRTCDecryptor;
 globalScope.HTTPDecryptor = HTTPDecryptor;
+globalScope.TusUploadEncryptor = TusUploadEncryptor;
