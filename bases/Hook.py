@@ -44,6 +44,7 @@ Usage (Client side - CLI):
     client.sendEvent('/server/ready', {'url': 'http://...'})
 """
 
+import base64
 import json
 import secrets
 import threading
@@ -65,6 +66,9 @@ from bases.Kernel import getLogger, FFLEvent, Event
 from bases.Server import AuthMixin, HTTPAuth
 
 logger = getLogger(__name__)
+
+
+_CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
 
 
 class HookError(Exception):
@@ -91,6 +95,21 @@ class HookRequestHandler(AuthMixin, BaseHTTPRequestHandler):
         """Return HTTPAuth from server for AuthMixin."""
         return HTTPAuth(user=self.server.username, password=self.server.password)
 
+    def _sendJsonResponse(self, statusCode: int, payload: dict):
+        responseBody = json.dumps(HookEventSerializer.makeJsonSafe(payload)).encode('utf-8')
+
+        try:
+            self.send_response(statusCode)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(responseBody)))
+            self.end_headers()
+            self.wfile.write(responseBody)
+        except _CLIENT_DISCONNECT_ERRORS as e:
+            logger.info(
+                "Hook client disconnected before response could be sent for %s from %s: %s",
+                getattr(self, 'path', ''), self.client_address[0], e
+            )
+
     def do_POST(self):
         """Handle POST request with event data."""
         # Check authentication using AuthMixin
@@ -107,18 +126,14 @@ class HookRequestHandler(AuthMixin, BaseHTTPRequestHandler):
         # Read request body
         contentLength = int(self.headers.get('Content-Length', 0))
         if contentLength == 0:
-            self.send_response(400)
-            self.end_headers()
-            self.wfile.write(b'{"error": "Empty request body"}')
+            self._sendJsonResponse(400, {'error': "Empty request body"})
             return
 
         try:
             requestBody = self.rfile.read(contentLength)
             data = json.loads(requestBody.decode('utf-8'))
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            self.send_response(400)
-            self.end_headers()
-            self.wfile.write(json.dumps({'error': f'Invalid JSON: {e}'}).encode('utf-8'))
+            self._sendJsonResponse(400, {'error': f'Invalid JSON: {e}'})
             logger.warning(f"Invalid JSON from {self.client_address[0]}: {e}")
             return
 
@@ -127,9 +142,7 @@ class HookRequestHandler(AuthMixin, BaseHTTPRequestHandler):
         eventData = data.get('data', {})
 
         if not eventName:
-            self.send_response(400)
-            self.end_headers()
-            self.wfile.write(b'{"error": "Missing event field"}')
+            self._sendJsonResponse(400, {'error': "Missing event field"})
             logger.warning(f"Missing event field from {self.client_address[0]}")
             return
 
@@ -141,23 +154,14 @@ class HookRequestHandler(AuthMixin, BaseHTTPRequestHandler):
                 responsePayload = self.server.onEvent(eventName, eventData)
             except Exception as e:
                 logger.error(f"Error in event handler for {eventName}: {e}")
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(json.dumps({'error': f'Handler error: {e}'}).encode('utf-8'))
+                self._sendJsonResponse(500, {'error': f'Handler error: {e}'})
                 return
 
         # Send success response
         if responsePayload is None:
             responsePayload = {'status': 'ok'}
 
-        jsonResponse = HookEventSerializer.makeJsonSafe(responsePayload)
-        responseBody = json.dumps(jsonResponse).encode('utf-8')
-
-        self.send_response(200)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Content-Length', str(len(responseBody)))
-        self.end_headers()
-        self.wfile.write(responseBody)
+        self._sendJsonResponse(200, responsePayload)
 
 
 class HookServer(ThreadingHTTPServer):
@@ -260,7 +264,8 @@ class HookEventSerializer:
     Serializes events into JSON-safe payloads for Hook IPC.
 
     Handles:
-    - Extracting/filtering non-serializable objects via HOOK_EXTRACTORS
+    - Extracting/filtering non-serializable objects via EXTRACTORS (exact) and
+      EXTRACTOR_PREFIXES (prefix-based, for event families)
     - Converting values to JSON-safe format via makeJsonSafe
     """
 
@@ -275,75 +280,132 @@ class HookEventSerializer:
         extracted['manifest'] = reader.manifest
         return extracted
 
+    @staticmethod
+    def extractTypeValues(eventData: dict, key: str) -> dict:
+        """Strip non-serializable objects from a named mapping, converting type objects to their name.
+
+        Generic utility for events that carry a mapping (under `key`) where values may be
+        class objects (types), lists of types, or plain scalars.  Non-serializable values
+        that are not types are silently dropped.
+
+        Use functools.partial to bind `key` when registering as an extractor:
+            partial(HookEventSerializer.extractTypeValues, key='context')
+        """
+        mapping = eventData.get(key, {})
+        safeMapping = {}
+        for k, v in mapping.items():
+            if isinstance(v, type):
+                safeMapping[k] = v.__name__
+            elif isinstance(v, list):
+                safeMapping[k] = [item.__name__ if isinstance(item, type) else str(item) for item in v]
+            elif isinstance(v, (str, int, float, bool, type(None))):
+                safeMapping[k] = v
+                
+        return {key: safeMapping}
+
+    @staticmethod
+    def extractCliArgumentsEvent(eventData: dict) -> dict:
+        """Strip ArgumentParser, Namespace, and function objects from /cli/arguments/* events."""
+        result = {}
+        for k, v in eventData.items():
+            if k in ('parser', 'args'):
+                continue
+                
+            if k == 'commandRegistry' and isinstance(v, dict):
+                result[k] = {
+                    name: {ck: cv for ck, cv in cmd.items() if ck != 'setupFunction'}
+                    for name, cmd in v.items()
+                    if isinstance(cmd, dict)
+                }
+            else:
+                result[k] = v
+                
+        return result
+
     EXTRACTORS = {
-        # Remove non-serializable objects from events
+        # Exact-match extractors keyed by Event instance
         FFLEvent.shareLinkCreate:
             lambda eventData: HookEventSerializer.extractShareLinkCreateEvent(eventData),
         FFLEvent.downloadStarted:
-            lambda e: {
-                k: v for k, v in e.items() if k not in ('request', 'handler', 'server')
-            },
+            lambda e: {k: v for k, v in e.items() if k not in ('request', 'handler', 'server')},
         FFLEvent.downloadProgress:
-            lambda e: {
-                k: v for k, v in e.items() if k not in ('progressObj', 'handler')
-            },
+            lambda e: {k: v for k, v in e.items() if k not in ('progressObj', 'handler')},
         FFLEvent.downloadCompleted:
-            lambda e: {
-                k: v for k, v in e.items() if k not in ('handler', 'server')
-            },
+            lambda e: {k: v for k, v in e.items() if k not in ('handler', 'server')},
         FFLEvent.downloadFailed:
-            lambda e: {
-                k: v for k, v in e.items() if k not in ('exception', 'handler')
-            },
+            lambda e: {k: v for k, v in e.items() if k not in ('exception', 'handler')},
         FFLEvent.webrtcConnected:
-            lambda e: {
-                k: v for k, v in e.items() if k not in ('peerConnection', 'dataChannel')
-            },
+            lambda e: {k: v for k, v in e.items() if k not in ('peerConnection', 'dataChannel')},
         FFLEvent.webrtcTransferProgress:
-            lambda e: {
-                k: v for k, v in e.items() if k not in ('progressObj', 'dataChannel')
-            },
+            lambda e: {k: v for k, v in e.items() if k not in ('progressObj', 'dataChannel')},
         FFLEvent.webrtcTransferCompleted:
-            lambda e: {
-                k: v for k, v in e.items() if k not in ('peerConnection', 'dataChannel')
-            },
+            lambda e: {k: v for k, v in e.items() if k not in ('peerConnection', 'dataChannel')},
         FFLEvent.errorOccurred:
-            lambda e: {
-                k: v for k, v in e.items() if k not in ('exception', 'stack')
-            },
+            lambda e: {k: v for k, v in e.items() if k not in ('exception', 'stack')},
+    }
+
+    # Prefix-based extractors applied when no exact match is found.
+    # Covers entire event families (e.g. all /cli/arguments/* events).
+    # Addons can extend this via registerExtractorPrefix().
+    EXTRACTOR_PREFIXES = {
+        '/cli/arguments/': staticmethod(lambda e: HookEventSerializer.extractCliArgumentsEvent(e)),
     }
 
     @classmethod
     def registerExtractor(cls, event, extractor):
-        """
-        Register an extractor for an event type.
+        """Register an extractor for an event type.
 
-        Allows addons to register their own event extractors without
-        modifying the base EXTRACTORS dict.
+        Allows addons to register their own event extractors without modifying
+        the base EXTRACTORS dict.
 
         Args:
-            event: Event instance (e.g., UploadEvent.uploadStarted)
-            extractor: Callable that takes event data dict and returns filtered dict
+            event:     Event instance (e.g., UploadEvent.uploadStarted)
+            extractor: Callable(eventData: dict) -> dict
         """
         cls.EXTRACTORS[event] = extractor
 
+    @classmethod
+    def registerExtractorPrefix(cls, prefix: str, extractor):
+        """Register a prefix-based extractor for an event family.
+
+        Allows addons to handle entire event families without modifying Hook.py.
+
+        Args:
+            prefix:    Event name prefix (e.g., '/feature/class/')
+            extractor: Callable(eventData: dict) -> dict
+        """
+        cls.EXTRACTOR_PREFIXES[prefix] = extractor
+
     @staticmethod
-    def makeJsonSafe(value):
+    def makeJsonSafe(value, keyPath: str = ''):
+        """Convert value into JSON serializable data.
+
+        Containers (dict/list/tuple/set) are handled structurally so that only
+        the actual non-serializable leaf values produce a log message, including
+        the full key path for easy identification.
+
+        Args:
+            value:   Value to make JSON-safe.
+            keyPath: Dot-notation path used in log messages (e.g. '[/event].field.sub').
         """
-        Convert value into JSON serializable data.
-        Any non-serializable value will be converted to repr().
-        """
-        try:
-            json.dumps(value)
-            return value
-        except (TypeError, ValueError) as e:
-            logger.debug(f"Value not directly JSON-serializable, converting: {type(value).__name__} - {e}")
+        # Handle known container types structurally — no json.dumps probe needed.
+        if isinstance(value, dict):
+            return {
+                str(k): HookEventSerializer.makeJsonSafe(v, f'{keyPath}.{k}' if keyPath else str(k))
+                for k, v in value.items()
+            }
+
+        if isinstance(value, (list, tuple, set)):
+            return [
+                HookEventSerializer.makeJsonSafe(v, f'{keyPath}[{i}]')
+                for i, v in enumerate(value)
+            ]
 
         if is_dataclass(value):
-            return HookEventSerializer.makeJsonSafe(asdict(value))
+            return HookEventSerializer.makeJsonSafe(asdict(value), keyPath)
 
         if isinstance(value, Enum):
-            return HookEventSerializer.makeJsonSafe(value.value)
+            return HookEventSerializer.makeJsonSafe(value.value, keyPath)
 
         if isinstance(value, (datetime, date)):
             return value.isoformat()
@@ -351,18 +413,27 @@ class HookEventSerializer:
         if isinstance(value, Path):
             return str(value)
 
-        if isinstance(value, dict):
-            return {str(k): HookEventSerializer.makeJsonSafe(v) for k, v in value.items()}
+        if isinstance(value, bytes):
+            try:
+                return value.decode('utf-8')
+            except UnicodeDecodeError:
+                return base64.b64encode(value).decode('ascii')
 
-        if isinstance(value, (list, tuple, set)):
-            return [HookEventSerializer.makeJsonSafe(v) for v in value]
-
-        return repr(value)
+        # Scalar: attempt direct serialization, fall back to repr with location context.
+        try:
+            json.dumps(value)
+            return value
+        except (TypeError, ValueError):
+            location = f" at '{keyPath}'" if keyPath else ''
+            logger.debug(
+                "Non-serializable value%s: %s — falling back to repr()",
+                location, type(value).__name__
+            )
+            return repr(value)
 
     @staticmethod
     def serialize(eventName: str, eventData: dict = None) -> dict:
-        """
-        Serialize event into JSON-safe payload.
+        """Serialize event into JSON-safe payload.
 
         Args:
             eventName: Event name (e.g., '/server/ready')
@@ -373,18 +444,26 @@ class HookEventSerializer:
         """
         eventData = eventData or {}
 
+        # Exact-match extractor first, then prefix-based fallback.
         extractor = HookEventSerializer.EXTRACTORS.get(Event(eventName))
+        if extractor is None:
+            for prefix, prefixExtractor in HookEventSerializer.EXTRACTOR_PREFIXES.items():
+                if eventName.startswith(prefix):
+                    extractor = prefixExtractor
+                    break
+
         if extractor:
             extracted = extractor(eventData)
-            if extracted is not None:
-                eventData = extracted
-            else:
-                eventData = {}
+            eventData = extracted if extracted is not None else {}
+
+        safeData = HookEventSerializer.makeJsonSafe(eventData, keyPath=f'[{eventName}]')
+
+        logger.debug("Sent event: %s", eventName)
 
         return {
             'event': eventName,
             'timestamp': datetime.now().isoformat(),
-            'data': HookEventSerializer.makeJsonSafe(eventData)
+            'data': safeData
         }
 
 
@@ -554,7 +633,6 @@ class HookClient:
         response = self._postPayload(payload, timeout=timeout)
 
         if not expectResponse:
-            logger.debug(f"Sent event: {eventName}")
             return None
 
         try:
@@ -565,7 +643,7 @@ class HookClient:
         if not isinstance(responsePayload, dict):
             raise HookError("Hook response must be a JSON object")
 
-        logger.debug(f"Sent event with response: {eventName}")
+        logger.debug("Received response for event: %s", eventName)
         return responsePayload
 
     def registerServerEndpoints(self, serverContext: dict, timeout: float = 5.0) -> list:
@@ -831,7 +909,7 @@ def registerHookEndpointsForHandler(handler, server, hookClient: HookClient, get
 _hookResponseHandlers: dict = {}
 
 
-def registerHookResponseHandler(eventName: str, handler) -> None:
+def registerHookResponseHandler(eventName: str, handler, timeout: float = 10.0) -> None:
     """Register a response handler for a specific event forwarded via hook.
 
     When a HookClient forwards an event that has a registered handler, the event
@@ -843,8 +921,9 @@ def registerHookResponseHandler(eventName: str, handler) -> None:
     Args:
         eventName: Event name key (e.g. UploadEvent.uploadTell.key)
         handler:   Callable invoked with (hookSender, eventData, response)
+        timeout:   Response wait timeout in seconds for HookClient request/response mode
     """
-    _hookResponseHandlers[eventName] = handler
+    _hookResponseHandlers[eventName] = {'handler': handler, 'timeout': timeout}
 
 
 def forwardEventToHook(hookSender, eventName, **eventData):
@@ -860,9 +939,11 @@ def forwardEventToHook(hookSender, eventName, **eventData):
             )
         return
 
-    responseHandler = _hookResponseHandlers.get(eventName)
-    if responseHandler and isinstance(hookSender, HookClient):
-        response = hookSender.sendEvent(eventName, eventData, expectResponse=True)
-        responseHandler(hookSender, eventData, response or {})
+    responseHandlerSpec = _hookResponseHandlers.get(eventName)
+    if responseHandlerSpec and isinstance(hookSender, HookClient):
+        response = hookSender.sendEvent(
+            eventName, eventData, expectResponse=True, timeout=responseHandlerSpec.get('timeout', 10.0)
+        )
+        responseHandlerSpec['handler'](hookSender, eventData, response or {})
     else:
         hookSender.sendEvent(eventName, eventData)

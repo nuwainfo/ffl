@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-03-16 14:32+0800\n"
+"POT-Creation-Date: 2026-04-06 13:21+0800\n"
 "PO-Revision-Date: 2025-12-18 10:23+0800\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -152,7 +152,24 @@ msgid ""
 "addresses separated by commas."
 msgstr ""
 
+msgid ""
+"Show a confirmation dialog to the receiver after download, asking them to"
+" acknowledge receipt. Omit value to use a default message. Confirmation "
+"reply is sent to --receipt email(s) or your account email (requires non-"
+"free account)."
+msgstr ""
+
 msgid "Error: --receipt without email requires a registered (non-free) account"
+msgstr ""
+
+msgid ""
+"The sender has requested a download receipt. Do you want to send a "
+"receipt?"
+msgstr ""
+
+msgid ""
+"Error: --receipt-confirm without --receipt email requires a registered "
+"(non-free) account"
 msgstr ""
 
 msgid "GUI.py requires Upload addon (addons/Upload.py) to function properly"
@@ -160,6 +177,10 @@ msgstr ""
 
 #, python-brace-format
 msgid "Loading advanced arguments from: {argsFile}"
+msgstr ""
+
+#, python-brace-format
+msgid " (+{count} more)"
 msgstr ""
 
 #, python-brace-format
@@ -182,6 +203,18 @@ msgid "Recipient key file + pickup code"
 msgstr ""
 
 msgid "auto"
+msgstr ""
+
+msgid "Receipt email"
+msgstr ""
+
+msgid "Receipt email: account email"
+msgstr ""
+
+msgid "Receipt confirmation: custom message"
+msgstr ""
+
+msgid "Receipt confirmation"
 msgstr ""
 
 msgid "Verify Recipient"
@@ -253,21 +286,6 @@ msgstr ""
 msgid "Message to receiver:"
 msgstr ""
 
-msgid "Receipt email"
-msgstr ""
-
-msgid "Receipt email: account email"
-msgstr ""
-
-msgid "Receipt confirmation: custom message"
-msgstr ""
-
-msgid "Receipt confirmation"
-msgstr ""
-
-msgid "Please enter valid receipt email address(es)."
-msgstr ""
-
 msgid "OK"
 msgstr ""
 
@@ -294,6 +312,9 @@ msgstr ""
 msgid "Please enter valid email address(es)."
 msgstr ""
 
+msgid "Please enter valid receipt email address(es)."
+msgstr ""
+
 msgid "Recipient key file cannot be empty."
 msgstr ""
 
@@ -304,14 +325,10 @@ msgstr ""
 msgid "Edit: {summary}"
 msgstr ""
 
-#, python-brace-format
-msgid " (+{count} more)"
+msgid "Click to change recipient verification settings."
 msgstr ""
 
 msgid "Verify recipient for this share"
-msgstr ""
-
-msgid "Click to change recipient verification settings."
 msgstr ""
 
 msgid "📁Select Folder"
@@ -572,6 +589,12 @@ msgstr ""
 msgid "📲 Activate This Device"
 msgstr ""
 
+msgid "🎁 Claim Free Account (5 Points Bonus)"
+msgstr ""
+
+msgid "🛒 Top Up Points"
+msgstr ""
+
 msgid "🔧 Preferences"
 msgstr ""
 
@@ -604,6 +627,10 @@ msgid "⚠️ VERSION INCOMPATIBLE!"
 msgstr ""
 
 msgid "⬇️ Download latest version"
+msgstr ""
+
+#, python-brace-format
+msgid "Points shown after upload starts. Current points: {points}."
 msgstr ""
 
 #, python-brace-format
@@ -685,6 +712,104 @@ msgid "🔄 Start Over"
 msgstr ""
 
 msgid ""
+"Claim your free account — it's completely free!\n"
+"You'll receive 5 bonus points after checkout.\n"
+"\n"
+"After claiming:\n"
+"1. Restart FastFileLink\n"
+"2. Activate your device with your registered email\n"
+"3. Share your file again using Upload mode"
+msgstr ""
+
+msgid "Next Steps"
+msgstr ""
+
+msgid ""
+"Claim your free account — it's completely free!\n"
+"You'll receive 5 bonus points after checkout.\n"
+"\n"
+"After claiming, activate your device right away:\n"
+"Go to Account → Activate This Device in the menu."
+msgstr ""
+
+msgid "Upload to Cloud"
+msgstr ""
+
+msgid "Keep Your File Available?"
+msgstr ""
+
+msgid ""
+"Looks like your recipient hasn't connected yet.\n"
+"Upload to our cloud so they can download it whenever they're ready."
+msgstr ""
+
+#, python-brace-format
+msgid "Uses 1 point  ·  Your balance: {current}"
+msgstr ""
+
+#, python-brace-format
+msgid "Not enough points  ·  You need 1, you have {current}"
+msgstr ""
+
+msgid "🎁 Claim Free Account"
+msgstr ""
+
+msgid "🛒 Buy Points"
+msgstr ""
+
+msgid "↻ Refresh"
+msgstr ""
+
+msgid "↻ Refreshing…"
+msgstr ""
+
+msgid "☁ Upload Now"
+msgstr ""
+
+msgid "Not Now"
+msgstr ""
+
+msgid "Confirm Upload Points"
+msgstr ""
+
+msgid "Upload Will Consume Points"
+msgstr ""
+
+msgid "Review the calculated cost before continuing."
+msgstr ""
+
+#, python-brace-format
+msgid "This upload requires {cost} points."
+msgstr ""
+
+msgid "Please confirm that you want to use these points for this upload."
+msgstr ""
+
+msgid "File"
+msgstr ""
+
+msgid "Size"
+msgstr ""
+
+msgid "Retention"
+msgstr ""
+
+msgid "Current points"
+msgstr ""
+
+msgid "Remaining after upload"
+msgstr ""
+
+msgid "Do you want to continue with the upload?"
+msgstr ""
+
+msgid "✖ Cancel"
+msgstr ""
+
+msgid "✔ Confirm"
+msgstr ""
+
+msgid ""
 "Password protection enabled but password is unavailable; continuing "
 "without it."
 msgstr ""
@@ -705,6 +830,32 @@ msgstr ""
 
 #, python-brace-format
 msgid "Set preferred tunnel for future runs. Available: {tunnels}"
+msgstr ""
+
+#, python-brace-format
+msgid "Upload requires {cost} points for {fileName} ({size})."
+msgstr ""
+
+msgid ""
+"Cannot prompt for confirmation in non-interactive mode. Use --yes or set "
+"FFL_YES=True."
+msgstr ""
+
+#, python-brace-format
+msgid "Your current points: {points}. Remaining after upload: {remaining}."
+msgstr ""
+
+#, python-brace-format
+msgid "Retention period: {retention}."
+msgstr ""
+
+msgid "Continue with upload? [y/N]: "
+msgstr ""
+
+msgid "No confirmation input received. Upload cancelled."
+msgstr ""
+
+msgid "Please type \"yes\" or \"no\"."
 msgstr ""
 
 #, python-brace-format
@@ -978,5 +1129,43 @@ msgstr ""
 #~ "Error: HTTP Basic Authentication (--auth-"
 #~ "user/--auth-password) with --upload is "
 #~ "under development and not yet supported."
+#~ msgstr ""
+
+#~ msgid ""
+#~ "A free account with 5 bonus points is available!\n"
+#~ "\n"
+#~ "After signing up:\n"
+#~ "1. Restart FastFileLink\n"
+#~ "2. Activate your device with your registered email\n"
+#~ "3. Share your file again using Upload mode"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "A free account with 5 bonus points is available!\n"
+#~ "\n"
+#~ "After purchasing, activate your device right away:\n"
+#~ "Go to Account → Activate This Device in the menu."
+#~ msgstr ""
+
+#~ msgid "🎁 Create Free Account (5 Points Bonus)"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "You'll get 5 bonus points once you sign up.\n"
+#~ "\n"
+#~ "After signing up:\n"
+#~ "1. Restart FastFileLink\n"
+#~ "2. Activate your device with your registered email\n"
+#~ "3. Share your file again using Upload mode"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "You'll get 5 bonus points once you sign up.\n"
+#~ "\n"
+#~ "After signing up, activate your device right away:\n"
+#~ "Go to Account → Activate This Device in the menu."
+#~ msgstr ""
+
+#~ msgid "🎁 Get Free Points"
 #~ msgstr ""
 

@@ -49,6 +49,88 @@ logger = getLogger(__name__)
 HTTP_READ_CHUNK = 1024 * 1024 # 1 MB
 
 
+class LocalPathAccess:
+    """Platform-aware adapter for user-visible paths vs OS access paths."""
+
+    def absolutePath(self, path: str) -> str:
+        return os.path.abspath(os.fspath(path))
+
+    def toAccessPath(self, path: str) -> str:
+        return self.absolutePath(path)
+
+    def fromAccessPath(self, path: str) -> str:
+        return os.fspath(path)
+
+    def normalizePath(self, path: str) -> str:
+        return os.path.normpath(self.fromAccessPath(path))
+
+    def relativePath(self, path: str, base: str) -> str:
+        rel = os.path.relpath(self.normalizePath(path), self.normalizePath(base))
+        return "" if rel == "." else rel
+
+
+class WindowsLocalPathAccess(LocalPathAccess):
+    """
+    Windows implementation that keeps user-facing paths normal while routing
+    filesystem access through verbatim paths when needed.
+    """
+
+    def absolutePath(self, path: str) -> str:
+        path = os.path.expanduser(os.fspath(path))
+        if path.startswith('\\\\?\\') or path.startswith('\\\\.\\'):
+            return self.normalizePath(path)
+
+        if os.path.isabs(path):
+            return os.path.normpath(path)
+
+        return os.path.normpath(os.path.join(os.getcwd(), path))
+
+    def toAccessPath(self, path: str) -> str:
+        path = self.absolutePath(path)
+        if path.startswith('\\\\?\\') or path.startswith('\\\\.\\'):
+            return path
+
+        if path.startswith('\\\\'):
+            return '\\\\?\\UNC\\' + path.lstrip('\\')
+
+        return '\\\\?\\' + path
+
+    def fromAccessPath(self, path: str) -> str:
+        path = os.fspath(path)
+
+        if path.startswith('\\\\?\\UNC\\'):
+            return '\\\\' + path[8:]
+
+        if path.startswith('\\\\?\\'):
+            return path[4:]
+
+        return path
+
+    def relativePath(self, path: str, base: str) -> str:
+        path = self.normalizePath(path)
+        base = self.normalizePath(base)
+
+        pathDrive, pathRest = os.path.splitdrive(path)
+        baseDrive, baseRest = os.path.splitdrive(base)
+
+        if os.path.normcase(pathDrive) != os.path.normcase(baseDrive):
+            raise ValueError(f"path is on mount {pathDrive!r}, start on mount {baseDrive!r}")
+
+        pathParts = [part for part in pathRest.replace('/', '\\').split('\\') if part and part != '.']
+        baseParts = [part for part in baseRest.replace('/', '\\').split('\\') if part and part != '.']
+
+        sharedCount = 0
+        for pathPart, basePart in zip(pathParts, baseParts):
+            if os.path.normcase(pathPart) != os.path.normcase(basePart):
+                break
+                
+            sharedCount += 1
+
+        relParts = ['..'] * (len(baseParts) - sharedCount) + pathParts[sharedCount:]
+        rel = os.path.join(*relParts) if relParts else "."
+        return "" if rel == "." else rel
+
+
 class ExcludeFilter:
     """
     Name-based exclude filter supporting glob patterns and regex.
@@ -147,6 +229,14 @@ class LocalFileSystem(FileSystem):
     Wraps os.* calls to provide FileSystem interface for local directories.
     """
 
+    @staticmethod
+    def createPathAccess() -> LocalPathAccess:
+        """Create the local path-access adapter for the current platform."""
+        if os.name == 'nt':
+            return WindowsLocalPathAccess()
+
+        return LocalPathAccess()
+
     def __init__(self, root: str, excludeFilter: ExcludeFilter = None):
         """
         Initialize LocalFileSystem.
@@ -155,7 +245,8 @@ class LocalFileSystem(FileSystem):
             root: Absolute or relative path to root directory
             excludeFilter: Optional filter applied during walk()
         """
-        self.root = os.path.abspath(root)
+        self._pathAccess = self.createPathAccess()
+        self.root = self._pathAccess.absolutePath(root)
         self._excludeFilter = excludeFilter
 
         logger.debug(f"LocalFileSystem initialized: {self.root}")
@@ -172,7 +263,7 @@ class LocalFileSystem(FileSystem):
     @property
     def rootIsDir(self) -> bool:
         """Check if root is a directory (True) or single file (False)"""
-        return os.path.isdir(self.root)
+        return os.path.isdir(self._pathAccess.toAccessPath(self.root))
 
     def walk(self, top: str) -> Iterable[Tuple[str, List[str], List[str]]]:
         """
@@ -184,13 +275,18 @@ class LocalFileSystem(FileSystem):
         Yields:
             (dirpath, dirnames, filenames) tuples
         """
+        accessTop = self._pathAccess.toAccessPath(top)
+
         if not self._excludeFilter:
-            yield from os.walk(top)
+            for dirPath, dirNames, fileNames in os.walk(accessTop):
+                yield self._pathAccess.fromAccessPath(dirPath), dirNames, fileNames
             return
             
-        for dirPath, dirNames, fileNames in os.walk(top):
+        for dirPath, dirNames, fileNames in os.walk(accessTop):
             dirNames[:] = [d for d in dirNames if not self._excludeFilter.matches(d)]
-            yield dirPath, dirNames, [f for f in fileNames if not self._excludeFilter.matches(f)]
+            yield self._pathAccess.fromAccessPath(dirPath), dirNames, [
+                f for f in fileNames if not self._excludeFilter.matches(f)
+            ]
 
     def stat(self, path: str) -> Stat:
         """
@@ -205,7 +301,7 @@ class LocalFileSystem(FileSystem):
         # Avoid os.path.isdir() here: it triggers an extra stat() call.
         # On "mounted" / FUSE-like filesystems (WSL2 /mnt, Android shared storage, etc.)
         # that extra syscall cost is huge and can stall the whole app.
-        st = os.stat(path)
+        st = os.stat(self._pathAccess.toAccessPath(path))
         isDir = _stat.S_ISDIR(st.st_mode)
         return Stat(size=int(st.st_size), mtime=float(st.st_mtime), isDir=isDir)
 
@@ -219,23 +315,23 @@ class LocalFileSystem(FileSystem):
         Returns:
             Binary file object
         """
-        return open(path, "rb")
+        return open(self._pathAccess.toAccessPath(path), "rb")
 
     def exists(self, path: str) -> bool:
         """Check if path exists"""
-        return os.path.exists(path)
+        return os.path.exists(self._pathAccess.toAccessPath(path))
 
     def isFile(self, path: str) -> bool:
         """Check if path is a file"""
-        return os.path.isfile(path)
+        return os.path.isfile(self._pathAccess.toAccessPath(path))
 
     def isDir(self, path: str) -> bool:
         """Check if path is a directory"""
-        return os.path.isdir(path)
+        return os.path.isdir(self._pathAccess.toAccessPath(path))
 
     def getSize(self, path: str) -> int:
         """Get file size"""
-        return os.path.getsize(path)
+        return os.path.getsize(self._pathAccess.toAccessPath(path))
 
     def joinPath(self, parent: str, name: str) -> str:
         """Join paths using OS-specific separator"""
@@ -243,23 +339,22 @@ class LocalFileSystem(FileSystem):
 
     def relPath(self, path: str, base: str) -> str:
         """Get relative path from base to path"""
-        rel = os.path.relpath(path, base)
-        return "" if rel == "." else rel
+        return self._pathAccess.relativePath(path, base)
 
     def normPath(self, path: str) -> str:
         """Normalize path"""
-        return os.path.normpath(path)
+        return self._pathAccess.normalizePath(path)
 
     def baseName(self, path: str) -> str:
         """Get base name of path"""
-        return os.path.basename(path)
+        return os.path.basename(self.normPath(path))
 
     def dirName(self, path: str) -> str:
         """Get directory name of path"""
-        return os.path.dirname(path)
+        return os.path.dirname(self.normPath(path))
 
     def realPath(self, path: str) -> str:
-        return path
+        return self._pathAccess.absolutePath(path)
 
 
 class HttpSession:
@@ -1000,8 +1095,9 @@ class VirtualFileSystem(FileSystem):
 
         if backingFS is None:
             # Default: local filesystem; normalise paths to absolute
-            self._backingFS: FileSystem = LocalFileSystem(os.path.abspath("."), excludeFilter=excludeFilter)
-            filePaths = [os.path.abspath(p) for p in filePaths]
+            pathAccess = LocalFileSystem.createPathAccess()
+            self._backingFS: FileSystem = LocalFileSystem(pathAccess.absolutePath("."), excludeFilter=excludeFilter)
+            filePaths = [pathAccess.absolutePath(p) for p in filePaths]
         else:
             self._backingFS = backingFS
 

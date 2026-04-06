@@ -34,8 +34,25 @@ from unittest.mock import patch
 
 from tests.CoreTestBase import FastFileLinkTestBase, getFileHash
 
+from bases.FileSystems import LocalFileSystem
 from bases.Kernel import FFLEvent
 from bases.Readers import SourceReader, ZipDirSourceReader, FolderChangedException, StdinSourceReader, CachingMixin
+
+
+LOCAL_PATH_ACCESS = LocalFileSystem.createPathAccess()
+
+
+def writeTestFile(path, content):
+    """Write test content through the platform path-access adapter."""
+    with open(LOCAL_PATH_ACCESS.toAccessPath(path), 'wb') as f:
+        f.write(content)
+
+
+def deleteTestPath(path):
+    """Delete a test path through the platform path-access adapter."""
+    accessPath = LOCAL_PATH_ACCESS.toAccessPath(path)
+    if os.path.exists(accessPath):
+        os.unlink(accessPath)
 
 
 def calculateFolderHash(folderPath):
@@ -65,6 +82,19 @@ def calculateFolderHash(folderPath):
 
 class FolderReaderTest(unittest.TestCase):
     """Direct test of folder reader without HTTP transfer"""
+
+    class RecordingProgressReporter:
+        def __init__(self):
+            self.events = []
+
+        def start(self, operation: str, total=None, unit: str = "items"):
+            self.events.append(('start', operation, total, unit))
+
+        def advance(self, amount: int = 1, processedBytes=None):
+            self.events.append(('advance', amount, processedBytes))
+
+        def finish(self):
+            self.events.append(('finish',))
 
     def testBasicFolderReading(self):
         """Test that folder reader generates valid ZIP"""
@@ -116,6 +146,59 @@ class FolderReaderTest(unittest.TestCase):
 
         finally:
             shutil.rmtree(tmpdir)
+
+    def testFolderReadingReportsScanProgress(self):
+        """Folder scanning should emit progress callbacks through the reader interface."""
+        tmpdir = tempfile.mkdtemp()
+        try:
+            testFolder = os.path.join(tmpdir, 'test_folder')
+            os.makedirs(os.path.join(testFolder, 'sub'))
+            with open(os.path.join(testFolder, 'file1.txt'), 'w') as f:
+                f.write('alpha')
+            with open(os.path.join(testFolder, 'sub', 'file2.txt'), 'w') as f:
+                f.write('beta')
+
+            reporter = self.RecordingProgressReporter()
+            reader = SourceReader.build(testFolder, compression='store', progressReporter=reporter)
+
+            self.assertIsNotNone(reader.size)
+            self.assertTrue(reporter.events)
+            self.assertEqual(reporter.events[0], ('start', 'scan', None, 'entries'))
+            self.assertEqual(reporter.events[-1], ('finish',))
+            self.assertTrue(any(event[0] == 'advance' and event[1] > 0 for event in reporter.events))
+            self.assertTrue(any(event[0] == 'advance' and event[2] is not None for event in reporter.events))
+        finally:
+            shutil.rmtree(tmpdir)
+
+    @unittest.skipUnless(os.name == 'nt', "Windows-only reserved filename regression")
+    def testFolderReadingWithReservedWindowsFilename(self):
+        """Reserved Windows names like 'nul' should be treated as real files."""
+        tmpdir = tempfile.mkdtemp()
+        try:
+            testFolder = os.path.join(tmpdir, 'test_folder')
+            os.makedirs(testFolder)
+
+            reservedPath = os.path.join(testFolder, 'nul')
+            reservedContent = b'reserved-name-file'
+            writeTestFile(reservedPath, reservedContent)
+
+            reader = SourceReader.build(testFolder, compression='store')
+            data = b''.join(reader.iterChunks(1024))
+
+            zipPath = os.path.join(tmpdir, 'reserved_output.zip')
+            with open(zipPath, 'wb') as f:
+                f.write(data)
+
+            with zipfile.ZipFile(zipPath, 'r') as zipf:
+                self.assertIn('test_folder/nul', zipf.namelist())
+                self.assertEqual(zipf.read('test_folder/nul'), reservedContent)
+
+        finally:
+            try:
+                deleteTestPath(os.path.join(tmpdir, 'test_folder', 'nul'))
+            except OSError:
+                pass
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 class FolderTransferTest(FastFileLinkTestBase):

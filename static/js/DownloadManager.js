@@ -1020,11 +1020,13 @@ class DownloadManager {
         // Unblocks _waitForHTTPDownloadComplete() on the server so shutdown/doAfterDownload
         // is only triggered after the relay has fully drained to the client.
         if (this.serverDownloadId && this.uid) {
-            this.log('DownloadManager', `Notifying server of HTTP download completion, downloadId: ${this.serverDownloadId}`);
+            const downloadId = this.serverDownloadId;
+            this.log('DownloadManager', `Notifying server of HTTP download completion, downloadId: ${downloadId}`);
             fetch(`/${this.uid}/complete`, {
                 method: 'POST',
+                keepalive: true,
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ downloadId: this.serverDownloadId, receivedBytes: resolvedTotal || 0 }),
+                body: JSON.stringify({ downloadId, receivedBytes: resolvedTotal || 0 }),
             }).then(async response => {
                 const data = await response.json().catch(() => null);
                 if (this.receiptConfirmationUI && data && data.confirmRequired) {
@@ -1967,7 +1969,9 @@ class DownloadManager {
             return;
         }
 
-        if (this.authHeaders && navigator.serviceWorker && navigator.serviceWorker.controller) {
+        const useServiceWorker = progressSwSupported;
+
+        if (this.authHeaders && useServiceWorker && navigator.serviceWorker && navigator.serviceWorker.controller) {
             navigator.serviceWorker.controller.postMessage({
                 type: 'auth-headers',
                 downloadId: this.activeDlId,
@@ -1975,14 +1979,46 @@ class DownloadManager {
             });
         }
 
-        if (progressSwSupported) {
+        if (useServiceWorker) {
             // Case A: Service Worker is available
-            if (writer && (resumeConfig || forceWriter)) {
-                // Has SW + (has resumeConfig OR forceWriter) + has writer
-                // SW handles resume + decryption, we just write plaintext to writer
-                // No progressCallback needed (SW broadcasts events)
-                // forceWriter=true ensures ZIP preview can feed chunks even without resume
-                this.log('DownloadManager', 'BRANCH: SW + writer + (resumeConfig OR forceWriter) -> fetchToWriter (SW handles resume/decrypt)');
+            if (writer && resumeConfig) {
+                // Keep ProgressServiceWorker in the path for auth/range handling, but avoid
+                // wrapping the resumed long-lived body in TransformStream when the page itself
+                // will consume the response stream and forward it into an existing writer.
+                downloadUrl.searchParams.set('ff_pass', '1');
+                this.log('DownloadManager', 'BRANCH: SW + writer + resumeConfig -> fetchToWriter via SW passthrough resume');
+
+                const needsDecryption = this.e2eeEnabled;
+                const progressCallback = this.handleDownloadProgress.bind(this);
+                const checksumVerifier = this.createChecksumVerifierForHTTP(resumeConfig);
+                const expectedSize = resumeConfig.expectedSize || this.totalBytesHint || 0;
+
+                try {
+                    const totalSize = await this.fetchToWriter(
+                        downloadUrl.pathname + downloadUrl.search,
+                        writer,
+                        needsDecryption,
+                        resumeConfig,
+                        progressCallback,
+                        checksumVerifier
+                    );
+
+                    this.handleDownloadComplete(totalSize || expectedSize);
+                    if (this.pendingChecksumResult) {
+                        this.handleChecksumVerificationResult(this.pendingChecksumResult, 'http');
+                        this.pendingChecksumResult = null;
+                    }
+                } catch (err) {
+                    this.log('DownloadManager', 'SW passthrough resume -> writer failed:', err);
+                    this.handleDownloadError(String(err));
+                }
+                return;
+            }
+
+            if (writer && forceWriter) {
+                // Has SW + writer, but no resume. Keep TransformStream path for ZIP preview and
+                // other writer-first flows that depend on SW-driven progress events.
+                this.log('DownloadManager', 'BRANCH: SW + writer + forceWriter -> fetchToWriter (SW handles download)');
                 const needsDecryption = false;
                 const progressCallback = null;  // SW broadcasts events
                 return this.fetchToWriter(

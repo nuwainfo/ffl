@@ -30,7 +30,8 @@ import requests
 from urllib.parse import urlparse
 
 from bases.CLI import DEFAULT_AUTH_USER_NAME
-from ..CoreTestBase import FastFileLinkTestBase
+
+from ..CoreTestBase import FastFileLinkTestBase, LOCAL_TEST_SERVER_URL
 
 
 class CLITest(FastFileLinkTestBase):
@@ -146,7 +147,7 @@ class CLITest(FastFileLinkTestBase):
         """Verify authentication is enabled with correct username and password is NOT shown"""
         self.assertIn(f"Authentication enabled - Username: {username}", combinedOutput)
         self.assertNotIn(password, combinedOutput) # Password should not be shown
-        print(f"[Test] ✓ Authentication enabled for user '{username}' (password hidden)")
+        print(f"[Test] [OK] Authentication enabled for user '{username}' (password hidden)")
 
     def _verifyHttpBasicAuth(self, shareLink, username, password, downloadPath):
         """
@@ -162,7 +163,7 @@ class CLITest(FastFileLinkTestBase):
         self.assertEqual(
             response.status_code, 401, f"Expected 401 Unauthorized without credentials, got {response.status_code}"
         )
-        print("[Test] ✓ Unauthenticated request correctly rejected with 401")
+        print("[Test] [OK] Unauthenticated request correctly rejected with 401")
 
         # Test 2: Wrong credentials
         print("[Test] Test 2/3: Wrong credentials (should fail)...")
@@ -170,7 +171,7 @@ class CLITest(FastFileLinkTestBase):
         self.assertEqual(
             response.status_code, 401, f"Expected 401 Unauthorized with wrong credentials, got {response.status_code}"
         )
-        print("[Test] ✓ Wrong credentials correctly rejected with 401")
+        print("[Test] [OK] Wrong credentials correctly rejected with 401")
 
         # Test 3: Correct credentials
         print("[Test] Test 3/3: Correct credentials (should succeed)...")
@@ -178,7 +179,7 @@ class CLITest(FastFileLinkTestBase):
         self.assertEqual(
             response.status_code, 200, f"Expected 200 OK with correct credentials, got {response.status_code}"
         )
-        print("[Test] ✓ Authenticated request succeeded with 200 OK")
+        print("[Test] [OK] Authenticated request succeeded with 200 OK")
 
         # Save and verify the downloaded file
         with open(downloadPath, 'wb') as f:
@@ -187,7 +188,7 @@ class CLITest(FastFileLinkTestBase):
                     f.write(chunk)
 
         self._verifyDownloadedFile(downloadPath)
-        print("[Test] ✓ Downloaded file integrity verified")
+        print("[Test] [OK] Downloaded file integrity verified")
 
     def _tryDownloadUploadedFile(self, shareLink, username, password):
         """
@@ -206,15 +207,15 @@ class CLITest(FastFileLinkTestBase):
                 self.assertEqual(
                     response.status_code, 200, f"Expected 200 OK with credentials, got {response.status_code}"
                 )
-                print("[Test] ✓ Download with authentication succeeded")
+                print("[Test] [OK] Download with authentication succeeded")
             elif response.status_code == 200:
-                print("[Test] ✓ Download succeeded (remote server may not require auth)")
+                print("[Test] [OK] Download succeeded (remote server may not require auth)")
             else:
                 self.fail(f"Unexpected status code: {response.status_code}")
 
             # Verify we got file content
             self.assertGreater(len(response.content), 0, "Downloaded file should not be empty")
-            print(f"[Test] ✓ Downloaded {len(response.content)} bytes")
+            print(f"[Test] [OK] Downloaded {len(response.content)} bytes")
 
         except requests.exceptions.RequestException as e:
             print(f"[Test] Warning: Could not download from remote server: {e}")
@@ -284,6 +285,44 @@ class CLITest(FastFileLinkTestBase):
             print(f"[Test] Captured output length: {len(output)} chars")
 
         return output
+
+    def _runUploadPromptCommand(self, userInput=None, extraArgs=None, extraEnvVars=None, timeout=120):
+        """Run upload mode with interactive stdin support against the local test server."""
+        self._provisionLocalTestServerCredential()
+        testServerProcess = self._startTestServer()
+        coreScriptPath = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "CorePatched.py"))
+
+        command = [
+            sys.executable, coreScriptPath, "--cli", "share", self.testFilePath, "--json", self.jsonOutputPath,
+            "--upload", "3 hours"
+        ]
+        if extraArgs:
+            command.extend(extraArgs)
+
+        env = os.environ.copy()
+        env['PYTHONUNBUFFERED'] = '1'
+        env['FILESHARE_TEST'] = LOCAL_TEST_SERVER_URL
+        if extraEnvVars:
+            for key, value in extraEnvVars.items():
+                env[key] = str(value)
+
+        print(f"[Test] Running upload prompt command: {' '.join(command)}")
+
+        try:
+            with subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env
+            ) as proc:
+                output, _ = proc.communicate(input=userInput, timeout=timeout)
+                proc.stdin = None
+                proc.stdout = None
+                return output, proc.returncode
+        finally:
+            self._stopTestServer(testServerProcess)
 
     def testCLIAuthPasswordOnly(self):
         """Test --auth-password enables auth with default username 'ffl'."""
@@ -638,12 +677,12 @@ class CLITest(FastFileLinkTestBase):
 
         # Verify custom filename in JSON output
         self._verifyCustomNameInJson(customName)
-        print(f"[Test] ✓ Custom filename '{customName}' verified in JSON output")
+        print(f"[Test] [OK] Custom filename '{customName}' verified in JSON output")
 
         # Verify Content-Disposition header in HTTP response
         downloadedFilePath = self._getDownloadedFilePath("custom_name_test")
         self.downloadFileWithRequests(shareLink, downloadedFilePath, expectedFileName=customName)
-        print(f"[Test] ✓ Content-Disposition header verified with filename '{customName}'")
+        print(f"[Test] [OK] Content-Disposition header verified with filename '{customName}'")
 
     def testCustomNameWithFileNoExtension(self):
         """Test --name with a file without extension."""
@@ -657,7 +696,7 @@ class CLITest(FastFileLinkTestBase):
 
         # Verify custom filename in JSON output (should keep as-is for files)
         self._verifyCustomNameInJson(customName)
-        print(f"[Test] ✓ Filename '{customName}' kept as-is for file")
+        print(f"[Test] [OK] Filename '{customName}' kept as-is for file")
 
     def testCustomNameWithFolder(self):
         """Test --name with a folder (should add .zip extension)."""
@@ -685,7 +724,7 @@ class CLITest(FastFileLinkTestBase):
 
             # Verify custom filename in JSON output
             self._verifyCustomNameInJson(customName)
-            print(f"[Test] ✓ Folder custom name '{customName}' verified")
+            print(f"[Test] [OK] Folder custom name '{customName}' verified")
         finally:
             # Restore original test file and size
             self.testFilePath = originalTestFile
@@ -718,7 +757,7 @@ class CLITest(FastFileLinkTestBase):
 
             # Verify .zip extension was added
             self._verifyCustomNameInJson(expectedName)
-            print(f"[Test] ✓ Folder name '{customName}' converted to '{expectedName}'")
+            print(f"[Test] [OK] Folder name '{customName}' converted to '{expectedName}'")
         finally:
             # Restore original test file and size
             self.testFilePath = originalTestFile
@@ -751,7 +790,7 @@ class CLITest(FastFileLinkTestBase):
 
             # Verify .zip was appended
             self._verifyCustomNameInJson(expectedName)
-            print(f"[Test] ✓ Folder name '{customName}' converted to '{expectedName}'")
+            print(f"[Test] [OK] Folder name '{customName}' converted to '{expectedName}'")
         finally:
             # Restore original test file and size
             self.testFilePath = originalTestFile
@@ -856,6 +895,33 @@ class CLITest(FastFileLinkTestBase):
 
         print("[Test] PASS: Authentication (default username) with upload mode works correctly")
 
+    def testCLIUploadConfirmPromptAcceptsYes(self):
+        """Test upload confirmation prompt appears and accepts interactive yes."""
+        output, returnCode = self._runUploadPromptCommand(userInput="yes\n", extraEnvVars={"FFL_YES": "False"})
+
+        print(f"[Test] Upload confirm output: {output}")
+        self.assertEqual(returnCode, 0, f"Expected exit code 0, got {returnCode}")
+        self.assertIn("Upload requires", output)
+        self.assertIn("Continue with upload?", output)
+        self.assertTrue(os.path.exists(self.jsonOutputPath), "Expected upload to complete and write share_info.json")
+
+        with open(self.jsonOutputPath, 'r', encoding='utf-8') as f:
+            jsonOutput = json.load(f)
+        self.assertIn("link", jsonOutput)
+        print("[Test] PASS: Interactive upload confirmation accepted and upload completed")
+
+    def testCLIUploadConfirmWithYesSkipsPrompt(self):
+        """Test --yes skips the upload confirmation prompt."""
+        output, returnCode = self._runUploadPromptCommand(
+            userInput=None, extraArgs=["--yes"], extraEnvVars={"FFL_YES": "False"}
+        )
+
+        print(f"[Test] --yes output: {output}")
+        self.assertEqual(returnCode, 0, f"Expected exit code 0, got {returnCode}")
+        self.assertNotIn("Continue with upload?", output)
+        self.assertTrue(os.path.exists(self.jsonOutputPath), "Expected upload to complete and write share_info.json")
+        print("[Test] PASS: --yes skipped upload confirmation prompt")
+
 
 class CLIArgumentParsingTest(unittest.TestCase):
     """Lightweight test class for CLI argument parsing behavior - help, version, and error cases"""
@@ -868,6 +934,7 @@ class CLIArgumentParsingTest(unittest.TestCase):
         # Set up environment to disable GUI addon for CLI testing
         env = os.environ.copy()
         env['DISABLE_ADDONS'] = 'GUI'
+        env['FFL_YES'] = 'True'
 
         try:
             result = subprocess.run(command, capture_output=True, text=True, timeout=10, env=env)
@@ -925,7 +992,7 @@ class CLIArgumentParsingTest(unittest.TestCase):
                     if not foundHelpIndicator:
                         self.fail(f"Expected help output for {args}, but got: {output}")
 
-                    print(f"✓ {description}: Found help output")
+                    print(f"[OK] {description}: Found help output")
 
     def testCLIArgumentsVersionBehavior(self):
         """Test --version argument behavior"""
@@ -959,7 +1026,7 @@ class CLIArgumentParsingTest(unittest.TestCase):
                     # Should exit with code 0 for version
                     self.assertEqual(returnCode, 0, f"Version command should exit with code 0, got {returnCode}")
 
-                    print(f"✓ {description}: Found version output")
+                    print(f"[OK] {description}: Found version output")
 
     def testCLIArgumentsValidCombinations(self):
         """Test CLI argument combinations that should work (with file argument)"""
@@ -1001,6 +1068,7 @@ class CLIArgumentParsingTest(unittest.TestCase):
                     # Set up environment to disable GUI addon for CLI testing
                     env = os.environ.copy()
                     env['DISABLE_ADDONS'] = 'GUI'
+                    env['FFL_YES'] = 'True'
 
                     try:
                         # Start the process
@@ -1033,10 +1101,10 @@ class CLIArgumentParsingTest(unittest.TestCase):
                         if foundHelpIndicator:
                             self.fail(f"Expected valid sharing start for {args}, but got help output: {output}")
 
-                        print(f"✓ {description}: Did not show help (started normally)")
+                        print(f"[OK] {description}: Did not show help (started normally)")
 
                     except Exception as e:
-                        print(f"⚠ {description}: Exception during test: {e}")
+                        print(f"[WARN] {description}: Exception during test: {e}")
                         # Don't fail the test for process management issues
 
         finally:
@@ -1084,7 +1152,7 @@ class CLIArgumentParsingTest(unittest.TestCase):
                         returnCode, 0, f"Error command should exit with non-zero code, got {returnCode}"
                     )
 
-                    print(f"✓ {description}: Found error output with code {returnCode}")
+                    print(f"[OK] {description}: Found error output with code {returnCode}")
 
 
 class MultiFileShareTest(FastFileLinkTestBase):

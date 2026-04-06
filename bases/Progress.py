@@ -102,7 +102,8 @@ class Progress:
     )
 
     def __init__(
-        self, totalSize, sizeFormatter=None, loggerCallback=print, logInterval=2.0, useBar=False, barFormat=None
+        self, totalSize, sizeFormatter=None, loggerCallback=print, logInterval=2.0, useBar=False, barFormat=None,
+        description=None, unit='B', unitScale=False, leave=True
     ):
         self.totalSize = totalSize
         self.sizeFormatter = sizeFormatter or formatSize
@@ -110,6 +111,10 @@ class Progress:
         self.logInterval = logInterval
         self.useBar = useBar
         self.barFormat = barFormat
+        self.description = description or _('Progress')
+        self.unit = unit
+        self.unitScale = unitScale
+        self.leave = leave
 
         # Progress tracking
         self.transferred = 0
@@ -148,16 +153,20 @@ class Progress:
 
             self.pbar = BitmathTqdm(
                 total=total,
-                desc=_('Progress'),
+                desc=self.description,
                 sizeFormatter=self.sizeFormatter,
-                leave=True,
+                leave=self.leave,
                 dynamic_ncols=True, # Auto-adjust width to terminal size
                 ascii=False,
+                unit=self.unit,
+                unitScale=self.unitScale,
                 bar_format=self.barFormat
             )
         except Exception:
             total = None if (self.totalSize is None or self.totalSize <= 0) else self.totalSize
-            self.pbar = tqdm(total=total, desc=_('Progress'), unit='B', unit_scale=True, leave=True)
+            self.pbar = tqdm(
+                total=total, desc=self.description, unit=self.unit, unit_scale=self.unitScale, leave=self.leave
+            )
 
     def update(self, bytesTransferred, forceLog=False, extraText="", forceFinish=False):
         """Update progress with new bytes transferred."""

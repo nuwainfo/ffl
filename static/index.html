@@ -635,6 +635,9 @@ Licensed under Apache-2.0 license.
                     downloadButton: document.getElementById('play-download-btn')
                 });
 
+                // Test/debug hook for browser automation and live inspection.
+                window.webrtcManager = webrtcManager;
+
                 // Start the download process
                 webrtcManager.start();
             } // End of startWebRTCDownload function

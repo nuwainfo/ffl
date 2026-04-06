@@ -23,6 +23,7 @@ import imaplib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -162,28 +163,26 @@ class FastFileLinkTestBase(unittest.TestCase):
         if self.coreProcess:
             # Check if process is still running
             if self.coreProcess.poll() is None:
-                print("[Test] Process is still running, sending Ctrl+C signal")
+                print("[Test] Process is still running, sending graceful shutdown signal")
                 try:
                     if sys.platform == 'win32':
                         import signal
-                        # On Windows, this might not work in all cases
-                        os.kill(self.coreProcess.pid, signal.CTRL_C_EVENT)
+                        self.coreProcess.send_signal(signal.CTRL_BREAK_EVENT)
                     else:
                         import signal
-                        # On Unix-like systems, send SIGINT
                         os.kill(self.coreProcess.pid, signal.SIGINT)
 
                     # Give the process some time to handle the signal
                     for _ in range(5): # Wait up to 5 seconds
                         time.sleep(1)
                         if self.coreProcess.poll() is not None:
-                            print("[Test] Process terminated after Ctrl+C")
+                            print("[Test] Process terminated after graceful shutdown signal")
                             break
                 except KeyboardInterrupt:
                     print("Catched KeyboardInterrupt")
                     time.sleep(2)
                 except Exception as e:
-                    print(f"[Test] Failed to send Ctrl+C signal: {e}")
+                    print(f"[Test] Failed to send graceful shutdown signal: {e}")
 
             # If process is still running after Ctrl+C, terminate it
             if isProcessRunning(self.coreProcess.pid):
@@ -733,6 +732,37 @@ class FastFileLinkTestBase(unittest.TestCase):
         except Exception as e:
             print(f"[Test] Error stopping test server: {e}")
 
+    def _normalizeCommandSpec(self, commandSpec):
+        """Normalize command spec into argv list."""
+        if commandSpec is None:
+            return None
+
+        if isinstance(commandSpec, (list, tuple)):
+            return [str(part) for part in commandSpec]
+
+        if isinstance(commandSpec, str):
+            posixMode = not sys.platform.startswith('win')
+            return shlex.split(commandSpec, posix=posixMode)
+
+        raise TypeError(f"Unsupported command spec type: {type(commandSpec).__name__}")
+
+    def _adaptExternalCommandForPlatform(self, commandPrefix):
+        """Adjust external command prefixes for platform-specific launcher requirements."""
+        if not commandPrefix:
+            return commandPrefix
+
+        if sys.platform.startswith('win'):
+            return commandPrefix
+
+        launcher = os.path.basename(commandPrefix[0]).lower()
+        if launcher in ('bash', 'sh'):
+            return commandPrefix
+
+        if commandPrefix[0].lower().endswith('.com'):
+            return ['bash', *commandPrefix]
+
+        return commandPrefix
+
     def _startFastFileLink(
         self,
         p2p=True,
@@ -745,7 +775,8 @@ class FastFileLinkTestBase(unittest.TestCase):
         extraEnvVars=None,
         extraArgs=None,
         captureOutputIn=None,
-        waitForCompletion=True
+        waitForCompletion=True,
+        binaryCommand=None
     ):
         """
         Start the FastFileLink process and wait for the share link to be ready
@@ -761,6 +792,7 @@ class FastFileLinkTestBase(unittest.TestCase):
             extraEnvVars (dict): Additional environment variables to set
             extraArgs (list): Additional command line arguments to pass to the process
             captureOutputIn (dict): Optional dict to capture process output in ['output'] key
+            binaryCommand (str|list): Optional external command prefix, e.g. "./ffl.com" or "python Core.py --cli"
 
         Returns:
             tuple: (share_link, test_server_process) if useTestServer=True, otherwise just share_link
@@ -772,17 +804,32 @@ class FastFileLinkTestBase(unittest.TestCase):
             testServerProcess = self._startTestServer()
 
         try:
-            # Determine which core script to use
             useNetworkSimulation = networkFailureRate > 0.0
-            coreScript = "CorePatched.py" # Always use CorePatched.py now
-            coreScriptPath = os.path.join(os.path.dirname(__file__), coreScript)
-
-            if not os.path.exists(coreScriptPath):
-                raise AssertionError(f"{coreScript} not found. Please ensure it's in the same directory.")
-
             modeDesc = "with network simulation" if useNetworkSimulation else "normal mode"
             serverDesc = " + test server" if useTestServer else ""
-            print(f"[Test] Starting FastFileLink in CLI mode using {coreScript} ({modeDesc}{serverDesc})...")
+
+            commandPrefix = None
+            runnerLabel = None
+            if binaryCommand:
+                if useNetworkSimulation:
+                    raise AssertionError("networkFailureRate simulation is only supported with the patched Python runner")
+                    
+                commandPrefix = self._normalizeCommandSpec(binaryCommand)
+                if not commandPrefix:
+                    raise AssertionError("binaryCommand resolved to an empty command")
+                    
+                commandPrefix = self._adaptExternalCommandForPlatform(commandPrefix)
+                runnerLabel = " ".join(commandPrefix)
+            else:
+                coreScript = "CorePatched.py" # Always use CorePatched.py now
+                coreScriptPath = os.path.join(os.path.dirname(__file__), coreScript)
+                if not os.path.exists(coreScriptPath):
+                    raise AssertionError(f"{coreScript} not found. Please ensure it's in the same directory.")
+                    
+                commandPrefix = [sys.executable, coreScriptPath, "--cli"]
+                runnerLabel = coreScript
+
+            print(f"[Test] Starting FastFileLink in CLI mode using {runnerLabel} ({modeDesc}{serverDesc})...")
             if useNetworkSimulation:
                 print(
                     f"[Test] Network simulation: {networkFailureRate * 100:.1f}% failure rate, max {maxConsecutiveFailures} consecutive failures"
@@ -790,9 +837,7 @@ class FastFileLinkTestBase(unittest.TestCase):
             print(f"[Test] Mode: {'P2P' if p2p else 'Server'}")
 
             # Prepare the command - use 'share' subcommand for file sharing
-            command = [
-                sys.executable, coreScriptPath, "--cli", "share", self.testFilePath, "--json", self.jsonOutputPath
-            ]
+            command = commandPrefix + ["share", self.testFilePath, "--json", self.jsonOutputPath]
 
             # Add network instability parameters if needed
             if useNetworkSimulation:
@@ -855,23 +900,27 @@ class FastFileLinkTestBase(unittest.TestCase):
             if showOutput:
                 # Real-time output: don't capture stdout/stderr, let them show directly
                 # Force line buffering to ensure output appears immediately
+                creationFlags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
                 self.coreProcess = subprocess.Popen(
                     command,
                     text=True,
                     env=env,
                     bufsize=1, # Line buffered
-                    universal_newlines=True
+                    universal_newlines=True,
+                    creationflags=creationFlags
                 )
             else:
                 # File-based output: redirect stdout/stderr to log file to avoid pipe buffer deadlock
                 self._procLogFile = open(self.procLogPath, "w+", encoding="utf-8", buffering=1)
+                creationFlags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
                 self.coreProcess = subprocess.Popen(
                     command,
                     stdout=self._procLogFile,
                     stderr=subprocess.STDOUT, # Merge stderr into stdout
                     text=True,
                     env=env,
-                    bufsize=1 # Line buffered
+                    bufsize=1, # Line buffered
+                    creationflags=creationFlags
                 )
 
             # Determine appropriate timeout
@@ -1361,6 +1410,11 @@ class FastFileLinkTestBase(unittest.TestCase):
         originalVars['FFL_STORAGE_LOCATION'] = os.environ.get('FFL_STORAGE_LOCATION')
         os.environ['FFL_STORAGE_LOCATION'] = tempConfigDir
         print(f"[Test] Set FFL_STORAGE_LOCATION={tempConfigDir}")
+
+        # Default tests to non-interactive upload confirmation.
+        originalVars['FFL_YES'] = os.environ.get('FFL_YES')
+        os.environ['FFL_YES'] = 'True'
+        print("[Test] Set FFL_YES=True")
 
         # Set additional environment variables if provided
         if extraVars:

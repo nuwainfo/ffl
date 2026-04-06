@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-03-16 14:32+0800\n"
+"POT-Creation-Date: 2026-04-06 13:21+0800\n"
 "PO-Revision-Date: 2025-12-17 09:22+0800\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -17,6 +17,16 @@ msgstr ""
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.17.0\n"
+
+msgid "Scanning folder"
+msgstr ""
+
+msgid "Scanning folder. Calculating size may take some time..."
+msgstr ""
+
+#, python-brace-format
+msgid "Scanned {size}"
+msgstr ""
 
 #, python-brace-format
 msgid "Authentication enabled - Username: {authUser}\n"
@@ -99,6 +109,9 @@ msgstr ""
 msgid "Upload not allowed."
 msgstr ""
 
+msgid "Upload cancelled before transfer started."
+msgstr ""
+
 msgid "Retrying...\n"
 msgstr ""
 
@@ -129,6 +142,9 @@ msgid ""
 msgstr ""
 
 msgid "VFS server stopped."
+msgstr ""
+
+msgid "Error: Please select a file or folder to share"
 msgstr ""
 
 #, python-brace-format
@@ -340,12 +356,20 @@ msgid ""
 "--recipient-auth email"
 msgstr ""
 
-msgid "Choose a file or folder you want to share (use '-' for stdin)"
+msgid ""
+"File(s) or folder to share. Use '-' for stdin, '@filelist.txt' to read "
+"paths from a file. Multiple files can be specified: file1 file2 file3"
 msgstr ""
 
 msgid ""
 "Specify custom download filename (default: original filename for files, "
 "folder.zip for folders, stdin-YYYYMMDD-HHMMSS.bin for stdin)"
+msgstr ""
+
+msgid ""
+"Comma-separated patterns to exclude files/folders by name (e.g. "
+"'*.log,.svn,__pycache__'). Prefix with 're:' for regex (e.g. "
+"'re:\\.tmp$'). Applies at any depth."
 msgstr ""
 
 msgid "Output link and settings to a JSON file"
@@ -363,6 +387,9 @@ msgid ""
 msgstr ""
 
 msgid "Pause upload at specified percentage (1-99, requires --upload)"
+msgstr ""
+
+msgid "Automatically answer yes to upload confirmation prompts"
 msgstr ""
 
 msgid ""
@@ -536,6 +563,14 @@ msgid ""
 "who can download.\n"
 msgstr ""
 
+#, python-brace-format
+msgid "Error: file list not found: {path}"
+msgstr ""
+
+#, python-brace-format
+msgid "Error: file list is empty: {path}"
+msgstr ""
+
 msgid "Error: --upload option requires Upload addon (addons/Upload.py)"
 msgstr ""
 
@@ -608,6 +643,12 @@ msgid "Error: --vfs cannot be used with --upload"
 msgstr ""
 
 msgid "VFS mode is only for P2P sharing. Remove --upload to use --vfs"
+msgstr ""
+
+msgid "Error: --vfs does not support multiple files"
+msgstr ""
+
+msgid "Please specify a single file or folder path for VFS mode"
 msgstr ""
 
 msgid "Error: --vfs does not support stdin input"
@@ -686,6 +727,22 @@ msgstr ""
 msgid ""
 "\n"
 "User closes the connection, please try again.\n"
+msgstr ""
+
+#, python-brace-format
+msgid "Tap to watch {fileName}"
+msgstr ""
+
+#, python-brace-format
+msgid "Tap to listen to {fileName}"
+msgstr ""
+
+#, python-brace-format
+msgid "Tap to view {fileName}"
+msgstr ""
+
+#, python-brace-format
+msgid "Tap to download {fileName}"
 msgstr ""
 
 #, python-brace-format
@@ -1019,19 +1076,6 @@ msgstr ""
 #~ "verification (implies --recipient-auth email)"
 #~ msgstr ""
 
+#~ msgid "Choose a file or folder you want to share (use '-' for stdin)"
+#~ msgstr ""
 
-#, python-brace-format
-msgid "Tap to watch {fileName}"
-msgstr ""
-
-#, python-brace-format
-msgid "Tap to listen to {fileName}"
-msgstr ""
-
-#, python-brace-format
-msgid "Tap to view {fileName}"
-msgstr ""
-
-#, python-brace-format
-msgid "Tap to download {fileName}"
-msgstr ""

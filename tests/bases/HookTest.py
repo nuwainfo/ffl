@@ -33,7 +33,9 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-from bases.Hook import HookServer, HookClient, HookError, HookAuthError
+from functools import partial
+
+from bases.Hook import HookServer, HookClient, HookError, HookAuthError, HookEventSerializer
 from bases.crypto import CryptoInterface
 from bases.E2EE import StreamDecryptor
 from ..CoreTestBase import FastFileLinkTestBase
@@ -312,6 +314,121 @@ class HookTest(unittest.TestCase):
             client.registerServerEndpoints({'uid': 'abc123'})
 
         server.stop()
+
+
+class HookEventSerializerTest(unittest.TestCase):
+    """Tests for HookEventSerializer utilities and extractor registration."""
+
+    def setUp(self):
+        # Save and restore EXTRACTOR_PREFIXES so tests are isolated
+        self._originalPrefixes = dict(HookEventSerializer.EXTRACTOR_PREFIXES)
+
+    def tearDown(self):
+        HookEventSerializer.EXTRACTOR_PREFIXES.clear()
+        HookEventSerializer.EXTRACTOR_PREFIXES.update(self._originalPrefixes)
+
+    # ------------------------------------------------------------------
+    # extractTypeValues
+    # ------------------------------------------------------------------
+
+    def testExtractTypeValuesConvertsTypeToName(self):
+        """Type objects are replaced with their __name__ string."""
+        class Foo:
+            pass
+
+        result = HookEventSerializer.extractTypeValues({'context': {'cls': Foo}}, key='context')
+        self.assertEqual(result, {'context': {'cls': 'Foo'}})
+
+    def testExtractTypeValuesConvertsListOfTypes(self):
+        """Lists of type objects are each replaced with __name__."""
+        class A:
+            pass
+
+        class B:
+            pass
+
+        result = HookEventSerializer.extractTypeValues({'context': {'classes': [A, B]}}, key='context')
+        self.assertEqual(result, {'context': {'classes': ['A', 'B']}})
+
+    def testExtractTypeValuesKeepsScalars(self):
+        """Scalar values (str, int, float, bool, None) are kept as-is."""
+        data = {'context': {'name': 'hello', 'count': 42, 'ratio': 3.14, 'flag': True, 'empty': None}}
+        result = HookEventSerializer.extractTypeValues(data, key='context')
+        self.assertEqual(result, {'context': data['context']})
+
+    def testExtractTypeValuesDropsNonSerializableObjects(self):
+        """Non-serializable objects that are not types are silently dropped."""
+
+        class Manager:
+            pass
+
+        result = HookEventSerializer.extractTypeValues(
+            {'context': {'mgr': Manager(), 'name': 'kept'}}, key='context'
+        )
+        self.assertNotIn('mgr', result['context'])
+        self.assertEqual(result['context']['name'], 'kept')
+
+    def testExtractTypeValuesMissingKey(self):
+        """Missing key returns an empty mapping under that key."""
+        result = HookEventSerializer.extractTypeValues({}, key='context')
+        self.assertEqual(result, {'context': {}})
+
+    def testExtractTypeValuesCustomKey(self):
+        """The key parameter controls which dict key is extracted and returned."""
+        result = HookEventSerializer.extractTypeValues({'payload': {'cls': int}}, key='payload')
+        self.assertEqual(result, {'payload': {'cls': 'int'}})
+
+    # ------------------------------------------------------------------
+    # registerExtractorPrefix + partial binding
+    # ------------------------------------------------------------------
+
+    def testRegisterExtractorPrefixWithPartial(self):
+        """Prefix registered via partial is applied during serialize()."""
+
+        class MyClass:
+            pass
+
+        HookEventSerializer.registerExtractorPrefix(
+            '/test/class/', partial(HookEventSerializer.extractTypeValues, key='context')
+        )
+
+        result = HookEventSerializer.serialize(
+            '/test/class/create', {'context': {'cls': MyClass}, 'manager': object()}
+        )
+        self.assertEqual(result['data']['context']['cls'], 'MyClass')
+        # The 'manager' key from the raw event data is stripped by the extractor
+        self.assertNotIn('manager', result['data'])
+
+    def testRegisterExtractorPrefixLongerPrefixTakesPrecedence(self):
+        """When two prefixes match, the first registered wins (dict insertion order)."""
+
+        HookEventSerializer.registerExtractorPrefix('/foo/', lambda e: {'from': 'foo'})
+        HookEventSerializer.registerExtractorPrefix('/foo/bar/', lambda e: {'from': 'foobar'})
+
+        result = HookEventSerializer.serialize('/foo/baz/event', {})
+        self.assertEqual(result['data']['from'], 'foo')
+
+        result2 = HookEventSerializer.serialize('/foo/bar/event', {})
+        self.assertEqual(result2['data']['from'], 'foo')
+
+    def testRegisterExtractorPrefixDoesNotAffectExactMatch(self):
+        """An exact EXTRACTORS entry takes priority over any prefix match."""
+        from bases.Kernel import FFLEvent
+
+        HookEventSerializer.registerExtractorPrefix(
+            FFLEvent.shareLinkCreate.key[:5],  # just the leading '/'
+            lambda e: {'overridden': True}
+        )
+
+        # shareLinkCreate has an exact extractor — prefix must not override it
+        result = HookEventSerializer.serialize(FFLEvent.shareLinkCreate.key, {'filePath': '/tmp/f'})
+        self.assertNotIn('overridden', result['data'])
+        self.assertIn('filePath', result['data'])
+
+    def testUnregisteredPrefixFallsBackToMakeJsonSafe(self):
+        """Events with no matching extractor still serialize via makeJsonSafe."""
+        result = HookEventSerializer.serialize('/unknown/event', {'value': 42})
+        self.assertEqual(result['data']['value'], 42)
 
 
 class HookFunctionalTest(FastFileLinkTestBase):

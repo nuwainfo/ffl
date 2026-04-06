@@ -363,6 +363,13 @@ def configureCLIParser():
             help=_("Pause upload at specified percentage (1-99, requires --upload)")
         )
         parser.add_argument(
+            "--yes",
+            action="store_true",
+            default=False,
+            help=_("Automatically answer yes to upload confirmation prompts"),
+            dest="yes"
+        )
+        parser.add_argument(
             "--max-downloads",
             type=validateMaxDownloads,
             default=0,

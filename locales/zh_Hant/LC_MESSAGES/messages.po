@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-03-16 14:32+0800\n"
+"POT-Creation-Date: 2026-04-06 13:21+0800\n"
 "PO-Revision-Date: 2025-12-21 08:43+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -17,6 +17,16 @@ msgstr ""
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.17.0\n"
+
+msgid "Scanning folder"
+msgstr "正在掃描資料夾"
+
+msgid "Scanning folder. Calculating size may take some time..."
+msgstr "正在掃描資料夾，計算大小可能需要一些時間…"
+
+#, python-brace-format
+msgid "Scanned {size}"
+msgstr "已掃描 {size}"
 
 #, python-brace-format
 msgid "Authentication enabled - Username: {authUser}\n"
@@ -110,6 +120,9 @@ msgstr "您的使用者點數不足。請在我們的網站上儲值 (https://fa
 msgid "Upload not allowed."
 msgstr "不允許上傳。"
 
+msgid "Upload cancelled before transfer started."
+msgstr "上傳在傳輸開始前已取消。"
+
 msgid "Retrying...\n"
 msgstr "正在重試...\n"
 
@@ -143,6 +156,9 @@ msgstr ""
 
 msgid "VFS server stopped."
 msgstr "VFS 伺服器已停止。"
+
+msgid "Error: Please select a file or folder to share"
+msgstr "錯誤：請選擇要分享的檔案或資料夾"
 
 #, python-brace-format
 msgid "{file} does not exist!"
@@ -350,11 +366,13 @@ msgid ""
 "of paths (implies --recipient-auth pubkey; with --pickup-code, implies "
 "pubkey+pickup)"
 msgstr ""
+"收件人 RSA 公鑰檔案路徑（{ext}），或以逗號分隔的多個路徑（隱含 --recipient-auth pubkey；與 --pickup-"
+"code 結合使用時，隱含 pubkey+pickup）"
 
 msgid ""
 "Recipient email address, or a comma-separated list of email addresses, "
 "for OTP verification (implies --recipient-auth email)"
-msgstr ""
+msgstr "收件人電子郵件地址，或以逗號分隔的多個地址，用於 OTP 驗證（隱含 --recipient-auth email）"
 
 msgid ""
 "Base URL for OTP email API (e.g. https://myserver.com/api). Required for "
@@ -363,8 +381,10 @@ msgstr ""
 "OTP 信箱 API 的基礎 URL（例如 https://myserver.com/api）。使用 --recipient-auth email"
 " 時必填"
 
-msgid "Choose a file or folder you want to share (use '-' for stdin)"
-msgstr "選擇要分享的檔案或資料夾（使用 '-' 表示標準輸入）"
+msgid ""
+"File(s) or folder to share. Use '-' for stdin, '@filelist.txt' to read "
+"paths from a file. Multiple files can be specified: file1 file2 file3"
+msgstr "要分享的檔案或資料夾。使用 '-' 讀取標準輸入，'@filelist.txt' 從檔案讀取路徑。可指定多個檔案：file1 file2 file3"
 
 msgid ""
 "Specify custom download filename (default: original filename for files, "
@@ -372,6 +392,14 @@ msgid ""
 msgstr ""
 "指定自訂下載檔案名稱（預設：檔案使用原始檔案名稱，資料夾使用 folder.zip，標準輸入使用 stdin-YYYYMMDD-"
 "HHMMSS.bin）"
+
+msgid ""
+"Comma-separated patterns to exclude files/folders by name (e.g. "
+"'*.log,.svn,__pycache__'). Prefix with 're:' for regex (e.g. "
+"'re:\\.tmp$'). Applies at any depth."
+msgstr ""
+"以逗號分隔的排除模式，按名稱排除檔案/資料夾（例如 '*.log,.svn,__pycache__'）。使用 're:' 前綴表示正規表示式（例如"
+" 're:\\.tmp$'）。適用於任意深度。"
 
 msgid "Output link and settings to a JSON file"
 msgstr "將連結和設定輸出到 JSON 檔案"
@@ -389,6 +417,9 @@ msgstr "繼續先前中斷的上傳（需要先前的上傳工作階段存在）
 
 msgid "Pause upload at specified percentage (1-99, requires --upload)"
 msgstr "在指定百分比時暫停上傳（1-99，需要 --upload）"
+
+msgid "Automatically answer yes to upload confirmation prompts"
+msgstr "自動對上傳確認提示回答是"
 
 msgid ""
 "Maximum number of downloads before the server automatically shuts down "
@@ -568,6 +599,14 @@ msgid ""
 "who can download.\n"
 msgstr "提示：使用 --recipient-auth pickup 或 --recipient-auth pubkey 限制誰可以下載。\n"
 
+#, python-brace-format
+msgid "Error: file list not found: {path}"
+msgstr "錯誤：檔案列表未找到：{path}"
+
+#, python-brace-format
+msgid "Error: file list is empty: {path}"
+msgstr "錯誤：檔案列表為空：{path}"
+
 msgid "Error: --upload option requires Upload addon (addons/Upload.py)"
 msgstr "錯誤：--upload 選項需要 Upload 附加元件（addons/Upload.py）"
 
@@ -641,6 +680,12 @@ msgstr "錯誤：--vfs 不能與 --upload 一起使用"
 
 msgid "VFS mode is only for P2P sharing. Remove --upload to use --vfs"
 msgstr "VFS 模式僅用於 P2P 分享。移除 --upload 以使用 --vfs"
+
+msgid "Error: --vfs does not support multiple files"
+msgstr "錯誤：--vfs 不支援多個檔案"
+
+msgid "Please specify a single file or folder path for VFS mode"
+msgstr "請為 VFS 模式指定單個檔案或資料夾路徑"
 
 msgid "Error: --vfs does not support stdin input"
 msgstr "錯誤：--vfs 不支援標準輸入"
@@ -725,6 +770,22 @@ msgid ""
 msgstr ""
 "\n"
 "使用者關閉連線，請重試。\n"
+
+#, python-brace-format
+msgid "Tap to watch {fileName}"
+msgstr "點擊觀看 {fileName}"
+
+#, python-brace-format
+msgid "Tap to listen to {fileName}"
+msgstr "點擊聆聽 {fileName}"
+
+#, python-brace-format
+msgid "Tap to view {fileName}"
+msgstr "點擊檢視 {fileName}"
+
+#, python-brace-format
+msgid "Tap to download {fileName}"
+msgstr "點擊下載 {fileName}"
 
 #, python-brace-format
 msgid "Timeout ({timeout} seconds) reached. Shutting down server."
@@ -1061,19 +1122,6 @@ msgstr "正在嘗試 WebRTC 下載..."
 #~ "verification (implies --recipient-auth email)"
 #~ msgstr "用於 OTP 驗證的收件人信箱地址（隱含 --recipient-auth email）"
 
+#~ msgid "Choose a file or folder you want to share (use '-' for stdin)"
+#~ msgstr "選擇要分享的檔案或資料夾（使用 '-' 表示標準輸入）"
 
-#, python-brace-format
-msgid "Tap to watch {fileName}"
-msgstr "點擊觀看 {fileName}"
-
-#, python-brace-format
-msgid "Tap to listen to {fileName}"
-msgstr "點擊聆聽 {fileName}"
-
-#, python-brace-format
-msgid "Tap to view {fileName}"
-msgstr "點擊檢視 {fileName}"
-
-#, python-brace-format
-msgid "Tap to download {fileName}"
-msgstr "點擊下載 {fileName}"

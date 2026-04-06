@@ -162,6 +162,7 @@ class BoreClient:
         remoteHost,
         remotePort=0,
         secret=None,
+        tokenProvider=None,
         bufferSize=8192,
         verbose=False,
         debug=True,
@@ -173,13 +174,14 @@ class BoreClient:
         self.remoteHost = remoteHost
         self.requestedPort = remotePort
         self.remotePort = None # Will be assigned by server
-        self.authenticator = Authenticator(secret) if secret else None
+        self.authenticator = None
         self.controlConnection = None
         self.running = False
         self.bufferSize = bufferSize
         self.connectionLock = asyncio.Lock() # Add a lock for connection handling
         self.runningTasks = set() # Task management per instance
         self.proxyConfig = proxyConfig # Store proxy configuration
+        self.tokenProvider = tokenProvider
 
         # Force HTTPS mode for security (ignores useHttps parameter)
         self.useHttps = True # Always True for security
@@ -190,9 +192,28 @@ class BoreClient:
 
         # Use environment variable for secret if not provided
         secret = secret or os.environ.get("BORE_SECRET")
-        self.secret = secret
+        self._setSecret(secret)
+        
         if not self.secret:
             logger.warning("No secret provided and BORE_SECRET environment variable not set")
+
+    def _setSecret(self, secret):
+        self.secret = secret
+        self.authenticator = Authenticator(secret) if secret else None
+
+    def _refreshSecret(self):
+        if not callable(self.tokenProvider):
+            return
+
+        newSecret = self.tokenProvider()
+        if not newSecret:
+            logger.warning("Token provider returned empty token; keeping existing token")
+            return
+
+        if newSecret != self.secret:
+            logger.info("Tunnel token refreshed")
+
+        self._setSecret(newSecret)
 
     def addRunningTask(self, task):
         """Add a task to the running tasks set with proper cleanup callback."""
@@ -429,6 +450,16 @@ class BoreClient:
         Optionally uses SOCKS5 proxy if FFL_TUNNEL_SOCKS5 is configured.
         """
         try:
+            try:
+                self._refreshSecret()
+            except Exception as e:
+                if not self.secret:
+                    logger.error(f"Failed to refresh tunnel token before connect: {e}")
+                    logger.error(traceback.format_exc())
+                    return False
+
+                logger.warning(f"Failed to refresh tunnel token, reusing existing token: {e}")
+
             logger.info(f"Connecting to {self.controlHost}:{self.controlPort}...")
 
             # 1. Establish secure TLS connection (always HTTPS, optionally via SOCKS5)

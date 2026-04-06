@@ -23,8 +23,10 @@ import json
 import platform
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
+import psutil
 
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -36,6 +38,8 @@ from get_gecko_driver import GetGeckoDriver
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.support import expected_conditions as EC
@@ -56,6 +60,11 @@ class BrowserTestBase(FastFileLinkTestBase):
     _geckoDriverPath = None
     _geckoDriverLock = threading.Lock()
 
+    @staticmethod
+    def _isHeadlessEnabled():
+        value = os.getenv("FFL_BROWSER_HEADLESS", "True").strip().lower()
+        return value not in ("0", "false", "no", "off")
+
     def __init__(self, methodName='runTest', fileSizeBytes=None):
         if fileSizeBytes is None:
             fileSizeBytes = self.DEFAULT_FILE_SIZE
@@ -74,6 +83,8 @@ class BrowserTestBase(FastFileLinkTestBase):
 
         # Keep track of active drivers for cleanup
         self.activeDrivers = []
+        self.activeChromeProfileDirs = []
+        self.activeFirefoxProfileDirs = []
 
     def _getBrowserDownloadDir(self, browserName, index=0):
         if browserName == 'chrome':
@@ -94,6 +105,7 @@ class BrowserTestBase(FastFileLinkTestBase):
         """Clean up test environment including browser instances"""
         # Clean up any remaining browser instances with timeout
         for idx, driver in enumerate(self.activeDrivers):
+            servicePid = self._getDriverServicePid(driver)
             cleanupComplete = threading.Event()
 
             def quitDriver():
@@ -112,9 +124,54 @@ class BrowserTestBase(FastFileLinkTestBase):
             # Wait up to 5 seconds for cleanup
             if not cleanupComplete.wait(timeout=5):
                 print(f"[Test] Warning: Driver {idx} cleanup timed out after 5 seconds - forcing continue")
-                # Thread is daemon so it won't block exit
+                self._killDriverServiceProcessTree(servicePid)
+            else:
+                self._killDriverServiceProcessTree(servicePid)
+
+        for profileDir in self.activeChromeProfileDirs + self.activeFirefoxProfileDirs:
+            try:
+                shutil.rmtree(profileDir, ignore_errors=True)
+            except Exception as e:
+                print(f"[Test] Warning: Failed to clean browser profile dir {profileDir}: {e}")
 
         super().tearDown()
+
+    def _getDriverServicePid(self, driver):
+        try:
+            service = getattr(driver, 'service', None)
+            process = getattr(service, 'process', None)
+            pid = getattr(process, 'pid', None)
+            if pid:
+                return int(pid)
+        except Exception as e:
+            print(f"[Test] Warning: Failed to inspect driver service pid: {e}")
+
+        return None
+
+    def _killDriverServiceProcessTree(self, servicePid):
+        if not servicePid:
+            return
+
+        try:
+            root = psutil.Process(servicePid)
+        except psutil.NoSuchProcess:
+            return
+        except Exception as e:
+            print(f"[Test] Warning: Failed to inspect driver service {servicePid}: {e}")
+            return
+
+        processTree = root.children(recursive=True)
+        processTree.append(root)
+
+        for proc in reversed(processTree):
+            try:
+                proc.kill()
+            except psutil.NoSuchProcess:
+                continue
+            except psutil.AccessDenied as e:
+                print(f"[Test] Warning: Access denied killing browser process {proc.pid}: {e}")
+            except Exception as e:
+                print(f"[Test] Warning: Failed to kill browser process {proc.pid}: {e}")
 
     def _setupChromeDriver(self, downloadDir):
         """Setup undetected Chrome WebDriver"""
@@ -127,8 +184,23 @@ class BrowserTestBase(FastFileLinkTestBase):
             "profile.default_content_setting_values.automatic_downloads": 1
         }
 
-        options = uc.ChromeOptions()
-        options.add_argument('--headless')
+        useStandardChromeDriver = self._shouldUseStandardChromeDriver()
+        options = ChromeOptions() if useStandardChromeDriver else uc.ChromeOptions()
+        chromeBinary = self._getChromeBinaryPath()
+        if not chromeBinary:
+            self._raiseMissingBrowser("chrome")
+
+        options.binary_location = chromeBinary
+        print(f"[Test] Using Chrome binary: {chromeBinary}")
+
+        chromeProfileDir = tempfile.mkdtemp(prefix="ffl_chrome_profile_")
+        self.activeChromeProfileDirs.append(chromeProfileDir)
+        options.add_argument(f'--user-data-dir={chromeProfileDir}')
+        options.add_argument(f'--disk-cache-dir={os.path.join(chromeProfileDir, "cache")}')
+        
+        if self._isHeadlessEnabled():
+            options.add_argument('--headless')
+            
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-gpu')
@@ -149,16 +221,136 @@ class BrowserTestBase(FastFileLinkTestBase):
             options.add_argument('--disable-web-security')
         
         versionMain = self._getChromeDriverVersionMain()
-        if versionMain is not None:
+        if useStandardChromeDriver:
+            driver = webdriver.Chrome(options=options, service=ChromeService())
+        elif versionMain is not None:
             print(f"[Test] Using ChromeDriver major version {versionMain}")
             driver = uc.Chrome(options=options, version_main=versionMain)
         else:
             driver = uc.Chrome(options=options)
+
+        try:
+            serviceUrl = getattr(getattr(driver, "service", None), "service_url", None)
+            if serviceUrl:
+                print(f"[Test] ChromeDriver service URL: {serviceUrl}")
+        except Exception as e:
+            print(f"[Test] Warning: failed to read ChromeDriver service URL: {e}")
+
+        try:
+            print(f"[Test] ChromeDriver session ID: {driver.session_id}")
+        except Exception as e:
+            print(f"[Test] Warning: failed to read ChromeDriver session ID: {e}")
+
+        try:
+            debuggerAddress = driver.capabilities.get("goog:chromeOptions", {}).get("debuggerAddress")
+            if debuggerAddress:
+                print(f"[Test] Chrome debugger address: {debuggerAddress}")
+        except Exception as e:
+            print(f"[Test] Warning: failed to read Chrome debugger address: {e}")
             
         self._configureChromeDownloadBehavior(driver, downloadDir)
 
         self.activeDrivers.append(driver)
         return driver
+
+    def _shouldUseStandardChromeDriver(self):
+        configuredValue = os.getenv("FFL_USE_STANDARD_CHROMEDRIVER", "").strip().lower()
+        if configuredValue:
+            return configuredValue in ("1", "true", "yes", "on")
+
+        return platform.system() != "Windows"
+
+    def _getChromeBinaryCandidates(self):
+        candidates = []
+        configuredBinary = os.getenv('CHROME_BIN', '').strip()
+        if configuredBinary:
+            candidates.append(configuredBinary)
+
+        if platform.system() == "Windows":
+            candidates.extend([
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            ])
+        else:
+            candidates.extend([
+                shutil.which('google-chrome-stable'),
+                shutil.which('google-chrome'),
+                shutil.which('chrome'),
+                shutil.which('chromium-browser'),
+                shutil.which('chromium'),
+            ])
+
+        return [candidate for candidate in candidates if candidate]
+
+    def _getChromeBinaryPath(self):
+        for chromeBinary in self._getChromeBinaryCandidates():
+            if os.path.isfile(chromeBinary):
+                return chromeBinary
+        return None
+
+    def _getFirefoxBinaryCandidates(self):
+        candidates = []
+        configuredBinary = os.getenv('FIREFOX_BIN', '').strip()
+        if configuredBinary:
+            candidates.append(configuredBinary)
+
+        if platform.system() == "Windows":
+            candidates.extend([
+                r"C:\Program Files\Mozilla Firefox\firefox.exe",
+                r"C:\Program Files (x86)\Mozilla Firefox\firefox.exe",
+            ])
+        elif platform.system() == "Darwin":
+            candidates.append("/Applications/Firefox.app/Contents/MacOS/firefox")
+        else:
+            candidates.extend([
+                shutil.which('firefox'),
+                shutil.which('firefox-esr'),
+            ])
+
+        return [candidate for candidate in candidates if candidate]
+
+    def _getFirefoxBinaryPath(self):
+        for firefoxBinary in self._getFirefoxBinaryCandidates():
+            if os.path.isfile(firefoxBinary):
+                return firefoxBinary
+        return None
+
+    def _getLinuxBrowserInstallCommand(self):
+        return (
+            "cat > /etc/yum.repos.d/google-chrome.repo <<'EOF'\n"
+            "[google-chrome]\n"
+            "name=google-chrome\n"
+            "baseurl=http://dl.google.com/linux/rpm/stable/x86_64\n"
+            "enabled=1\n"
+            "gpgcheck=1\n"
+            "gpgkey=https://dl-ssl.google.com/linux/linux_signing_key.pub\n"
+            "EOF\n"
+            "yum install -y google-chrome-stable firefox"
+        )
+
+    def _raiseMissingBrowser(self, browserName):
+        if browserName == "chrome":
+            candidates = self._getChromeBinaryCandidates()
+            label = "Chrome"
+        elif browserName == "firefox":
+            candidates = self._getFirefoxBinaryCandidates()
+            label = "Firefox"
+        else:
+            candidates = []
+            label = browserName
+
+        messageLines = [
+            f"[Test] ERROR: {label} browser binary not found.",
+        ]
+        if candidates:
+            messageLines.append(f"[Test] Checked candidates: {candidates}")
+
+        if platform.system() == "Linux":
+            messageLines.append("[Test] Run the following commands as root, then re-run the test:")
+            messageLines.append(self._getLinuxBrowserInstallCommand())
+            messageLines.append("[Test] Chromium might work in some environments, but these tests are validated with google-chrome-stable.")
+
+        raise RuntimeError("\n".join(messageLines))
 
     def _getChromeDriverVersionMain(self):
         """Match ChromeDriver major version to the locally installed browser when possible."""
@@ -166,26 +358,27 @@ class BrowserTestBase(FastFileLinkTestBase):
         if configuredVersion:
             return int(configuredVersion)
 
-        chromeBinaries = [
-            os.getenv('CHROME_BIN'),
-            shutil.which('google-chrome-stable'),
-            shutil.which('google-chrome'),
-            shutil.which('chrome'),
-            shutil.which('chromium-browser'),
-            shutil.which('chromium'),
-        ]
-
-        for chromeBinary in chromeBinaries:
-            if not chromeBinary:
-                continue
-
+        for chromeBinary in self._getChromeBinaryCandidates():
             try:
-                result = subprocess.run(
-                    [chromeBinary, '--version'],
-                    capture_output=True,
-                    check=True,
-                    text=True,
-                )
+                if platform.system() == "Windows" and os.path.isfile(chromeBinary):
+                    result = subprocess.run(
+                        [
+                            "powershell",
+                            "-NoProfile",
+                            "-Command",
+                            f"(Get-Item '{chromeBinary}').VersionInfo.ProductVersion",
+                        ],
+                        capture_output=True,
+                        check=True,
+                        text=True,
+                    )
+                else:
+                    result = subprocess.run(
+                        [chromeBinary, '--version'],
+                        capture_output=True,
+                        check=True,
+                        text=True,
+                    )
             except Exception as e:
                 print(f"[Test] Warning: Failed to inspect Chrome binary {chromeBinary}: {e}")
                 continue
@@ -203,13 +396,14 @@ class BrowserTestBase(FastFileLinkTestBase):
 
         for command in ("Browser.setDownloadBehavior", "Page.setDownloadBehavior"):
             try:
-                driver.execute_cdp_cmd(
+                self._executeChromeCdpCmdWithTimeout(
+                    driver,
                     command,
                     {
                         "behavior": "allow",
                         "downloadPath": downloadDir,
                         "eventsEnabled": True
-                    }
+                    },
                 )
                 print(f"[Test] Configured Chrome download behavior via {command}")
                 behaviorSet = True
@@ -217,13 +411,38 @@ class BrowserTestBase(FastFileLinkTestBase):
                 print(f"[Test] Warning: Failed to set download behavior via {command}: {e}")
 
         try:
-            driver.execute_cdp_cmd("Network.enable", {})
-            driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
+            self._executeChromeCdpCmdWithTimeout(driver, "Network.enable", {})
+            self._executeChromeCdpCmdWithTimeout(driver, "Network.setCacheDisabled", {"cacheDisabled": True})
         except Exception as e:
             print(f"[Test] Warning: Failed to configure Chrome network CDP: {e}")
 
         if not behaviorSet:
             print("[Test] Warning: Chrome download behavior was not configured via CDP")
+
+    def _executeChromeCdpCmdWithTimeout(self, driver, command, params, timeout=15):
+        """Run a Chrome CDP command with a hard timeout so flaky local RPC does not hang tests."""
+        result = {}
+        error = {}
+        completed = threading.Event()
+
+        def run():
+            try:
+                result["value"] = driver.execute_cdp_cmd(command, params)
+            except Exception as e:
+                error["value"] = e
+            finally:
+                completed.set()
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+
+        if not completed.wait(timeout):
+            raise TimeoutError(f"{command} timed out after {timeout}s")
+
+        if "value" in error:
+            raise error["value"]
+
+        return result.get("value")
 
     def _isChromeDriver(self, driver):
         """Return True when the supplied Selenium driver is Chrome-based."""
@@ -237,6 +456,10 @@ class BrowserTestBase(FastFileLinkTestBase):
 
     def _setupFirefoxDriver(self, downloadDir):
         """Setup Firefox WebDriver with get-gecko-driver"""
+        firefoxBinary = self._getFirefoxBinaryPath()
+        if not firefoxBinary:
+            self._raiseMissingBrowser("firefox")
+
         with self._geckoDriverLock:
             if not self._geckoDriverPath:
                 getDriver = GetGeckoDriver()
@@ -298,9 +521,11 @@ class BrowserTestBase(FastFileLinkTestBase):
         geckoDriverPath = self._geckoDriverPath
 
         firefoxOptions = FirefoxOptions()
-        firefoxOptions.add_argument('--headless')
-        if platform.system() == 'Darwin':
-            firefoxOptions.binary_location = "/Applications/Firefox.app/Contents/MacOS/firefox"
+        if self._isHeadlessEnabled():
+            firefoxOptions.add_argument('--headless')
+
+        firefoxOptions.binary_location = firefoxBinary
+        print(f"[Test] Using Firefox binary: {firefoxBinary}")
 
         firefoxOptions.set_preference("browser.download.folderList", 2)
         firefoxOptions.set_preference("browser.download.manager.showWhenStarting", False)

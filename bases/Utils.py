@@ -19,6 +19,7 @@
 
 import locale
 import os
+import re
 import socket
 import ssl
 import sys
@@ -207,6 +208,33 @@ def formatSize(size, decimal=None, plural=None):
         return sizeStr.replace('Byte', ' Byte').replace('Bit', ' Byte')
 
 
+def parseSizeString(sizeStr):
+    """
+    Parse a human-friendly size string like '20G', '500M', '1024K', or '1234' into bytes.
+
+    Uses binary units (KiB, MiB, GiB, TiB) for K/M/G/T suffixes.
+    """
+    sizeStr = str(sizeStr).strip().upper()
+    if not sizeStr:
+        raise ValueError("sizeStr cannot be empty")
+
+    match = re.match(r'^(\d+(?:\.\d+)?)\s*([BKMGT]?)$', sizeStr)
+    if not match:
+        raise ValueError(f"Invalid size format: {sizeStr}")
+
+    numberStr, unit = match.groups()
+    unit = unit or 'B'
+
+    multipliers = {
+        'B': 1,
+        'K': ONE_KB,
+        'M': ONE_MB,
+        'G': ONE_GB,
+        'T': ONE_TB,
+    }
+    return int(float(numberStr) * multipliers[unit])
+
+
 def getApplicationPath():
     return os.path.dirname(__file__)
 
@@ -280,7 +308,12 @@ def getEnv(envVar, default):
 
             # Automatically detect type based on default value
             if isinstance(default, bool):
-                return value == "True"
+                normalized = value.strip().lower()
+                if normalized in ("1", "true", "yes", "on"):
+                    return True
+                if normalized in ("0", "false", "no", "off"):
+                    return False
+                return default
             elif isinstance(default, int):
                 return int(value)
             elif isinstance(default, float):

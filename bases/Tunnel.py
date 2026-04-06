@@ -70,6 +70,7 @@ class AsyncTunnelThread(threading.Thread):
         self.e = None
         self.loop = asyncio.new_event_loop()
         self.loop.set_exception_handler(self._silencePendingTask)
+        self.stopRequested = False
         super().__init__()
 
     def _silencePendingTask(self, loop, context):
@@ -90,16 +91,58 @@ class AsyncTunnelThread(threading.Thread):
             self.kill()
 
     async def main(self):
-        # Connect and start listening
-        if await self.client.connect():
+        announcedSuccess = False
+        reconnectDelay = 1
+        expectedPort = None
+
+        while not self.stopRequested:
+            if not await self.client.connect():
+                if not announcedSuccess:
+                    logger.error("Failed to connect to the server. Exiting.")
+                    raise TunnelUnavailableError('Failed to connect to tunnel server')
+
+                logger.warning(
+                    "Tunnel control connection failed after initial success; retrying in %ss",
+                    reconnectDelay,
+                )
+                await asyncio.sleep(reconnectDelay)
+                reconnectDelay = min(reconnectDelay * 2, 30)
+                continue
+
             tunnelUrl = self.client.getTunnelURL()
-            self.resultQueue.put((True, tunnelUrl))
+            assignedPort = getattr(self.client, 'remotePort', None)
+            if announcedSuccess and expectedPort and assignedPort and assignedPort != expectedPort:
+                logger.warning(
+                    "Tunnel reconnected with unexpected port %s (expected %s); keeping retry loop active",
+                    assignedPort,
+                    expectedPort,
+                )
+                self.client.stop()
+                await self.client.shutdown()
+                await asyncio.sleep(reconnectDelay)
+                reconnectDelay = min(reconnectDelay * 2, 30)
+                continue
+
+            if assignedPort:
+                expectedPort = assignedPort
+                self.client.requestedPort = assignedPort
+
+            if not announcedSuccess:
+                self.resultQueue.put((True, tunnelUrl))
+                announcedSuccess = True
+            else:
+                logger.warning("Tunnel listener ended unexpectedly; reconnected to %s", tunnelUrl)
+
+            reconnectDelay = 1
             await self.client.listen()
-        else:
-            logger.error("Failed to connect to the server. Exiting.")
-            raise TunnelUnavailableError('Failed to connect to tunnel server')
+
+            if self.stopRequested:
+                break
+
+            logger.warning("Tunnel listen loop ended unexpectedly; attempting to reconnect")
 
     def kill(self):
+        self.stopRequested = True
         if self.client:
             try:
                 # Use proper shutdown method that handles task cancellation
@@ -197,6 +240,7 @@ class TunnelRunner:
             remoteHost=domain,
             remotePort=0,
             secret=secret,
+            tokenProvider=fetchTunnelToken,
             verbose=False,
             debug=False,
             useHttps=True,

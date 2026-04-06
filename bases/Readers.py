@@ -32,7 +32,7 @@ import uuid
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Iterator, Optional
+from typing import Iterator, Optional, Protocol
 
 from bases.Kernel import getLogger, FFLEvent
 from bases.FileSystems import ExcludeFilter, HTTPFileSystem, LocalFileSystem, VirtualFileSystem
@@ -85,6 +85,19 @@ class FolderChangedException(RuntimeError):
     def __init__(self, message: str, filePath: str = None):
         super().__init__(message)
         self.filePath = filePath
+
+
+class SourceReaderProgressReporter(Protocol):
+    """Generic progress callback interface for reader-side work."""
+
+    def start(self, operation: str, total: Optional[int] = None, unit: str = "items") -> None:
+        ...
+
+    def advance(self, amount: int = 1, processedBytes: Optional[int] = None) -> None:
+        ...
+
+    def finish(self) -> None:
+        ...
 
 
 class CachingMixin:
@@ -689,7 +702,10 @@ class SourceReader:
         return False
 
     @classmethod
-    def build(cls, path, fileName: str = None, compression: str = None, excludeFilter: ExcludeFilter = None) -> 'SourceReader':
+    def build(
+        cls, path, fileName: str = None, compression: str = None, excludeFilter: ExcludeFilter = None,
+        progressReporter: Optional[SourceReaderProgressReporter] = None
+    ) -> 'SourceReader':
         """
         Factory method to create appropriate SourceReader.
 
@@ -700,6 +716,7 @@ class SourceReader:
             fileName: Custom download filename
             compression: "store" or "deflate" (default: READER_FOLDER_COMPRESSION env var → "store")
             excludeFilter: Optional filter to exclude files/dirs by name during walk
+            progressReporter: Optional progress reporter for reader-side preprocessing
 
         Returns:
             SourceReader: Appropriate reader for the path type
@@ -728,7 +745,8 @@ class SourceReader:
             if compression is None:
                 compression = os.getenv('READER_FOLDER_COMPRESSION', 'store')
             return ZipDirSourceReader(
-                fileSystem.rootPath, fileName=fileName, compression=compression, fileSystem=fileSystem, flatRoot=flatRoot
+                fileSystem.rootPath, fileName=fileName, compression=compression, fileSystem=fileSystem, flatRoot=flatRoot,
+                progressReporter=progressReporter
             )
 
         # Single file
@@ -1373,7 +1391,10 @@ class ZipDirSourceReader(CachingMixin, SourceReader):
             folder = 'archive'
         return f"{folder}.zip"
 
-    def __init__(self, path: str, fileName=None, compression: str = "store", strictMode: bool = None, fileSystem=None, flatRoot: bool = False):
+    def __init__(
+        self, path: str, fileName=None, compression: str = "store", strictMode: bool = None, fileSystem=None,
+        flatRoot: bool = False, progressReporter: Optional[SourceReaderProgressReporter] = None
+    ):
         """
         Initialize ZIP directory reader
 
@@ -1386,6 +1407,7 @@ class ZipDirSourceReader(CachingMixin, SourceReader):
             fileSystem: FileSystem instance (default: LocalFileSystem)
             flatRoot: If True, entries are placed at ZIP root (no root folder prefix).
                       Use for multi-file archives where a synthetic root name is meaningless.
+            progressReporter: Optional progress reporter for directory scanning/preprocessing
         """
         if fileSystem is None:
             fileSystem = LocalFileSystem(path)
@@ -1407,6 +1429,7 @@ class ZipDirSourceReader(CachingMixin, SourceReader):
             self.strictMode = strictMode
 
         self.flatRoot = flatRoot
+        self._progressReporter = progressReporter
 
         super().__init__(path, fileName) # CachingMixin -> SourceReader
         self.path = self.fileSystem.normPath(self.path) # Normalize path
@@ -1784,71 +1807,89 @@ class ZipDirSourceReader(CachingMixin, SourceReader):
         """
         logger.debug("Scan directory START: %s", self.path)
         entries = []
+        progressReporter = self._progressReporter
+        totalScannedBytes = 0
 
         rootName = self.fileSystem.rootName()
         rootPath = self.fileSystem.rootPath
+        if progressReporter:
+            progressReporter.start("scan", total=None, unit="entries")
 
-        for dirPath, dirNames, fileNames in self.fileSystem.walk(rootPath):
+        try:
+            for dirPath, dirNames, fileNames in self.fileSystem.walk(rootPath):
 
-            # Deterministic traversal order (critical for resume correctness)
-            dirNames.sort()
-            fileNames.sort()
+                # Deterministic traversal order (critical for resume correctness)
+                dirNames.sort()
+                fileNames.sort()
 
-            # Compute relative directory path for arcname
-            relDir = self.fileSystem.relPath(dirPath, rootPath)
-            if self.flatRoot:
-                arcDir = (relDir + "/" if relDir else "").replace("\\", "/")
-            else:
-                arcDir = (rootName + ("/" + relDir if relDir else "")).replace("\\", "/")
-                
-            if arcDir and not arcDir.endswith("/"):
-                arcDir += "/"
+                # Compute relative directory path for arcname
+                relDir = self.fileSystem.relPath(dirPath, rootPath)
+                if self.flatRoot:
+                    arcDir = (relDir + "/" if relDir else "").replace("\\", "/")
+                else:
+                    arcDir = (rootName + ("/" + relDir if relDir else "")).replace("\\", "/")
 
-            # Add subdirectory entries.
-            # NOTE: We intentionally avoid stat() calls for directories.
-            # On mounted / FUSE-like filesystems, directory metadata syscalls are
-            # disproportionately expensive (and we don't currently use dir mtime for
-            # anything in streaming). Skipping these stats drastically reduces the
-            # amount of metadata traffic on e.g. WSL2 /mnt, Android shared storage.
-            for d in dirNames:
-                dirFullPath = self.fileSystem.joinPath(dirPath, d)
-                dirArcname = f"{arcDir}{d}/"
-                entries.append({
-                    'path': dirFullPath,
-                    'arcname': dirArcname,
-                    'isDir': True,
-                    'size': 0,
-                    'mtime': None,
-                })
+                if arcDir and not arcDir.endswith("/"):
+                    arcDir += "/"
 
-            # Add file entries
-            for f in fileNames:
-                fileFullPath = self.fileSystem.joinPath(dirPath, f)
-                relFile = self.fileSystem.relPath(fileFullPath, rootPath)
-                arcname = (relFile if self.flatRoot else f"{rootName}/{relFile}").replace("\\", "/")
-                realOsPath = self.fileSystem.realPath(fileFullPath)
+                scannedCount = 0
+                scannedBytes = 0
 
-                try:
-                    stat = self.fileSystem.stat(fileFullPath)
+                # Add subdirectory entries.
+                # NOTE: We intentionally avoid stat() calls for directories.
+                # On mounted / FUSE-like filesystems, directory metadata syscalls are
+                # disproportionately expensive (and we don't currently use dir mtime for
+                # anything in streaming). Skipping these stats drastically reduces the
+                # amount of metadata traffic on e.g. WSL2 /mnt, Android shared storage.
+                for d in dirNames:
+                    dirFullPath = self.fileSystem.joinPath(dirPath, d)
+                    dirArcname = f"{arcDir}{d}/"
                     entries.append({
-                        'path': realOsPath,
-                        'fsPath': fileFullPath,
-                        'arcname': arcname,
-                        'isDir': False,
-                        'size': stat.size,
-                        'mtime': stat.mtime
-                    })
-                except OSError as e:
-                    logger.warning("Cannot access file %s: %s", fileFullPath, e)
-                    # Add entry anyway for deflate mode compatibility
-                    entries.append({
-                        'path': realOsPath,
-                        'fsPath': fileFullPath,
-                        'arcname': arcname,
-                        'isDir': False,
+                        'path': dirFullPath,
+                        'arcname': dirArcname,
+                        'isDir': True,
                         'size': 0,
                         'mtime': None,
                     })
+                    scannedCount += 1
+
+                # Add file entries
+                for f in fileNames:
+                    fileFullPath = self.fileSystem.joinPath(dirPath, f)
+                    relFile = self.fileSystem.relPath(fileFullPath, rootPath)
+                    arcname = (relFile if self.flatRoot else f"{rootName}/{relFile}").replace("\\", "/")
+                    realOsPath = self.fileSystem.realPath(fileFullPath)
+
+                    try:
+                        stat = self.fileSystem.stat(fileFullPath)
+                        scannedBytes += stat.size
+                        entries.append({
+                            'path': realOsPath,
+                            'fsPath': fileFullPath,
+                            'arcname': arcname,
+                            'isDir': False,
+                            'size': stat.size,
+                            'mtime': stat.mtime
+                        })
+                    except OSError as e:
+                        logger.warning("Cannot access file %s: %s", fileFullPath, e)
+                        # Add entry anyway for deflate mode compatibility
+                        entries.append({
+                            'path': realOsPath,
+                            'fsPath': fileFullPath,
+                            'arcname': arcname,
+                            'isDir': False,
+                            'size': 0,
+                            'mtime': None,
+                        })
+                    scannedCount += 1
+
+                if progressReporter and scannedCount > 0:
+                    totalScannedBytes += scannedBytes
+                    progressReporter.advance(scannedCount, processedBytes=totalScannedBytes)
+        finally:
+            if progressReporter:
+                progressReporter.finish()
 
         # Ensure global determinism even if os.walk behavior differs
         entries.sort(key=lambda e: e['arcname'])

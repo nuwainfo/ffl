@@ -20,6 +20,7 @@
 import http.server
 import json
 import os
+import queue
 import shutil
 import socketserver
 import tempfile
@@ -27,10 +28,12 @@ import threading
 import time
 import unittest
 import requests
+import asyncio
+from unittest import mock
 
 
 from addons.Tunnels import TunnelRunnerProvider, StaticURLTunnelClient # isort:skip
-from bases.Tunnel import TunnelRunner, TunnelUnavailableError # isort:skip
+from bases.Tunnel import AsyncTunnelThread, TunnelRunner, TunnelUnavailableError # isort:skip
 
 from tests.BrowserTestBase import BrowserTestBase # isort:skip
 
@@ -102,7 +105,7 @@ class SimpleHTTPHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(404)
 
 
-class TestTunnelIntegration(BrowserTestBase):
+class _TunnelIntegrationMixin:
     """Integration test for tunnel functionality with FastFileLink and browser-based E2EE"""
 
     def __init__(self, methodName='runTest'):
@@ -208,6 +211,83 @@ class TestTunnelIntegration(BrowserTestBase):
         # Should prefer None (default tunnel = builtin Bore)
         self.assertIsNone(runner.preferredTunnel)
 
+
+class _FakeReconnectingClient:
+    def __init__(self):
+        self.connectCalls = 0
+        self.listenCalls = 0
+        self.requestedPort = 0
+        self.remotePort = None
+        self.running = False
+
+    async def connect(self):
+        self.connectCalls += 1
+        assignedPort = self.requestedPort or 54321
+        self.remotePort = assignedPort
+        return True
+
+    def getTunnelURL(self):
+        return f"https://{self.remotePort}.example.com/"
+
+    async def listen(self):
+        self.listenCalls += 1
+        self.running = True
+
+        if self.listenCalls == 1:
+            self.running = False
+            return
+
+        while self.running:
+            await asyncio.sleep(0.05)
+
+    def stop(self):
+        self.running = False
+
+    async def shutdown(self):
+        self.running = False
+
+
+class TunnelThreadTest(unittest.TestCase):
+    def testTunnelRunnerCreateClientPassesTokenProvider(self):
+        # TODO: This only verifies that a refresh provider is wired into BoreClient.
+        # Add an integration test for a real reconnect after token expiry when we have
+        # a controllable short-lived issuer/token fixture, instead of waiting for live
+        # production-style expiry in unittest.
+        runner = TunnelRunner(1024)
+
+        with mock.patch('bases.Tunnel.requests.get') as mockGet, \
+             mock.patch('bases.Tunnel.fetchTunnelToken', return_value='token-1') as mockFetch:
+            mockGet.return_value.text = "ok"
+            client = runner.createClient(8000)
+
+        self.assertEqual('token-1', client.secret)
+        self.assertIs(client.tokenProvider, mockFetch)
+
+    def testAsyncTunnelThreadReconnectsWithSamePort(self):
+        resultQueue = queue.Queue()
+        client = _FakeReconnectingClient()
+        thread = AsyncTunnelThread(resultQueue, client)
+        thread.start()
+
+        try:
+            success, tunnelUrl = resultQueue.get(timeout=5)
+            self.assertTrue(success)
+            self.assertEqual("https://54321.example.com/", tunnelUrl)
+
+            deadline = time.time() + 5
+            while client.connectCalls < 2 and time.time() < deadline:
+                time.sleep(0.05)
+
+            self.assertGreaterEqual(client.connectCalls, 2, "Expected reconnect after unexpected listen exit")
+            self.assertEqual(54321, client.requestedPort, "Expected reconnect attempts to reuse the original port")
+        finally:
+            thread.kill()
+            thread.join(timeout=5)
+
+
+class TestTunnelIntegration(_TunnelIntegrationMixin, BrowserTestBase):
+    """Integration test for tunnel functionality with FastFileLink and browser-based E2EE"""
+
     @unittest.skipUnless(shutil.which('cloudflared'), "cloudflared binary not found in PATH")
     @unittest.skipIf(os.getenv('SKIP_INTEGRATION_TESTS'), "Integration tests disabled")
     def testTunnelWithRealHttpServer(self):
@@ -259,13 +339,13 @@ class TestTunnelIntegration(BrowserTestBase):
             response = requests.get(f'{tunnelLink}test', timeout=10)
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.text, 'Hello from tunnel test!')
-            print("✅ Basic tunnel connectivity test passed")
+            print("[OK] Basic tunnel connectivity test passed")
 
             # Test file serving through tunnel
             response = requests.get(f'{tunnelLink}file', timeout=10)
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.text, 'This is a test file for tunnel serving!')
-            print("✅ File serving through tunnel test passed")
+            print("[OK] File serving through tunnel test passed")
 
     def testTunnelRunnerProvider(self):
         """Test TunnelRunnerProvider basic functionality"""
@@ -383,7 +463,7 @@ class TestTunnelIntegration(BrowserTestBase):
         self.assertIn('trycloudflare.com', shareLink,
                      "Share link should use cloudflare tunnel")
 
-        print(f"✅ E2EE + Tunnel share link generated: {shareLink}")
+        print(f"[OK] E2EE + Tunnel share link generated: {shareLink}")
 
         # Wait for tunnel DNS to become available (test the actual share link)
         print("Waiting for Cloudflare tunnel DNS to propagate...")
@@ -409,7 +489,7 @@ class TestTunnelIntegration(BrowserTestBase):
             # Verify downloaded file matches original
             self._verifyDownloadedFile(browserDownloadedPath)
 
-            print("✅ Test 1 passed - Browser WebRTC + E2EE download verified")
+            print("[OK] Test 1 passed - Browser WebRTC + E2EE download verified")
 
         finally:
             driver.quit()
@@ -427,8 +507,8 @@ class TestTunnelIntegration(BrowserTestBase):
         # Verify Core.py downloaded file matches original
         self._verifyDownloadedFile(coreDownloadedPath)
 
-        print("✅ Test 2 passed - Core.py HTTP + E2EE download verified")
-        print("✅ E2EE tunnel test passed - both browser and Core.py downloads verified")
+        print("[OK] Test 2 passed - Core.py HTTP + E2EE download verified")
+        print("[OK] E2EE tunnel test passed - both browser and Core.py downloads verified")
 
     @unittest.skipUnless(shutil.which('cloudflared'), "cloudflared binary not found in PATH")
     @unittest.skipIf(os.getenv('SKIP_INTEGRATION_TESTS'), "Integration tests disabled")

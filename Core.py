@@ -52,10 +52,12 @@ from bases.Settings import DEFAULT_STATIC_ROOT, SettingsGetter, ExecutionMode
 from bases.CLI import (
     configureCLIParser, processGlobalArguments, processArgumentsAndCommands, loadEnvFile, preprocessArguments
 )
+from bases.Progress import Progress
 from bases.Utils import (
-    copy2Clipboard, flushPrint, getLogger, getAvailablePort, sendException, validateCompatibleWithServer, ProxyConfig
+    copy2Clipboard, flushPrint, formatSize, getLogger, getAvailablePort, sendException, validateCompatibleWithServer,
+    ProxyConfig
 )
-from bases.Readers import SourceReader, FolderChangedException
+from bases.Readers import SourceReader, FolderChangedException, SourceReaderProgressReporter
 from bases.FileSystems import ExcludeFilter
 from bases.Tor import verifyTorProxy
 from bases.Auth import RecipientAuth, PUBKEY_PUBLIC_EXT, PUBKEY_PRIVATE_EXT
@@ -64,6 +66,65 @@ from bases.VFS import VFSServer
 from bases.I18n import _
 
 logger = getLogger(__name__)
+
+
+class ScanFolderProgressReporter(SourceReaderProgressReporter):
+    """Render SourceReader preprocessing progress for CLI and GUI modes."""
+
+    @staticmethod
+    def create(path):
+        """Create a reader preprocessing reporter only for folder-like inputs."""
+        if path == "-":
+            return None
+
+        if isinstance(path, list):
+            return ScanFolderProgressReporter(useBar=isCLIMode())
+
+        if isinstance(path, str) and not path.startswith("vfs://") and os.path.isdir(path):
+            return ScanFolderProgressReporter(useBar=isCLIMode())
+
+        return None
+
+    def __init__(self, useBar: bool):
+        self._progress = Progress(
+            totalSize=None,
+            sizeFormatter=lambda value: f"{int(value):,}",
+            loggerCallback=lambda text: None,
+            useBar=useBar,
+            description=_('Scanning folder'),
+            unit='entry',
+            unitScale=False,
+            leave=False
+        )
+        self._useBar = useBar
+        self._started = False
+        self._count = 0
+        self._guiLabel = _('Scanning folder. Calculating size may take some time...')
+
+    def start(self, operation: str, total=None, unit: str = "items") -> None:
+        self._started = True
+        self._count = 0
+        if not self._useBar:
+            flushPrint(self._guiLabel)
+
+    def advance(self, amount: int = 1, processedBytes=None) -> None:
+        if not self._started:
+            return
+
+        self._count += amount
+        extraText = ""
+        if processedBytes is not None and processedBytes > 0:
+            extraText = _('Scanned {size}').format(size=formatSize(processedBytes))
+            
+        self._progress.update(self._count, extraText=extraText)
+
+    def finish(self) -> None:
+        if not self._started:
+            return
+
+        self._started = False
+        if self._useBar:
+            self._progress.finishBar(complete=False)
 
 
 def setupGracefulShutdown():
@@ -262,6 +323,7 @@ def processUpload(args, reader, proxyConfig: ProxyConfig):
         createUploadStrategy,
         UploadPredicate,
         UploadResult,
+        confirmUploadPoints,
         PauseUploadError,
         ResumeNotSupportedError,
         PauseNotSupportedError,
@@ -449,6 +511,17 @@ def processUpload(args, reader, proxyConfig: ProxyConfig):
 
         return UploadProcessor(uploadMethod=None, uid=uid, exitCode=1)
 
+    if not confirmUploadPoints(
+        fileName=reader.contentName,
+        fileSize=size,
+        retentionPeriod=args.upload,
+        cost=predicateResult.cost,
+        currentPoints=user.points,
+        autoConfirm=getattr(args, 'yes', False)
+    ):
+        flushPrint(_('Upload cancelled before transfer started.'))
+        return UploadProcessor(uploadMethod=None, uid=uid, exitCode=0)
+
     while uploadMethod:
         if uploadMethod.requireServer():
             return UploadProcessor(uploadMethod=uploadMethod, uid=uid)
@@ -558,11 +631,15 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
     Returns:
         int: Exit code (0 for success, 1 for error)
     """
+    if not getattr(args, 'file', None):
+        flushPrint(_('Error: Please select a file or folder to share'))
+        return 1
+
     # Argument predicates.
     # Allow "-" for stdin and vfs:// URIs, otherwise check file existence.
     # Lists are already validated path-by-path in CLI.py.
     isLocalPath = not isinstance(args.file, list) and args.file != "-" and not args.file.startswith("vfs://")
-    
+
     if isLocalPath and not os.path.exists(args.file):
         flushPrint(_('{file} does not exist!').format(file=f'"{args.file}"'))
         return 1
@@ -594,15 +671,18 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
         if not isCLIMode():
             flushPrint(_('If a firewall notification appears, please allow the application to connect.\n'))
 
-        # Get size using Reader abstraction (supports both files and folders)
-        # Reader will use its own default if args.fileName is None
-        excludeFilter = ExcludeFilter(args.exclude) if args.exclude else None
-        reader = SourceReader.build(args.file, fileName=args.fileName, excludeFilter=excludeFilter)
-        size = reader.size # None means unknown size (e.g., stdin)
-
         # Hint user about folder content change detection for strict mode
         if isLocalPath and os.path.isdir(args.file):
             flushPrint(_('📁 Sharing folder as ZIP - please keep folder contents unchanged during transfer\n'))
+
+        # Get size using Reader abstraction (supports both files and folders)
+        # Reader will use its own default if args.fileName is None
+        excludeFilter = ExcludeFilter(args.exclude) if args.exclude else None
+        progressReporter = ScanFolderProgressReporter.create(args.file)
+        reader = SourceReader.build(
+            args.file, fileName=args.fileName, excludeFilter=excludeFilter, progressReporter=progressReporter
+        )
+        size = reader.size # None means unknown size (e.g., stdin)
 
         # Show E2EE status if enabled (first line, before establishing tunnel)
         e2eeEnabled = args.e2ee
@@ -687,8 +767,8 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
                 try:
                     handlerClass = uploadProcessor.getDownloadHandlerClass(link, uid)
                 except RuntimeError as uploadError:
-                    flushPrint(_('Upload failed: {error}').format(error=uploadError.message))
-                    sendException(logger, uploadError.message)
+                    flushPrint(_('Upload failed: {error}').format(error=str(uploadError)))
+                    sendException(logger, str(uploadError))
                     return 1
             else:
                 # P2P mode
@@ -706,6 +786,7 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
                     e2ee=e2eeEnabled,
                     reader=reader,
                     recipientAuth=recipientAuth,
+                    upload=args.upload,
                 )
 
                 flushPrint(_('Please keep the application running so the recipient can download the file.'))
@@ -785,6 +866,7 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
                     e2ee=e2eeEnabled,
                     reader=reader,
                     recipientAuth=recipientAuth,
+                    upload=args.upload,
                 )
                 return 0
 
