@@ -1191,6 +1191,8 @@ class DownloadManager {
                         this.serverDownloadId = evt.data.serverId;
                     }
                     this.handleDownloadComplete(total);
+                } else if (type === 'download-stall') {
+                    this.log('DownloadManager', `SW stall [${evt.data.phase}]: delivered=${evt.data.delivered}/${evt.data.total} (${evt.data.percent}%), probe=${evt.data.probeStatus}, rangeOk=${evt.data.rangeOk}, stallMs=${evt.data.stallDurationMs}`);
                 } else if (type === 'download-error') {
                     this.handleDownloadError(evt.data.message);
                 } else if (type === 'download-checksum') {

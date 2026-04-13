@@ -192,7 +192,24 @@ class IsolationRef:
 # ---------------------------------------------------------------------------
 installAs("av")
 
+import mimetypes
 import platform
+
+# Monkey-patch MimeTypes.read() to skip files that cannot be opened.
+# On macOS sandboxed apps, /etc/apache2/mime.types exists but is unreadable,
+# causing PermissionError inside BaseHTTPRequestHandler.guess_type().
+# mimetypes.init() only guards with os.path.isfile() (existence, not readability)
+# so the bare open() in read() raises uncaught. Known unfixed Python bug:
+# https://bugs.python.org/issue38672
+_originalMimeTypesRead = mimetypes.MimeTypes.read
+
+def _safeMimeTypesRead(self, filename, strict=True):
+    try:
+        _originalMimeTypesRead(self, filename, strict)
+    except OSError:
+        pass
+
+mimetypes.MimeTypes.read = _safeMimeTypesRead
 
 if 'Cosmopolitan' in platform.version():
     BASE_DIR = os.path.dirname(os.path.dirname(__file__))

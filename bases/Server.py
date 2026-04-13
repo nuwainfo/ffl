@@ -23,6 +23,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import sys
 import uuid
 import datetime
@@ -255,6 +256,137 @@ class DownloadSessionStore:
             return True
 
 
+class DownloadProgressStore:
+    """Thread-safe per-download progress tracker for server-side stall detection.
+
+    Each active HTTP download registers here.  The /status poll checks for
+    downloads that have stopped making progress and reports them to /diagnosis
+    via the public tunnel URL so the relay can also log the event.
+    """
+
+    STALL_THRESHOLD_SECONDS = int(os.getenv('STALL_DETECTION_SECONDS', '60'))
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._downloads = {}  # downloadId -> progress snapshot
+
+    def register(self, downloadId, total):
+        with self._lock:
+            self._downloads[downloadId] = {
+                'downloadId': downloadId,
+                'written': 0,
+                'total': total,
+                'lastUpdateTime': time.time(),
+                'startTime': time.time(),
+                'stallReported': False,
+            }
+
+    def update(self, downloadId, written):
+        with self._lock:
+            entry = self._downloads.get(downloadId)
+            if entry:
+                entry['written'] = written
+                entry['lastUpdateTime'] = time.time()
+                entry['stallReported'] = False  # reset on any progress
+
+    def unregister(self, downloadId):
+        with self._lock:
+            self._downloads.pop(downloadId, None)
+
+    def getStalledDownloads(self):
+        """Return snapshots of downloads with no progress for STALL_THRESHOLD_SECONDS."""
+        now = time.time()
+        stalled = []
+        with self._lock:
+            for entry in self._downloads.values():
+                if not entry['stallReported']:
+                    if now - entry['lastUpdateTime'] >= self.STALL_THRESHOLD_SECONDS:
+                        stalled.append(dict(entry))
+                        
+        return stalled
+
+    def markStallReported(self, downloadId):
+        with self._lock:
+            entry = self._downloads.get(downloadId)
+            if entry:
+                entry['stallReported'] = True
+
+
+@dataclass
+class LogicalDownloadRequest:
+    logicalDl: str
+    requestId: str
+    rangeStart: int
+    rangeEnd: Optional[int]
+    startedAt: float
+    superseded: bool = False
+
+
+class LogicalDownloadRequestStore:
+    """Track active logical download requests and supersede overlapping older ones.
+
+    Browser/native retry behaviour may open a new /download request using the same
+    logical dl identifier before the earlier request has fully drained. We keep
+    the newer request and mark overlapping older ones as superseded so they can
+    stop sending duplicate data at the next safe checkpoint.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._requests = {}  # logicalDl -> requestId -> LogicalDownloadRequest
+
+    def _getRequestsFor(self, logicalDl):
+        if logicalDl not in self._requests:
+            self._requests[logicalDl] = {}
+            
+        return self._requests[logicalDl]
+
+    @staticmethod
+    def _rangesOverlap(start1, end1, start2, end2):
+        normalizedEnd1 = float('inf') if end1 is None else end1
+        normalizedEnd2 = float('inf') if end2 is None else end2
+        return start1 <= normalizedEnd2 and start2 <= normalizedEnd1
+
+    def register(self, logicalDl, requestId, rangeStart, rangeEnd):
+        supersededRequestIds = []
+        
+        with self._lock:
+            requestsForDl = self._getRequestsFor(logicalDl)
+            for entry in requestsForDl.values():
+                if self._rangesOverlap(rangeStart, rangeEnd, entry.rangeStart, entry.rangeEnd):
+                    entry.superseded = True
+                    supersededRequestIds.append(entry.requestId)
+
+            requestsForDl[requestId] = LogicalDownloadRequest(
+                logicalDl=logicalDl,
+                requestId=requestId,
+                rangeStart=rangeStart,
+                rangeEnd=rangeEnd,
+                startedAt=time.time(),
+            )
+
+        return supersededRequestIds
+
+    def isSuperseded(self, logicalDl, requestId):
+        with self._lock:
+            entry = self._requests.get(logicalDl, {}).get(requestId)
+            return bool(entry and entry.superseded)
+
+    def unregister(self, logicalDl, requestId):
+        with self._lock:
+            requestsForDl = self._requests.get(logicalDl)
+            if not requestsForDl:
+                return
+
+            requestsForDl.pop(requestId, None)
+            if not requestsForDl:
+                self._requests.pop(logicalDl, None)
+
+
+class SupersededDownloadError(ConnectionAbortedError):
+    """Raised when a newer overlapping logical download request replaces this one."""
+
+
 class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
     # Transfer chunk size - shared across WebRTC and HTTP downloads
     CHUNK_SIZE = TRANSFER_CHUNK_SIZE
@@ -326,6 +458,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             '/e2ee/manifest': self._handleE2EEManifest,
             '/e2ee/tags': self._handleE2EETags,
             '/status': self._handleStatus,
+            '/diagnosis': self._handleDiagnosis,
             '/': self._handleRedirect,
             '': self._handleRedirect
         }
@@ -362,6 +495,30 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
     def auth(self) -> HTTPAuth:
         """Return HTTPAuth from server config for AuthMixin."""
         return HTTPAuth(user=self.server.config.authUser, password=self.server.config.authPassword)
+
+    def _appendDownloadRequestLog(self, args, name, size):
+        """Append a lightweight JSON line for each /download request when enabled."""
+        logPath = os.getenv('FFL_DOWNLOAD_REQUEST_LOG')
+        if not logPath:
+            return
+
+        try:
+            entry = {
+                'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                'method': self.command,
+                'path': self.path,
+                'downloadId': self._downloadId,
+                'logicalDl': args.get('dl', [None])[0] if args else None,
+                'range': self.headers.get('Range'),
+                'host': self.headers.get('Host'),
+                'userAgent': self.headers.get('User-Agent'),
+                'fileName': name,
+                'fileSize': size,
+            }
+            with open(logPath, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+        except Exception as exc:
+            logger.warning(f"Failed to append FFL_DOWNLOAD_REQUEST_LOG entry: {exc}")
 
     def _registerAdditionalEndpoints(self, server):
         """
@@ -609,6 +766,9 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
     def _handleStartDownloadActions(self, size):
         flushPrint(_('[{timestamp}] Downloading by user').format(timestamp=self.date_time_string()))
 
+        # Track per-download progress for server-side stall detection
+        self.server.downloadProgressStore.register(self._downloadId, size)
+
         # Register completion event so _waitForHTTPDownloadComplete can block until client ACKs
         self.server.httpDownloadCompleteEvents[self._downloadId] = threading.Event()
 
@@ -682,6 +842,112 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 "(non-FFL client or slow relay), proceeding"
             )
 
+    def _parsePositiveDebugIntArg(self, args, argName, default=None):
+        """Parse a positive integer debug query parameter."""
+        if not args or argName not in args:
+            return default
+
+        rawValue = args[argName][0]
+        if rawValue.isdecimal():
+            return int(rawValue)
+
+        logger.warning(f"[Test] Invalid {argName} value: {rawValue!r}, must be a positive integer")
+        return default
+
+    def _parseIntArg(self, args, argName, default=0):
+        """Parse an integer query parameter, falling back to default on invalid input."""
+        if not args or argName not in args:
+            return default
+
+        try:
+            return int(args[argName][0])
+        except (ValueError, IndexError, TypeError):
+            return default
+
+    def _getDownloadDebugOptions(self, args):
+        """Collect download-specific debug/test injection options."""
+        return {
+            'stallAfterBytes': self._parsePositiveDebugIntArg(args, 'stall-after'),
+            'disconnectAfterBytes': self._parsePositiveDebugIntArg(args, 'disconnect-after'),
+        }
+
+    def _getClientDebugFlags(self, args):
+        """Resolve page-level debug flags from environment, server defaults, and URL params."""
+        flags = {
+            'debugEnabled': os.getenv('JS_DEBUG', None) == 'True',
+            'serverDebugEnabled': os.getenv('JS_LOG_TO_SERVER_DEBUG', None) == 'True',
+            'webrtcDisabled': os.getenv('DISABLE_WEBRTC', None) == 'True',
+            'streamSaverBlob': os.getenv('STREAMSAVER_BLOB', None) == 'True',
+            'webrtcDisabledDetermined': False,
+        }
+
+        if not args:
+            return flags
+
+        debugParam = args.get('debug', [None])[0]
+        if debugParam:
+            if debugParam.lower() == 'server':
+                flags['serverDebugEnabled'] = True
+            elif self.parseURLBooleanParam(debugParam):
+                flags['debugEnabled'] = True
+
+        webrtcParam = args.get('webrtc', [None])[0]
+        if webrtcParam:
+            webrtcValue = self.parseURLBooleanParam(webrtcParam)
+            if webrtcValue is False:
+                flags['webrtcDisabled'] = True
+            elif webrtcValue is True:
+                flags['webrtcDisabled'] = False
+                
+            flags['webrtcDisabledDetermined'] = True
+
+        return flags
+
+    def _getWebRTCDebugOptions(self, args):
+        """Collect WebRTC-specific debug/test options from URL params."""
+        return {
+            'simulateIceFailure': bool(args) and self.parseURLBooleanParam(args.get('simulate-ice-failure', [None])[0]),
+            'simulateStall': bool(args) and self.parseURLBooleanParam(args.get('simulate-stall', [None])[0]),
+            'stallAfterBytes': self._parsePositiveDebugIntArg(args, 'stall-after', default=50000),
+        }
+
+    def _truncateChunkForDebugOptions(self, data, written, debugOptions):
+        """Trim the outgoing chunk so stall injection lands exactly on the requested byte offset."""
+        stallAfterBytes = debugOptions.get('stallAfterBytes')
+        if stallAfterBytes is None or written + len(data) <= stallAfterBytes:
+            return data
+
+        return data[:stallAfterBytes - written]
+
+    def _handlePostWriteDebugOptions(self, written, debugOptions, logicalDl=None):
+        """Execute post-write debug/test actions such as stall or forced disconnect."""
+        stallAfterBytes = debugOptions.get('stallAfterBytes')
+        if stallAfterBytes is not None and written >= stallAfterBytes:
+            flushPrint(f"[Test] Stall injection: blocking after {written} bytes (stall-after={stallAfterBytes})")
+            debugOptions['stallAfterBytes'] = None  # Only stall once
+            self.wfile.flush()
+            while True:
+                self._ensureLogicalDownloadStillActive(logicalDl)
+                time.sleep(0.25)
+
+        disconnectAfterBytes = debugOptions.get('disconnectAfterBytes')
+        if disconnectAfterBytes is not None and written >= disconnectAfterBytes:
+            flushPrint(
+                f"[Test] Disconnect injection: closing connection after {written} bytes "
+                f"(disconnect-after={disconnectAfterBytes})"
+            )
+            debugOptions['disconnectAfterBytes'] = None
+            self.wfile.flush()
+            try:
+                self.connection.shutdown(socket.SHUT_RDWR)
+            except OSError as e:
+                logger.debug(f"Disconnect injection shutdown already closed socket: {e}")
+            try:
+                self.connection.close()
+            except OSError as e:
+                logger.debug(f"Disconnect injection close already closed socket: {e}")
+            raise ConnectionResetError("Disconnect injection triggered")
+
     def _handleDownloadExceptionActions(self, exception):
         # Determine failure reason
         if isinstance(exception, FolderChangedException):
@@ -724,6 +990,57 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             totalBytes=None,
             duration=time.time() - self._downloadStartTime
         )
+
+    def _getLogicalDownloadId(self, args):
+        if not args:
+            return None
+
+        logicalDl = args.get('dl', [None])[0]
+        return logicalDl or None
+
+    def _registerLogicalDownloadRequest(self, args, start, end):
+        logicalDl = self._getLogicalDownloadId(args)
+        if not logicalDl:
+            return None
+
+        supersededRequestIds = self.server.logicalDownloadRequestStore.register(
+            logicalDl=logicalDl,
+            requestId=self._downloadId,
+            rangeStart=start,
+            rangeEnd=end,
+        )
+    
+        if supersededRequestIds:
+            logger.info(
+                f"Superseding {len(supersededRequestIds)} overlapping request(s) "
+                f"for logical dl={logicalDl}: {', '.join(requestId[:8] for requestId in supersededRequestIds)}"
+            )
+
+        return logicalDl
+
+    def _ensureLogicalDownloadStillActive(self, logicalDl):
+        if not logicalDl:
+            return
+
+        if self.server.logicalDownloadRequestStore.isSuperseded(logicalDl, self._downloadId):
+            try:
+                self.wfile.flush()
+            except OSError as e:
+                logger.debug(f"Superseded logical download flush failed: {e}")
+                
+            try:
+                self.connection.shutdown(socket.SHUT_RDWR)
+            except OSError as e:
+                logger.debug(f"Superseded logical download shutdown failed: {e}")
+                
+            try:
+                self.connection.close()
+            except OSError as e:
+                logger.debug(f"Superseded logical download close failed: {e}")
+                
+            raise SupersededDownloadError(
+                f"Superseded by newer overlapping request for logical dl={logicalDl}"
+            )
 
     def _handleE2EEManifest(self, args):
         """Handle /e2ee/manifest endpoint - returns E2E encryption metadata"""
@@ -1078,8 +1395,11 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         if not self._handleRecipientAuth(args):
             return
 
+        debugOptions = self._getDownloadDebugOptions(args)
+
         # Get file info using existing helper method
         path, name, size, ctype, reader = self._getFileInfo(quoteName=False)
+        self._appendDownloadRequestLog(args, name, size)
 
         # Check if reader has already been consumed (for single-use sources like stdin)
         if reader.consumed:
@@ -1104,6 +1424,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
         settingsGetter = SettingsGetter.getInstance()
 
+        logicalDl = None
         written = 0
         progress = Progress(
             size,
@@ -1138,6 +1459,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
             # Determine if we should use chunked encoding
             useChunked = (size is None) and ('Range' not in self.headers)
+            logicalDl = self._registerLogicalDownloadRequest(args, start, end)
 
             # Send appropriate response headers
             if 'Range' in self.headers:
@@ -1193,9 +1515,15 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             progressThrottler = Throttler(interval=1.0)
 
             for data in reader.iterChunks(chunkSize, start=start):
+                self._ensureLogicalDownloadStillActive(logicalDl)
+
                 # Ensure we don't send beyond the requested range (if known)
                 if end is not None and written + len(data) > end + 1:
                     data = data[:end + 1 - written]
+
+                # Debug/test injections are applied before encryption so any truncation
+                # still produces a valid (shorter) plaintext chunk.
+                data = self._truncateChunkForDebugOptions(data, written, debugOptions)
 
                 # Encrypt if E2EE enabled
                 if encryptor:
@@ -1210,6 +1538,9 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                     self.wfile.write(data)
 
                 written += len(data)
+                self.server.downloadProgressStore.update(self._downloadId, written)
+
+                self._handlePostWriteDebugOptions(written, debugOptions, logicalDl=logicalDl)
 
                 # Update progress periodically
                 progress.update(written)
@@ -1266,8 +1597,12 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         finally:
             if checksumSession and not checksumSession.isClosed:
                 checksumSession.abort()
-            # Always clean up the completion event (covers exception / connection-reset paths)
+                
+            # Always clean up the completion event and progress tracking
             self.server.httpDownloadCompleteEvents.pop(self._downloadId, None)
+            self.server.downloadProgressStore.unregister(self._downloadId)
+            if logicalDl:
+                self.server.logicalDownloadRequestStore.unregister(logicalDl, self._downloadId)
 
     def _transformStaticIndexContent(self, content: bytes, args) -> bytes:
         """
@@ -1349,33 +1684,12 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
         # Debug and WebRTC flags
         # Priority: 1. URL param  2. Server config  3. Environment variable
-        debugEnabled = os.getenv('JS_DEBUG', None) == 'True'
-        serverDebugEnabled = os.getenv('JS_LOG_TO_SERVER_DEBUG', None) == 'True'
-        webrtcDisabled = os.getenv('DISABLE_WEBRTC', None) == 'True'
-        streamSaverBlob = os.getenv('STREAMSAVER_BLOB', None) == 'True'
-        webrtcDisabledDetermined = False
-
-        if args:
-            # Check debug parameter: ?debug=yes/1/true/on/server
-            debugParam = args.get('debug', [None])[0]
-            if debugParam:
-                if debugParam.lower() == 'server':
-                    serverDebugEnabled = True
-                elif self.parseURLBooleanParam(debugParam):
-                    debugEnabled = True
-
-            # Check webrtc parameter: ?webrtc=no/0/false/off/yes/1/true/on
-            webrtcParam = args.get('webrtc', [None])[0]
-            if webrtcParam:
-                webrtcValue = self.parseURLBooleanParam(webrtcParam)
-                if webrtcValue is False:
-                    webrtcDisabled = True
-                elif webrtcValue is True:
-                    webrtcDisabled = False
-                else:
-                    pass # If webrtcResult is None (unrecognized value), keep current state
-
-                webrtcDisabledDetermined = True
+        clientDebugFlags = self._getClientDebugFlags(args)
+        debugEnabled = clientDebugFlags['debugEnabled']
+        serverDebugEnabled = clientDebugFlags['serverDebugEnabled']
+        webrtcDisabled = clientDebugFlags['webrtcDisabled']
+        streamSaverBlob = clientDebugFlags['streamSaverBlob']
+        webrtcDisabledDetermined = clientDebugFlags['webrtcDisabledDetermined']
 
         if not webrtcDisabledDetermined and not self.server.config.defaultWebRTC:
             webrtcDisabled = True
@@ -1513,27 +1827,157 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         self._handleStaticScript("/static/js/E2EE.js")
 
     def _handleStatus(self, args):
-        """Handle status polling endpoint for error notifications"""
+        """Handle status polling endpoint for error notifications and server-side stall detection.
+
+        Each poll checks all active HTTP downloads for stalls.  When one is found,
+        /diagnosis is called via the public tunnel URL (from the Host header of this
+        very request) so the tunnel/relay also records the event.  The call is fired
+        in a daemon thread so it never delays the /status response.
+
+        DownloadHandler is instantiated per request, so self.headers already carries
+        the current client's Host / X-Forwarded-Proto — no extra context needed.
+        """
         try:
-            # Check if there's a server error
+            # Resolve public base URL once from this request's headers.
+            # Tunnel URLs always use HTTPS and contain dots; localhost/bare-IP is HTTP.
+            host = self.headers.get('Host', '')
+            scheme = self.headers.get('X-Forwarded-Proto', '')
+            if not scheme:
+                scheme = 'https' if (host and '.' in host and 'localhost' not in host) else 'http'
+                
+            publicBaseUrl = f'{scheme}://{host}' if host else f'http://localhost:{self.server.server_address[1]}'
+            uid = self.server.uid
+
+            for info in self.server.downloadProgressStore.getStalledDownloads():
+                self.server.downloadProgressStore.markStallReported(info['downloadId'])
+
+                downloadId = info['downloadId']
+                written = info['written']
+                total = info['total']
+                stallMs = int((time.time() - info['lastUpdateTime']) * 1000)
+
+                if written == 0:
+                    phase = 'first-byte'
+                elif total and total > 0 and written / total >= 0.95:
+                    phase = 'tail'
+                else:
+                    phase = 'mid-stream'
+
+                percent = f'{written / total * 100:.2f}' if total and total > 0 else 'unknown'
+                diagnosisUrl = f'{publicBaseUrl}/{uid}/diagnosis'
+                params = {
+                    'type': 'http',
+                    'phase': phase,
+                    'delivered': str(written),
+                    'total': str(total) if total is not None else '?',
+                    'stall_ms': str(stallMs),
+                    'percent': percent,
+                    'probe_status': 'server-side',
+                    'range_ok': '?',
+                    'has_auth': '?',
+                    'browser': '?',
+                    'ff_pass': '?',
+                    'e2ee': str(self.server.config.e2eeEnabled).lower(),
+                    'resume': '?',
+                    'dl': downloadId,
+                    'source': 'server',
+                }
+
+                logger.warning(
+                    f"[Status] Server-side stall | dl={downloadId[:8]} phase={phase}"
+                    f" written={written}/{total} stall={stallMs}ms → {diagnosisUrl}"
+                )
+
+                def fire(url=diagnosisUrl, p=params):
+                    try:
+                        requests.get(url, params=p, timeout=10)
+                    except Exception as exc:
+                        logger.debug(f"[Status] /diagnosis call failed: {exc}")
+
+                threading.Thread(target=fire, daemon=True).start()
+
             status = {'error': self.server.lastError if self.server.lastError else None}
 
-            # Encode response
             responseBody = json.dumps(status).encode('utf-8')
-
-            # Send headers with Content-Length
             self.send_response(HTTPStatus.OK)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(responseBody)))
             self.send_header('Cache-Control', 'no-cache')
             self.end_headers()
-
-            # Send body
             self.wfile.write(responseBody)
 
         except Exception as e:
             logger.exception(f"Status endpoint error: {e}")
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Status endpoint error")
+
+    def _handleDiagnosis(self, args):
+        """Handle stall diagnosis reports from the Service Worker or server-side stall detection.
+
+        The SW sends this when it detects no data has flowed for stallMs milliseconds.
+        The /status handler also fires this when it detects a server-side stall (source=server).
+        Fields logged here help identify recurring stall patterns (browser, position, probe result, etc.).
+
+        When FFL_DIAGNOSIS_LOG is set, each report is appended as a JSON line to that file.
+        This is used by tests to verify that /diagnosis was called with the correct parameters.
+        """
+        def first(key, default=''):
+            values = args.get(key)
+            return values[0] if values else default
+
+        transportType = first('type', 'unknown')
+        phase = first('phase', 'unknown')
+        delivered = first('delivered', '?')
+        total = first('total', '?')
+        stallMs = first('stall_ms', '?')
+        percent = first('percent', '?')
+        probeStatus = first('probe_status', '?')
+        rangeOk = first('range_ok', '?')
+        hasAuth = first('has_auth', '?')
+        browser = first('browser', '?')
+        ffPass = first('ff_pass', '?')
+        e2ee = first('e2ee', '?')
+        resume = first('resume', '?')
+        downloadId = first('dl', '?')
+        source = first('source', 'sw')
+        userAgent = self.headers.get('User-Agent', 'unknown')
+
+        dlShort = downloadId[:8] if len(downloadId) >= 8 else downloadId
+
+        logger.warning(
+            f"[Diagnosis] Stall | type={transportType} phase={phase}"
+            f" delivered={delivered}/{total} ({percent}%)"
+            f" stall={stallMs}ms probe={probeStatus} range_ok={rangeOk}"
+            f" browser={browser} has_auth={hasAuth} ff_pass={ffPass} e2ee={e2ee} resume={resume}"
+            f" source={source} dl={dlShort} ua={userAgent}"
+        )
+
+        diagLogPath = os.getenv('FFL_DIAGNOSIS_LOG', '')
+        if diagLogPath:
+            record = {
+                'type': transportType,
+                'phase': phase,
+                'delivered': delivered,
+                'total': total,
+                'stall_ms': stallMs,
+                'percent': percent,
+                'probe_status': probeStatus,
+                'range_ok': rangeOk,
+                'has_auth': hasAuth,
+                'browser': browser,
+                'ff_pass': ffPass,
+                'e2ee': e2ee,
+                'resume': resume,
+                'dl': downloadId,
+                'source': source,
+            }
+            try:
+                with open(diagLogPath, 'a', encoding='utf-8') as diagLog:
+                    diagLog.write(json.dumps(record) + '\n')
+                    diagLog.flush()
+            except Exception as exc:
+                logger.debug(f"[Diagnosis] Failed to write to FFL_DIAGNOSIS_LOG: {exc}")
+
+        self._sendBytes(b'ok')
 
     def _handleChecksum(self, args):
         """Handle checksum polling endpoint for download integrity verification."""
@@ -1585,25 +2029,20 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             
         try:
             # Check for debug simulation parameters
-            simulateIceFailure = args and self.parseURLBooleanParam(args.get('simulate-ice-failure', [None])[0])
-            if simulateIceFailure:
+            debugOptions = self._getWebRTCDebugOptions(args)
+            if debugOptions['simulateIceFailure']:
                 logger.warning("Debug: Simulating ICE failure - returning 500 error")
                 self.send_error(500, "Simulated ICE connection failure for testing")
                 return
 
-            simulateStall = args and self.parseURLBooleanParam(args.get('simulate-stall', [None])[0])
-            if simulateStall:
-                stallAfter = args.get('stall-after', ['50000'])[0]
+            if debugOptions['simulateStall']:
+                stallAfter = debugOptions['stallAfterBytes']
                 logger.warning(f"Debug: Simulating stall after {stallAfter} bytes - WebRTC will work initially")
 
             # Handle resume offset parameter
-            offset = 0
-            if args and 'offset' in args:
-                try:
-                    offset = int(args['offset'][0])
-                    logger.info(f"Resume requested from offset: {offset}")
-                except (ValueError, IndexError):
-                    offset = 0
+            offset = self._parseIntArg(args, 'offset', default=0)
+            if offset:
+                logger.info(f"Resume requested from offset: {offset}")
 
             path, name, size, ctype, reader = self._getFileInfo()
 
@@ -1955,6 +2394,8 @@ class Server(ThreadingHTTPServer):
         self.checksumStore = TransferChecksumStore()
         self.downloadSessionStore = DownloadSessionStore()
         self.authRateLimiter = AuthRateLimiter()
+        self.downloadProgressStore = DownloadProgressStore()
+        self.logicalDownloadRequestStore = LogicalDownloadRequestStore()
 
         self.downloadCount = 0
         self.startTime = time.time()

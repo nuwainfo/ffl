@@ -45,7 +45,7 @@ from signalslot import Signal
 from sentry_sdk.integrations.logging import SentryHandler, LoggingIntegration
 from sentry_sdk.integrations import atexit as sentryAtexit
 
-PUBLIC_VERSION = '3.9.3'
+PUBLIC_VERSION = '3.9.4'
 
 # Map string levels to logging constants for standard level names
 LOG_LEVEL_MAPPING = {'DEBUG': logging.DEBUG, 'INFO': logging.INFO, 'WARNING': logging.WARNING, 'ERROR': logging.ERROR}
@@ -92,12 +92,16 @@ def getLogger(name, version=PUBLIC_VERSION, reinitialize=False):
     Get a logger with Sentry integration. Uses Sentry's own initialization state to avoid duplicate setup.
     SENTRY_DSN is loaded dynamically via SecretGetter and cached transparently.
 
+    Sentry is skipped when CONDA_PREFIX is part of sys.executable, meaning Python itself
+    is running from inside a conda environment (development mode).
+
     Args:
         name: Logger name
         version: Version string for logging context
         reinitialize: If True, reinitialize Sentry and add handlers to all existing loggers
     """
     logger = None
+    developmentMode = False
 
     try:
         # Check if Sentry is already initialized using Sentry's own state
@@ -107,6 +111,15 @@ def getLogger(name, version=PUBLIC_VERSION, reinitialize=False):
         if notInit or reinitialize:
             secretGetter = SecretGetter.getInstance()
             sentryDsn = secretGetter.get('SENTRY_DSN')
+            
+            # Skip Sentry when running from source: sys.executable sits inside the active
+            # conda environment, meaning we are running 'python Core.py' directly.
+            # Built executables (PyInstaller / PyApp) live outside CONDA_PREFIX even
+            # when the user has a conda env activated in their shell.
+            condaPrefix = os.getenv('CONDA_PREFIX')
+            if condaPrefix and condaPrefix in sys.executable:
+                sentryDsn = None      
+                developmentMode = True
 
             if sentryDsn:
                 # Override default_callback to suppress "sentry is attempting to send pending events..." message
@@ -147,8 +160,8 @@ def getLogger(name, version=PUBLIC_VERSION, reinitialize=False):
         # Create logger
         logger = logging.getLogger(name)
 
-        # Add Sentry handler if not already present
-        if not any(isinstance(h, SentryHandler) for h in logger.handlers):
+        # Add Sentry handler if not already present (skip in dev mode — Sentry not initialized)
+        if not developmentMode and not any(isinstance(h, SentryHandler) for h in logger.handlers):
             extra = {'version': version or 'unknown'}
             formatter = logging.Formatter('%(asctime)s version[%(version)s] : %(message)s')
 
@@ -159,6 +172,9 @@ def getLogger(name, version=PUBLIC_VERSION, reinitialize=False):
 
         if sentryInitialized:
             logger.debug(f'Sentry initialized with DSN: {sentryDsn}')
+
+        if developmentMode:
+            logger.debug(f"Sentry skipped: running inside conda env {os.getenv('CONDA_PREFIX')}")
 
         return logger
 

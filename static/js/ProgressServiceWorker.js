@@ -506,6 +506,122 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
             log('[ProgressSW] No E2EE decryption - context not available');
         }
 
+        // ---- Stall watchdog (Route 2: probe-only, never touches the main stream) ----
+        const STALL_TIMEOUT_MS = getConfigFromUrl(url, 'stallMs', 60000);
+        const TAIL_THRESHOLD = 0.95; // >= 95% delivered = tail phase
+        let stallWatchdogTimer = null;
+        let lastChunkTime = Date.now();
+        let stallReported = false;
+
+        const swUserAgent = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+        const isHeadless = /headless/i.test(swUserAgent);
+        const browserHint = /firefox/i.test(swUserAgent) ? 'firefox'
+                          : isHeadless ? 'headless-chrome'
+                          : /chrome/i.test(swUserAgent) ? 'chrome'
+                          : 'other';
+
+        // Classify stall phase for server-side pattern analysis.
+        // chunkCount is declared below but only read after the timer fires (async).
+        function stallPhase() {
+            if (chunkCount === 0) {
+                return 'first-byte';
+            }
+            if (isValidSize(total) && delivered / total >= TAIL_THRESHOLD) {
+                return 'tail';
+            }
+            return 'mid-stream';
+        }
+
+        function scheduleStallWatchdog() {
+            if (stallWatchdogTimer) {
+                clearTimeout(stallWatchdogTimer);
+            }
+            stallWatchdogTimer = setTimeout(() => {
+                onStallDetected().catch(err => log('[ProgressSW] Stall handler error:', String(err)));
+            }, STALL_TIMEOUT_MS);
+        }
+
+        async function onStallDetected() {
+            if (stallReported) {
+                return;
+            }
+            stallReported = true;
+
+            const stallDurationMs = Date.now() - lastChunkTime;
+            const phase = stallPhase();
+            const percent = isValidSize(total) ? ((delivered / total) * 100).toFixed(2) : 'unknown';
+            log('[ProgressSW] ⚠ Stall detected:', phase, 'at', delivered, 'bytes (' + percent + '%) after', stallDurationMs, 'ms');
+
+            // Probe: tiny Range request — carries auth headers so a 401 won't pollute results.
+            let probeStatus = 'error';
+            let rangeOk = false;
+            try {
+                const probeEnd = isValidSize(total)
+                    ? Math.min(delivered + 1023, total - 1)
+                    : delivered + 1023;
+                const probeHeaders = new Headers({
+                    'Range': `bytes=${delivered}-${probeEnd}`,
+                    'Cache-Control': 'no-cache',
+                });
+                if (authHeaders) {
+                    for (const [k, v] of Object.entries(authHeaders)) {
+                        probeHeaders.set(k, v);
+                    }
+                }
+                const probeResp = await fetch(new Request(`${url.origin}${url.pathname}`, { headers: probeHeaders }));
+                probeStatus = String(probeResp.status);
+                if (probeResp.status === 206) {
+                    // Verify Content-Range start matches our expected position.
+                    const cr = parseContentRange(probeResp.headers.get('Content-Range'));
+                    rangeOk = cr !== null && cr.start === delivered;
+                }
+                // Consume the tiny body completely for a clean connection close.
+                try { await probeResp.arrayBuffer(); } catch (_e) {}
+                log('[ProgressSW] Probe: HTTP', probeStatus, '| rangeOk (start===delivered):', rangeOk);
+            } catch (probeErr) {
+                probeStatus = 'fetch-error';
+                log('[ProgressSW] Probe fetch failed:', String(probeErr));
+            }
+
+            // Report to /diagnosis endpoint for server-side pattern logging.
+            try {
+                const params = new URLSearchParams({
+                    type: 'http',
+                    phase,
+                    delivered: String(delivered),
+                    total: String(total),
+                    stall_ms: String(stallDurationMs),
+                    percent,
+                    probe_status: probeStatus,
+                    range_ok: rangeOk ? '1' : '0',
+                    has_auth: (authHeaders && Object.keys(authHeaders).length > 0) ? '1' : '0',
+                    browser: browserHint,
+                    ff_pass: ffPass ? '1' : '0',
+                    e2ee: e2eeEnabled ? '1' : '0',
+                    resume: hasResume ? '1' : '0',
+                    dl: downloadId,
+                });
+                await fetch(`${url.origin}/${uid}/diagnosis?${params}`);
+                log('[ProgressSW] Stall diagnosis reported');
+            } catch (diagErr) {
+                log('[ProgressSW] Diagnosis report failed:', String(diagErr));
+            }
+
+            broadcast({
+                type: 'download-stall',
+                id: downloadId,
+                phase,
+                delivered,
+                total,
+                percent,
+                probeStatus,
+                rangeOk,
+                stallDurationMs,
+            });
+        }
+
+        scheduleStallWatchdog(); // arm immediately — also catches first-byte stall
+
         let chunkCount = 0;
         const progressTransform = new TransformStream({
             async transform(chunk, controller) {
@@ -524,9 +640,10 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
                 if (httpDecryptor) {
                     try {
                         processedChunk = await httpDecryptor.decryptChunk(chunk);
-                        newSize = processedChunk.byteLength || processedChunk.length;
-                        if (newSize > 0)
+                        const newSize = processedChunk.byteLength || processedChunk.length;
+                        if (newSize > 0) {
                             log('[ProgressSW] Chunk decrypted, new size:', newSize);
+                        }
                     } catch (e) {
                         console.error('[ProgressSW] E2EE decryption failed:', e);
                         broadcast({ type: 'download-error', id: downloadId, message: 'E2EE decryption failed: ' + e.message });
@@ -558,14 +675,18 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
                     skipRemaining = 0;
                 }
 
-                if (chunkView.length === 0)  // Maybe decrypt buffering
+                if (chunkView.length === 0) {  // Maybe decrypt buffering
                     return;
+                }
                 
                 // Pass the processed chunk through to the browser
                 controller.enqueue(chunkView);
                 log('[ProgressSW] Enqueued chunk, size:', chunkView.length);
 
                 delivered += chunkView.length;
+                lastChunkTime = Date.now();
+                stallReported = false; // allow re-reporting if a new stall follows
+                scheduleStallWatchdog();
 
                 const now = Date.now();
                 const shouldReport = (
@@ -592,6 +713,12 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
             },
 
             async flush(controller) {
+                // Download stream ended — cancel watchdog so it never fires after completion.
+                if (stallWatchdogTimer) {
+                    clearTimeout(stallWatchdogTimer);
+                    stallWatchdogTimer = null;
+                }
+
                 // Flush any remaining decrypted data
                 if (httpDecryptor) {
                     try {

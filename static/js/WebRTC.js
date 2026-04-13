@@ -2251,9 +2251,9 @@ class WebRTCManager {
         // NOTE: Server must wait for START before sending file data
         try {
             dc.send('START');
-            this.log("DataChannel", "??START signal sent");
+            this.log("DataChannel", "START signal sent");
         } catch (e) {
-            this.log("DataChannel", `??Failed to send START: ${e}`);
+            this.log("DataChannel", `Failed to send START: ${e}`);
             throw e; // Re-throw to trigger fallback
         }
 
@@ -2331,12 +2331,12 @@ class WebRTCManager {
             // Download-first mode: START sent immediately
             this.log("DataChannel", "Auto-starting download");
             this._startP2PTransfer(dc).catch(err => {
-                this.log("DataChannel", `??Failed to start P2P transfer: ${err}`);
+                this.log("DataChannel", `Failed to start P2P transfer: ${err}`);
                 fallbackToHTTP("Failed to start P2P transfer", true);
             });
         } else {
             // Paused or preview-first mode: wait for user action (PauseGate handles heartbeat)
-            this.log("DataChannel", `??Transfer paused - ${isPreviewMode ? 'preview mode' : 'user pause'}`);
+            this.log("DataChannel", `Transfer paused - ${isPreviewMode ? 'preview mode' : 'user pause'}`);
         }
     }
 

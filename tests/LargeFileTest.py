@@ -21,6 +21,7 @@ import os
 import argparse
 import platform
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -104,6 +105,9 @@ class LargeFileTest(ResumeBrowserTestBase):
         super().setUp()
 
         self._cleanupPaths = set()
+        self._currentOutputCapture = {}
+        self._currentDriver = None
+        self._registerSigintHandler()
         self.largeFilePath = self._prepareLargeFile()
         self.testFilePath = self.largeFilePath
         self.originalFileSize = os.path.getsize(self.largeFilePath)
@@ -121,6 +125,25 @@ class LargeFileTest(ResumeBrowserTestBase):
         print(f"[Test] Large file path: {self.largeFilePath}")
         print(f"[Test] Large file size: {self.originalFileSize} bytes")
         print(f"[Test] Browser: {self.DEFAULT_BROWSER}")
+
+    def _registerSigintHandler(self):
+        previousHandler = signal.getsignal(signal.SIGINT)
+
+        def sigintHandler(sig, frame):
+            print('\n[Test] Ctrl+C detected - dumping diagnostic logs before exit')
+            try:
+                self._printServerOutput(self._currentOutputCapture, lastNLines=None)
+            except Exception as exc:
+                print(f'[Test] Failed to dump server output: {exc}')
+            try:
+                if self._currentDriver:
+                    self._printBrowserLogs(driver=self._currentDriver, title='Browser logs at Ctrl+C')
+            except Exception as exc:
+                print(f'[Test] Failed to dump browser logs: {exc}')
+            signal.signal(signal.SIGINT, previousHandler)
+            os.kill(os.getpid(), signal.SIGINT)
+
+        signal.signal(signal.SIGINT, sigintHandler)
 
     def prepareTestConfigDir(self, tempConfigDir):
         preparedDir = super().prepareTestConfigDir(tempConfigDir)
@@ -656,6 +679,7 @@ class LargeFileTest(ResumeBrowserTestBase):
             extraArgs=["--preferred-tunnel", "default"],
             binaryCommand=binaryCommand,
         )
+        self._currentOutputCapture = outputCapture
         return shareLink, outputCapture
 
     def _getLargeShareEnv(self):
@@ -675,6 +699,7 @@ class LargeFileTest(ResumeBrowserTestBase):
 
     def _runBrowserLargeDownload(self, shareUrl, extraQueryParams=None):
         driver, downloadDir = self._setupBrowserAndDir()
+        self._currentDriver = driver
         finalUrl = self._addQueryParams(shareUrl, **extraQueryParams) if extraQueryParams else shareUrl
         evidence = self._createBrowserEvidence()
         downloadedFile = self._downloadWithBrowserTimeout(
@@ -786,6 +811,17 @@ class LargeFileTest(ResumeBrowserTestBase):
         finally:
             self._terminateProcess()
 
+    def testLargeBrowserDownloadNormal(self):
+        """Large-file browser download with no extra URL parameters (default behavior)."""
+        try:
+            shareLink, outputCapture = self._startLargeShare(p2p=True)
+            downloadedFile, driver, evidence = self._runBrowserLargeDownload(shareLink)
+
+            self._verifyLargeDownloadedFile(downloadedFile)
+            self._printServerOutput(outputCapture, lastNLines=80)
+        finally:
+            self._terminateProcess()
+
     def testLargeBrowserDownloadWebRTCOnly(self):
         """Large-file P2P browser download with browser-side HTTP fallback disabled."""
         try:
@@ -869,6 +905,7 @@ class LargeFileTest(ResumeBrowserTestBase):
 SCENARIO_TO_TEST = {
     "http-request": "testLargeHttpRequestDownload",
     "http-browser": "testLargeBrowserDownloadHttpOnly",
+    "normal": "testLargeBrowserDownloadNormal",
     "webrtc": "testLargeBrowserDownloadWebRTCOnly",
     "fallback": "testLargeBrowserDownloadAfterWebRTCDisconnect",
     "upload": "testLargeUploadAndBrowserDownload",

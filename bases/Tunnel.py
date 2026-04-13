@@ -28,6 +28,7 @@ import requests
 from bases.Bore import BoreClient
 from bases.Kernel import getLogger, FFLEvent
 
+# Set ONLY_BUILTIN_TUNNEL="True" if Features addon enabled if needed.
 BUILTIN_TUNNEL = os.getenv('BUILTIN_TUNNEL', '33.fastfilelink.com')
 TUNNEL_TOKEN_SERVER_URL = os.getenv('TUNNEL_TOKEN_SERVER_URL', 'https://fastfilelink.com')
 
