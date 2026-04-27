@@ -358,6 +358,8 @@ ffl myfile.bin --auth-user tom --auth-password mypassword
 
 This prevents anonymous downloads even if the link leaks.
 
+> 💡 **Pro Tip:** You can set the `FFL_AUTH_PASSWORD` environment variable. This keeps your password completely out of your shell history and the system's process list!
+
 #### 🕵️ Ultimate Privacy & Anonymity (Tor + E2EE)
 
 You can chain options to achieve a **Zero-Knowledge, Zero-Trust** transfer profile. This ensures that neither the relay server nor the recipient can trace your identity or access your data.
