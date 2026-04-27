@@ -280,12 +280,12 @@ ffl [options] [FILE_OR_FOLDER]
 
 Options (most useful ones):
 
+  --exclude PATTERNS        Exclude files/folders by name, glob, or regex (e.g., '*.log,re:\.env$').
   --max-downloads N        Auto-shutdown after N downloads (P2P mode). 0 = unlimited
   --timeout SECONDS        Auto-shutdown after idle timeout (P2P mode). 0 = no timeout
-  --port PORT              Local HTTP server port (auto-detect by default)
   --auth-user USERNAME     HTTP Basic Auth for downloads
   --auth-password PASSWORD HTTP Basic Auth for downloads
-  --force-relay            Force relayed P2P mode, disable direct WebRTC
+  --recipient-auth MODE    Recipient verification mode ('pickup', 'pubkey', 'pubkey+pickup', or 'email').  
   --alias ALIAS            Use custom alias as UID for sharing link
   --e2ee                   Enable end-to-end encryption
   --preferred-tunnel {cloudflare,default,...} Set preferred tunnel for future runs
@@ -311,6 +311,8 @@ Options:
   --resume                Resume incomplete download (like curl -C), otherwise overwrite existing file
   --auth-user USERNAME    Username for HTTP Basic Authentication (default: 'ffl')
   --auth-password PASSWORD Password for HTTP Basic Authentication
+  --recipient-auth MODE   Recipient verification mode ('pickup', 'pubkey', 'pubkey+pickup', or 'email').    
+  --stdout                Write downloaded content to stdout instead of a file (useful for piping: | tar -xf -).
 ```
 
 ## Features & Advanced Usage
