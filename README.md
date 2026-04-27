@@ -8,15 +8,14 @@
 
 AFAIK, `ffl` is the only CLI file-transfer tool that does all of the following:
 
-- 📡 **Instant P2P file sharing using WebRTC**
-- 🔁 **Automatic fallback to secure relay tunnels** when NAT traversal fails — guarantees delivery
-- 🧑‍💻 **Recipient doesn’t need to install anything** — they can download via browser, `curl`, `ffl`, etc.
-- 🔐 **End-to-end encryption (AES-256-GCM)** — relay/storage is zero-knowledge
-- 📁 **Folder & stdin support** — streaming, no need to zip/encrypt first, works even for TB-scale data
-- ⏯️ **Resume interrupted transfers**
-- 🧱 **Actually Portable Executable (APE)** + native builds for **Windows, Linux, macOS**
-- 🧰 **Built-in & pluggable tunnels** (Cloudflare, ngrok, self-hosted, etc.) — supports proxies like Tor
-- ☁️ **Optional temporary upload to server** (licensed feature) when both sides can’t be online simultaneously
+- 📡 **Instant P2P WebRTC sharing** — Auto-fallback and cross-mode resume guarantees delivery.
+- 🧑‍💻 **Zero-install for recipients** — Download instantly via modern browsers, `curl`, or `ffl`, etc.
+- 📁 **Folder & batch transfers** — Stream TB-scale data or `stdin` directly without zip/encrypt first.
+- 🔐 **Zero-trust End-to-end encryption** — Ensures all relays and storage remain strictly zero-knowledge.
+- 🚀 **Smart Delivery & AI-Ready** — Verify recipients via OTP/PubKey, or empower AI agents via MCP.
+- 🧱 **Actually Portable Executable (APE)** + native builds for **Windows, Linux, macOS**. Embeddable.
+- 🧰 **Built-in & pluggable tunnels** (Cloudflare, ngrok, self-hosted) — Supports proxies like Tor.
+- ☁️ **Optional temporary upload to server** (licensed feature) when both sides can’t be online simultaneously.
 
 ⚡ At a glance: **Think `croc` or `magic-wormhole`, but the recipient uses a standard browser/HTTPS link — no software installation required.**
 > 📊 **How does it compare to other tools?** See our [Comparison Guide](https://github.com/nuwainfo/ffl/wiki/Comparison-with-Other-File-Transfer-Tools)
