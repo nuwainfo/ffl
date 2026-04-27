@@ -420,13 +420,13 @@ You can generate RSA keypairs directly via the CLI. Even better, you can use `--
 
 ```bash
 # Generate a keypair named "clientA" and securely share the private key via a custom PIN
-ffl keygen --name clientA --share --recipient-auth pickup --pickup-code 123456
+ffl keygen --name clientA --share --pickup-code 123456
 ```
 
 **3. Proof of Delivery & Package Integrity**
 Want to know exactly when your file lands and ensure it wasn't tampered with?
 * **Receipts:** Use `--receipt` to get an automatic email notification the moment the download finishes. Add `--receipt-confirm` to prompt the receiver with a dialog to explicitly acknowledge receipt.
-* **Auto-Checksum:** Upon completion, `ffl` automatically performs a strict checksum verification on the receiver's end.
+* **Auto-Checksum:** Upon completion, a strict checksum verification is automatically performed on the receiver's end—**whether they download via the `ffl` CLI or a standard web browser**—guaranteeing the file wasn't corrupted in transit.
 * **Manual Verification:** For advanced automation, you can query the file's metadata via the `/checksum` endpoint and verify it manually using standard tools like `b2sum`.
 
 ```bash
