@@ -557,12 +557,6 @@ ffl download https://my-fixed-tunnel.com/nightly-build
   
   If this happens, we recommend switching to Cloudflare tunnel for better performance - in fact, we suggest using Cloudflare from the start, especially in fixed mode, for the most stable and fastest experience.
 
-  **ℹ️ Bandwidth Routing**
-
-  To keep the default service sustainable, files larger than 500MB are automatically routed through our unlimited bandwidth infrastructure rather than the nearest premium node to prevent astronomical server bills.
-
-  If you prefer to always use the nearest high-performance node regardless of file size, please consider the **Licensed Version**. Your contribution helps us happily maintain these global infrastructure costs.
-
   **🛡️ Self-Host Your Own Relay / Tunnel**
 
   For ultimate privacy or corporate compliance, you can self-host your own relay infrastructure using **sish**. This allows you to:
