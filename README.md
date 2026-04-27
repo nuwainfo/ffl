@@ -625,7 +625,7 @@ ffl download https://my-fixed-tunnel.com/nightly-build
 
 ```bash
 # Example: Stream real-time events to a local JSONL file instead of a Webhook
-ffl --vfs --hook events.jsonl
+ffl --hook events.jsonl
 ```
 
 **Real-world Validation:**
