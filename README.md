@@ -12,7 +12,7 @@ AFAIK, `ffl` is the only CLI file-transfer tool that does all of the following:
 - 🧑‍💻 **Zero-install for recipients** — Download instantly via modern browsers, `curl`, or `ffl`, etc.
 - 📁 **Folder & batch transfers** — Stream TB-scale data or `stdin` directly without zip/encrypt first.
 - 🔐 **Zero-trust End-to-end encryption** — Ensures all relays and storage remain strictly zero-knowledge.
-- 🚀 **Smart Delivery & AI-Ready** — Verify recipients via OTP/PubKey, or empower AI agents via MCP.
+- 🚀 **Smart Delivery & AI-Ready** — Verify recipients via OTP/PubKey, or empower AI agents via [MCP](https://github.com/nuwainfo/ffl-mcp).
 - 🧱 **Actually Portable Executable (APE)** + native builds for **Windows, Linux, macOS**. Embeddable.
 - 🧰 **Built-in & pluggable tunnels** (Cloudflare, ngrok, self-hosted) — Supports proxies like Tor.
 - ☁️ **Optional temporary upload to server** (licensed feature) when both sides can’t be online simultaneously.
