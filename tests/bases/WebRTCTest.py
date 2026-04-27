@@ -858,6 +858,91 @@ class DownloadTest(FastFileLinkTestBase):
         finally:
             self._terminateProcess()
 
+    def _downloadToStdout(self, shareLink, extraEnvVars=None):
+        """
+        Run download with --stdout and return the captured binary content.
+
+        The download process writes file bytes to stdout and progress messages
+        to stderr, so we capture them separately.
+
+        Returns:
+            bytes: Raw file bytes received via stdout
+        """
+        downloadArgs = [sys.executable, "Core.py", "--cli", "download", shareLink, "--stdout"]
+        downloadEnv = os.environ.copy()
+        if extraEnvVars:
+            downloadEnv.update(extraEnvVars)
+
+        print(f"[Test] Running stdout download: {' '.join(downloadArgs)}")
+
+        projectRoot = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        downloadProcess = subprocess.Popen(
+            downloadArgs,
+            cwd=projectRoot,
+            env=downloadEnv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        try:
+            rawBytes, stderrOutput = downloadProcess.communicate(timeout=120)
+        except subprocess.TimeoutExpired:
+            downloadProcess.kill()
+            raise AssertionError("Stdout download process timed out")
+
+        if downloadProcess.returncode != 0:
+            raise AssertionError(
+                f"Stdout download failed (exit {downloadProcess.returncode}):\n{stderrOutput.decode(errors='replace')}"
+            )
+
+        print(f"[Test] Stderr output:\n{stderrOutput.decode(errors='replace')}")
+        return rawBytes, stderrOutput.decode(errors='replace')
+
+    def testStdoutDownload(self):
+        """Test --stdout download: file bytes come via stdout, progress to stderr (WebRTC path)"""
+        print("\n[Test] Testing --stdout download via WebRTC")
+
+        shareLink = self._startFastFileLink(p2p=True, timeout=60)
+
+        rawBytes, stderrOutput = self._downloadToStdout(shareLink)
+
+        # Write captured bytes to a temp file so _verifyDownloadedFile can hash it
+        outputPath = os.path.join(self.tempDir, "stdout_download_webrtc.bin")
+        with open(outputPath, 'wb') as f:
+            f.write(rawBytes)
+
+        # Verify no "Downloaded:" path line leaked onto stdout
+        self.assertNotIn(b"Downloaded:", rawBytes, "Progress messages must not appear in stdout binary stream")
+
+        # Progress messages should be on stderr
+        self.assertIn("Download complete", stderrOutput, "Completion message should appear on stderr")
+
+        self._verifyDownloadedFile(outputPath)
+        print("[Test] --stdout WebRTC download successful")
+
+    def testStdoutHTTPFallbackDownload(self):
+        """Test --stdout download via HTTP fallback (ICE failure forces HTTP path)"""
+        print("\n[Test] Testing --stdout download via HTTP fallback")
+
+        shareLink = self._startFastFileLink(p2p=True, timeout=60)
+
+        rawBytes, stderrOutput = self._downloadToStdout(
+            shareLink,
+            extraEnvVars={"WEBRTC_CLI_SIMULATE_ICE_FAILURE": "True"}
+        )
+
+        outputPath = os.path.join(self.tempDir, "stdout_download_http.bin")
+        with open(outputPath, 'wb') as f:
+            f.write(rawBytes)
+
+        self.assertNotIn(b"Downloaded:", rawBytes, "Progress messages must not appear in stdout binary stream")
+
+        # HTTP fallback produces "HTTP fallback" in progress output (goes to stderr)
+        self.assertIn("HTTP fallback", stderrOutput, "HTTP fallback message should appear on stderr")
+
+        self._verifyDownloadedFile(outputPath)
+        print("[Test] --stdout HTTP fallback download successful")
+
 
 if __name__ == '__main__':
     unittest.main()

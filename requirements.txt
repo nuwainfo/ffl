@@ -1,7 +1,7 @@
 requests
 requests[socks]
 pyperclip>=1.8, <1.9
-bitmath
+bitmath<2
 sentry_sdk>=1.41, <2.0
 psutil
 chardet

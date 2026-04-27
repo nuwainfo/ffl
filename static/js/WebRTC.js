@@ -305,6 +305,10 @@ class WritePump {
         return this.writer;
     }
 
+    async ensureWriterReady() {
+        return this._ensureWriter();
+    }
+
     isAccepting() {
         return this.intakeOpen && !this.writeError;
     }
@@ -1044,9 +1048,19 @@ class FallbackManager {
         this.fallbackTriggered = true;
 
         const actualBytesWritten = writePump ? writePump.bytesWritten : 0;
+        let downloadWriter = writePump ? writePump.writer : null;
         const bytesReceived = this.getBytesReceived();
         this.log("Fallback", "Queue flushed, starting DownloadManager download");
         this.log("Fallback", `Current state (after flush): bytesReceived=${bytesReceived}, bytesWritten=${actualBytesWritten}`);
+
+        if (writePump && !downloadWriter && !this.forceNativeLink) {
+            try {
+                this.log("Fallback", "Pre-initializing writer for direct HTTP relay download");
+                downloadWriter = await writePump.ensureWriterReady();
+            } catch (writerError) {
+                this.log("Fallback", "Failed to pre-initialize writer, falling back to native download path:", writerError);
+            }
+        }
 
         if (e2eeEnabledValue) {
             this.downloadManager.httpDecryptor = await this.e2eeManager.setupHTTPDecryptor();
@@ -1055,12 +1069,13 @@ class FallbackManager {
 
         // Calculate resume options
         const resumeOptions = this._calculateResumeOptions(actualBytesWritten);
+        const shouldForceWriter = this.forceWriter || (!!downloadWriter && !this.forceNativeLink);
 
-        this.log("Fallback", `Starting DownloadManager with writer: ${writePump ? 'YES' : 'NO'}, resume: ${resumeOptions ? 'YES' : 'NO'}, forceWriter: ${this.forceWriter}, forceNativeLink: ${this.forceNativeLink}`);
+        this.log("Fallback", `Starting DownloadManager with writer: ${downloadWriter ? 'YES' : 'NO'}, resume: ${resumeOptions ? 'YES' : 'NO'}, forceWriter: ${shouldForceWriter}, forceNativeLink: ${this.forceNativeLink}`);
         this.downloadManager.startDownload({
-            writer: writePump ? writePump.writer : null,
+            writer: downloadWriter,
             resume: resumeOptions,
-            forceWriter: this.forceWriter,
+            forceWriter: shouldForceWriter,
             forceNativeLink: this.forceNativeLink
         });
     }

@@ -190,8 +190,13 @@ class ResumeBrowserTestBase(BrowserTestBase, ResumeTestBase):
                 ):
                     fallbackDetected = True
 
-                # Check for writer being used to write HTTP bytes
-                if "Writer closed successfully, HTTP bytes written:" in message:
+                # Check for writer being used to write HTTP bytes. Keep the
+                # legacy wording for compatibility with older DownloadManager
+                # logs, and accept the newer unified writer/resume close log.
+                if (
+                    "Writer closed successfully, HTTP bytes written:" in message or
+                    "Writer closed successfully after writer download/resume flow" in message
+                ):
                     writerUsed = True
 
             return {

@@ -261,7 +261,8 @@ class TunnelThreadTest(unittest.TestCase):
             client = runner.createClient(8000)
 
         self.assertEqual('token-1', client.secret)
-        self.assertIs(client.tokenProvider, mockFetch)
+        self.assertIs(client.tokenProvider.func, mockFetch)
+        self.assertEqual(client.tokenProvider.keywords.get('domain'), '33.fastfilelink.com')
 
     def testAsyncTunnelThreadReconnectsWithSamePort(self):
         resultQueue = queue.Queue()

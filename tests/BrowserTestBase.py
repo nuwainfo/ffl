@@ -190,6 +190,7 @@ class BrowserTestBase(FastFileLinkTestBase):
         if not chromeBinary:
             self._raiseMissingBrowser("chrome")
 
+        chromeBinary = self._resolveBrowserBinaryPath("chrome", chromeBinary)
         options.binary_location = chromeBinary
         print(f"[Test] Using Chrome binary: {chromeBinary}")
 
@@ -222,7 +223,7 @@ class BrowserTestBase(FastFileLinkTestBase):
         
         versionMain = self._getChromeDriverVersionMain()
         if useStandardChromeDriver:
-            driver = webdriver.Chrome(options=options, service=ChromeService())
+            driver = webdriver.Chrome(options=options, service=self._createChromeService())
         elif versionMain is not None:
             print(f"[Test] Using ChromeDriver major version {versionMain}")
             driver = uc.Chrome(options=options, version_main=versionMain)
@@ -524,6 +525,7 @@ class BrowserTestBase(FastFileLinkTestBase):
         if self._isHeadlessEnabled():
             firefoxOptions.add_argument('--headless')
 
+        firefoxBinary = self._resolveBrowserBinaryPath("firefox", firefoxBinary)
         firefoxOptions.binary_location = firefoxBinary
         print(f"[Test] Using Firefox binary: {firefoxBinary}")
 
@@ -541,10 +543,19 @@ class BrowserTestBase(FastFileLinkTestBase):
             firefoxOptions.set_preference("security.mixed_content.block_display_content", False)
             firefoxOptions.set_preference("security.insecure_connection_text.enabled", False)
 
-        service = FirefoxService(executable_path=geckoDriverPath)
+        service = self._createFirefoxService(geckoDriverPath)
         driver = webdriver.Firefox(service=service, options=firefoxOptions)
         self.activeDrivers.append(driver)
         return driver
+
+    def _resolveBrowserBinaryPath(self, browserName, binaryPath):
+        return binaryPath
+
+    def _createChromeService(self):
+        return ChromeService()
+
+    def _createFirefoxService(self, geckoDriverPath):
+        return FirefoxService(executable_path=geckoDriverPath)
 
     def _attachConsoleMirror(self, driver):
         """Attach console log mirroring to capture browser console logs in window.__TEST_LOGS__

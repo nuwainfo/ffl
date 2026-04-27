@@ -753,6 +753,35 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
                     : `delivered: ${delivered} (size unknown)`;
                 log('[ProgressSW] Transform stream completed,', completionDesc);
 
+                const prematureEOFDetected = isValidSize(resolvedTotal) && delivered < resolvedTotal;
+                if (prematureEOFDetected) {
+                    const missingBytes = resolvedTotal - delivered;
+                    log(
+                        '[ProgressSW] Premature EOF detected in TransformStream path:',
+                        `delivered=${delivered}, expected=${resolvedTotal}, missing=${missingBytes}`
+                    );
+
+                    try {
+                        broadcast({
+                            type: 'download-premature-eof',
+                            id: downloadId,
+                            sent: delivered,
+                            total: resolvedTotal,
+                            missingBytes,
+                            serverId: serverDownloadId
+                        });
+                    } catch (broadcastError) {
+                        console.error('[ProgressSW] Premature EOF broadcast failed:', broadcastError);
+                    }
+
+                    resolveDone();
+
+                    if (e2eeEnabled) {
+                        e2eeContexts.delete(downloadId);
+                    }
+                    return;
+                }
+
                 try {
                     broadcast({
                         type: 'download-complete',

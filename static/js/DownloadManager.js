@@ -33,6 +33,8 @@ const dmT = (typeof window !== 'undefined' && typeof window.t === 'function') ? 
     return defaultValue || key;
 };
 
+const DEFAULT_MAX_AUTOMATIC_WRITER_RESUME_ATTEMPTS = 8;
+
 /**
  * AuthGateRegistry — collects auth gates (pickup code, pubkey, E2EE key, …) and runs them
  * in sequence before invoking onUnlockedCallback. Decoupled from DownloadManager so that
@@ -705,6 +707,27 @@ class DownloadManager {
         // Firefox hybrid strategy configuration
         this.FF_SW_LIMIT = options.ffSwLimit || 512 * 1024 * 1024; // 512MB default threshold
         
+        // Debug-friendly route profiles. Keep route selection centralized so we can
+        // test different download paths without scattering ad-hoc query handling.
+        this.DOWNLOAD_ROUTE_PROFILES = Object.freeze({
+            auto: Object.freeze({
+                name: 'auto',
+                mode: null,
+                description: 'Browser-default route selection'
+            }),
+            sw: Object.freeze({
+                name: 'sw',
+                mode: 'sw',
+                description: 'Force Service Worker TransformStream route'
+            }),
+            pass: Object.freeze({
+                name: 'pass',
+                mode: 'pass',
+                description: 'Force browser passthrough route'
+            })
+        });
+        this.routeOverride = this.getRequestedRouteProfile();
+        
         // Service Worker configuration
         this.serviceWorkerPath = options.serviceWorkerPath || '/static/js/ProgressServiceWorker.js';
         this.serviceWorkerScope = options.serviceWorkerScope || '/';
@@ -753,12 +776,16 @@ class DownloadManager {
         this.isTabHidden = document.hidden || false; // Track visibility state
         this.checksumVerified = false;
         this.pendingChecksumResult = null;
+        this.writerAutoResumeUsed = false;
 
         // Server-assigned download ID for POST /complete ACK (relay truncation fix)
         this.serverDownloadId = null;
 
         // Resume support state
         this.resumeConfig = null;
+        this.maxAutomaticWriterResumeAttempts = Number.isFinite(options.maxAutomaticWriterResumeAttempts)
+            ? Math.max(0, options.maxAutomaticWriterResumeAttempts)
+            : DEFAULT_MAX_AUTOMATIC_WRITER_RESUME_ATTEMPTS;
         
         // Configurable adaptive unlock delay options
         this.ADAPTIVE_DELAY_CONFIG = options.adaptiveDelayConfig || {
@@ -820,6 +847,103 @@ class DownloadManager {
 
     // ============ Size Utility Functions ============
 
+    getFileSizeFromMetadata() {
+        const fileSizeElement = document.getElementById('fileSize');
+        if (!fileSizeElement) {
+            return 0;
+        }
+
+        const sizeText = fileSizeElement.textContent || fileSizeElement.innerText || '0';
+        const size = parseInt(sizeText.trim(), 10);
+        return isNaN(size) ? 0 : size;
+    }
+
+    buildAutoDownloadPlan(size) {
+        if (!this.isFirefox) {
+            return { browser: 'chromium', size, mode: 'sw' };
+        }
+
+        // Firefox's Service Worker TransformStream download route can
+        // prematurely appear as completed while the payload is still incomplete.
+        // Track upstream at:
+        // https://bugzilla.mozilla.org/show_bug.cgi?id=2033956
+        if (this.isValidSize(size) && size <= this.FF_SW_LIMIT) {
+            return { browser: 'firefox', size, mode: 'sw' };
+        }
+
+        return { browser: 'firefox', size, mode: 'pass' };
+    }
+
+    normalizeRouteProfileValue(value) {
+        if (!value) {
+            return null;
+        }
+
+        const normalized = String(value).trim().toLowerCase();
+        const aliases = {
+            auto: 'auto',
+            default: 'auto',
+            sw: 'sw',
+            transform: 'sw',
+            transformstream: 'sw',
+            firefox_sw: 'sw',
+            'firefox-sw': 'sw',
+            pass: 'pass',
+            passthrough: 'pass',
+            ff_pass: 'pass',
+            'ff-pass': 'pass',
+            firefox_pass: 'pass',
+            'firefox-pass': 'pass'
+        };
+
+        return aliases[normalized] || null;
+    }
+
+    getRequestedRouteProfile() {
+        const searchParams = new URLSearchParams(window.location.search || '');
+        const rawValue = searchParams.get('route');
+        if (rawValue) {
+            const profileName = this.normalizeRouteProfileValue(rawValue);
+            if (!profileName) {
+                this.log('DownloadManager', `Ignoring unknown route profile override from route: ${rawValue}`);
+                return null;
+            }
+
+            return {
+                key: 'route',
+                rawValue,
+                profile: this.DOWNLOAD_ROUTE_PROFILES[profileName]
+            };
+        }
+
+        return null;
+    }
+
+    applyRouteProfile(plan, routeOverride) {
+        const resolvedPlan = {
+            ...plan,
+            routeProfile: 'auto',
+            routeProfileSource: 'planner'
+        };
+
+        if (!routeOverride || !routeOverride.profile || !routeOverride.profile.mode) {
+            return resolvedPlan;
+        }
+
+        const overriddenPlan = {
+            ...resolvedPlan,
+            mode: routeOverride.profile.mode,
+            routeProfile: routeOverride.profile.name,
+            routeProfileSource: routeOverride.key
+        };
+
+        this.log(
+            'DownloadManager',
+            `Applying route profile override: ${routeOverride.profile.name} (from ${routeOverride.key}=${routeOverride.rawValue})`
+        );
+        return overriddenPlan;
+    }
+
     /**
      * Check if size represents unknown/indeterminate size
      * @param {number} size - File size to check
@@ -865,33 +989,13 @@ class DownloadManager {
      * @returns {Object} Plan object with browser, size, and mode
      */
     getPlannedMode({ uid, filename } = {}) {
-        // Get file size from hidden metadata elements
-        let size = 0;
-        const fileSizeElement = document.getElementById('fileSize');
-        if (fileSizeElement) {
-            const sizeText = fileSizeElement.textContent || fileSizeElement.innerText || '0';
-            size = parseInt(sizeText.trim(), 10);
-            if (isNaN(size)) {
-                size = 0;
-            }
-        }
+        const size = this.getFileSizeFromMetadata();
 
         const sizeDesc = this.isUnknownSize(size) ? 'unknown' : this.formatBytes(size);
         this.log('DownloadManager', `File size detected from metadata: ${size} bytes (${sizeDesc})`);
 
-        // Decision logic (unified)
-        if (!this.isFirefox) {
-            // Chromium: Always use SW + Transform (handles unknown size via indeterminate progress)
-            return { browser: 'chromium', size, mode: 'sw' };
-        }
-
-        // Firefox: Use SW for small files, pass-through for large/unknown
-        if (this.isValidSize(size) && size <= this.FF_SW_LIMIT) {
-            return { browser: 'firefox', size, mode: 'sw' };
-        }
-
-        // Firefox large/unknown: pass-through (browser handles download directly)
-        return { browser: 'firefox', size, mode: 'pass' };
+        const autoPlan = this.buildAutoDownloadPlan(size);
+        return this.applyRouteProfile(autoPlan, this.routeOverride);
     }
     
     parsePositiveNumber(value) {
@@ -1191,6 +1295,11 @@ class DownloadManager {
                         this.serverDownloadId = evt.data.serverId;
                     }
                     this.handleDownloadComplete(total);
+                } else if (type === 'download-premature-eof') {
+                    this.log(
+                        'DownloadManager',
+                        `SW premature EOF detected: sent=${evt.data.sent}/${evt.data.total}, missing=${evt.data.missingBytes}`
+                    );
                 } else if (type === 'download-stall') {
                     this.log('DownloadManager', `SW stall [${evt.data.phase}]: delivered=${evt.data.delivered}/${evt.data.total} (${evt.data.percent}%), probe=${evt.data.probeStatus}, rangeOk=${evt.data.rangeOk}, stallMs=${evt.data.stallDurationMs}`);
                 } else if (type === 'download-error') {
@@ -1702,21 +1811,42 @@ class DownloadManager {
 
         try {
             this.log('DownloadManager', `Registering Service Worker: ${this.serviceWorkerPath} with scope: ${this.serviceWorkerScope}`);
-            const reg = await navigator.serviceWorker.register(this.serviceWorkerPath, { scope: this.serviceWorkerScope });
 
-            await navigator.serviceWorker.ready;
+            const reg = await navigator.serviceWorker.register(this.serviceWorkerPath, {
+                scope: this.serviceWorkerScope
+            });
 
+            // Skip navigator.serviceWorker.ready — in Firefox it blocks 1-2s waiting for SW
+            // activation even when clients.claim() has already fired. Instead use controller
+            // directly: already set means the page is controlled (may be an older SW version,
+            // but that is acceptable since ProgressServiceWorker.js rarely changes); not set
+            // means we wait for controllerchange which fires right after clients.claim().
             if (!navigator.serviceWorker.controller) {
                 this.log('DownloadManager', 'Waiting for SW to take control...');
 
-                await new Promise((resolve) => {
-                    const onCtl = () => {
+                await new Promise((resolve, reject) => {
+                    if (navigator.serviceWorker.controller) { resolve(); return; }
+
+                    const timeout = setTimeout(() => {
                         navigator.serviceWorker.removeEventListener('controllerchange', onCtl);
+                        reject(new Error('Timed out waiting for Service Worker controllerchange'));
+                    }, 5000);
+
+                    const onCtl = () => {
+                        clearTimeout(timeout);
                         this.log('DownloadManager', 'SW now controlling');
                         resolve();
                     };
+
                     navigator.serviceWorker.addEventListener('controllerchange', onCtl, { once: true });
                 });
+            }
+
+            const controller = navigator.serviceWorker.controller;
+
+            if (!controller) {
+                this.log('DownloadManager', 'SW registered but page is still uncontrolled');
+                return false;
             }
 
             this.log('DownloadManager', 'Progress SW is ready and controlling');
@@ -1724,7 +1854,7 @@ class DownloadManager {
             // Invoke callback when Service Worker is ready and WAIT for it to complete
             if (this.onServiceWorkerReadyCallback) {
                 try {
-                    await this.onServiceWorkerReadyCallback(navigator.serviceWorker.controller);
+                    await this.onServiceWorkerReadyCallback(controller);
                 } catch (e) {
                     this.log('DownloadManager', 'Error in onServiceWorkerReadyCallback:', e);
                 }
@@ -1759,157 +1889,277 @@ class DownloadManager {
         return this.activeDlId;
     }
 
+    buildAutomaticWriterResumeUrl(urlPath, resumeConfig = null) {
+        const urlObj = new URL(urlPath, window.location.origin);
+
+        // Writer resume still needs the Service Worker for auth headers and Range
+        // construction, but the page is now consuming the response stream directly
+        // and appending it to the existing writer. Keep the SW in passthrough mode
+        // so Firefox does not wrap the resumed long-lived body in TransformStream
+        // again, which can report a premature EOF as a completed native download.
+        urlObj.searchParams.set('ff_pass', '1');
+
+        if (resumeConfig && resumeConfig.rangeStart > 0) {
+            urlObj.searchParams.set('resume_start', String(resumeConfig.rangeStart));
+        } else {
+            urlObj.searchParams.delete('resume_start');
+        }
+
+        if (resumeConfig && resumeConfig.baseBytes > 0) {
+            urlObj.searchParams.set('resume_base', String(resumeConfig.baseBytes));
+        } else {
+            urlObj.searchParams.delete('resume_base');
+        }
+
+        if (resumeConfig && resumeConfig.skipBytes > 0) {
+            urlObj.searchParams.set('resume_skip', String(resumeConfig.skipBytes));
+        } else {
+            urlObj.searchParams.delete('resume_skip');
+        }
+
+        if (resumeConfig && resumeConfig.expectedSize > 0) {
+            urlObj.searchParams.set('resume_expected', String(resumeConfig.expectedSize));
+        } else {
+            urlObj.searchParams.delete('resume_expected');
+        }
+
+        urlObj.searchParams.set('ff_auto_resume', '1');
+        return urlObj.pathname + urlObj.search;
+    }
+
+    buildAutomaticWriterResumeConfig(baseBytes, expectedSize) {
+        if (!Number.isFinite(baseBytes) || baseBytes <= 0) {
+            return null;
+        }
+
+        return this.normalizeResumeOptions({
+            baseBytes,
+            rangeStart: baseBytes,
+            skipBytes: 0,
+            expectedSize: expectedSize || 0
+        });
+    }
+
+    resolveWriterTransferTotal(primaryTotal, resumeConfig = null) {
+        const candidates = [
+            primaryTotal,
+            resumeConfig && resumeConfig.expectedSize,
+            this.totalBytesHint
+        ].filter(value => typeof value === 'number' && value > 0);
+
+        return candidates.length ? Math.max(...candidates) : 0;
+    }
+
+    createPrematureEOFError(receivedBytes, expectedSize) {
+        const error = new Error(
+            `Premature EOF while reading download stream: received ${receivedBytes} of ${expectedSize} bytes`
+        );
+        error.code = 'FFL_PREMATURE_EOF';
+        error.receivedBytes = receivedBytes;
+        error.expectedSize = expectedSize;
+        return error;
+    }
+
     async fetchToWriter(urlPath, writer, needsDecryption, resume = null, progressCallback = null, checksumVerifier = null) {
-        if (needsDecryption) {
-            this.log('DownloadManager', 'E2EE decryption will be applied during resume (bypassing Service Worker)');
+        this.writerAutoResumeUsed = false;
 
-            if (!this.httpDecryptor) {
-                const error = 'E2EE resume requires httpDecryptor (should have been created upfront)';
-                this.log('DownloadManager', 'ERROR:', error);
-                throw new Error(error);
-            }
+        let activeUrlPath = urlPath;
+        let activeResume = resume;
+        let activeProgressCallback = progressCallback;
+        let finalTotalSize = 0;
+        let attemptIndex = 0;
 
-            this.log('DownloadManager', 'Using existing HTTPDecryptor instance from constructor');
+        while (true) {
+            if (needsDecryption) {
+                this.log('DownloadManager', 'E2EE decryption will be applied during resume (bypassing Service Worker)');
 
-            // Set resume position if needed
-            if (resume && typeof resume.rangeStart === 'number') {
-                this.httpDecryptor.setResumeState(resume.rangeStart);
-                this.log('DownloadManager', `HTTPDecryptor resume position set to: ${resume.rangeStart}`);
-            }
-        }
-
-        // Prepare Range header if resuming
-        const headers = new Headers();
-        let wantRange = false;
-        if (resume && Number.isFinite(resume.rangeStart) && resume.rangeStart > 0) {
-            headers.set('Range', `bytes=${resume.rangeStart}-`);
-            wantRange = true;
-            this.log('DownloadManager', `Resume request: Range bytes=${resume.rangeStart}-, skipBytes=${resume.skipBytes || 0}`);
-        }
-        if (this.authHeaders) {
-            for (const [key, value] of Object.entries(this.authHeaders)) {
-                headers.set(key, value);
-            }
-        }
-
-        // This fetch will trigger ProgressServiceWorker if SW is available.
-        const response = await fetch(urlPath, { headers, cache: 'no-cache' });
-
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        // Capture server-assigned download ID for POST /complete ACK (relay truncation fix).
-        // Only reachable when SW is NOT active (SW path gets serverId via broadcast instead).
-        const serverDlId = response.headers.get('FFL-DownloadId');
-        if (serverDlId) {
-            this.serverDownloadId = serverDlId;
-        }
-
-        // Validate 206 / Content-Range for resume and get total size
-        let totalSizeFromServer = 0;
-        let contentRange = response.headers.get('Content-Range');
-        if (wantRange) {
-            if (response.status === 206 && contentRange) {
-                // e.g. Content-Range: bytes 20709376-104857599/104857600
-                const m = contentRange.match(/^bytes\s+(\d+)-(\d+)\/(\d+)$/i);
-                if (m) {
-                    const start = parseInt(m[1], 10);
-                    const end = parseInt(m[2], 10);
-                    const full = parseInt(m[3], 10);
-                    if (start !== resume.rangeStart) {
-                        throw new Error(`Server returned mismatched range start: ${start} != ${resume.rangeStart}`);
-                    }
-                    totalSizeFromServer = full;
-                    this.totalBytesHint = Math.max(this.totalBytesHint || 0, full);
-                    this.log('DownloadManager', `206 Partial Content: ${contentRange}, total=${full}`);
+                if (!this.httpDecryptor) {
+                    const error = 'E2EE resume requires httpDecryptor (should have been created upfront)';
+                    this.log('DownloadManager', 'ERROR:', error);
+                    throw new Error(error);
                 }
-            } else if (response.status === 200) {
-                // Server doesn't support Range; fallback to client-side discard
-                this.log('DownloadManager', 'WARNING: Server ignored Range header (200), using client-side discard');
+
+                this.log('DownloadManager', 'Using existing HTTPDecryptor instance from constructor');
+                if (activeResume && typeof activeResume.rangeStart === 'number') {
+                    this.httpDecryptor.setResumeState(activeResume.rangeStart);
+                    this.log('DownloadManager', `HTTPDecryptor resume position set to: ${activeResume.rangeStart}`);
+                }
+            }
+
+            const headers = new Headers();
+            let wantRange = false;
+            if (activeResume && Number.isFinite(activeResume.rangeStart) && activeResume.rangeStart > 0) {
+                headers.set('Range', `bytes=${activeResume.rangeStart}-`);
+                wantRange = true;
+                this.log(
+                    'DownloadManager',
+                    `Resume request: Range bytes=${activeResume.rangeStart}-, skipBytes=${activeResume.skipBytes || 0}`
+                );
+            }
+            if (this.authHeaders) {
+                for (const [key, value] of Object.entries(this.authHeaders)) {
+                    headers.set(key, value);
+                }
+            }
+
+            const response = await fetch(activeUrlPath, { headers, cache: 'no-cache' });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            const serverDlId = response.headers.get('FFL-DownloadId');
+            if (serverDlId) {
+                this.serverDownloadId = serverDlId;
+            }
+
+            let totalSizeFromServer = 0;
+            const contentRange = response.headers.get('Content-Range');
+            if (wantRange) {
+                if (response.status === 206 && contentRange) {
+                    const match = contentRange.match(/^bytes\s+(\d+)-(\d+)\/(\d+)$/i);
+                    if (match) {
+                        const start = parseInt(match[1], 10);
+                        const full = parseInt(match[3], 10);
+                        if (start !== activeResume.rangeStart) {
+                            throw new Error(`Server returned mismatched range start: ${start} != ${activeResume.rangeStart}`);
+                        }
+                        totalSizeFromServer = full;
+                        this.totalBytesHint = Math.max(this.totalBytesHint || 0, full);
+                        this.log('DownloadManager', `206 Partial Content: ${contentRange}, total=${full}`);
+                    }
+                } else if (response.status === 200) {
+                    this.log('DownloadManager', 'WARNING: Server ignored Range header (200), using client-side discard');
+                    const len = response.headers.get('Content-Length');
+                    if (len) {
+                        totalSizeFromServer = parseInt(len, 10);
+                    }
+                } else {
+                    throw new Error(`Unexpected response status for ranged request: ${response.status}`);
+                }
+            } else {
                 const len = response.headers.get('Content-Length');
                 if (len) {
                     totalSizeFromServer = parseInt(len, 10);
                 }
-            } else {
-                throw new Error(`Unexpected response status for ranged request: ${response.status}`);
-            }
-        } else {
-            // No range request, get Content-Length for progress
-            const len = response.headers.get('Content-Length');
-            if (len) {
-                totalSizeFromServer = parseInt(len, 10);
-            }
-        }
-
-        this.log('DownloadManager', 'Fetch response received, reading stream');
-
-        // Calculate initial sent bytes (for resume scenarios)
-        const baseBytes = resume?.baseBytes || 0;
-
-        // Read the stream and write to the writer
-        const reader = response.body.getReader();
-        let totalWritten = 0;                 // Bytes written in this HTTP session
-        let firstChunk = true;
-        let bytesToDiscard = resume?.skipBytes ? Math.max(0, resume.skipBytes) : 0;
-
-        while (true) {
-            const { done, value } = await reader.read();
-
-            if (done) {
-                this.log('DownloadManager', 'Stream read complete, total written:', totalWritten);
-                break;
             }
 
-            let chunk = value;
+            this.log('DownloadManager', 'Fetch response received, reading stream');
 
-            if (checksumVerifier) {
-                checksumVerifier.update(chunk);
-            }
+            const baseBytes = activeResume?.baseBytes || 0;
+            const expectedTotal = this.resolveWriterTransferTotal(totalSizeFromServer, activeResume);
+            const reader = response.body.getReader();
+            let totalWritten = 0;
+            let firstChunk = true;
+            let bytesToDiscard = activeResume?.skipBytes ? Math.max(0, activeResume.skipBytes) : 0;
 
-            // Apply E2EE decryption only when resuming (bypassing Service Worker)
-            // Normal path: Service Worker already decrypts chunks
-            if (needsDecryption) {
+            try {
+                while (true) {
+                    let readResult;
+                    try {
+                        readResult = await reader.read();
+                    } catch (readError) {
+                        const error = new Error(`Reader failed while streaming download: ${readError.message || readError}`);
+                        error.code = 'FFL_STREAM_READ_ERROR';
+                        error.cause = readError;
+                        error.receivedBytes = baseBytes + totalWritten;
+                        error.expectedSize = expectedTotal;
+                        throw error;
+                    }
+
+                    const { done, value } = readResult;
+                    if (done) {
+                        const receivedBytes = baseBytes + totalWritten;
+                        if (expectedTotal > 0 && receivedBytes < expectedTotal) {
+                            throw this.createPrematureEOFError(receivedBytes, expectedTotal);
+                        }
+                        this.log('DownloadManager', 'Stream read complete, total written:', totalWritten);
+                        finalTotalSize = Math.max(finalTotalSize, totalSizeFromServer, expectedTotal);
+                        break;
+                    }
+
+                    let chunk = value;
+                    if (checksumVerifier) {
+                        checksumVerifier.update(chunk);
+                    }
+
+                    if (needsDecryption) {
+                        try {
+                            const encryptedSize = chunk.byteLength;
+                            chunk = await this.httpDecryptor.decryptChunk(chunk);
+                            this.log(
+                                'DownloadManager',
+                                `E2EE resume: Chunk decrypted, encrypted size: ${encryptedSize}, decrypted size: ${chunk.byteLength}`
+                            );
+                        } catch (decryptError) {
+                            this.log('DownloadManager', 'ERROR: E2EE decryption failed during resume:', decryptError);
+                            throw new Error('E2EE decryption failed: ' + decryptError.message);
+                        }
+                    }
+
+                    if (firstChunk && bytesToDiscard > 0) {
+                        if (chunk.byteLength <= bytesToDiscard) {
+                            this.log(
+                                'DownloadManager',
+                                `Discarding entire chunk (${chunk.byteLength} bytes), remaining=${bytesToDiscard - chunk.byteLength}`
+                            );
+                            bytesToDiscard -= chunk.byteLength;
+                            continue;
+                        }
+
+                        this.log(
+                            'DownloadManager',
+                            `Discarding ${bytesToDiscard} bytes from first chunk, keeping ${chunk.byteLength - bytesToDiscard}`
+                        );
+                        chunk = chunk.subarray(bytesToDiscard);
+                        bytesToDiscard = 0;
+                    }
+                    firstChunk = false;
+
+                    await writer.write(chunk);
+                    totalWritten += chunk.byteLength;
+
+                    if (activeProgressCallback) {
+                        activeProgressCallback(baseBytes + totalWritten, expectedTotal || totalSizeFromServer);
+                    }
+                }
+            } catch (transferError) {
                 try {
-                    const encryptedSize = chunk.byteLength;
-                    chunk = await this.httpDecryptor.decryptChunk(chunk);
-                    this.log('DownloadManager', `E2EE resume: Chunk decrypted, encrypted size: ${encryptedSize}, decrypted size: ${chunk.byteLength}`);
-                } catch (e) {
-                    this.log('DownloadManager', 'ERROR: E2EE decryption failed during resume:', e);
-                    throw new Error('E2EE decryption failed: ' + e.message);
+                    await reader.cancel(transferError);
+                } catch (cancelError) {
+                    this.log('DownloadManager', 'Reader cancel after failure did not complete cleanly:', cancelError);
                 }
-            }
 
-            // Only discard bytes in first chunk(s) for client-side resume fallback
-            if (firstChunk && bytesToDiscard > 0) {
-                if (chunk.byteLength <= bytesToDiscard) {
-                    // Discard entire chunk
-                    this.log('DownloadManager', `Discarding entire chunk (${chunk.byteLength} bytes), remaining=${bytesToDiscard - chunk.byteLength}`);
-                    bytesToDiscard -= chunk.byteLength;
-                    continue; // Don't set firstChunk=false yet, may need more discarding
-                } else {
-                    // Discard first part, keep rest
-                    this.log('DownloadManager', `Discarding ${bytesToDiscard} bytes from first chunk, keeping ${chunk.byteLength - bytesToDiscard}`);
-                    chunk = chunk.subarray(bytesToDiscard);
-                    bytesToDiscard = 0;
+                const writtenBytes = baseBytes + totalWritten;
+                const retryExpectedSize = expectedTotal || this.resolveWriterTransferTotal(totalSizeFromServer, activeResume);
+                const canRetry = attemptIndex < this.maxAutomaticWriterResumeAttempts;
+
+                if (!canRetry || (!writtenBytes && !retryExpectedSize)) {
+                    throw transferError;
                 }
-            }
-            firstChunk = false;
 
-            // Write chunk to the existing StreamSaver writer
-            await writer.write(chunk);
-            totalWritten += chunk.byteLength;
+                attemptIndex += 1;
+                this.writerAutoResumeUsed = true;
+                activeResume = this.buildAutomaticWriterResumeConfig(writtenBytes, retryExpectedSize);
+                this.resumeConfig = activeResume;
+                activeUrlPath = this.buildAutomaticWriterResumeUrl(urlPath, activeResume);
+                if (!activeProgressCallback) {
+                    activeProgressCallback = this.handleDownloadProgress.bind(this);
+                }
 
-            // Report progress if callback provided (no-SW case)
-            if (progressCallback) {
-                const currentSent = baseBytes + totalWritten;
-                progressCallback(currentSent, totalSizeFromServer);
+                this.log(
+                    'DownloadManager',
+                    `Automatic writer resume triggered (${attemptIndex}/${this.maxAutomaticWriterResumeAttempts}) after ${writtenBytes} bytes:`,
+                    transferError
+                );
+                this.log('DownloadManager', 'Automatic writer resume URL:', activeUrlPath);
+                continue;
             }
+
+            break;
         }
 
-        // Close the writer (completes the file)
         await writer.close();
-        this.log('DownloadManager', 'Writer closed successfully, HTTP bytes written:', totalWritten);
+        this.log('DownloadManager', 'Writer closed successfully after writer download/resume flow');
 
         if (checksumVerifier) {
             try {
@@ -1920,8 +2170,7 @@ class DownloadManager {
             }
         }
 
-        // Return total size for caller to handle completion
-        return totalSizeFromServer;
+        return finalTotalSize;
     }
 
     triggerNativeDownloadLink(url) {
@@ -2030,7 +2279,18 @@ class DownloadManager {
                     null,  // Resume handled by SW
                     progressCallback,
                     null
-                ).catch(err => {
+                ).then(totalSize => {
+                    if (!this.writerAutoResumeUsed) {
+                        return totalSize;
+                    }
+
+                    this.handleDownloadComplete(totalSize || this.totalBytesHint || 0);
+                    if (this.pendingChecksumResult) {
+                        this.handleChecksumVerificationResult(this.pendingChecksumResult, 'http');
+                        this.pendingChecksumResult = null;
+                    }
+                    return totalSize;
+                }).catch(err => {
                     this.log('DownloadManager', 'Writer-based download failed:', err);
                     this.onDownloadErrorCallback && this.onDownloadErrorCallback(String(err));
                 });
@@ -2257,10 +2517,14 @@ class DownloadManager {
                 this.log('DownloadManager', 'Debug mode enabled - ServiceWorker will use verbose logging');
             }
 
-            // Add Firefox routing flag for large files (pass-through mode)
-            if (plan.browser === 'firefox' && plan.mode === 'pass') {
+            // Add passthrough routing flag when the selected route profile bypasses
+            // the TransformStream path and lets the browser consume the download directly.
+            if (plan.mode === 'pass') {
                 urlObj.searchParams.set('ff_pass', '1');
-                this.log('DownloadManager', `Firefox large/unknown file mode: pass-through (${this.formatBytes(plan.size) || 'unknown size'})`);
+                this.log(
+                    'DownloadManager',
+                    `Added ff_pass=1 for pass-through route (${plan.routeProfile || 'auto'}, ${this.formatBytes(plan.size) || 'unknown size'})`
+                );
             }
 
             // Add E2EE flag if decryption is enabled

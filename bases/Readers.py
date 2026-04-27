@@ -704,7 +704,7 @@ class SourceReader:
     @classmethod
     def build(
         cls, path, fileName: str = None, compression: str = None, excludeFilter: ExcludeFilter = None,
-        progressReporter: Optional[SourceReaderProgressReporter] = None
+        progressReporter: Optional[SourceReaderProgressReporter] = None, stdinCache: bool = True
     ) -> 'SourceReader':
         """
         Factory method to create appropriate SourceReader.
@@ -717,13 +717,14 @@ class SourceReader:
             compression: "store" or "deflate" (default: READER_FOLDER_COMPRESSION env var → "store")
             excludeFilter: Optional filter to exclude files/dirs by name during walk
             progressReporter: Optional progress reporter for reader-side preprocessing
+            stdinCache: If False, disable stdin caching (only applies when path == "-")
 
         Returns:
             SourceReader: Appropriate reader for the path type
         """
         # Handle stdin
         if path == "-":
-            return StdinSourceReader(path, fileName=fileName)
+            return StdinSourceReader(path, fileName=fileName, stdinCache=stdinCache)
 
         # Determine FileSystem
         flatRoot = False
@@ -1070,15 +1071,19 @@ class StdinSourceReader(CachingMixin, SourceReader):
         timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         return f"stdin-{timestamp}.bin"
 
-    def __init__(self, path: str, fileName=None):
+    def __init__(self, path: str, fileName=None, stdinCache=True):
         """
         Initialize StdinSourceReader
 
         Args:
             path: Path (should be "-" for stdin)
             fileName: Custom filename (string), callable that returns filename, or None for default
+            stdinCache: If False, disable caching; a second read will raise RuntimeError
         """
         super().__init__(path, fileName) # CachingMixin -> SourceReader
+        if not stdinCache:
+            self._cacheEnabled = False
+            
         self.stdin = sys.stdin.buffer # Binary mode for file data
         self.contentType = "application/octet-stream"
         self.size = None # Unknown size for streaming input

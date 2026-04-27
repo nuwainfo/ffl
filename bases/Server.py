@@ -1621,6 +1621,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         content = (content
             .replace(b'{{ EXTRA_HEAD_STYLES }}', b'')
             .replace(b'{{ PAGE_HEADER }}', b'')
+            .replace(b'{{ PAGE_TITLE }}', b'FastFileLink')
             .replace(b'{{ DOWNLOAD_CONTAINER_CLASS }}', b'main-banner')
             .replace(b'{{ TITLE_PRIMARY_CLASS }}', b'')
             .replace(b'{{ TITLE_ACCENT_CLASS }}', b'')
@@ -1763,21 +1764,24 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             staticServer = settingsGetter.getStaticServer()
             remoteUrl = f"{staticServer}{scriptPath}"
 
-            # Merge request headers if provided
-            headers = requestHeaders or {}
+            # Force identity encoding so the upstream returns plain bytes.
+            # Copying remote Content-Encoding (zstd/gzip) while requests may have
+            # already decoded the body causes Content-Length mismatches that break
+            # HTTP/2 streams with INTERNAL_ERROR.
+            headers = dict(requestHeaders or {})
+            headers['Accept-Encoding'] = 'identity'
 
             response = requests.get(remoteUrl, headers=headers, timeout=10)
             response.raise_for_status()
 
-            # Send response
+            content = response.content
+            contentType = response.headers.get('Content-Type', 'application/javascript')
+
             self.send_response(HTTPStatus.OK)
-
-            # Copy headers from the remote response
-            for header, value in response.headers.items():
-                self.send_header(header, value)
-
+            self.send_header('Content-Type', contentType)
+            self.send_header('Content-Length', str(len(content)))
             self.end_headers()
-            self.wfile.write(response.content)
+            self.wfile.write(content)
 
         except requests.RequestException as e:
             if fallbackToLocal:

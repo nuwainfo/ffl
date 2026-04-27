@@ -20,8 +20,11 @@
 import asyncio
 import queue
 import threading
+import time
 import urllib.parse
 import os
+
+from functools import partial
 
 import requests
 
@@ -30,7 +33,8 @@ from bases.Kernel import getLogger, FFLEvent
 
 # Set ONLY_BUILTIN_TUNNEL="True" if Features addon enabled if needed.
 BUILTIN_TUNNEL = os.getenv('BUILTIN_TUNNEL', '33.fastfilelink.com')
-TUNNEL_TOKEN_SERVER_URL = os.getenv('TUNNEL_TOKEN_SERVER_URL', 'https://fastfilelink.com')
+TUNNEL_TOKEN_SERVER_URL = os.getenv('TUNNEL_TOKEN_SERVER_URL', f'https://{BUILTIN_TUNNEL}')
+#TUNNEL_TOKEN_SERVER_URL = os.getenv('TUNNEL_TOKEN_SERVER_URL', f'https://fastfilelink.com')
 
 logger = getLogger(__name__)
 
@@ -40,26 +44,39 @@ class TunnelUnavailableError(Exception):
     pass
 
 
-def fetchTunnelToken():
+def _isTokenServerTunnel(serverURL):
+    return serverURL != 'https://fastfilelink.com' and serverURL.endswith('.fastfilelink.com')
+
+
+def fetchTunnelToken(domain=None):
     """Fetch tunnel authentication token from token server"""
-    serverURL = os.getenv(
-        'TUNNEL_TOKEN_SERVER_URL', TUNNEL_TOKEN_SERVER_URL
-    ) # Fetch again to make sure its final value.
+    serverURL = os.getenv('TUNNEL_TOKEN_SERVER_URL', TUNNEL_TOKEN_SERVER_URL)
 
-    try:
-        response = requests.get(f"{serverURL}/api/tunnel/token", timeout=10)
-        response.raise_for_status()
-        tokenData = response.json()
-        token = tokenData.get('token')
-        expiresIn = tokenData.get('expires_in', 300)
+    if domain and _isTokenServerTunnel(serverURL):
+        # Token server is a tunnel itself; use the selected tunnel's domain instead.
+        serverURL = f"https://{domain}"
 
-        logger.info(f"Retrieved tunnel token, expires in {expiresIn} seconds")
-        logger.debug(f"Token: {token}")
+    for attempt in range(3):
+        try:
+            response = requests.get(f"{serverURL}/api/tunnel/token", timeout=10)
+            if response.status_code == 429 and attempt < 2:
+                delay = 2 ** (attempt + 1)
+                logger.debug(f"Token endpoint rate-limited (429), retrying in {delay:.1f}s")
+                time.sleep(delay)
+                continue
 
-        return token
-    except Exception as e:
-        logger.error(f"Failed to fetch tunnel token from {TUNNEL_TOKEN_SERVER_URL}: {e}")
-        raise TunnelUnavailableError(f'Cannot fetch tunnel token: {e}')
+            response.raise_for_status()
+            tokenData = response.json()
+            token = tokenData.get('token')
+            expiresIn = tokenData.get('expires_in', 300)
+
+            logger.info(f"Retrieved tunnel token, expires in {expiresIn} seconds")
+            logger.debug(f"Token: {token}")
+
+            return token
+        except Exception as e:
+            logger.error(f"Failed to fetch tunnel token from {serverURL}: {e}")
+            raise TunnelUnavailableError(f'Cannot fetch tunnel token: {e}')
 
 
 class AsyncTunnelThread(threading.Thread):
@@ -218,22 +235,21 @@ class TunnelRunner:
             BoreClient: Configured client instance
         """
 
-        # Get tunnel configuration
-        # Use builtin tunnel domain
         domain = BUILTIN_TUNNEL
 
-        # Validate builtin tunnel reachable
-        try:
-            reachable = requests.get(f"https://{domain}/", timeout=5).text is not None
-        except Exception as e:
-            logger.error(f"Failed to verify tunnel server reachability: {e}")
-            raise TunnelUnavailableError('Cannot connect to tunnel server')
+        # When token comes from fastfilelink.com (not the bore server itself), a
+        # successful token fetch does not imply the bore server is reachable.
+        # Guard with an explicit connectivity check in that case only.
+        serverURL = os.getenv('TUNNEL_TOKEN_SERVER_URL', TUNNEL_TOKEN_SERVER_URL)
+        tokenFromBoreServer = _isTokenServerTunnel(serverURL)
+        if not tokenFromBoreServer:
+            try:
+                requests.get(f"https://{domain}/", timeout=5)
+            except Exception as e:
+                logger.error(f"Failed to verify tunnel server reachability: {e}")
+                raise TunnelUnavailableError('Cannot connect to tunnel server')
 
-        if not reachable:
-            raise TunnelUnavailableError('Cannot connect to tunnel server')
-
-        # Fetch authentication token from token server
-        secret = fetchTunnelToken()
+        secret = fetchTunnelToken(domain=domain)
 
         return BoreClient(
             localhost='127.0.0.1',
@@ -241,7 +257,7 @@ class TunnelRunner:
             remoteHost=domain,
             remotePort=0,
             secret=secret,
-            tokenProvider=fetchTunnelToken,
+            tokenProvider=partial(fetchTunnelToken, domain=domain),
             verbose=False,
             debug=False,
             useHttps=True,

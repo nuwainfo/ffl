@@ -27,6 +27,7 @@ import json
 import os
 import socket
 import ssl
+import threading
 import traceback
 import uuid
 
@@ -50,6 +51,31 @@ BORE_VERBOSE = os.getenv('BORE_VERBOSE', False)
 
 # SOCKS5 proxy support via environment variable
 SOCKS5_ENV_VAR = "FFL_TUNNEL_SOCKS5"
+
+class _SSLContextCache:
+    # ssl.create_default_context() loads the system trust store on first call.
+    # Cost varies by platform (~200ms Windows cert store, ~50ms Linux/macOS CA bundle).
+    # Caching it here means the cost is paid once per process, and warmSSLContext()
+    # can pay it early from a background thread.
+    _ctx = None
+    _lock = threading.Lock()
+
+    @classmethod
+    def get(cls):
+        if cls._ctx is None:
+            with cls._lock:
+                if cls._ctx is None:
+                    cls._ctx = ssl.create_default_context()
+        return cls._ctx
+
+    @classmethod
+    def warm(cls):
+        cls.get()
+
+
+def warmSSLContext():
+    """Pre-create the shared SSL context. Call from a background thread to pay the cost early."""
+    _SSLContextCache.warm()
 
 
 
@@ -193,7 +219,19 @@ class BoreClient:
         # Use environment variable for secret if not provided
         secret = secret or os.environ.get("BORE_SECRET")
         self._setSecret(secret)
-        
+
+        # Skip the first _refreshSecret() call when a fresh secret was supplied at
+        # construction time — avoids an unnecessary extra token round-trip on the
+        # initial connect().  Subsequent reconnects will refresh normally.
+        self._skipInitialRefresh = self.secret is not None
+
+        # Use the shared SSL context (created once; Windows cert store load ~200ms).
+        self._sslCtx = _SSLContextCache.get()
+
+        # Pre-connected TCP socket injected by the prefetch path to skip the TCP
+        # RTT inside connect().  Consumed once; reconnects do a fresh TCP connect.
+        self._preTcpSocket = None
+
         if not self.secret:
             logger.warning("No secret provided and BORE_SECRET environment variable not set")
 
@@ -203,6 +241,10 @@ class BoreClient:
 
     def _refreshSecret(self):
         if not callable(self.tokenProvider):
+            return
+
+        if self._skipInitialRefresh:
+            self._skipInitialRefresh = False
             return
 
         newSecret = self.tokenProvider()
@@ -292,6 +334,33 @@ class BoreClient:
             return None
 
         return host, port
+
+    @staticmethod
+    def openTcpConnectionBlocking(host, port, proxyConfig=None, timeout=NETWORK_TIMEOUT):
+        """Establish a TCP connection (optionally via SOCKS5 proxy) in blocking mode.
+
+        Returns a socket ready for asyncio adoption via open_connection(sock=..., ssl=...).
+        Returns None on failure so callers can fall back to a normal connect().
+        """
+        try:
+            if proxyConfig and proxyConfig.get('type') == 'socks5':
+                return BoreClient._connectViaSocks5Blocking(
+                    proxyConfig['host'], proxyConfig['port'], host, port, timeout
+                )
+            
+            envProxy = BoreClient._parseSocks5Env()
+            if envProxy:
+                proxyHost, proxyPort = envProxy
+                return BoreClient._connectViaSocks5Blocking(proxyHost, proxyPort, host, port, timeout)
+                
+            return socket.create_connection((host, port), timeout=timeout)
+        except Exception as e:
+            logger.debug(f"TCP pre-connect to {host}:{port} failed: {e}")
+            return None
+
+    def injectPreTcpSocket(self, sock):
+        """Inject a pre-connected TCP socket to skip the TCP RTT in connect()."""
+        self._preTcpSocket = sock
 
     @staticmethod
     def _recvExact(sock, n):
@@ -462,16 +531,30 @@ class BoreClient:
 
             logger.info(f"Connecting to {self.controlHost}:{self.controlPort}...")
 
-            # 1. Establish secure TLS connection (always HTTPS, optionally via SOCKS5)
+            # 1. Establish secure TLS connection (always HTTPS, optionally via SOCKS5).
+            #    When a pre-connected TCP socket was injected by the prefetch path,
+            #    adopt it directly (skipping the TCP RTT) and only do the TLS handshake.
             try:
-                sslCtx = ssl.create_default_context()
-                reader, writer = await self._openTlsConnection(
-                    self.controlHost,
-                    self.controlPort,
-                    sslCtx,
-                    serverHostname=self.controlHost,
-                    timeout=NETWORK_TIMEOUT,
-                )
+                preSock = self._preTcpSocket
+                self._preTcpSocket = None  # consume once; reconnects start fresh
+                if preSock is not None:
+                    reader, writer = await asyncio.wait_for(
+                        asyncio.open_connection(
+                            sock=preSock,
+                            ssl=self._sslCtx,
+                            server_hostname=self.controlHost,
+                        ),
+                        NETWORK_TIMEOUT,
+                    )
+                    logger.debug("Using pre-connected TCP socket (TCP RTT already paid)")
+                else:
+                    reader, writer = await self._openTlsConnection(
+                        self.controlHost,
+                        self.controlPort,
+                        self._sslCtx,
+                        serverHostname=self.controlHost,
+                        timeout=NETWORK_TIMEOUT,
+                    )
             except asyncio.TimeoutError:
                 logger.error(f"Connect timed-out after {NETWORK_TIMEOUT}s")
                 return False
@@ -580,11 +663,10 @@ class BoreClient:
 
             # 1. Establish secure data channel connection (always HTTPS, optionally via SOCKS5)
             try:
-                sslCtx = ssl.create_default_context()
                 remoteReader, remoteWriter = await self._openTlsConnection(
                     host,
                     port,
-                    sslCtx,
+                    self._sslCtx,
                     serverHostname=host,
                     timeout=NETWORK_TIMEOUT,
                 )

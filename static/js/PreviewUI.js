@@ -75,6 +75,7 @@
             this.overlay = null;
             this.viewer = null;
             this.extractor = null;
+            this._currentViewEntry = null;
 
             // Store getDownloadState function
             this.getDownloadState = options.getDownloadState || null;
@@ -377,6 +378,9 @@
                     <div class="zip-file-viewer-content">
                         <div class="zip-file-viewer-header">
                             <div class="zip-file-viewer-name" id="zip-viewer-name">${this.t('Download:zipPreview.file', 'File')}</div>
+                            <button class="zip-file-viewer-download" id="zip-viewer-download" title="${this.t('Download:zipPreview.actions.downloadFile', 'Download file')}">
+                                <i class="fas fa-download"></i>
+                            </button>
                             <button class="zip-file-viewer-close" id="zip-viewer-close">
                                 <i class="fas fa-times"></i>
                             </button>
@@ -453,6 +457,16 @@
                     this.closePreview();
                 }
             });
+
+            // Viewer download button
+            const viewerDownloadBtn = document.getElementById('zip-viewer-download');
+            if (viewerDownloadBtn) {
+                viewerDownloadBtn.addEventListener('click', () => {
+                    if (this._currentViewEntry) {
+                        this.downloadFile(this._currentViewEntry);
+                    }
+                });
+            }
 
             // Viewer close button
             const viewerCloseBtn = document.getElementById('zip-viewer-close');
@@ -1216,6 +1230,8 @@
         _showViewerModal(entry) {
             const viewer = document.getElementById('zip-file-viewer');
             const nameEl = document.getElementById('zip-viewer-name');
+
+            this._currentViewEntry = entry;
 
             if (viewer) {
                 viewer.classList.add('active');

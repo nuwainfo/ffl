@@ -1193,6 +1193,34 @@ class StdinCachingTest(unittest.TestCase):
         print("[Test] StdinSourceReader Range/offset read from cache successful")
 
 
+class StdinCacheOffTest(unittest.TestCase):
+    """Test StdinSourceReader with caching disabled (--stdin-cache off)"""
+
+    def testStdinCacheOffSecondReadRaises(self):
+        """Test that with caching off, a second iterChunks call raises RuntimeError"""
+
+        testData = b"Hello World from stdin! " * 1000 # ~24KB of data
+        mockStdin = io.BytesIO(testData)
+
+        reader = StdinSourceReader('-', stdinCache=False)
+        reader.stdin = mockStdin
+
+        self.assertFalse(reader._cacheEnabled, "Cache should be disabled")
+
+        # First read - should stream from stdin without caching
+        firstReadData = b''.join(reader.iterChunks(chunkSize=1024))
+        self.assertEqual(firstReadData, testData, "First read should return all stdin data")
+        self.assertTrue(reader._consumed, "Stdin should be marked as consumed")
+        self.assertFalse(reader._hasCache(), "No cache should exist when caching is disabled")
+        self.assertTrue(reader.consumed, "Reader should report consumed when cache is disabled")
+
+        # Second read - should raise RuntimeError because stdin is consumed and no cache
+        with self.assertRaises(RuntimeError, msg="Second read should raise RuntimeError when caching is off"):
+            b''.join(reader.iterChunks(chunkSize=1024))
+
+        print("[Test] StdinSourceReader cache-off second read raises RuntimeError successfully")
+
+
 class DeflateCachingTest(unittest.TestCase):
     """Test ZipDirSourceReader deflate mode caching functionality"""
 

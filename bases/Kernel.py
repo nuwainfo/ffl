@@ -45,7 +45,7 @@ from signalslot import Signal
 from sentry_sdk.integrations.logging import SentryHandler, LoggingIntegration
 from sentry_sdk.integrations import atexit as sentryAtexit
 
-PUBLIC_VERSION = '3.9.4'
+PUBLIC_VERSION = '3.9.5'
 
 # Map string levels to logging constants for standard level names
 LOG_LEVEL_MAPPING = {'DEBUG': logging.DEBUG, 'INFO': logging.INFO, 'WARNING': logging.WARNING, 'ERROR': logging.ERROR}
@@ -993,19 +993,27 @@ class StorageLocator(Singleton):
 
         return os.path.join(self._homeDir, filename)
 
-    def findConfig(self, filename, prefer=None):
+    def findConfig(self, filename, prefer=None, folder=None):
         """
         Find configuration file
         Alias for findStorage with better naming for config files
-        
+
         Args:
             filename: Name of the config file to find
             prefer: Preferred location (Location.CURRENT, Location.HOME, Location.PLATFORM)
-            
+            folder: If provided, return this subdirectory next to the config file,
+                    creating it if it does not exist.
+
         Returns:
-            Path to the config file (may not exist)
+            Path to the config file (may not exist), or the resolved subdirectory
+            path when folder is specified.
         """
-        return self.findStorage(filename, prefer=prefer)
+        path = self.findStorage(filename, prefer=prefer)
+        if folder is not None:
+            path = os.path.join(os.path.dirname(path), folder)
+            os.makedirs(path, exist_ok=True)
+            
+        return path
 
 
 class SecretGetter(Singleton):

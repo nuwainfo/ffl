@@ -18,6 +18,7 @@
 # limitations under the License.
 
 import concurrent.futures
+import os
 import shutil
 import tempfile
 import threading
@@ -49,12 +50,28 @@ class TunnelsIntegrationTest(unittest.TestCase):
                 # Fetch token dynamically for each test
                 print(f"[Test] Fetching token for {host}...")
                 try:
-                    secret = fetchTunnelToken()
+                    secret = fetchTunnelToken(domain=host)
                 except Exception as e:
-                    with lock:
-                        print(f"[❌ FAIL] {host} - Token fetch failed: {e}")
-                        results.append((host, False))
-                    return
+                    isJenkins = 'JENKINS_HOME' in os.environ
+                    isRateLimited = '429' in str(e)
+                    if isJenkins and isRateLimited:
+                        print(
+                            f"[⚠️  WARN] {host} - Token fetch returned 429 on Jenkins "
+                            f"(Jenkins itself may be on this server). "
+                            f"Falling back to fastfilelink.com token."
+                        )
+                        try:
+                            secret = fetchTunnelToken(domain='fastfilelink.com')
+                        except Exception as fallbackE:
+                            with lock:
+                                print(f"[❌ FAIL] {host} - Fallback token fetch also failed: {fallbackE}")
+                                results.append((host, False))
+                            return
+                    else:
+                        with lock:
+                            print(f"[❌ FAIL] {host} - Token fetch failed: {e}")
+                            results.append((host, False))
+                        return
                     
                 from tests.bases.BoreTest import BoreHttpsTest # isort:skip                 
                 

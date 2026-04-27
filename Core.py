@@ -680,7 +680,8 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
         excludeFilter = ExcludeFilter(args.exclude) if args.exclude else None
         progressReporter = ScanFolderProgressReporter.create(args.file)
         reader = SourceReader.build(
-            args.file, fileName=args.fileName, excludeFilter=excludeFilter, progressReporter=progressReporter
+            args.file, fileName=args.fileName, excludeFilter=excludeFilter, progressReporter=progressReporter,
+            stdinCache=(args.stdinCache != 'off')
         )
         size = reader.size # None means unknown size (e.g., stdin)
 
@@ -894,24 +895,26 @@ def processDownload(args):
         if args.authPassword:
             credentials = (args.authUser, args.authPassword)
 
+        logCallback = (lambda text: print(text, file=sys.stderr, flush=True)) if args.stdout else flushPrint
+
         # Create downloader and download file
-        downloader = WebRTCDownloader(loggerCallback=flushPrint)
-        resume = args.resume if hasattr(args, 'resume') else False
-        pickupCode = args.pickupCode if hasattr(args, 'pickupCode') else None
-        recipientPrivateKey = args.recipientPrivateKey if hasattr(args, 'recipientPrivateKey') else None
+        downloader = WebRTCDownloader(loggerCallback=logCallback)
         outputPath = downloader.downloadFile(
             args.url,
-            args.output,
+            "-" if args.stdout else args.output,
             credentials,
-            resume=resume,
-            pickupCode=pickupCode,
-            recipientPrivateKey=recipientPrivateKey
+            resume=args.resume,
+            pickupCode=args.pickupCode,
+            recipientPrivateKey=args.recipientPrivateKey
         )
 
-        # Don't print success message - progress bar already shows completion
         logger.debug(f"File downloaded successfully: {outputPath}")
-        # Print file path for test framework to parse
-        flushPrint(_('Downloaded: {outputPath}').format(outputPath=outputPath))
+        
+        if args.stdout:
+            logCallback(_('Download complete'))
+        else:
+            logCallback(_('Downloaded: {outputPath}').format(outputPath=outputPath))
+            
         return 0
 
     except Exception as e:
@@ -1006,6 +1009,11 @@ def runCLIMain():
     commandResult = processArgumentsAndCommands(args, shareSubparser=shareSubparser)
     if commandResult is not None:
         return commandResult
+
+    # Start prefetch immediately so tunnels API + token + SSL warm + TCP pre-connect
+    # all run concurrently with the version check network round-trip.
+    if settingsGetter.hasFeaturesSupport():
+        featureManager.startTunnelPrefetch(proxyConfig=proxyConfig)
 
     if not validateCompatibleWithServer():
         return 1

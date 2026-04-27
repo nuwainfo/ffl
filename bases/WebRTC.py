@@ -18,6 +18,7 @@
 # limitations under the License.
 
 import asyncio
+import contextlib
 import sys
 import threading
 import uuid
@@ -1158,8 +1159,12 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
 
     def _resolveOutputPath(self, outputPath: Optional[str], fileName: str) -> str:
         """Resolve output path handling directory vs file path cases"""
+        if outputPath == "-":
+            return "-"
+            
         if outputPath:
             return os.path.join(outputPath, fileName) if os.path.isdir(outputPath) else outputPath
+            
         return fileName
 
     def _sendHTTPRequest(
@@ -1258,6 +1263,9 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         Returns:
             Resume position in bytes (0 for new download)
         """
+        if filePath == "-":
+            return 0
+            
         if not os.path.exists(filePath):
             return 0
 
@@ -1289,12 +1297,14 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
     def _failDownload(self, context: dict, error: Exception, errorEvent: asyncio.Event):
         """Unified helper to handle download failure: close file and set error"""
         context['error'] = error
-        if context.get('outputFile'):
+        
+        if context.get('outputFile') and context['outputFile'] is not sys.stdout.buffer:
             try:
                 context['outputFile'].close()
                 context['outputFile'] = None
             except Exception as e:
                 logger.debug(f"Error closing file during download failure: {e}")
+                
         errorEvent.set()
 
     def _waitFutureInterruptibly(self, future: concurrent.futures.Future, pollInterval: float = 0.5):
@@ -1468,7 +1478,14 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             except Exception as e:
                 logger.warning(f"Failed to send ICE candidate: {e}")
 
-    def _startStatusPollingThread(self, baseURL: str, authHeaders: dict, stopEvent: threading.Event, errorQueue: deque):
+    def _startStatusPollingThread(
+        self,
+        baseURL: str,
+        authHeaders: dict,
+        stopEvent: threading.Event,
+        errorQueue: deque,
+        onError: Optional[Callable[[Exception], None]] = None
+    ):
         """
         Start background thread to poll server status for errors (unified for WebRTC and HTTP)
 
@@ -1511,6 +1528,13 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
 
                             # Add to error queue (thread-safe append, no lock needed)
                             errorQueue.append(exception)
+                            
+                            if onError:
+                                try:
+                                    onError(exception)
+                                except Exception as callbackError:
+                                    logger.debug(f"[STATUS_POLL] onError callback failed: {callbackError}")
+                                    
                             logger.debug("[STATUS_POLL] Error added to queue, stopping polling")
                             return
 
@@ -1645,9 +1669,9 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                 logger.debug("Simulating connection hang - ignoring data channel")
                 return
             logger.debug("Data channel accepted - setting up file transfer")
-            # Open file when data channel is established (append mode if resuming)
+            # Open file when data channel is established (append mode if resuming), or use stdout
             mode = 'ab' if resumePosition > 0 else 'wb'
-            context['outputFile'] = open(outputPath, mode)
+            context['outputFile'] = sys.stdout.buffer if outputPath == "-" else open(outputPath, mode)
 
             # Send START signal when channel opens
             def sendStartSignal():
@@ -1683,7 +1707,9 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                                         logger.debug(f"Wrote {len(finalData)} bytes from streamDecryptor.flush()")
 
                                 context['outputFile'].flush()
-                                context['outputFile'].close()
+                                
+                                if context['outputFile'] is not sys.stdout.buffer:
+                                    context['outputFile'].close()
 
                             self._finalizeTransferChecksumState(context['checksumState'])
 
@@ -1697,15 +1723,18 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                             downloadComplete.set()
                         elif data == "ERROR":
                             progress.write("Server reported error during transfer")
-                            if context['outputFile']:
+                            if context['outputFile'] and context['outputFile'] is not sys.stdout.buffer:
                                 context['outputFile'].close()
+                                
                             downloadComplete.set()
                         elif data.startswith("ERROR:"):
                             # Handle specific error codes from server (ERROR:STALE, ERROR:TIMEOUT)
                             errorType = data.split(":", 1)[1] if ":" in data else "UNKNOWN"
                             progress.write(f"Server connection error: {errorType}")
-                            if context['outputFile']:
+                            
+                            if context['outputFile'] and context['outputFile'] is not sys.stdout.buffer:
                                 context['outputFile'].close()
+                                
                             self._failDownload(context, RuntimeError(f"Server error: {errorType}"), errorEvent)
                         elif data == "PONG":
                             # Heartbeat response from server (no action needed)
@@ -2040,9 +2069,11 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                 logger.debug("WebRTC download cancelled, cleaning up...")
                 statusStopEvent.set()
                 await self._cancelTasks([pollingTask, completionTask, errorTask])
-                if context.get('outputFile'):
+                
+                if context.get('outputFile') and context['outputFile'] is not sys.stdout.buffer:
                     context['outputFile'].close()
                     context['outputFile'] = None
+                    
                 raise
             except Exception:
                 # On error, cancel polling and monitoring tasks
@@ -2187,10 +2218,33 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         session.mount("https://", adapter)
         session.mount("http://", adapter)
 
+        activeResponse = {'response': None}
+
+        def closeActiveResponseOnServerError(serverError):
+            response = activeResponse.get('response')
+            if response is None:
+                return
+
+            logger.debug(f"[HTTP] Closing active response after server error: {serverError}")
+            response.close()
+
+        def raiseQueuedServerErrorIfAny():
+            if statusErrorQueue:
+                serverError = statusErrorQueue[0]
+                logger.debug(f"[HTTP] Error found in queue: {serverError}")
+                statusStopEvent.set()
+                raise serverError
+
         # Start background thread for status polling
         statusStopEvent = threading.Event()
         statusErrorQueue = deque()
-        self._startStatusPollingThread(urlInfo.baseURL, downloadHeaders, statusStopEvent, statusErrorQueue)
+        self._startStatusPollingThread(
+            urlInfo.baseURL,
+            downloadHeaders,
+            statusStopEvent,
+            statusErrorQueue,
+            onError=closeActiveResponseOnServerError
+        )
 
         serverDownloadId = None
         try:
@@ -2199,6 +2253,9 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             with session.get(
                 downloadURL, headers=downloadHeaders, stream=True, timeout=(HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT)
             ) as response:
+                activeResponse['response'] = response
+                raiseQueuedServerErrorIfAny()
+
                 # Check status codes
                 if response.status_code not in (200, 206): # 206 is partial content for resume
                     raise RuntimeError(f"HTTP download failed: {response.status_code}")
@@ -2222,19 +2279,16 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                                 self._finishProgress(complete=False)
                                 progress = self._ensureProgress(fileSize, self._STATUS_HTTP_DOWNLOAD, resumePosition)
 
-                # Open file for writing (append mode if resuming)
+                # Open file for writing (append mode if resuming), or stream to stdout
                 mode = 'ab' if resumePosition > 0 else 'wb'
                 totalDownloaded = resumePosition # Start from resume position
 
-                with open(finalOutputPath, mode) as f:
+                ctx = contextlib.nullcontext(sys.stdout.buffer) if finalOutputPath == "-" else open(finalOutputPath, mode)
+                with ctx as f:
                     checksumState = self._createTransferChecksumState(verifyChecksum, checksumAlgorithm)
                     for chunk in response.iter_content(chunk_size=TRANSFER_CHUNK_SIZE):
                         # Check status error queue (lock-free, very fast - no performance impact)
-                        if statusErrorQueue:
-                            serverError = statusErrorQueue[0]
-                            logger.debug(f"[HTTP] Error found in queue: {serverError}")
-                            statusStopEvent.set()
-                            raise serverError
+                        raiseQueuedServerErrorIfAny()
 
                         if chunk: # Filter out keep-alive chunks
                             self._updateTransferChecksumState(checksumState, chunk)
@@ -2255,6 +2309,16 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                             progress.update(totalDownloaded, extraText="HTTP fallback")
 
         except requests.exceptions.RequestException as e:
+            if statusErrorQueue:
+                serverError = statusErrorQueue[0]
+                logger.debug(f"[HTTP] Request failed after server error: {serverError}")
+                statusStopEvent.set()
+                
+                if not sharedProgress:
+                    self._finishProgress(complete=False)
+                    
+                raise serverError
+                
             # Don't update progress to 100% on failure
             statusStopEvent.set()
             if not sharedProgress:
@@ -2279,13 +2343,17 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                 self._finishProgress(complete=False)
             raise RuntimeError(f"HTTP download failed: {e}")
         finally:
+            activeResponse['response'] = None
             statusStopEvent.set()
             session.close() # Clean up session resources
 
-        # Verify final file size (skip for generic URLs and unknown sizes)
-        finalSize = os.path.getsize(finalOutputPath)
-        if not urlInfo.isGenericURL and self._isPositiveSize(fileSize) and finalSize != fileSize:
-            raise RuntimeError(f"Download incomplete: {finalSize} != {fileSize} bytes")
+        # Verify final file size (skip for stdout and generic URLs and unknown sizes)
+        if finalOutputPath == "-":
+            finalSize = totalDownloaded
+        else:
+            finalSize = os.path.getsize(finalOutputPath)
+            if not urlInfo.isGenericURL and self._isPositiveSize(fileSize) and finalSize != fileSize:
+                raise RuntimeError(f"Download incomplete: {finalSize} != {fileSize} bytes")
 
         # Final progress update on success
         progress.update(finalSize, forceLog=True, extraText="HTTP fallback")

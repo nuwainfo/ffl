@@ -447,6 +447,13 @@ def configureCLIParser():
             help=_("Start VFS server and provide vfs:// URI instead of HTTPS link (P2P mode only, works with --port)"),
             dest="vfs"
         )
+        parser.add_argument(
+            "--stdin-cache",
+            choices=["on", "off"],
+            default="on",
+            help=_("Enable or disable stdin caching ('off' means a second read raises an error)"),
+            dest="stdinCache"
+        )
 
         # Allow addons to register additional arguments for share command
         FFLEvent.cliArgumentsShareOptionsRegister.trigger(parser=parser)
@@ -586,6 +593,13 @@ def configureCLIParser():
         ).format(ext=PUBKEY_PRIVATE_EXT),
         metavar="FILE",
         dest="recipientPrivateKey"
+    )
+    downloadSubparser.add_argument(
+        "--stdout",
+        action="store_true",
+        default=False,
+        help=_("Write downloaded content to stdout instead of a file (useful for piping, e.g. | tar -xf -)"),
+        dest="stdout"
     )
 
     # Upgrade command for self-updating
