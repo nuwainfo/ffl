@@ -49,11 +49,12 @@ Workflows like this also pair naturally with tools such as [llamafile](https://g
 - [CLI Reference](#cli-reference-short-version)
 - [Features & Advanced Usage](#features--advanced-usage)
   - [1. E2EE & Authentication](#1--end-to-end-encryption--authentication)
-  - [2. The "Digital Courier" (Secure Delivery Suite)](#2--the-digital-courier-secure-delivery-suite)
+  - [2. The "Digital Courier"](#2--the-digital-courier-secure-delivery-suite)
   - [3. Automation Tips](#3--automation-tips)
   - [4. Using Tunnels](#4--using-tunnels)
-  - [5. Downloading with ffl](#5--downloading-with-ffl-wget-replacement)
-  - [6. Server Upload (Licensed)](#6--upload-and-share-via-server-licensed-feature)
+  - [5. For Developers: Embedded Mode](#5--for-developers-embedded-mode)
+  - [6. Downloading with ffl](#6--downloading-with-ffl-wget-replacement)
+  - [7. Server Upload (Licensed)](#7--upload-and-share-via-server-licensed-feature)
 - [Privacy & Security](#privacy--security)
 - [How it Works & Motivation](#how-it-works--motivation)
 - [Open Source & Contributing](#open-source--contributing)
@@ -614,7 +615,30 @@ ffl download https://my-fixed-tunnel.com/nightly-build
 
   👉 **Check out the guide:** [How to self-host a sish tunnel for ffl](https://github.com/nuwainfo/ffl/wiki/Self%E2%80%90host-a-sish-tunnel)
 
-### 5. 📥 Downloading with ffl (wget replacement)
+
+### 5. 🔌 For Developers: Embedded Mode
+
+`ffl` is designed not just as a standalone tool, but as a robust engine that can be embedded into other applications. Our "Embedded Mode" provides the necessary plumbing to integrate secure P2P transfers into your own software.
+
+* **Virtual File System (`--vfs`)**: Map abstract sources (like Android's `content://` providers) to internal `vfs://` URIs. This allows `ffl` to serve content from non-standard sources as if they were regular local files.
+* **Event Hooks (`--hook`)**: Monitor transfer progress, connection status, and errors in real-time. While the standard usage takes a **Webhook URL** to POST events, you can also provide a **local file path** to stream events as JSON Lines (JSONL)—perfect if you want to parse logs directly without setting up a dedicated server.
+
+```bash
+# Example: Stream real-time events to a local JSONL file instead of a Webhook
+ffl --vfs --hook events.jsonl
+```
+
+**Real-world Validation:**
+This architecture powers both our [Official Android App](https://play.google.com/store/apps/details?id=com.fastfilelink.wrapper) and our [MCP Server (ffl-mcp)](https://github.com/nuwainfo/ffl-mcp). 
+
+Both implementations bundle the **APE version (`ffl.com`)** as their core engine and utilize `--hook` to precisely track sharing and download progress, ensuring a seamless and responsive user experience even in complex mobile or AI-driven environments.
+
+> 📖 **Developer Resources:**
+> * [Embedded Mode & Event Hooks](https://github.com/nuwainfo/ffl/wiki/Embedded-Mode-&-Event-Hooks)
+> * [VFS Implementation Guide](https://github.com/nuwainfo/ffl/wiki/VFS-Implementation-Guide)
+
+
+### 6. 📥 Downloading with ffl (wget replacement)
 
 ffl can also act like an HTTP download tool:
 
@@ -639,7 +663,7 @@ ffl https://53969.852.fastfilelink.com/MZoWzhPl -o myfile.bin
 ffl https://53969.852.fastfilelink.com/MZoWzhPl -o myfile.bin --resume
 ```
 
-### 6. ☁️ Upload and share via server (licensed feature)
+### 7. ☁️ Upload and share via server (licensed feature)
 
 If you can't keep your device online or both sides cannot be online at the same time, you can upload once and share a server-hosted link.
 
