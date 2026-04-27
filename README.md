@@ -264,6 +264,7 @@ These options work for both **sharing** and **downloading**:
                         - 127.0.0.1:9050 (defaults to SOCKS5, e.g., for Tor)
                         - socks5://user:pass@host:port
                         - http://user:pass@host:port
+  --hook WEBHOOK_URL    Webhook URL or file path (e.g., events.jsonl) to monitor real-time transfer events.
   --log-level LEVEL     Set logging level (DEBUG, INFO, WARNING, ERROR) or path to config file.
   --enable-reporting    Enable error reporting to FastFileLink server for diagnostics. *Disabled by default.*
   --version             Show version information and enabled addons.
