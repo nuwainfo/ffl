@@ -467,6 +467,8 @@ LINK=$(jq -r .link ffl.json)
 echo "Download link: $LINK"
 ```
 
+> 💡 **Real-time Event Hooks:** If parsing a static JSON file isn't enough, you can use the `--hook` flag to stream real-time transfer events (progress, connection states, errors) directly to a local JSONL file or a Webhook. 👉 *See [For Developers: Embedded Mode](#5--for-developers-embedded-mode) for details.*
+
 **Best Practice: Predictable URLs**
 
 The biggest challenge in automation is often passing the generated URL to the receiver. 
