@@ -667,6 +667,17 @@ ffl https://53969.852.fastfilelink.com/MZoWzhPl -o myfile.bin
 ffl https://53969.852.fastfilelink.com/MZoWzhPl -o myfile.bin --resume
 ```
 
+**Piping & Zero Disk Footprint (`--stdout`)**
+For DevOps, server migrations, or automated workflows, you can redirect the downloaded payload directly to standard output. This bypasses local disk I/O entirely, allowing you to process data on the fly.
+
+```bash
+# Download and extract an archive directly into a specific folder
+ffl https://<link> --stdout | tar -xf - -C /restore/path
+
+# Stream a downloaded database backup directly into MySQL
+ffl https://<link> --stdout | mysql -u root my_database
+```
+
 ### 7. ☁️ Upload and share via server (licensed feature)
 
 If you can't keep your device online or both sides cannot be online at the same time, you can upload once and share a server-hosted link.
