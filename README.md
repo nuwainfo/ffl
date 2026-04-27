@@ -750,7 +750,7 @@ If you require maximum privacy or need to comply with strict corporate policies,
 * Self-Hosted Tunnel: You can run your own relay server using **sish**. This ensures that even the encrypted metadata and traffic do not pass through any third-party tunnel services (like Cloudflare or ngrok).
 * Private Relay: Control your own domain, TLS certificates, and access logs.
 
-👉 **Step-by-step guide:** [Self-host a sish tunnel for ffl)](https://github.com/nuwainfo/ffl/wiki/Self%E2%80%90host-a-sish-tunnel)
+👉 **Step-by-step guide:** [Self-host a sish tunnel for ffl](https://github.com/nuwainfo/ffl/wiki/Self%E2%80%90host-a-sish-tunnel)
 
 ### 🛡️ Additional Security Controls
 
