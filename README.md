@@ -273,10 +273,10 @@ These options work for both **sharing** and **downloading**:
 > **💡 Pro Tip (Tor Support):** You can route traffic through Tor using `--proxy 127.0.0.1:9050`.
 
 ### 📤 Sharing (Default)
-Turn a file or folder into a link.
+Turn files, folders, or streams into a secure link.
 
 ```
-ffl [options] [FILE_OR_FOLDER] 
+ffl [options] [FILE_OR_FOLDER ...]
 
 Options (most useful ones):
 
