@@ -202,11 +202,13 @@ Don't worry too much about speed. In most cases, APE and native builds run almos
 ### 🔁 Share a file, folder, or stream
 
 ```bash
-# Share a local file
+# Share a file or folder
 ffl myfile.zip
-
-# Share a folder
 ffl /path/to/folder
+
+# Share multiple items at once 
+# (use @files.txt for lists, or --exclude to filter files)
+ffl file1.mp4 file2.jpg my_folder/
 
 # Pipe data from stdin, --name is optional
 mysqldump my_db | ffl - --name "db_backup.sql"
