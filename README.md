@@ -49,10 +49,11 @@ Workflows like this also pair naturally with tools such as [llamafile](https://g
 - [CLI Reference](#cli-reference-short-version)
 - [Features & Advanced Usage](#features--advanced-usage)
   - [1. E2EE & Authentication](#1--end-to-end-encryption--authentication)
-  - [2. Automation Tips](#2--automation-tips)
-  - [3. Using Tunnels](#3--using-tunnels)
-  - [4. Downloading with ffl](#4--downloading-with-ffl-wget-replacement)
-  - [5. Server Upload (Licensed)](#5--upload-and-share-via-server-licensed-feature)
+  - [2. The "Digital Courier" (Secure Delivery Suite)](#2--the-digital-courier-secure-delivery-suite)
+  - [3. Automation Tips](#3--automation-tips)
+  - [4. Using Tunnels](#4--using-tunnels)
+  - [5. Downloading with ffl](#5--downloading-with-ffl-wget-replacement)
+  - [6. Server Upload (Licensed)](#6--upload-and-share-via-server-licensed-feature)
 - [Privacy & Security](#privacy--security)
 - [How it Works & Motivation](#how-it-works--motivation)
 - [Open Source & Contributing](#open-source--contributing)
@@ -393,7 +394,54 @@ ffl --proxy "socks5h://127.0.0.1:9050" --auth-user tom --auth-password secret --
 > ```
 ---
 
-### 2. 🤖 Automation Tips
+### 2. 📦 The "Digital Courier" (Secure Delivery Suite)
+
+Moving beyond standard group passwords, `ffl` acts as a dedicated digital courier. It ensures your file is delivered *only* to the exact intended person, verified upon arrival, and guarantees package integrity.
+
+**1. Require a Signature (Recipient Verification)**
+Use the `--recipient-auth` flag to choose how the recipient proves their identity before downloading:
+* **`pickup` (One-Time PIN):** Require a 6-digit code. If you don't set a custom `--pickup-code`, `ffl` will automatically generate a random one for you. Perfect for single, verified client deliveries.
+* **`email` (OTP Verification):** The recipient must enter a One-Time Password sent to their inbox. (This mode is automatically implied if you provide a `--recipient-email`).
+* **`pubkey` (Zero-Trust Identity):** Verify using a long-term RSA Public Key (`.fflpub`). Only the person holding the corresponding private key can unlock the download. 
+
+```bash
+# Example 1: Require a PIN (ffl will auto-generate a random 6-digit code for you)
+ffl confidential.pdf --recipient-auth pickup
+
+# Example 2: Require an Email OTP (--recipient-auth email is implied)
+ffl confidential.pdf --recipient-email client@example.com
+```
+
+**2. Key Generation & Instant Secure Share**
+You can generate RSA keypairs directly via the CLI. Even better, you can use `--share` to instantly send the newly generated private key to your recipient securely (e.g., protected by a pickup code) so they are ready to receive your encrypted files.
+
+```bash
+# Generate a keypair named "clientA" and securely share the private key via a custom PIN
+ffl keygen --name clientA --share --recipient-auth pickup --pickup-code 123456
+```
+
+**3. Proof of Delivery & Package Integrity**
+Want to know exactly when your file lands and ensure it wasn't tampered with?
+* **Receipts:** Use `--receipt` to get an automatic email notification the moment the download finishes. Add `--receipt-confirm` to prompt the receiver with a dialog to explicitly acknowledge receipt.
+* **Auto-Checksum:** Upon completion, `ffl` automatically performs a strict checksum verification on the receiver's end.
+* **Manual Verification:** For advanced automation, you can query the file's metadata via the `/checksum` endpoint and verify it manually using standard tools like `b2sum`.
+
+```bash
+# 1. Fetch the expected Blake2b checksum from the API
+curl https://<link>/<uid>/checksum
+
+# 2. Verify your downloaded file manually
+echo "<checksum_from_api>  myfile.zip" | b2sum -c -
+```
+
+**4. White-label Delivery Experience**
+Customize the entire delivery experience to match your brand. You can use our White-label features to display your own company logo and branding on the recipient's download page, providing a highly professional and seamless file-receiving experience for your clients.
+
+> 📖 **Learn more in our Wiki:**
+> * [White-label Configuration](https://github.com/nuwainfo/ffl/wiki/White-label-Configuration)
+
+
+### 3. 🤖 Automation Tips
 
 ffl is designed for many downloaders; you can always stop sharing with `Ctrl+C`.  
 But for automation / CI/CD or scripts, these flags help:
@@ -444,7 +492,7 @@ ffl download https://my-fixed-tunnel.com/nightly-build
 > `ffl --alias nightly-build --auth-user dev --auth-password secret ...`
 
 
-### 3. 🚀 Using Tunnels
+### 4. 🚀 Using Tunnels
 
 `ffl` supports various tunnels for NAT traversal. By default, `ffl` comes with a built-in tunnel called `default`.
 
@@ -564,9 +612,9 @@ ffl download https://my-fixed-tunnel.com/nightly-build
   * **Custom Branding:** Use your own domain (e.g., `https://share.yourcompany.com`).
   * **Enhanced Security:** Control your own TLS certificates and access policies.
 
-  👉 **Check out the guide:** [How to self-host a sish tunnel for ffl (GitHub Wiki)](https://github.com/nuwainfo/ffl/wiki/Self%E2%80%90host-a-sish-tunnel)
+  👉 **Check out the guide:** [How to self-host a sish tunnel for ffl](https://github.com/nuwainfo/ffl/wiki/Self%E2%80%90host-a-sish-tunnel)
 
-### 4. 📥 Downloading with ffl (wget replacement)
+### 5. 📥 Downloading with ffl (wget replacement)
 
 ffl can also act like an HTTP download tool:
 
@@ -591,7 +639,7 @@ ffl https://53969.852.fastfilelink.com/MZoWzhPl -o myfile.bin
 ffl https://53969.852.fastfilelink.com/MZoWzhPl -o myfile.bin --resume
 ```
 
-### 5. ☁️ Upload and share via server (licensed feature)
+### 6. ☁️ Upload and share via server (licensed feature)
 
 If you can't keep your device online or both sides cannot be online at the same time, you can upload once and share a server-hosted link.
 
@@ -676,7 +724,7 @@ If you require maximum privacy or need to comply with strict corporate policies,
 * Self-Hosted Tunnel: You can run your own relay server using **sish**. This ensures that even the encrypted metadata and traffic do not pass through any third-party tunnel services (like Cloudflare or ngrok).
 * Private Relay: Control your own domain, TLS certificates, and access logs.
 
-👉 **Step-by-step guide:** [Self-host a sish tunnel for ffl (Wiki)](https://github.com/nuwainfo/ffl/wiki/Self%E2%80%90host-a-sish-tunnel)
+👉 **Step-by-step guide:** [Self-host a sish tunnel for ffl)](https://github.com/nuwainfo/ffl/wiki/Self%E2%80%90host-a-sish-tunnel)
 
 ### 🛡️ Additional Security Controls
 
