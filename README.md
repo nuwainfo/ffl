@@ -412,7 +412,7 @@ Use the `--recipient-auth` flag to choose how the recipient proves their identit
 ffl confidential.pdf --recipient-auth pickup
 
 # Example 2: Require an Email OTP (--recipient-auth email is implied)
-ffl confidential.pdf --recipient-email client@example.com
+ffl confidential.pdf --recipient-email client@example.com,client2@example.com
 ```
 
 **2. Key Generation & Instant Secure Share**
