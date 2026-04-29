@@ -226,6 +226,8 @@ You’ll get a shareable link like:
 
 > 💡Tip: Use `curl -JLO` or `wget --content-disposition` to automatically save with the correct filename.
 
+> 💡**Pro Tip**: Piped streams (ffl -) cache to disk by default for resume support, but safely abort caching if space runs low. To completely bypass disk I/O for massive transfers, add `--stdin-cache off`.
+
 ### 🔁 Receive using `ffl`
 
 ```bash
