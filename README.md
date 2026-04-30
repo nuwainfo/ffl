@@ -54,7 +54,7 @@ Workflows like this also pair naturally with tools such as [llamafile](https://g
   - [4. Using Tunnels](#4--using-tunnels)
   - [5. For Developers: Embedded Mode](#5--for-developers-embedded-mode)
   - [6. Downloading with ffl](#6--downloading-with-ffl-wget-replacement)
-  - [7. Server Upload](#7--upload-and-share-via-server-account-required)
+  - [7. Server Upload](7-%EF%B8%8F-upload-and-share-via-server-account-required)
 - [Privacy & Security](#privacy--security)
 - [How it Works & Motivation](#how-it-works--motivation)
 - [Open Source & Contributing](#open-source--contributing)
@@ -720,12 +720,13 @@ Uploading to the server unlocks additional management features via a dedicated s
 * **Traffic Logs:** View download history and stats.
 * **Live Control:** Change the password or disable the link instantly without re-uploading.
 * **Redirect Rules:** Modify where the link points to.
+* **White-label UI:** Customize your company logo and branding for the recipient's download page directly from the server dashboard.
 
-...and more! For a complete list of server-side features, please visit the [Official Website](https://fastfilelink.com).
+...and more! For a complete list of server-side features, please visit the [this article](https://fastfilelink.com/static/blog/benefits_of_using_server_upload.html).
 
 **Requirements & Access**
 
-This upload feature requires a registered account and a licensed plan (Standard or higher). See [Pricing](https://fastfilelink.com/#pricing).
+This upload feature requires a registered account. You can claim a **[Free Account here](https://pixiu.nuwainfo.com/cart/product/18/add/?returnUrl=https%3A%2F%2Ffastfilelink.com)** to get started immediately, or view our [Pricing](https://fastfilelink.com/#pricing) for advanced usage and higher-tier plans.
 
 ```bash
 ffl register  # Register a new account / Get license
