@@ -54,7 +54,7 @@ Workflows like this also pair naturally with tools such as [llamafile](https://g
   - [4. Using Tunnels](#4--using-tunnels)
   - [5. For Developers: Embedded Mode](#5--for-developers-embedded-mode)
   - [6. Downloading with ffl](#6--downloading-with-ffl-wget-replacement)
-  - [7. Server Upload](#7--upload-and-share-via-server--account-required)
+  - [7. Server Upload](#7--upload-and-share-via-server-account-required)
 - [Privacy & Security](#privacy--security)
 - [How it Works & Motivation](#how-it-works--motivation)
 - [Open Source & Contributing](#open-source--contributing)
