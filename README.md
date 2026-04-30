@@ -15,7 +15,7 @@ AFAIK, `ffl` is the only CLI file-transfer tool that does all of the following:
 - 🚀 **Smart Delivery & AI-Ready** — Verify recipients via OTP/PubKey, or empower AI agents via [MCP](https://github.com/nuwainfo/ffl-mcp).
 - 🧱 **Actually Portable Executable (APE)** + native builds for **Windows, Linux, macOS**. Embeddable.
 - 🧰 **Built-in & pluggable tunnels** (Cloudflare, ngrok, self-hosted) — Supports proxies like Tor.
-- ☁️ **Optional temporary upload to server** (licensed feature) when both sides can’t be online simultaneously.
+- ☁️ **Optional temporary upload to server** (account required) when both sides can’t be online simultaneously.
 
 ⚡ At a glance: **Think `croc` or `magic-wormhole`, but the recipient uses a standard browser/HTTPS link — no software installation required.**
 > 📊 **How does it compare to other tools?** See our [Comparison Guide](https://github.com/nuwainfo/ffl/wiki/Comparison-with-Other-File-Transfer-Tools)
@@ -54,7 +54,7 @@ Workflows like this also pair naturally with tools such as [llamafile](https://g
   - [4. Using Tunnels](#4--using-tunnels)
   - [5. For Developers: Embedded Mode](#5--for-developers-embedded-mode)
   - [6. Downloading with ffl](#6--downloading-with-ffl-wget-replacement)
-  - [7. Server Upload (Licensed)](#7--upload-and-share-via-server-licensed-feature)
+  - [7. Server Upload](#7--upload-and-share-via-server--account-required)
 - [Privacy & Security](#privacy--security)
 - [How it Works & Motivation](#how-it-works--motivation)
 - [Open Source & Contributing](#open-source--contributing)
@@ -680,7 +680,7 @@ ffl https://<link> --stdout | tar -xf - -C /restore/path
 ffl https://<link> --stdout | mysql -u root my_database
 ```
 
-### 7. ☁️ Upload and share via server (licensed feature)
+### 7. ☁️ Upload and share via server (account required)
 
 If you can't keep your device online or both sides cannot be online at the same time, you can upload once and share a server-hosted link.
 
