@@ -441,10 +441,7 @@ echo "<checksum_from_api>  myfile.zip" | b2sum -c -
 ```
 
 **4. White-label Delivery Experience**
-Customize the entire delivery experience to match your brand. You can use our White-label features to display your own company logo and branding on the recipient's download page, providing a highly professional and seamless file-receiving experience for your clients.
-
-> 📖 **Learn more in our Wiki:**
-> * [White-label Configuration](https://github.com/nuwainfo/ffl/wiki/White-label-Configuration)
+Customize the entire delivery experience to match your brand. You can use our White-label features to display your own company logo and branding on the recipient's download page, providing a highly professional and seamless file-receiving experience for your clients. 📖 **Learn more:** [White-label Configuration](https://github.com/nuwainfo/ffl/wiki/White-label-Configuration)
 
 
 ### 3. 🤖 Automation Tips
