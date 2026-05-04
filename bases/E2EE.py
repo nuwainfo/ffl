@@ -47,6 +47,16 @@ class CryptoHelper:
     Provides unified AAD and nonce construction for both WebRTC and HTTP modes.
     """
 
+    UNKNOWN_FILE_SIZE = (1 << 64) - 1
+
+    @staticmethod
+    def normalizeFilesize(filesize: Optional[int]) -> int:
+        """Convert optional file sizes into a stable integer for crypto metadata."""
+        if filesize is None:
+            return CryptoHelper.UNKNOWN_FILE_SIZE
+
+        return int(filesize)
+
     @staticmethod
     def buildNonce(nonceBase: bytes, chunkIndex: int) -> bytes:
         """Build 12-byte nonce for AES-GCM
@@ -498,6 +508,7 @@ class E2EEManager(Singleton):
             dict: Response with encrypted content key, nonce base, and commitment tag
         """
         logger.debug(f"[E2EE] handleInit called for file={filename}, size={filesize}")
+        normalizedFilesize = CryptoHelper.normalizeFilesize(filesize)
 
         # Load client's public key
         clientPublicKey = self.crypto.loadRSAPublicKeyFromPEM(clientPublicKeyPEM)
@@ -509,7 +520,9 @@ class E2EEManager(Singleton):
         encryptedNonceBase = self.crypto.encryptRSAOAEP(clientPublicKey, self.nonceBase)
 
         # Generate commitment tag using shared helper
-        commitment = CryptoHelper.buildCommitment(self.contentKey, self.chunkSize, filesize, filename, self.crypto)
+        commitment = CryptoHelper.buildCommitment(
+            self.contentKey, self.chunkSize, normalizedFilesize, filename, self.crypto
+        )
 
         return {
             'wrappedContentKey': base64.b64encode(encryptedContentKey).decode(),
@@ -536,8 +549,9 @@ class E2EEManager(Singleton):
         if not self.contentKey or not self.nonceBase:
             raise RuntimeError("E2EE not initialized - call handleInit() first")
 
+        normalizedFilesize = CryptoHelper.normalizeFilesize(filesize)
         return StreamEncryptor(
-            self.contentKey, self.nonceBase, filename, filesize, self.encryptionMetaStorage,
+            self.contentKey, self.nonceBase, filename, normalizedFilesize, self.encryptionMetaStorage,
             startChunkIndex, saveTags, streamId
         )
 
@@ -566,11 +580,12 @@ class E2EEManager(Singleton):
         if not self.contentKey or not self.nonceBase:
             return None
 
+        normalizedFilesize = CryptoHelper.normalizeFilesize(filesize)
         return {
             'contentKey': self.contentKey,
             'nonceBase': self.nonceBase,
             'filename': filename,
-            'filesize': filesize,
+            'filesize': normalizedFilesize,
             'chunkSize': self.chunkSize
         }
 
@@ -596,11 +611,12 @@ class E2EEManager(Singleton):
                          f"contentKey={hasKey}, nonceBase={hasNonce}")
             raise RuntimeError("E2EE not initialized - call handleInit() first")
 
+        normalizedFilesize = CryptoHelper.normalizeFilesize(filesize)
         return WebRTCStreamEncryptor(
             contentKey=self.contentKey,
             nonceBase=self.nonceBase,
             filename=filename,
-            filesize=filesize,
+            filesize=normalizedFilesize,
             chunkSize=self.chunkSize
         )
 
@@ -784,7 +800,7 @@ class E2EEClient:
 
         # Verify commitment tag using shared helper
         filename = manifest['filename']
-        filesize = manifest['filesize']
+        filesize = CryptoHelper.normalizeFilesize(manifest['filesize'])
         chunkSize = manifest['chunkSize']
 
         if not CryptoHelper.verifyCommitment(contentKey, commitment, chunkSize, filesize, filename, self.crypto):

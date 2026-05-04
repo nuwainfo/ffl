@@ -81,6 +81,132 @@ function broadcast(msg) {
     dlChannel && dlChannel.postMessage(msg);
 }
 
+class DownloadCompletionTracker {
+    constructor({ ttlMs = 48 * 60 * 60 * 1000, maxRecords = 100 } = {}) {
+        this.ttlMs = ttlMs;
+        this.maxRecords = maxRecords;
+        this.records = new Map();
+    }
+
+    prune(now = Date.now()) {
+        for (const [id, record] of this.records.entries()) {
+            if (!record || record.expiresAt <= now) {
+                this.records.delete(id);
+            }
+        }
+
+        while (this.records.size > this.maxRecords) {
+            const oldestId = this.records.keys().next().value;
+            this.records.delete(oldestId);
+        }
+    }
+
+    remember(record) {
+        if (!record || !record.id) {
+            return null;
+        }
+
+        const now = Date.now();
+        this.prune(now);
+        const storedRecord = {
+            ...record,
+            completedAt: now,
+            expiresAt: now + this.ttlMs
+        };
+        this.records.set(record.id, storedRecord);
+        return storedRecord;
+    }
+
+    get(downloadId) {
+        if (!downloadId) {
+            return null;
+        }
+
+        this.prune();
+        return this.records.get(downloadId) || null;
+    }
+
+    buildMessage(record, replayed = false) {
+        return {
+            type: 'download-complete',
+            id: record.id,
+            sent: record.sent,
+            total: record.total,
+            serverId: record.serverId,
+            serverAckSent: !!record.serverAckSent,
+            replayed
+        };
+    }
+
+    buildQueryResponse(requestId, downloadId) {
+        const record = this.get(downloadId);
+        return {
+            type: 'download-completion-state',
+            requestId,
+            found: !!record,
+            completion: record ? this.buildMessage(record, true) : null
+        };
+    }
+
+    replyToQuery(event) {
+        const { requestId, downloadId } = event.data || {};
+        const response = this.buildQueryResponse(requestId, downloadId);
+
+        try {
+            if (event.ports && event.ports[0]) {
+                event.ports[0].postMessage(response);
+            } else if (event.source) {
+                event.source.postMessage(response);
+            }
+        } catch (e) {
+            log('[ProgressSW] Failed to reply to completion query:', String(e));
+        }
+    }
+
+    async sendServerAck(uid, serverDownloadId, receivedBytes) {
+        if (!uid || !serverDownloadId) {
+            return false;
+        }
+
+        try {
+            const response = await fetch(`/${uid}/complete`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    downloadId: serverDownloadId,
+                    receivedBytes: receivedBytes || 0
+                }),
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            log('[ProgressSW] Direct completion ACK sent successfully for server download ID:', serverDownloadId);
+            return true;
+        } catch (e) {
+            console.error('[ProgressSW] Direct completion ACK failed:', e);
+            log('[ProgressSW] Direct completion ACK failed:', String(e));
+            return false;
+        }
+    }
+
+    async complete({ uid, downloadId, serverDownloadId, sent, total }) {
+        const serverAckSent = await this.sendServerAck(uid, serverDownloadId, total);
+        const record = this.remember({
+            id: downloadId,
+            sent,
+            total,
+            serverId: serverDownloadId,
+            serverAckSent
+        });
+
+        return record ? this.buildMessage(record) : null;
+    }
+}
+
+const downloadCompletionTracker = new DownloadCompletionTracker();
+
 function isDownloadRequest(url) {
     return url.origin === self.location.origin && url.pathname.endsWith('/download');
 }
@@ -214,6 +340,11 @@ function buildResumeAwareRequest(request, resumeConfig, authHeaders) {
 // Message handler for E2EE context and auth headers registration
 self.addEventListener('message', (event) => {
     log('[ProgressSW] Message received:', event.data?.type);
+
+    if (event.data && event.data.type === 'query-download-completion') {
+        downloadCompletionTracker.replyToQuery(event);
+        return;
+    }
 
     if (event.data && event.data.type === 'e2ee-context') {
         const { downloadId, context } = event.data;
@@ -782,16 +913,20 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
                     return;
                 }
 
-                try {
-                    broadcast({
-                        type: 'download-complete',
-                        id: downloadId,
-                        sent: delivered,
-                        total: resolvedTotal,
-                        serverId: serverDownloadId  // Server-assigned ID for POST /complete ACK
-                    });
-                } catch (broadcastError) {
-                    console.error('[ProgressSW] Complete broadcast failed:', broadcastError);
+                const completeMessage = await downloadCompletionTracker.complete({
+                    uid,
+                    downloadId,
+                    serverDownloadId,
+                    sent: delivered,
+                    total: resolvedTotal
+                });
+
+                if (completeMessage) {
+                    try {
+                        broadcast(completeMessage);
+                    } catch (broadcastError) {
+                        console.error('[ProgressSW] Complete broadcast failed:', broadcastError);
+                    }
                 }
 
                 if (checksumVerifier) {

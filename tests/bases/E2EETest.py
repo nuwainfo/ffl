@@ -243,6 +243,38 @@ class E2EEDownloadTest(ResumeTestBase):
         print(f"[Test]   Hash: {downloadedHash}")
         print(f"[Test]   Size: {downloadedSize} bytes")
 
+    def testE2EEStdinDownload(self):
+        """Test E2E encrypted download from stdin source with unknown size"""
+        print("\n[TEST] E2E stdin download")
+
+        outputCapture = {}
+        shareLink = self._startFastFileLink(
+            p2p=True,
+            extraArgs=["--e2ee", "--stdin-cache", "off"],
+            captureOutputIn=outputCapture,
+            stdinInputPath=self.testFilePath,
+            stdinFileName="stdin-e2ee.bin"
+        )
+        print(f"[Test] Share link with E2EE stdin source: {shareLink}")
+
+        with open(self.jsonOutputPath, 'r') as f:
+            shareInfo = json.load(f)
+
+        self.assertEqual(shareInfo.get("file_size"), -1, "Stdin E2EE share should report unknown size (-1)")
+
+        downloadedPath = os.path.join(self.tempDir, "downloaded_stdin_e2e.bin")
+        self._downloadWithCore(shareLink, downloadedPath)
+
+        downloadedHash = getFileHash(downloadedPath)
+        self.assertEqual(downloadedHash, self.originalFileHash, "E2EE stdin download should match original")
+
+        outputText = self._updateCapturedOutput(outputCapture)
+        self.assertNotIn("E2EE key exchange failed", outputText, "stdin E2EE path should not fail key exchange")
+
+        print(f"[Test] [OK] E2E stdin download successful")
+        print(f"[Test]   Hash: {downloadedHash}")
+        print(f"[Test]   Size: {os.path.getsize(downloadedPath)} bytes")
+
     def testE2EEHttpFallback(self):
         """Test E2E encrypted download with WebRTC ICE failure → HTTP fallback"""
         print("\n[TEST] E2EE HTTP fallback (ICE failure)")

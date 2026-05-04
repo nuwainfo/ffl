@@ -776,7 +776,9 @@ class FastFileLinkTestBase(unittest.TestCase):
         extraArgs=None,
         captureOutputIn=None,
         waitForCompletion=True,
-        binaryCommand=None
+        binaryCommand=None,
+        stdinInputPath=None,
+        stdinFileName=None
     ):
         """
         Start the FastFileLink process and wait for the share link to be ready
@@ -793,6 +795,8 @@ class FastFileLinkTestBase(unittest.TestCase):
             extraArgs (list): Additional command line arguments to pass to the process
             captureOutputIn (dict): Optional dict to capture process output in ['output'] key
             binaryCommand (str|list): Optional external command prefix, e.g. "./ffl.com" or "python Core.py --cli"
+            stdinInputPath (str): Optional path to pipe into stdin instead of sharing self.testFilePath directly
+            stdinFileName (str): Optional filename to advertise when stdinInputPath is used
 
         Returns:
             tuple: (share_link, test_server_process) if useTestServer=True, otherwise just share_link
@@ -837,7 +841,10 @@ class FastFileLinkTestBase(unittest.TestCase):
             print(f"[Test] Mode: {'P2P' if p2p else 'Server'}")
 
             # Prepare the command - use 'share' subcommand for file sharing
-            command = commandPrefix + ["share", self.testFilePath, "--json", self.jsonOutputPath]
+            sourcePath = "-" if stdinInputPath else self.testFilePath
+            command = commandPrefix + ["share", sourcePath, "--json", self.jsonOutputPath]
+            if stdinInputPath and stdinFileName:
+                command.extend(["--name", stdinFileName])
 
             # Add network instability parameters if needed
             if useNetworkSimulation:
@@ -897,31 +904,42 @@ class FastFileLinkTestBase(unittest.TestCase):
                     print(f"[Test] Extra env var: {key}={value}")
 
             # Launch in a separate process with conditional output capture
+            stdinHandle = open(stdinInputPath, 'rb') if stdinInputPath else None
             if showOutput:
                 # Real-time output: don't capture stdout/stderr, let them show directly
                 # Force line buffering to ensure output appears immediately
                 creationFlags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
-                self.coreProcess = subprocess.Popen(
-                    command,
-                    text=True,
-                    env=env,
-                    bufsize=1, # Line buffered
-                    universal_newlines=True,
-                    creationflags=creationFlags
-                )
+                try:
+                    self.coreProcess = subprocess.Popen(
+                        command,
+                        stdin=stdinHandle,
+                        text=True,
+                        env=env,
+                        bufsize=1, # Line buffered
+                        universal_newlines=True,
+                        creationflags=creationFlags
+                    )
+                finally:
+                    if stdinHandle:
+                        stdinHandle.close()
             else:
                 # File-based output: redirect stdout/stderr to log file to avoid pipe buffer deadlock
                 self._procLogFile = open(self.procLogPath, "w+", encoding="utf-8", buffering=1)
                 creationFlags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
-                self.coreProcess = subprocess.Popen(
-                    command,
-                    stdout=self._procLogFile,
-                    stderr=subprocess.STDOUT, # Merge stderr into stdout
-                    text=True,
-                    env=env,
-                    bufsize=1, # Line buffered
-                    creationflags=creationFlags
-                )
+                try:
+                    self.coreProcess = subprocess.Popen(
+                        command,
+                        stdin=stdinHandle,
+                        stdout=self._procLogFile,
+                        stderr=subprocess.STDOUT, # Merge stderr into stdout
+                        text=True,
+                        env=env,
+                        bufsize=1, # Line buffered
+                        creationflags=creationFlags
+                    )
+                finally:
+                    if stdinHandle:
+                        stdinHandle.close()
 
             # Determine appropriate timeout
             if timeout is None:
@@ -1094,7 +1112,7 @@ class FastFileLinkTestBase(unittest.TestCase):
                     raise AssertionError(f"JSON missing '{field}' field")
 
             # Verify file size is correct (skip if originalFileSize is -1, used for folders)
-            if self.originalFileSize != -1 and shareInfo["file_size"] != self.originalFileSize:
+            if stdinInputPath is None and self.originalFileSize != -1 and shareInfo["file_size"] != self.originalFileSize:
                 raise AssertionError(
                     f"File size in JSON ({shareInfo['file_size']}) doesn't match original file ({self.originalFileSize})"
                 )

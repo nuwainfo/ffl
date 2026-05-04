@@ -777,6 +777,13 @@ class DownloadManager {
         this.checksumVerified = false;
         this.pendingChecksumResult = null;
         this.writerAutoResumeUsed = false;
+        this.completionHandled = false;
+        this.completionReplayTimer = null;
+        this.completionReplayAttempts = 0;
+        this.completionReplayIntervalMs = options.completionReplayIntervalMs || 30000;
+        this.maxCompletionReplayAttempts = Number.isFinite(options.maxCompletionReplayAttempts)
+            ? Math.max(0, options.maxCompletionReplayAttempts)
+            : 960; // 8 hours at the default 30s interval.
 
         // Server-assigned download ID for POST /complete ACK (relay truncation fix)
         this.serverDownloadId = null;
@@ -1099,8 +1106,15 @@ class DownloadManager {
     }
 
     handleDownloadComplete(total) {
+        if (this.completionHandled) {
+            this.log('DownloadManager', 'Download completion already handled, ignoring duplicate event');
+            return;
+        }
+
+        this.completionHandled = true;
         this.log('DownloadManager', 'Download complete');
         this.stopProgressMonitoring();
+        this.stopCompletionReplayChecks();
         if (this.adaptiveUnlockTimer) {
             clearTimeout(this.adaptiveUnlockTimer);
             this.adaptiveUnlockTimer = null;
@@ -1152,9 +1166,19 @@ class DownloadManager {
         }
     }
 
+    handleDownloadCompleteEvent(data = {}, source = 'event') {
+        if (data.serverId) {
+            this.serverDownloadId = data.serverId;
+        }
+
+        this.log('DownloadManager', `Handling download-complete from ${source}`, data);
+        this.handleDownloadComplete(data.total || data.sent || this.totalBytesHint || 0);
+    }
+
     handleDownloadError(message) {
         this.log('DownloadManager', 'Download error:', message);
         this.stopProgressMonitoring();
+        this.stopCompletionReplayChecks();
         if (this.adaptiveUnlockTimer) {
             clearTimeout(this.adaptiveUnlockTimer);
             this.adaptiveUnlockTimer = null;
@@ -1291,10 +1315,7 @@ class DownloadManager {
                 } else if (type === 'download-progress') {
                     this.handleDownloadProgress(sent, total);
                 } else if (type === 'download-complete') {
-                    if (evt.data.serverId) {
-                        this.serverDownloadId = evt.data.serverId;
-                    }
-                    this.handleDownloadComplete(total);
+                    this.handleDownloadCompleteEvent(evt.data, evt.data.replayed ? 'sw-replay' : 'broadcast');
                 } else if (type === 'download-premature-eof') {
                     this.log(
                         'DownloadManager',
@@ -1328,8 +1349,118 @@ class DownloadManager {
                 if (this.progressMonitorTimer && !isPassMode) {
                     this.restartProgressMonitoring();
                 }
+
+                if (!this.isTabHidden) {
+                    this.queryServiceWorkerCompletion('visibilitychange');
+                }
             }
         });
+
+        window.addEventListener('focus', () => {
+            this.queryServiceWorkerCompletion('focus');
+        });
+    }
+
+    canQueryServiceWorkerCompletion() {
+        return !!(
+            this.activeDlId &&
+            !this.completionHandled &&
+            typeof MessageChannel !== 'undefined' &&
+            navigator.serviceWorker &&
+            navigator.serviceWorker.controller
+        );
+    }
+
+    queryServiceWorkerCompletion(reason = 'manual') {
+        if (!this.canQueryServiceWorkerCompletion()) {
+            return Promise.resolve(false);
+        }
+
+        const controller = navigator.serviceWorker.controller;
+        const requestId = (crypto?.randomUUID && crypto.randomUUID()) || String(Date.now() + Math.random());
+
+        this.log('DownloadManager', `Querying SW completion state (${reason}) for ${this.activeDlId}`);
+
+        return new Promise((resolve) => {
+            const channel = new MessageChannel();
+            const timeout = setTimeout(() => {
+                channel.port1.onmessage = null;
+                this.log('DownloadManager', `SW completion query timed out (${reason})`);
+                resolve(false);
+            }, 2000);
+
+            channel.port1.onmessage = (event) => {
+                clearTimeout(timeout);
+                const data = event.data || {};
+
+                if (data.type !== 'download-completion-state' || data.requestId !== requestId) {
+                    resolve(false);
+                    return;
+                }
+
+                if (!data.found || !data.completion) {
+                    resolve(false);
+                    return;
+                }
+
+                const completion = data.completion;
+                if (completion.id && completion.id !== this.activeDlId) {
+                    resolve(false);
+                    return;
+                }
+
+                this.handleDownloadCompleteEvent(completion, `sw-query:${reason}`);
+                resolve(true);
+            };
+
+            try {
+                controller.postMessage({
+                    type: 'query-download-completion',
+                    requestId,
+                    downloadId: this.activeDlId
+                }, [channel.port2]);
+            } catch (e) {
+                clearTimeout(timeout);
+                this.log('DownloadManager', `Failed to query SW completion state (${reason}):`, e);
+                resolve(false);
+            }
+        });
+    }
+
+    scheduleCompletionReplayChecks() {
+        this.stopCompletionReplayChecks();
+
+        if (!this.canQueryServiceWorkerCompletion()) {
+            return;
+        }
+
+        this.completionReplayAttempts = 0;
+        this.completionReplayTimer = setInterval(() => {
+            if (!this.canQueryServiceWorkerCompletion()) {
+                this.stopCompletionReplayChecks();
+                return;
+            }
+
+            this.completionReplayAttempts += 1;
+            if (this.completionReplayAttempts > this.maxCompletionReplayAttempts) {
+                this.log('DownloadManager', 'Stopping SW completion replay checks after max attempts');
+                this.stopCompletionReplayChecks();
+                return;
+            }
+
+            this.queryServiceWorkerCompletion('timer');
+        }, this.completionReplayIntervalMs);
+
+        setTimeout(() => {
+            this.queryServiceWorkerCompletion('initial');
+        }, 3000);
+    }
+
+    stopCompletionReplayChecks() {
+        if (this.completionReplayTimer) {
+            clearInterval(this.completionReplayTimer);
+            this.completionReplayTimer = null;
+        }
     }
     
     // Default delay calculation function (can be overridden)
@@ -1525,6 +1656,7 @@ class DownloadManager {
         
         // Stop progress monitoring
         this.stopProgressMonitoring();
+        this.stopCompletionReplayChecks();
         
         // Stop adaptive unlock timer
         if (this.adaptiveUnlockTimer) {
@@ -2200,6 +2332,8 @@ class DownloadManager {
             return;
         }
         this.downloadTriggeredOnce = true;
+        this.completionHandled = false;
+        this.stopCompletionReplayChecks();
 
         this.log('DownloadManager', 'Starting native download', {
             hasWriter: !!writer,
@@ -2298,6 +2432,7 @@ class DownloadManager {
                 // Has SW + no resumeConfig (or no writer)
                 // Use <a> tag, let SW handle everything (including all events)
                 this.log('DownloadManager', 'BRANCH: SW without resumeConfig → <a> tag (SW handles download)');
+                this.scheduleCompletionReplayChecks();
                 this.triggerNativeDownloadLink(downloadUrl.pathname + downloadUrl.search);
                 return;
             }

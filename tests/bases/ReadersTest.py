@@ -170,6 +170,36 @@ class FolderReaderTest(unittest.TestCase):
         finally:
             shutil.rmtree(tmpdir)
 
+    @unittest.skipUnless(os.name == 'nt', "Windows-specific relative-path resolution breadcrumb")
+    def testMultiFileVirtualFSWarningUsesArchivePathForMissingRelativeUnicodeEntries(self):
+        """Missing multi-file entries should log the virtual /archive path, not a fake user path."""
+        tmpdir = tempfile.mkdtemp()
+        originalCwd = os.getcwd()
+        missingPaths = ["технический", "Портфолио", "продюсер.pdf"]
+
+        try:
+            os.chdir(tmpdir)
+            reader = SourceReader.build(missingPaths, compression='store')
+
+            self.assertIsInstance(reader, ZipDirSourceReader)
+            self.assertEqual(reader.path, "/archive")
+
+            with self.assertLogs('bases.Readers', level='WARNING') as captured:
+                entries = reader._scanDirectory()
+
+            self.assertEqual(len(entries), len(missingPaths))
+            self.assertEqual(
+                sorted(entry['arcname'] for entry in entries),
+                sorted(missingPaths)
+            )
+
+            combinedLogs = "\n".join(captured.output)
+            for missingPath in missingPaths:
+                self.assertIn(f"/archive/{missingPath}", combinedLogs)
+        finally:
+            os.chdir(originalCwd)
+            shutil.rmtree(tmpdir)
+
     @unittest.skipUnless(os.name == 'nt', "Windows-only reserved filename regression")
     def testFolderReadingWithReservedWindowsFilename(self):
         """Reserved Windows names like 'nul' should be treated as real files."""

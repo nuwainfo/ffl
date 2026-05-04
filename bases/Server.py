@@ -256,7 +256,27 @@ class DownloadSessionStore:
             return True
 
 
-class DownloadProgressStore:
+class DownloadRecordStore:
+    """Thread-safe downloadId keyed record store.
+
+    Subclasses own the record schema and behavior; this base only centralizes
+    the shared lock/map lifecycle.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._downloads = {}
+
+    def _putRecord(self, downloadId, record):
+        with self._lock:
+            self._downloads[downloadId] = record
+
+    def unregister(self, downloadId):
+        with self._lock:
+            self._downloads.pop(downloadId, None)
+
+
+class DownloadProgressStore(DownloadRecordStore):
     """Thread-safe per-download progress tracker for server-side stall detection.
 
     Each active HTTP download registers here.  The /status poll checks for
@@ -266,20 +286,16 @@ class DownloadProgressStore:
 
     STALL_THRESHOLD_SECONDS = int(os.getenv('STALL_DETECTION_SECONDS', '60'))
 
-    def __init__(self):
-        self._lock = threading.Lock()
-        self._downloads = {}  # downloadId -> progress snapshot
-
     def register(self, downloadId, total):
-        with self._lock:
-            self._downloads[downloadId] = {
-                'downloadId': downloadId,
-                'written': 0,
-                'total': total,
-                'lastUpdateTime': time.time(),
-                'startTime': time.time(),
-                'stallReported': False,
-            }
+        now = time.time()
+        self._putRecord(downloadId, {
+            'downloadId': downloadId,
+            'written': 0,
+            'total': total,
+            'lastUpdateTime': now,
+            'startTime': now,
+            'stallReported': False,
+        })
 
     def update(self, downloadId, written):
         with self._lock:
@@ -288,10 +304,6 @@ class DownloadProgressStore:
                 entry['written'] = written
                 entry['lastUpdateTime'] = time.time()
                 entry['stallReported'] = False  # reset on any progress
-
-    def unregister(self, downloadId):
-        with self._lock:
-            self._downloads.pop(downloadId, None)
 
     def getStalledDownloads(self):
         """Return snapshots of downloads with no progress for STALL_THRESHOLD_SECONDS."""
@@ -311,6 +323,52 @@ class DownloadProgressStore:
             if entry:
                 entry['stallReported'] = True
 
+
+class HTTPDownloadCompletionStore(DownloadRecordStore):
+    """Thread-safe ACK tracker for HTTP relay download completion.
+
+    The browser may legitimately send duplicate POST /complete requests when we
+    add a Service Worker-side ACK as a reliability backstop while keeping the
+    existing page-side ACK path. The server should treat the first ACK as the
+    authoritative completion signal and quietly ignore duplicates.
+    """
+
+    def register(self, downloadId):
+        self._putRecord(downloadId, {
+            'event': threading.Event(),
+            'acknowledged': False,
+        })
+
+    def wait(self, downloadId, timeout):
+        with self._lock:
+            entry = self._downloads.get(downloadId)
+            event = entry['event'] if entry else None
+
+        if not event:
+            return False
+
+        return event.wait(timeout=timeout)
+
+    def acknowledge(self, downloadId):
+        """Mark downloadId as acknowledged.
+
+        Returns:
+            str: One of:
+                - 'accepted': first valid ACK for this downloadId
+                - 'duplicate': ACK already processed earlier
+                - 'unknown': downloadId is not being tracked
+        """
+        with self._lock:
+            entry = self._downloads.get(downloadId)
+            if not entry:
+                return 'unknown'
+
+            if entry['acknowledged']:
+                return 'duplicate'
+
+            entry['acknowledged'] = True
+            entry['event'].set()
+            return 'accepted'
 
 @dataclass
 class LogicalDownloadRequest:
@@ -769,8 +827,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         # Track per-download progress for server-side stall detection
         self.server.downloadProgressStore.register(self._downloadId, size)
 
-        # Register completion event so _waitForHTTPDownloadComplete can block until client ACKs
-        self.server.httpDownloadCompleteEvents[self._downloadId] = threading.Event()
+        # Register completion state so _waitForHTTPDownloadComplete can block until client ACKs
+        self.server.httpDownloadCompletionStore.register(self._downloadId)
 
         # Get client information
         userAgent = self.headers.get('User-Agent', 'Unknown')
@@ -831,11 +889,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         never send /complete — the short timeout lets the server proceed quickly
         without hanging.
         """
-        event = self.server.httpDownloadCompleteEvents.get(self._downloadId)
-        if not event:
-            return
-
-        completed = event.wait(timeout=5)
+        completed = self.server.httpDownloadCompletionStore.wait(self._downloadId, timeout=5)
         if not completed:
             logger.debug(
                 f"HTTP download complete ACK not received for {self._downloadId[:8]} "
@@ -1598,8 +1652,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             if checksumSession and not checksumSession.isClosed:
                 checksumSession.abort()
                 
-            # Always clean up the completion event and progress tracking
-            self.server.httpDownloadCompleteEvents.pop(self._downloadId, None)
+            # Always clean up the completion state and progress tracking
+            self.server.httpDownloadCompletionStore.unregister(self._downloadId)
             self.server.downloadProgressStore.unregister(self._downloadId)
             if logicalDl:
                 self.server.logicalDownloadRequestStore.unregister(logicalDl, self._downloadId)
@@ -2183,11 +2237,12 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         downloadId = data.get('downloadId')
         if downloadId:
             connectionType = 'relay'
-            event = self.server.httpDownloadCompleteEvents.get(downloadId)
-            if event:
-                event.set()
+            ackStatus = self.server.httpDownloadCompletionStore.acknowledge(downloadId)
+            if ackStatus == 'accepted':
                 logger.debug(f"HTTP download complete ACK received for {downloadId[:8]}")
                 FFLEvent.receiptCreated.trigger(downloadId=downloadId, connectionType='http', clientInfo=clientInfo)
+            elif ackStatus == 'duplicate':
+                logger.debug(f"HTTP download complete ACK duplicate ignored for {downloadId[:8]}")
             else:
                 logger.debug(f"HTTP download complete ACK: unknown downloadId {downloadId[:8]}")
 
@@ -2400,16 +2455,15 @@ class Server(ThreadingHTTPServer):
         self.authRateLimiter = AuthRateLimiter()
         self.downloadProgressStore = DownloadProgressStore()
         self.logicalDownloadRequestStore = LogicalDownloadRequestStore()
+        # HTTP relay completion ACK tracking. Both page JS and Service Worker may
+        # POST /complete; treat the first ACK as authoritative and ignore duplicates.
+        self.httpDownloadCompletionStore = HTTPDownloadCompletionStore()        
 
         self.downloadCount = 0
         self.startTime = time.time()
 
         # Initialize error tracking for status polling
         self.lastError = None
-
-        # Completion events for HTTP downloads (relay path)
-        # Maps downloadId -> threading.Event, set by client POST /complete
-        self.httpDownloadCompleteEvents = {}
 
         # Initialize E2E encryption if enabled
         if self.config.e2eeEnabled:

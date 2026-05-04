@@ -23,10 +23,16 @@ import threading
 import time
 import unittest
 from urllib.parse import urlparse
+from unittest import mock
 
 import requests
 
-from bases.Server import LogicalDownloadRequestStore
+from bases.Server import (
+    DownloadHandler,
+    DownloadProgressStore,
+    HTTPDownloadCompletionStore,
+    LogicalDownloadRequestStore,
+)
 
 from ..BrowserTestBase import BrowserTestBase
 from ..CoreTestBase import FastFileLinkTestBase
@@ -84,6 +90,95 @@ class LogicalDownloadRequestStoreTest(unittest.TestCase):
         store.unregister('same-dl', 'req-1')
 
         self.assertFalse(store.isSuperseded('same-dl', 'req-1'))
+
+
+class HTTPDownloadCompletionStoreTest(unittest.TestCase):
+    """Unit tests for idempotent HTTP relay completion ACK tracking."""
+
+    def testFirstAckSignalsWaiter(self):
+        store = HTTPDownloadCompletionStore()
+        downloadId = 'download-1'
+        store.register(downloadId)
+
+        self.assertEqual(store.acknowledge(downloadId), 'accepted')
+        self.assertTrue(store.wait(downloadId, timeout=0))
+
+    def testDuplicateAckIsIgnored(self):
+        store = HTTPDownloadCompletionStore()
+        downloadId = 'download-2'
+        store.register(downloadId)
+
+        self.assertEqual(store.acknowledge(downloadId), 'accepted')
+        self.assertEqual(store.acknowledge(downloadId), 'duplicate')
+
+    def testUnknownAckReturnsUnknown(self):
+        store = HTTPDownloadCompletionStore()
+        self.assertEqual(store.acknowledge('missing-download'), 'unknown')
+
+
+class DownloadProgressStoreTest(unittest.TestCase):
+    """Unit tests for per-download stall tracking independent of HTTP plumbing."""
+
+    def testStalledDownloadsAreTrackedAndUnregisteredIndependently(self):
+        store = DownloadProgressStore()
+        oldThreshold = store.STALL_THRESHOLD_SECONDS
+        store.STALL_THRESHOLD_SECONDS = 10
+
+        try:
+            with mock.patch('bases.Server.time.time', return_value=1000):
+                store.register('stalled-download', 100)
+                store.register('active-download', 100)
+                store.register('removed-download', 100)
+
+            with mock.patch('bases.Server.time.time', return_value=1005):
+                store.update('active-download', 50)
+
+            store.unregister('removed-download')
+
+            with mock.patch('bases.Server.time.time', return_value=1011):
+                stalled = store.getStalledDownloads()
+            self.assertEqual([entry['downloadId'] for entry in stalled], ['stalled-download'])
+
+            store.markStallReported('stalled-download')
+            with mock.patch('bases.Server.time.time', return_value=1011):
+                self.assertEqual(store.getStalledDownloads(), [])
+        finally:
+            store.STALL_THRESHOLD_SECONDS = oldThreshold
+
+
+class DownloadCompleteHandlerTest(unittest.TestCase):
+    """Unit tests for /complete ACK handling behaviour."""
+
+    def _createHandler(self):
+        handler = DownloadHandler.__new__(DownloadHandler)
+        handler.headers = {
+            'User-Agent': 'UnitTest',
+            'Host': 'example.fastfilelink.com',
+        }
+        handler.server = type('ServerStub', (), {})()
+        handler.server.httpDownloadCompletionStore = HTTPDownloadCompletionStore()
+        handler.server.webRTC = mock.Mock()
+        handler._sendBytes = mock.Mock()
+        return handler
+
+    def testDuplicateHttpCompleteAckTriggersReceiptOnlyOnce(self):
+        handler = self._createHandler()
+        downloadId = 'download-3'
+        handler.server.httpDownloadCompletionStore.register(downloadId)
+
+        with mock.patch('bases.Server.FFLEvent.receiptCreated.trigger') as triggerMock:
+            handler._handleDownloadComplete({'downloadId': downloadId, 'receivedBytes': 123})
+            handler._handleDownloadComplete({'downloadId': downloadId, 'receivedBytes': 123})
+
+        triggerMock.assert_called_once_with(
+            downloadId=downloadId,
+            connectionType='http',
+            clientInfo={
+                'userAgent': 'UnitTest',
+                'domain': 'example.fastfilelink.com',
+            }
+        )
+        self.assertEqual(handler._sendBytes.call_count, 2)
 
 
 class DiagnosisEndpointTest(FastFileLinkTestBase):

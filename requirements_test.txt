@@ -19,3 +19,5 @@ pyseto
 httpx
 paramiko
 pyyaml
+PyJWT
+cryptography
