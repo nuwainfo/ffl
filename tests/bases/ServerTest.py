@@ -19,6 +19,7 @@
 
 import json
 import os
+import socket
 import threading
 import time
 import unittest
@@ -548,12 +549,43 @@ class OverlappingDownloadReproTest(FastFileLinkTestBase):
 
     def __init__(self, methodName='runTest', fileSizeBytes=4 * 1024 * 1024):
         super().__init__(methodName, fileSizeBytes)
+        # These tests send two overlapping HTTP requests and assert precise timing:
+        # the first request stalls mid-stream, then the second supersedes it within
+        # a 12-second window.  Three properties of the bore tunnel make that window
+        # unreliable:
+        #
+        #   1. Multi-hop buffering: the stall is logged when the *server* stops
+        #      writing, but bore's asyncio buffer → TLS → remote bore server → TLS
+        #      → test client pipeline may still be draining.  The 12-second window
+        #      can expire before the stall even reaches the server.
+        #
+        #   2. Bore throughput: downloading 1 MB through bore can itself consume
+        #      several seconds in CI, leaving little headroom for the stall window.
+        #
+        #   3. Bore idle timeout: while the server is stalling, bore's localToRemote
+        #      pipe is blocked on a silent socket.  If bore's NETWORK_TIMEOUT fires
+        #      before the second request arrives and supersedes the first, bore tears
+        #      down the connection and the first request finishes prematurely.
+        #
+        # Fix: tell the server which port to bind via --port so we can address it
+        # directly on 127.0.0.1, bypassing bore entirely.  We ask the OS for a free
+        # port (bind to 0, read back the assigned port, then release), then pass it
+        # to the server process via --port.  The server's SO_REUSEADDR means the
+        # tiny race between our release and the server's bind is harmless in practice.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('127.0.0.1', 0))
+            self._localPort = s.getsockname()[1]
+
+    def _startFastFileLink(self, **kwargs):
+        kwargs.setdefault('extraArgs', [])
+        kwargs['extraArgs'] = ['--port', str(self._localPort)] + list(kwargs['extraArgs'])
+        return super()._startFastFileLink(**kwargs)
 
     def _parseShareLink(self, shareLink):
-        parsed = urlparse(shareLink.rstrip('/'))
-        baseUrl = f'{parsed.scheme}://{parsed.netloc}'
-        uid = parsed.path.lstrip('/')
-        return baseUrl, uid
+        # Ignore the bore tunnel URL returned by the process; use the known local
+        # port instead so requests go directly to the server with no tunnel latency.
+        uid = shareLink.rstrip('/').split('/')[-1].split('?')[0]
+        return f'http://127.0.0.1:{self._localPort}', uid
 
     def _waitForStallInjection(self, outputCapture, timeoutSeconds=12):
         deadline = time.time() + timeoutSeconds

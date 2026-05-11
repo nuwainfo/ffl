@@ -20,6 +20,7 @@
 import asyncio
 import logging
 import os
+import socket
 import subprocess
 import tempfile
 import threading
@@ -96,11 +97,15 @@ class BoreHttpsTest(unittest.TestCase):
         remoteHost="33.fastfilelink.com",
         secret=None,  # Will be fetched dynamically
         tempDir=None,
-        port=8000
+        port=None
     ):
         super().__init__(methodName)
         self.remoteHost = remoteHost
         self.secret = secret
+        if port is None:
+            with socket.socket() as s:
+                s.bind(('', 0))
+                port = s.getsockname()[1]
         self.testPort = port
 
         if tempDir is None:

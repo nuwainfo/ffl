@@ -21,5 +21,14 @@
     "account": "Account",
     "clientArea": "Settings",
     "logout": "Log out",
-    "menu": "Menu"
+    "menu": "Menu",
+    "freeDownloadModal":{
+        "recommendStore":"For your convenience, we recommend downloading the software from the store.",
+        "specificNeedPortable":"However, if you have specific needs, you can also download the portable executable version.",
+        "downloadFromStore":"Download From Store (Recommended)",
+        "downloadPortableExecutable":"Download Portable Executable",
+        "windowsVersion":"Windows Version",
+        "macVersion":"Mac Version",
+        "linuxVersion":"Linux Version"
+    }
 }

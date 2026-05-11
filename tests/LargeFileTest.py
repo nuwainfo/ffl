@@ -30,6 +30,7 @@ import time
 import unittest
 import json
 
+from datetime import datetime, timedelta
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -66,6 +67,27 @@ DIRECT_RUN = __name__ == "__main__"
 BROWSER_CHOICES = ("chrome", "firefox")
 ROUTE_CHOICES = ("auto", "sw", "pass")
 BROWSER_DRIVEN_SCENARIOS = {"http-browser", "normal", "webrtc", "fallback", "upload"}
+
+# Curated "full" matrix.
+# Keep only combinations that exercise distinct download behavior:
+# - `http-browser`: pure HTTP browser path; Firefox `pass` is distinct because the
+#   test maps it to `native=true`, which exercises browser-owned/native handling.
+# - `normal`: default happy-path coverage for both browsers; route variants add no
+#   meaningful value when P2P succeeds without relay fallback.
+# - `webrtc`: fallback is disabled, so route variants are irrelevant and `pass`
+#   is actively misleading for Firefox because it does not exercise HTTP/native flow.
+# - `fallback`: explicit relay fallback coverage; keep Firefox `pass` because it
+#   exercises the native/browser-owned HTTP resume path after P2P disruption.
+# - `upload`: browser download from an upload-mode share still benefits from Firefox
+#   native-path coverage, but extra route variants are redundant.
+CURATED_FULL_MATRIX = {
+    "http-request": [(None, None)],
+    "http-browser": [("chrome", "auto"), ("firefox", "auto"), ("firefox", "pass")],
+    "normal": [("chrome", "auto"), ("firefox", "auto")],
+    "webrtc": [("chrome", "auto"), ("firefox", "auto")],
+    "fallback": [("chrome", "auto"), ("firefox", "auto"), ("firefox", "pass")],
+    "upload": [("chrome", "auto"), ("firefox", "auto"), ("firefox", "pass")],
+}
 
 
 @dataclass(frozen=True)
@@ -759,8 +781,18 @@ class LargeFileTest(ResumeBrowserTestBase):
     REQUEST_CHUNK_SIZE = parseSizeString(os.getenv("FFL_LARGE_FILE_REQUEST_CHUNK_SIZE", "4M"))
     REQUEST_LOG_INTERVAL = parseSizeString(os.getenv("FFL_LARGE_FILE_REQUEST_LOG_INTERVAL", "512M"))
     REQUEST_SOCKET_TIMEOUT = int(os.getenv("FFL_LARGE_FILE_REQUEST_SOCKET_TIMEOUT", "900"))
+    ESTIMATE_MIN_SIZE = parseSizeString(os.getenv("FFL_LARGE_FILE_ESTIMATE_MIN_SIZE", "1G"))
+    ESTIMATE_PROBE_SIZE = parseSizeString(os.getenv("FFL_LARGE_FILE_ESTIMATE_PROBE_SIZE", "16M"))
+    ESTIMATE_CACHE_TTL_SECONDS = int(os.getenv("FFL_LARGE_FILE_ESTIMATE_CACHE_TTL", "86400"))
+    ESTIMATE_LOWER_FACTOR = float(os.getenv("FFL_LARGE_FILE_ESTIMATE_LOWER_FACTOR", "0.85"))
+    ESTIMATE_UPPER_FACTOR = float(os.getenv("FFL_LARGE_FILE_ESTIMATE_UPPER_FACTOR", "1.15"))
+    ESTIMATE_ANOMALY_FACTOR = float(os.getenv("FFL_LARGE_FILE_ESTIMATE_ANOMALY_FACTOR", "1.25"))
+    ESTIMATE_ANOMALY_GRACE_SECONDS = int(os.getenv("FFL_LARGE_FILE_ESTIMATE_ANOMALY_GRACE_SECONDS", "600"))
+    ESTIMATE_CONNECT_TIMEOUT = int(os.getenv("FFL_LARGE_FILE_ESTIMATE_CONNECT_TIMEOUT", "30"))
     VERIFY_HASH = getEnv("FFL_LARGE_FILE_VERIFY_HASH", False)
     NETWORK_EMULATION = NetworkEmulationConfig.fromEnvironment()
+    HTTP_PROBE_CACHE = None
+    HTTP_PROBE_CACHE_FILE_PATH = None
 
     def __init__(self, methodName="runTest"):
         super().__init__(methodName)
@@ -786,6 +818,16 @@ class LargeFileTest(ResumeBrowserTestBase):
         cls.REQUEST_CHUNK_SIZE = parseSizeString(os.getenv("FFL_LARGE_FILE_REQUEST_CHUNK_SIZE", "4M"))
         cls.REQUEST_LOG_INTERVAL = parseSizeString(os.getenv("FFL_LARGE_FILE_REQUEST_LOG_INTERVAL", "512M"))
         cls.REQUEST_SOCKET_TIMEOUT = int(os.getenv("FFL_LARGE_FILE_REQUEST_SOCKET_TIMEOUT", "900"))
+        cls.ESTIMATE_MIN_SIZE = parseSizeString(os.getenv("FFL_LARGE_FILE_ESTIMATE_MIN_SIZE", "1G"))
+        cls.ESTIMATE_PROBE_SIZE = parseSizeString(os.getenv("FFL_LARGE_FILE_ESTIMATE_PROBE_SIZE", "16M"))
+        cls.ESTIMATE_CACHE_TTL_SECONDS = int(os.getenv("FFL_LARGE_FILE_ESTIMATE_CACHE_TTL", "86400"))
+        cls.ESTIMATE_LOWER_FACTOR = float(os.getenv("FFL_LARGE_FILE_ESTIMATE_LOWER_FACTOR", "0.85"))
+        cls.ESTIMATE_UPPER_FACTOR = float(os.getenv("FFL_LARGE_FILE_ESTIMATE_UPPER_FACTOR", "1.15"))
+        cls.ESTIMATE_ANOMALY_FACTOR = float(os.getenv("FFL_LARGE_FILE_ESTIMATE_ANOMALY_FACTOR", "1.25"))
+        cls.ESTIMATE_ANOMALY_GRACE_SECONDS = int(
+            os.getenv("FFL_LARGE_FILE_ESTIMATE_ANOMALY_GRACE_SECONDS", "600")
+        )
+        cls.ESTIMATE_CONNECT_TIMEOUT = int(os.getenv("FFL_LARGE_FILE_ESTIMATE_CONNECT_TIMEOUT", "30"))
         cls.VERIFY_HASH = getEnv("FFL_LARGE_FILE_VERIFY_HASH", False)
         cls.NETWORK_EMULATION = NetworkEmulationConfig.fromEnvironment()
 
@@ -1286,6 +1328,20 @@ class LargeFileTest(ResumeBrowserTestBase):
             "logs": [],
         }
 
+    def _getResumeEvidenceUrls(self, observedUrls):
+        if not observedUrls:
+            return []
+
+        return [
+            url for url in observedUrls
+            if "/download" in url and (
+                "resume_start=" in url
+                or "resume_base=" in url
+                or "ff_auto_resume=1" in url
+                or "dl_path=sw_writer_resume" in url
+            )
+        ]
+
     def _printTransferSummary(self, label, totalBytes, elapsedSeconds):
         if elapsedSeconds <= 0:
             print(f"[Test] {label} summary: elapsed time too small to calculate throughput")
@@ -1297,6 +1353,292 @@ class LargeFileTest(ResumeBrowserTestBase):
             f"[Test] {label} summary: {totalBytes} bytes in {elapsedSeconds:.1f}s "
             f"({mibPerSecond:.2f} MiB/s, {mbps:.1f} Mbps)"
         )
+
+    def _shouldPrintHTTPProbeEstimate(self):
+        return self.originalFileSize >= self.ESTIMATE_MIN_SIZE
+
+    def _normalizeHTTPProbeCacheHost(self, requestUrl):
+        hostname = (urlparse(requestUrl).hostname or "").strip().lower()
+        hostLabels = hostname.split(".")
+
+        if len(hostLabels) >= 3 and hostLabels[0].isdigit():
+            return ".".join(hostLabels[1:])
+
+        return hostname
+
+    def _getHTTPProbeCacheKey(self, requestUrl):
+        return self._normalizeHTTPProbeCacheHost(requestUrl)
+
+    def _getHTTPProbeCacheFilePath(self):
+        cacheFile = os.getenv("FFL_LARGE_FILE_ESTIMATE_CACHE_FILE", "").strip()
+        if cacheFile:
+            return os.path.abspath(cacheFile)
+
+        if self.__class__.HTTP_PROBE_CACHE_FILE_PATH:
+            return self.__class__.HTTP_PROBE_CACHE_FILE_PATH
+
+        storageLocator = StorageLocator.getInstance()
+        candidateDirs = [
+            getattr(storageLocator, "_platformDir", ""),
+            getattr(storageLocator, "_homeDir", ""),
+            os.path.abspath("."),
+        ]
+        cacheFilename = "large_file_test_http_probe_cache.json"
+
+        for candidateDir in candidateDirs:
+            if not candidateDir:
+                continue
+            try:
+                os.makedirs(candidateDir, exist_ok=True)
+                cacheFilePath = os.path.join(candidateDir, cacheFilename)
+                self.__class__.HTTP_PROBE_CACHE_FILE_PATH = cacheFilePath
+                return cacheFilePath
+            except OSError as exc:
+                print(f"[Test] HTTP preflight cache directory unavailable: {candidateDir} => {exc}")
+
+        fallbackPath = os.path.abspath(cacheFilename)
+        self.__class__.HTTP_PROBE_CACHE_FILE_PATH = fallbackPath
+        return fallbackPath
+
+    def _pruneExpiredHTTPProbeCache(self, cacheData, now=None):
+        now = time.time() if now is None else now
+        prunedCache = {}
+        ttlSeconds = max(0, self.ESTIMATE_CACHE_TTL_SECONDS)
+
+        for cacheKey, cacheEntry in (cacheData or {}).items():
+            if not isinstance(cacheEntry, dict):
+                continue
+
+            timestamp = cacheEntry.get("timestamp")
+            if not isinstance(timestamp, (int, float)):
+                continue
+
+            if ttlSeconds and (now - timestamp) > ttlSeconds:
+                continue
+
+            prunedCache[cacheKey] = cacheEntry
+
+        return prunedCache
+
+    def _loadHTTPProbeCache(self):
+        if self.__class__.HTTP_PROBE_CACHE is not None:
+            return self.__class__.HTTP_PROBE_CACHE
+
+        cacheFilePath = self._getHTTPProbeCacheFilePath()
+        loadedCache = {}
+
+        if os.path.exists(cacheFilePath):
+            try:
+                with open(cacheFilePath, "r", encoding="utf-8") as cacheFile:
+                    cachePayload = json.load(cacheFile)
+                if isinstance(cachePayload, dict):
+                    loadedCache = self._pruneExpiredHTTPProbeCache(cachePayload)
+                else:
+                    print(f"[Test] HTTP preflight cache ignored: root JSON must be an object ({cacheFilePath})")
+            except (OSError, ValueError) as exc:
+                print(f"[Test] HTTP preflight cache load warning: {cacheFilePath} => {exc}")
+
+        self.__class__.HTTP_PROBE_CACHE = loadedCache
+        return self.__class__.HTTP_PROBE_CACHE
+
+    def _saveHTTPProbeCache(self):
+        cacheFilePath = self._getHTTPProbeCacheFilePath()
+        cacheDirectory = os.path.dirname(cacheFilePath) or "."
+        cachePayload = self._pruneExpiredHTTPProbeCache(self._loadHTTPProbeCache())
+
+        try:
+            os.makedirs(cacheDirectory, exist_ok=True)
+            tempCachePath = f"{cacheFilePath}.tmp"
+            with open(tempCachePath, "w", encoding="utf-8") as cacheFile:
+                json.dump(cachePayload, cacheFile, indent=2, sort_keys=True)
+            os.replace(tempCachePath, cacheFilePath)
+        except OSError as exc:
+            print(f"[Test] HTTP preflight cache save warning: {cacheFilePath} => {exc}")
+
+    def _getCachedHTTPProbe(self, cacheKey):
+        cacheNow = time.time()
+        cacheData = self._loadHTTPProbeCache()
+        cachedProbe = cacheData.get(cacheKey)
+        if not cachedProbe:
+            return None
+
+        timestamp = cachedProbe.get("timestamp")
+        if not isinstance(timestamp, (int, float)):
+            cacheData.pop(cacheKey, None)
+            self._saveHTTPProbeCache()
+            return None
+
+        if self.ESTIMATE_CACHE_TTL_SECONDS and (cacheNow - timestamp) > self.ESTIMATE_CACHE_TTL_SECONDS:
+            cacheData.pop(cacheKey, None)
+            self._saveHTTPProbeCache()
+            return None
+
+        return dict(cachedProbe, fromCache=True)
+
+    def _storeCachedHTTPProbe(self, cacheKey, probeResult):
+        cacheData = self._loadHTTPProbeCache()
+        cacheData[cacheKey] = dict(probeResult, fromCache=False)
+        self._saveHTTPProbeCache()
+
+    def _getHTTPProbeScenarioNote(self, requestUrl):
+        scenarioName = TEST_TO_SCENARIO.get(self._testMethodName)
+        queryValues = dict(parse_qsl(urlparse(requestUrl).query, keep_blank_values=True))
+        webrtcValue = str(queryValues.get("webrtc", "")).strip().lower()
+        webrtcExplicitlyDisabled = webrtcValue in ("0", "false", "off", "no")
+
+        if scenarioName in ("http-request", "http-browser") or webrtcExplicitlyDisabled:
+            return None
+
+        if scenarioName == "upload":
+            return (
+                "This estimate covers recipient-side HTTP relay throughput only; "
+                "uploader-side cloud upload time is not included."
+            )
+
+        return (
+            "This estimate is based on an HTTP tunnel probe; actual runtime may differ "
+            "if the scenario spends time on P2P before falling back."
+        )
+
+    def _formatDurationCompact(self, seconds):
+        seconds = max(0, int(round(seconds)))
+        hours, remainder = divmod(seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+        parts = []
+
+        if hours:
+            parts.append(f"{hours}h")
+        if minutes:
+            parts.append(f"{minutes}m")
+        if secs or not parts:
+            parts.append(f"{secs}s")
+
+        return " ".join(parts)
+
+    def _formatCompletionClock(self, dt):
+        timeFormat = "%H:%M:%S" if dt.date() == datetime.now().date() else "%m-%d %H:%M:%S"
+        return dt.strftime(timeFormat)
+
+    def _probeHTTPTransferRate(self, requestUrl):
+        probeBytes = max(1, min(self.originalFileSize, self.ESTIMATE_PROBE_SIZE))
+        cacheKey = self._getHTTPProbeCacheKey(requestUrl)
+        cachedProbe = self._getCachedHTTPProbe(cacheKey)
+
+        if cachedProbe:
+            return cachedProbe
+
+        chunkSize = max(64 * 1024, min(self.REQUEST_CHUNK_SIZE, probeBytes, 1024 * 1024))
+        socketTimeout = max(30, min(self.DOWNLOAD_TIMEOUT, self.REQUEST_SOCKET_TIMEOUT))
+        headers = {
+            "Cache-Control": "no-cache",
+            "Range": f"bytes=0-{probeBytes - 1}",
+        }
+
+        session = self._createDownloadSession()
+        response = None
+        measuredBytes = 0
+        startTime = time.time()
+
+        try:
+            response = session.get(
+                requestUrl,
+                stream=True,
+                timeout=(self.ESTIMATE_CONNECT_TIMEOUT, socketTimeout),
+                headers=headers,
+            )
+            response.raise_for_status()
+
+            for chunk in response.iter_content(chunk_size=chunkSize):
+                if not chunk:
+                    continue
+
+                remainingBytes = probeBytes - measuredBytes
+                measuredBytes += min(len(chunk), remainingBytes)
+                if measuredBytes >= probeBytes:
+                    break
+
+            elapsedSeconds = max(time.time() - startTime, 0.001)
+            if measuredBytes <= 0:
+                raise AssertionError("HTTP preflight probe did not receive any bytes")
+
+            probeResult = {
+                "timestamp": time.time(),
+                "requestUrl": requestUrl,
+                "probeBytes": probeBytes,
+                "measuredBytes": measuredBytes,
+                "elapsedSeconds": elapsedSeconds,
+                "bytesPerSecond": measuredBytes / elapsedSeconds,
+                "statusCode": response.status_code,
+                "contentRange": response.headers.get("Content-Range"),
+                "fromCache": False,
+            }
+            self._storeCachedHTTPProbe(cacheKey, probeResult)
+            return probeResult
+        finally:
+            if response is not None:
+                try:
+                    response.close()
+                except OSError as exc:
+                    print(f"[Test] HTTP preflight probe response close warning: {exc}")
+            session.close()
+
+    def _printHTTPTransferEstimate(self, requestUrl, label):
+        if not self._shouldPrintHTTPProbeEstimate():
+            return
+
+        note = self._getHTTPProbeScenarioNote(requestUrl)
+        print(f"[Test] HTTP preflight estimate for {label}: probing tunnel throughput...")
+
+        try:
+            probeResult = self._probeHTTPTransferRate(requestUrl)
+        except Exception as exc:
+            print(f"[Test] HTTP preflight estimate skipped: {exc}")
+            return
+
+        bytesPerSecond = probeResult["bytesPerSecond"]
+        if bytesPerSecond <= 0:
+            print("[Test] HTTP preflight estimate skipped: measured throughput was zero")
+            return
+
+        sampleMiBPerSecond = bytesPerSecond / (1024 * 1024)
+        sampleMbps = (bytesPerSecond * 8) / 1_000_000
+        sampleSource = "cache" if probeResult.get("fromCache") else "live probe"
+
+        centerSeconds = self.originalFileSize / bytesPerSecond
+        lowerSeconds = centerSeconds * self.ESTIMATE_LOWER_FACTOR
+        upperSeconds = centerSeconds * self.ESTIMATE_UPPER_FACTOR
+        anomalySeconds = max(
+            upperSeconds * self.ESTIMATE_ANOMALY_FACTOR,
+            upperSeconds + self.ESTIMATE_ANOMALY_GRACE_SECONDS,
+        )
+
+        now = datetime.now()
+        finishLower = now + timedelta(seconds=lowerSeconds)
+        finishUpper = now + timedelta(seconds=upperSeconds)
+        anomalyCutoff = now + timedelta(seconds=anomalySeconds)
+
+        print(
+            f"[Test] HTTP preflight sample ({sampleSource}): {probeResult['measuredBytes']} bytes "
+            f"in {probeResult['elapsedSeconds']:.2f}s "
+            f"({sampleMiBPerSecond:.2f} MiB/s, {sampleMbps:.1f} Mbps), status={probeResult['statusCode']}"
+        )
+        if probeResult["contentRange"]:
+            print(f"[Test] HTTP preflight Content-Range: {probeResult['contentRange']}")
+
+        print(
+            f"[Test] Estimated completion for {self.originalFileSize} bytes: "
+            f"{self._formatDurationCompact(lowerSeconds)} to {self._formatDurationCompact(upperSeconds)}"
+        )
+        print(
+            f"[Test] Expected finish window: {self._formatCompletionClock(finishLower)} "
+            f"to {self._formatCompletionClock(finishUpper)}"
+        )
+        print(
+            f"[Test] If still running well past {self._formatCompletionClock(anomalyCutoff)}, "
+            "it may indicate an anomaly."
+        )
+        if note:
+            print(f"[Test] Note: {note}")
 
     def _waitForLargeDownload(self, downloadDir, expectedFilename, timeout, driver=None, evidence=None):
         partialSuffixes = (".part", ".crdownload", ".tmp")
@@ -1415,6 +1757,7 @@ class LargeFileTest(ResumeBrowserTestBase):
         startTime = time.time()
         socketTimeout = max(60, min(timeout, self.REQUEST_SOCKET_TIMEOUT))
 
+        self._printHTTPTransferEstimate(requestUrl, "direct HTTP download")
         print(f"[Test] Starting direct HTTP download: {requestUrl}")
         print(f"[Test] Request chunk size: {self.REQUEST_CHUNK_SIZE} bytes")
         print(f"[Test] Direct download output: {outputPath}")
@@ -1567,6 +1910,7 @@ class LargeFileTest(ResumeBrowserTestBase):
             queryParams.setdefault("route", self._directRunRouteOverride)
         self._applyRouteSpecificQueryParams(queryParams)
         finalUrl = self._addQueryParams(shareUrl, **queryParams) if queryParams else shareUrl
+        self._printHTTPTransferEstimate(finalUrl, "browser download")
         evidence = self._createBrowserEvidence()
         downloadedFile = self._downloadWithBrowserTimeout(
             driver,
@@ -1738,10 +2082,7 @@ class LargeFileTest(ResumeBrowserTestBase):
 
             observedUrls = sorted(evidence["observedUrls"])
             analysis = self._analysisFromEvidence(evidence)
-            resumeUrls = [
-                url for url in observedUrls
-                if "/download" in url and ("resume_start=" in url or "resume_base=" in url)
-            ]
+            resumeUrls = self._getResumeEvidenceUrls(observedUrls)
             self._printDiagnosticSummary(analysis)
             if resumeUrls:
                 print(f"[Test] Resume-related download URLs observed: {resumeUrls}")
@@ -1751,8 +2092,9 @@ class LargeFileTest(ResumeBrowserTestBase):
                 self.assertTrue(
                     analysis["baseBytes"] > 0 or analysis["resumeDetected"] or bool(resumeUrls),
                     (
-                        "Expected either browser resume logs or resume_* query parameters in the observed "
-                        "HTTP download request after simulated WebRTC disconnect"
+                        "Expected either browser resume logs, explicit resume_* query parameters, or "
+                        "automatic writer-resume request evidence in the observed HTTP download traffic "
+                        "after simulated WebRTC disconnect"
                     )
                 )
             else:
@@ -1811,7 +2153,7 @@ def buildArgumentParser():
     parser.add_argument(
         "--full",
         action="store_true",
-        help="Run the full matrix: all scenarios, all browsers, and all routes.",
+        help="Run the curated full matrix with distinct scenario/browser/route coverage.",
     )
     parser.add_argument("--binary", help="External share command prefix, e.g. ./ffl.com or 'python Core.py --cli'")
     parser.add_argument("--size", help="Override FFL_LARGE_FILE_SIZE, e.g. 20M, 100G")
@@ -1984,6 +2326,14 @@ def resolveSelectedRoutes(args):
     return ["auto"]
 
 
+def getCuratedFullScenarioVariants():
+    scenarioVariants = []
+    for scenario, variants in CURATED_FULL_MATRIX.items():
+        for browserOverride, routeOverride in variants:
+            scenarioVariants.append((scenario, browserOverride, routeOverride))
+    return scenarioVariants
+
+
 def createScenarioTestCase(scenario, browserOverride=None, routeOverride=None):
     testCase = LargeFileTest(SCENARIO_TO_TEST[scenario])
     testCase._directRunBrowserOverride = browserOverride
@@ -2014,25 +2364,37 @@ def runSelectedScenarios(args):
         print(f"[Test] Invalid network emulation settings: {exc}")
         return 2
 
-    requestedScenarios = resolveSelectedScenarios(args)
-    requestedBrowsers = resolveSelectedBrowsers(args)
-    requestedRoutes = resolveSelectedRoutes(args)
-
     suite = unittest.TestSuite()
-    for scenario in requestedScenarios:
-        if scenario not in BROWSER_DRIVEN_SCENARIOS:
-            suite.addTest(createScenarioTestCase(scenario))
-            continue
+    if args.full:
+        selectedScenarioSet = set(resolveSelectedScenarios(args))
+        selectedExecutions = [
+            (scenario, browserOverride, routeOverride)
+            for scenario, browserOverride, routeOverride in getCuratedFullScenarioVariants()
+            if scenario in selectedScenarioSet
+        ]
+    else:
+        requestedScenarios = resolveSelectedScenarios(args)
+        requestedBrowsers = resolveSelectedBrowsers(args)
+        requestedRoutes = resolveSelectedRoutes(args)
+        selectedExecutions = []
 
-        for browserName in requestedBrowsers:
-            for routeName in requestedRoutes:
-                suite.addTest(
-                    createScenarioTestCase(
-                        scenario,
-                        browserOverride=browserName,
-                        routeOverride=routeName,
-                    )
-                )
+        for scenario in requestedScenarios:
+            if scenario not in BROWSER_DRIVEN_SCENARIOS:
+                selectedExecutions.append((scenario, None, None))
+                continue
+
+            for browserName in requestedBrowsers:
+                for routeName in requestedRoutes:
+                    selectedExecutions.append((scenario, browserName, routeName))
+
+    for scenario, browserOverride, routeOverride in selectedExecutions:
+        suite.addTest(
+            createScenarioTestCase(
+                scenario,
+                browserOverride=browserOverride,
+                routeOverride=routeOverride,
+            )
+        )
 
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     return 0 if result.wasSuccessful() else 1

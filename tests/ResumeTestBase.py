@@ -257,7 +257,9 @@ class ResumeBrowserTestBase(BrowserTestBase, ResumeTestBase):
         largeFileSize=100 * 1024 * 1024,
         stallAfterBytes=20 * 1024 * 1024,
         extraEnvVars=None,
-        extraArgs=None
+        extraArgs=None,
+        useStdinSource=False,
+        stdinFileName="resume_test.bin",
     ):
         """Test HTTP resume when WebRTC connection stalls and falls back to HTTP
 
@@ -271,6 +273,8 @@ class ResumeBrowserTestBase(BrowserTestBase, ResumeTestBase):
             stallAfterBytes: Number of bytes to transfer before simulating stall
             extraEnvVars: Optional dict of extra environment variables (e.g., {'JS_DEBUG': 'True'})
             extraArgs: Optional list of extra arguments to pass to _startFastFileLink (e.g., ['--e2ee'])
+            useStdinSource: If True, share the test file via stdin instead of a direct file path
+            stdinFileName: Download filename to expose when useStdinSource=True
         """        
         # Wait for download to complete with reasonable timeout
         # Reduced for debugging: 60s base + 1s per MB
@@ -328,13 +332,21 @@ class ResumeBrowserTestBase(BrowserTestBase, ResumeTestBase):
                 if browserName == 'chrome' and 'JENKINS_HOME' in os.environ:
                     envVars['STREAMSAVER_BLOB'] = 'True'
 
+                startKwargs = {}
+                if useStdinSource:
+                    startKwargs.update({
+                        'stdinInputPath': self.testFilePath,
+                        'stdinFileName': stdinFileName,
+                    })
+
                 shareLink = self._startFastFileLink(
                     p2p=True,
                     output=False,
                     captureOutputIn=outputCapture,
                     timeout=600,
                     extraEnvVars=envVars,
-                    extraArgs=extraArgs or []
+                    extraArgs=extraArgs or [],
+                    **startKwargs
                 )
 
                 # Setup browser driver

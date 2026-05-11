@@ -134,6 +134,7 @@ class DownloadCompletionTracker {
             total: record.total,
             serverId: record.serverId,
             serverAckSent: !!record.serverAckSent,
+            downloadPath: record.downloadPath || null,
             replayed
         };
     }
@@ -163,13 +164,18 @@ class DownloadCompletionTracker {
         }
     }
 
-    async sendServerAck(uid, serverDownloadId, receivedBytes) {
+    async sendServerAck(uid, serverDownloadId, receivedBytes, downloadPath = '') {
         if (!uid || !serverDownloadId) {
             return false;
         }
 
         try {
-            const response = await fetch(`/${uid}/complete`, {
+            const completeUrl = new URL(`/${uid}/complete`, self.location.origin);
+            if (downloadPath) {
+                completeUrl.searchParams.set('dl_path', downloadPath);
+            }
+
+            const response = await fetch(completeUrl.pathname + completeUrl.search, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -191,14 +197,15 @@ class DownloadCompletionTracker {
         }
     }
 
-    async complete({ uid, downloadId, serverDownloadId, sent, total }) {
-        const serverAckSent = await this.sendServerAck(uid, serverDownloadId, total);
+    async complete({ uid, downloadId, serverDownloadId, sent, total, downloadPath = '' }) {
+        const serverAckSent = await this.sendServerAck(uid, serverDownloadId, total, downloadPath);
         const record = this.remember({
             id: downloadId,
             sent,
             total,
             serverId: serverDownloadId,
-            serverAckSent
+            serverAckSent,
+            downloadPath
         });
 
         return record ? this.buildMessage(record) : null;
@@ -220,6 +227,15 @@ function extractUidFromDownloadPath(pathname) {
         return '';
     }
     return segments[segments.length - 2] || '';
+}
+
+function extractDownloadPathFromUrl(url) {
+    if (!url || !url.searchParams) {
+        return '';
+    }
+
+    const downloadPath = url.searchParams.get('dl_path');
+    return downloadPath ? String(downloadPath) : '';
 }
 
 // Helper function to get configuration from URL parameters
@@ -918,7 +934,8 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
                     downloadId,
                     serverDownloadId,
                     sent: delivered,
-                    total: resolvedTotal
+                    total: resolvedTotal,
+                    downloadPath: extractDownloadPathFromUrl(url)
                 });
 
                 if (completeMessage) {

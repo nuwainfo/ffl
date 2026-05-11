@@ -933,11 +933,11 @@ class FallbackManager {
     }
 
     // Create fallback timer with timeout
-    createFallbackTimer(timeoutMs) {
+    createFallbackTimer(timeoutMs, onTimeout) {
         this.log("Fallback", `Setting up timeout for ${timeoutMs}ms`);
         this.fallbackTimer = setTimeout(() => {
             this.log("Fallback", `Timeout reached after ${timeoutMs}ms`);
-            this.triggerFallback("Connection timeout");
+            onTimeout();
         }, timeoutMs);
         return this.fallbackTimer;
     }
@@ -1082,14 +1082,14 @@ class FallbackManager {
 
     _calculateResumeOptions(actualBytesWritten) {
         const hasBytes = actualBytesWritten > 0;
-        const hasSize = typeof this.fileSize === 'number' && this.fileSize > 0;
+        const hasKnownSize = typeof this.fileSize === 'number' && this.fileSize > 0;
 
-        if (!hasBytes || !hasSize) {
+        if (!hasBytes) {
             this.log("Fallback", `Resume not applicable: bytesWritten=${actualBytesWritten}, fileSize=${this.fileSize}`);
             return null;
         }
 
-        if (actualBytesWritten >= this.fileSize) {
+        if (hasKnownSize && actualBytesWritten >= this.fileSize) {
             this.log("Fallback", `Resume skipped: bytesWritten (${actualBytesWritten}) >= fileSize (${this.fileSize})`);
             return null;
         }
@@ -1102,13 +1102,13 @@ class FallbackManager {
             baseBytes: actualBytesWritten,
             rangeStart: alignedStart,
             skipBytes: skipBytes,
-            expectedSize: this.fileSize,
+            expectedSize: hasKnownSize ? this.fileSize : 0,
             chunkSize: ALIGN
         };
 
         this.log("Fallback", `Resume calculation: baseBytes=${actualBytesWritten}, rangeStart=${alignedStart}, skipBytes=${skipBytes}, expectedSize=${this.fileSize}`);
 
-        if (resumePayload.rangeStart >= 0 && resumePayload.rangeStart < this.fileSize) {
+        if (resumePayload.rangeStart >= 0 && (!hasKnownSize || resumePayload.rangeStart < this.fileSize)) {
             this.log("Fallback", `Resume options prepared`);
             return resumePayload;
         } else {
@@ -1420,6 +1420,8 @@ class WebRTCManager {
         this.peerId = null;
         this.cleanupConnectionsCallback = null;
         this.receiptConfirmationUI = config.receiptConfirmationUI || null;
+        this.previewMode = false;
+        this.transferStallWatchdogTimer = null;
     }
 
     /**
@@ -1456,6 +1458,141 @@ class WebRTCManager {
 
     shouldHandlePreTransferFailure() {
         return !this.shouldStopPeerOperations() && !this.hasTransferStarted();
+    }
+
+    _stopDisconnectDuringTransferTimer() {
+        if (this.disconnectDuringTransferTimer) {
+            clearTimeout(this.disconnectDuringTransferTimer);
+            this.disconnectDuringTransferTimer = null;
+        }
+    }
+
+    _stopStallFallbackTimer() {
+        if (this.stallFallbackTimer) {
+            clearTimeout(this.stallFallbackTimer);
+            this.stallFallbackTimer = null;
+        }
+    }
+
+    _stopTransferStallWatchdog() {
+        if (this.transferStallWatchdogTimer) {
+            clearInterval(this.transferStallWatchdogTimer);
+            this.transferStallWatchdogTimer = null;
+        }
+    }
+
+    _clearPeerTimers() {
+        this._stopDisconnectDuringTransferTimer();
+        this._stopStallFallbackTimer();
+        this._stopTransferStallWatchdog();
+
+        if (this.fallbackManager) {
+            this.fallbackManager.clearFallbackTimer();
+        }
+    }
+
+    _queueHTTPFallback(reason, force = false) {
+        this.transferChecksumVerifier = null;
+
+        if (this.previewMode && !this.pauseGate.isPaused()) {
+            this.log("Fallback", "Preview mode detected - requesting pause before HTTP fallback");
+            this.pauseGate.requestPause();
+        }
+
+        const startFn = () => this.fallbackManager.triggerFallback(reason, force);
+        const shouldStartNow = this.pauseGate.setPendingStart({
+            kind: 'http',
+            startFn: startFn,
+            getHealth: null
+        });
+
+        if (shouldStartNow) {
+            startFn();
+            return;
+        }
+
+        this.log("Fallback", "HTTP download paused - waiting for user to click download");
+    }
+
+    _handleTerminalWebRTCFailure(reason) {
+        if (this.shouldStopPeerOperations()) {
+            return;
+        }
+
+        this.log("WebRTC", `Terminal transfer failure: ${reason}`);
+        this.connectionFailureHandled = true;
+        this.stopCandidatePolling = true;
+        this._clearPeerTimers();
+        this.uiManager.stopCountdown();
+        this.uiManager.setStatus(
+            this.t(
+                'Download:client.status.webrtcFailed',
+                'WebRTC transfer failed: {{reason}}',
+                { reason }
+            )
+        );
+        this.uiManager.setConnectionType(
+            this.t('Download:client.connection.p2pFailed', 'P2P transfer failed')
+        );
+        this.uiManager.setDownloadMessage(
+            this.t(
+                'Download:client.download.retryRequired',
+                'The device-to-device transfer stopped responding. Please retry the download.'
+            )
+        );
+
+        if (this.cleanupConnectionsCallback) {
+            this.cleanupConnectionsCallback();
+        }
+    }
+
+    _handleTransferFailure(reason, force = false) {
+        if (this.debugConfig && this.debugConfig.isHTTPFallbackEnabled()) {
+            this._queueHTTPFallback(reason, force);
+            return;
+        }
+
+        this._handleTerminalWebRTCFailure(reason);
+    }
+
+    _getTransferStallWatchdogIntervalMs() {
+        return Math.max(1000, Math.min(3000, Math.floor(this.stallDetectionMs / 2)));
+    }
+
+    _startTransferStallWatchdog() {
+        if (this.transferStallWatchdogTimer) {
+            return;
+        }
+
+        const intervalMs = this._getTransferStallWatchdogIntervalMs();
+        this.log(
+            "Watchdog",
+            `Starting transfer stall watchdog (${intervalMs}ms interval, stall=${this.stallDetectionMs}ms)`
+        );
+        this.transferStallWatchdogTimer = setInterval(() => {
+            this._checkTransferStall();
+        }, intervalMs);
+    }
+
+    _checkTransferStall() {
+        if (this.shouldStopPeerOperations()) {
+            return;
+        }
+
+        if (!this.hasTransferStarted() || !this.isStalled()) {
+            return;
+        }
+
+        const stalledForMs = Date.now() - this.lastProgressTs;
+        this.log(
+            "Watchdog",
+            `Transfer stalled for ${stalledForMs}ms at ${this.bytesReceived}/${this.fileSize}`
+        );
+        this._stopTransferStallWatchdog();
+        this._handleTransferFailure(
+            `WebRTC transfer stalled after ${Math.round(stalledForMs / 1000)}s with no progress`,
+            true
+        );
     }
 
     /**
@@ -1536,6 +1673,7 @@ class WebRTCManager {
         // Preview mode check
         const urlParams = new URLSearchParams(window.location.search);
         const isPreviewMode = parseBooleanParam(urlParams.get('preview'));
+        this.previewMode = isPreviewMode;
         this.log("PreviewMode", `Mode: ${isPreviewMode ? 'preview-first' : 'download-first'}`);
 
         // Initialize UI Manager
@@ -1604,26 +1742,7 @@ class WebRTCManager {
         });
 
         // Fallback to HTTP helper
-        const fallbackToHTTP = (reason, force = false) => {
-            this.transferChecksumVerifier = null;
-
-            if (isPreviewMode && !this.pauseGate.isPaused()) {
-                this.log("Fallback", "Preview mode detected - requesting pause before HTTP fallback");
-                this.pauseGate.requestPause();
-            }
-
-            const startFn = () => this.fallbackManager.triggerFallback(reason, force);
-            const shouldStartNow = this.pauseGate.setPendingStart({
-                kind: 'http',
-                startFn: startFn,
-                getHealth: null
-            });
-            if (shouldStartNow) {
-                startFn();
-            } else {
-                this.log("Fallback", "HTTP download paused - waiting for user to click download");
-            }
-        };
+        const fallbackToHTTP = (reason, force = false) => this._handleTransferFailure(reason, force);
 
         // Set progress bar max
         this.uiManager.setProgressMax(this.fileSize);
@@ -1664,7 +1783,7 @@ class WebRTCManager {
             onFallback: (reason) => {
                 this.log("Download", `WritePump fallback: ${reason}`);
                 if (!this.shouldStopPeerOperations()) {
-                    fallbackToHTTP(reason, true);
+                    this._handleTransferFailure(reason, true);
                 }
             },
             log: this.log
@@ -1764,7 +1883,9 @@ class WebRTCManager {
             this.log("WebRTC", "Peer connection created:", this.pc);
 
             // Create fallback timer
-            this.fallbackManager.createFallbackTimer(fallbackMs);
+            this.fallbackManager.createFallbackTimer(fallbackMs, () => {
+                fallbackToHTTP("Connection timeout");
+            });
 
             // Setup ICE connection state handler
             this.pc.oniceconnectionstatechange = () => this._handleICEConnectionStateChange(fallbackToHTTP);
@@ -2037,45 +2158,20 @@ class WebRTCManager {
 
         dc.onclose = () => {
             this.log("DataChannel", "Channel closed");
-            if (this.stallFallbackTimer) {
-                clearTimeout(this.stallFallbackTimer);
-                this.stallFallbackTimer = null;
-            }
+            this._stopStallFallbackTimer();
             const bytesWrittenSoFar = this.writePump.bytesWritten;
-            if (!this.shouldStopPeerOperations() && bytesWrittenSoFar < this.fileSize) {
+            const hasKnownSize = typeof this.fileSize === 'number' && this.fileSize > 0;
+            const transferIncomplete = hasKnownSize ? bytesWrittenSoFar < this.fileSize : !this.downloadCompleted;
+            if (!this.shouldStopPeerOperations() && transferIncomplete) {
                 this.log("DataChannel", `Channel closed before completion (written: ${bytesWrittenSoFar}/${this.fileSize})`);
-                const fallbackToHTTP = (reason, force = false) => {
-                    this.transferChecksumVerifier = null;
-                    const startFn = () => this.fallbackManager.triggerFallback(reason, force);
-                    const shouldStartNow = this.pauseGate.setPendingStart({
-                        kind: 'http',
-                        startFn: startFn,
-                        getHealth: null
-                    });
-                    if (shouldStartNow) {
-                        startFn();
-                    }
-                };
-                fallbackToHTTP("Data channel closed unexpectedly", true);
+                this._handleTransferFailure("Data channel closed unexpectedly", true);
             }
         };
 
         dc.onerror = (err) => {
             this.log("DataChannel", "Error:", err);
             if (!this.shouldStopPeerOperations()) {
-                const fallbackToHTTP = (reason, force = false) => {
-                    this.transferChecksumVerifier = null;
-                    const startFn = () => this.fallbackManager.triggerFallback(reason, force);
-                    const shouldStartNow = this.pauseGate.setPendingStart({
-                        kind: 'http',
-                        startFn: startFn,
-                        getHealth: null
-                    });
-                    if (shouldStartNow) {
-                        startFn();
-                    }
-                };
-                fallbackToHTTP("Data channel error", true);
+                this._handleTransferFailure("Data channel error", true);
             }
         };
     }
@@ -2113,12 +2209,12 @@ class WebRTCManager {
                 await this.writePump.prepareForFallback(5000, 'Writer stuck finishing after EOF');
 
                 // Trigger HTTP fallback with resume support
-                fallbackToHTTP('Writer stuck finishing after EOF', true);
+                this._handleTransferFailure('Writer stuck finishing after EOF', true);
             }
         } else if (message === 'ERROR') {
             this.log("DataChannel", "Server reported error");
             if (!this.shouldStopPeerOperations()) {
-                fallbackToHTTP("Server reported error", true);
+                this._handleTransferFailure("Server reported error", true);
             }
         } else {
             this.log("DataChannel", `Unknown string message: ${message}`);
@@ -2153,6 +2249,7 @@ class WebRTCManager {
             this.log("DataChannel", `>>> First binary chunk received! <<<`);
             // NOW show P2P success - we confirmed data is flowing
             this.uiManager.showP2PSuccess();
+            this._startTransferStallWatchdog();
             this.log("DataChannel", "✓ P2P transfer confirmed - data flowing");
         }
 
@@ -2312,7 +2409,7 @@ class WebRTCManager {
                 .catch(err => {
                     this.log("DataChannel", `Message processing error: ${err}`);
                     if (!this.shouldStopPeerOperations()) {
-                        fallbackToHTTP("Message processing error", true);
+                        this._handleTransferFailure("Message processing error", true);
                     }
                 });
         };
@@ -2469,19 +2566,7 @@ class WebRTCManager {
         if (this.fileSize && this.bytesReceived < this.fileSize) {
             this.log("Download", `Incomplete P2P transfer detected: expected ${this.fileSize}, got ${this.bytesReceived}`);
             if (!this.shouldStopPeerOperations()) {
-                const fallbackToHTTP = (reason, force = false) => {
-                    this.transferChecksumVerifier = null;
-                    const startFn = () => this.fallbackManager.triggerFallback(reason, force);
-                    const shouldStartNow = this.pauseGate.setPendingStart({
-                        kind: 'http',
-                        startFn: startFn,
-                        getHealth: null
-                    });
-                    if (shouldStartNow) {
-                        startFn();
-                    }
-                };
-                fallbackToHTTP("Incomplete P2P transfer detected", true);
+                this._handleTransferFailure("Incomplete P2P transfer detected", true);
             }
             return;
         }
@@ -2498,6 +2583,7 @@ class WebRTCManager {
             this.log("Signal", `Notifying server of download completion for peer ${this.peerId}`);
             fetch(this.endpoints.complete, {
                 method: 'POST',
+                keepalive: true,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ peerId: this.peerId, receivedBytes: this.bytesReceived }),
             }).then(async response => {
@@ -2514,7 +2600,7 @@ class WebRTCManager {
         // Stop polling and timers
         this.stopCandidatePolling = true;
         this.connectionFailureHandled = true;
-        this.fallbackManager.clearFallbackTimer();
+        this._clearPeerTimers();
         this.uiManager.stopCountdown();
 
         // Cleanup connections

@@ -45,7 +45,7 @@ from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
 from bases.WebRTC import WebRTCManager, WebRTCDisabledError
 from bases.Progress import Progress
 from bases.Auth import RecipientAuth
-from bases.E2EE import E2EEManager
+from bases.E2EE import E2EEManager, CryptoHelper
 from bases.Checksum import DEFAULT_CHECKSUM_ALGORITHM, TransferChecksumStore
 from bases.Readers import FolderChangedException
 from bases.I18n import _
@@ -184,10 +184,10 @@ class AuthRateLimiter:
     """
 
     MAX_FAILURES = 5
-    LOCKOUT_DURATION = 300  # 5 minutes
+    LOCKOUT_DURATION = 300 # 5 minutes
 
     def __init__(self):
-        self._state = {}  # authType -> {'failures': int, 'lockedUntil': float}
+        self._state = {} # authType -> {'failures': int, 'lockedUntil': float}
         self._lock = threading.Lock()
 
     def _stateFor(self, authType: str) -> dict:
@@ -222,10 +222,10 @@ class DownloadSessionStore:
     - The existing session cookie (dlk) remains valid until expiry and supports Range requests.
     """
 
-    SESSION_TTL = 600  # seconds
+    SESSION_TTL = 600 # seconds
 
     def __init__(self):
-        self._sessions = {}  # dlk_hash -> expires_at
+        self._sessions = {} # dlk_hash -> expires_at
         self._claimed = False
         self._lock = threading.Lock()
 
@@ -234,7 +234,7 @@ class DownloadSessionStore:
         with self._lock:
             if self._claimed:
                 raise RuntimeError("Download session already claimed")
-                
+
             dlk = secrets.token_urlsafe(32)
             dlkHash = hashlib.sha256(dlk.encode()).hexdigest()
             self._sessions[dlkHash] = time.time() + self.SESSION_TTL
@@ -248,11 +248,11 @@ class DownloadSessionStore:
             expiresAt = self._sessions.get(dlkHash)
             if expiresAt is None:
                 return False
-                
+
             if time.time() > expiresAt:
                 del self._sessions[dlkHash]
                 return False
-                
+
             return True
 
 
@@ -288,14 +288,16 @@ class DownloadProgressStore(DownloadRecordStore):
 
     def register(self, downloadId, total):
         now = time.time()
-        self._putRecord(downloadId, {
-            'downloadId': downloadId,
-            'written': 0,
-            'total': total,
-            'lastUpdateTime': now,
-            'startTime': now,
-            'stallReported': False,
-        })
+        self._putRecord(
+            downloadId, {
+                'downloadId': downloadId,
+                'written': 0,
+                'total': total,
+                'lastUpdateTime': now,
+                'startTime': now,
+                'stallReported': False,
+            }
+        )
 
     def update(self, downloadId, written):
         with self._lock:
@@ -303,7 +305,7 @@ class DownloadProgressStore(DownloadRecordStore):
             if entry:
                 entry['written'] = written
                 entry['lastUpdateTime'] = time.time()
-                entry['stallReported'] = False  # reset on any progress
+                entry['stallReported'] = False # reset on any progress
 
     def getStalledDownloads(self):
         """Return snapshots of downloads with no progress for STALL_THRESHOLD_SECONDS."""
@@ -314,7 +316,7 @@ class DownloadProgressStore(DownloadRecordStore):
                 if not entry['stallReported']:
                     if now - entry['lastUpdateTime'] >= self.STALL_THRESHOLD_SECONDS:
                         stalled.append(dict(entry))
-                        
+
         return stalled
 
     def markStallReported(self, downloadId):
@@ -391,12 +393,12 @@ class LogicalDownloadRequestStore:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._requests = {}  # logicalDl -> requestId -> LogicalDownloadRequest
+        self._requests = {} # logicalDl -> requestId -> LogicalDownloadRequest
 
     def _getRequestsFor(self, logicalDl):
         if logicalDl not in self._requests:
             self._requests[logicalDl] = {}
-            
+
         return self._requests[logicalDl]
 
     @staticmethod
@@ -407,7 +409,7 @@ class LogicalDownloadRequestStore:
 
     def register(self, logicalDl, requestId, rangeStart, rangeEnd):
         supersededRequestIds = []
-        
+
         with self._lock:
             requestsForDl = self._getRequestsFor(logicalDl)
             for entry in requestsForDl.values():
@@ -952,7 +954,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 flags['webrtcDisabled'] = True
             elif webrtcValue is True:
                 flags['webrtcDisabled'] = False
-                
+
             flags['webrtcDisabledDetermined'] = True
 
         return flags
@@ -978,7 +980,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         stallAfterBytes = debugOptions.get('stallAfterBytes')
         if stallAfterBytes is not None and written >= stallAfterBytes:
             flushPrint(f"[Test] Stall injection: blocking after {written} bytes (stall-after={stallAfterBytes})")
-            debugOptions['stallAfterBytes'] = None  # Only stall once
+            debugOptions['stallAfterBytes'] = None # Only stall once
             self.wfile.flush()
             while True:
                 self._ensureLogicalDownloadStillActive(logicalDl)
@@ -1063,7 +1065,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             rangeStart=start,
             rangeEnd=end,
         )
-    
+
         if supersededRequestIds:
             logger.info(
                 f"Superseding {len(supersededRequestIds)} overlapping request(s) "
@@ -1081,17 +1083,17 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 self.wfile.flush()
             except OSError as e:
                 logger.debug(f"Superseded logical download flush failed: {e}")
-                
+
             try:
                 self.connection.shutdown(socket.SHUT_RDWR)
             except OSError as e:
                 logger.debug(f"Superseded logical download shutdown failed: {e}")
-                
+
             try:
                 self.connection.close()
             except OSError as e:
                 logger.debug(f"Superseded logical download close failed: {e}")
-                
+
             raise SupersededDownloadError(
                 f"Superseded by newer overlapping request for logical dl={logicalDl}"
             )
@@ -1110,7 +1112,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         manifest = {
             'e2eeEnabled': True,
             'filename': filename,
-            'filesize': size,
+            'filesize': CryptoHelper.normalizeFileSize(size),
             'chunkSize': self.server.e2eeManager.chunkSize
         }
 
@@ -1219,7 +1221,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             k, _, v = part.strip().partition('=')
             if k.strip() == name:
                 return v.strip()
-                
+
         return None
 
     def _sendRateLimitExceeded(self) -> None:
@@ -1260,7 +1262,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         except RuntimeError:
             self._sendAuthFailure(b'Pickup already claimed.')
             return
-            
+
         self.send_response(HTTPStatus.NO_CONTENT)
         self.send_header(
             'Set-Cookie',
@@ -1285,9 +1287,11 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
         try:
             resp = requests.post(
-                recipientAuth.otpVerifyUrl,
-                json={'email': email, 'otp': otp, 'link': link or ''},
-                timeout=10
+                recipientAuth.otpVerifyUrl, json={
+                    'email': email,
+                    'otp': otp,
+                    'link': link or ''
+                }, timeout=10
             )
             return resp.ok and bool(resp.json().get('verificationToken'))
         except Exception as e:
@@ -1319,9 +1323,11 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         language = data.get('language')
         try:
             resp = requests.post(
-                recipientAuth.otpRequestUrl,
-                json={'email': email, 'link': link, 'language': language},
-                timeout=10
+                recipientAuth.otpRequestUrl, json={
+                    'email': email,
+                    'link': link,
+                    'language': language
+                }, timeout=10
             )
             self.send_response(resp.status_code)
             self.send_header('Content-type', 'application/json; charset=utf-8')
@@ -1455,8 +1461,11 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         path, name, size, ctype, reader = self._getFileInfo(quoteName=False)
         self._appendDownloadRequestLog(args, name, size)
 
+        requestedStart = self.range[0] if self.range else 0
+        canResumeFromStart = reader.canResumeFrom(requestedStart)
+
         # Check if reader has already been consumed (for single-use sources like stdin)
-        if reader.consumed:
+        if reader.consumed and not canResumeFromStart:
             # Single-use reader already consumed - return 410 Gone
             self.send_response(HTTPStatus.GONE)
             self.send_header("Content-type", "text/plain; charset=utf-8")
@@ -1480,6 +1489,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
         logicalDl = None
         written = 0
+        totalSizeHeader = size if size is not None else '*'
         progress = Progress(
             size,
             sizeFormatter=formatSize,
@@ -1495,10 +1505,10 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
         try:
             # Handle range requests (only for files that support it)
-            if self.range and not reader.supportsRange:
+            if self.range and not (reader.supportsRange or canResumeFromStart):
                 # Directory streams don't support Range
                 self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
-                self.send_header("Content-Range", f'bytes */{size}')
+                self.send_header("Content-Range", f'bytes */{totalSizeHeader}')
                 self.end_headers()
                 return
 
@@ -1512,18 +1522,26 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 end = end if end else size - 1
 
             # Determine if we should use chunked encoding
-            useChunked = (size is None) and ('Range' not in self.headers)
+            useChunked = (size is None)
             logicalDl = self._registerLogicalDownloadRequest(args, start, end)
 
             # Send appropriate response headers
             if 'Range' in self.headers:
-                if self.range and reader.supportsRange:
+                if self.range and (reader.supportsRange or canResumeFromStart):
                     self.send_response(HTTPStatus.PARTIAL_CONTENT)
-                    self.send_header("Content-Length", str(end - start + 1))
-                    self.send_header("Content-Range", f'bytes {start}-{end}/{size}')
+                    if size is not None:
+                        self.send_header("Content-Length", str(end - start + 1))
+                        self.send_header("Content-Range", f'bytes {start}-{end}/{size}')
+                    else:
+                        self.send_header("Transfer-Encoding", "chunked")
+                        
+                    if canResumeFromStart and not reader.supportsRange:
+                        self.send_header("FFL-Resume-Mode", "handoff")
+                        self.send_header("FFL-Resume-Start", str(start))
+                        logger.info("Stdin handoff resume accepted at byte %s", start)
                 else:
                     self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
-                    self.send_header("Content-Range", f'bytes */{size}')
+                    self.send_header("Content-Range", f'bytes */{totalSizeHeader}')
                     self.end_headers()
                     return
             else:
@@ -1558,10 +1576,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                     filename=name, filesize=size, startChunkIndex=startChunkIndex, saveTags=saveTags
                 )
 
-            checksumSession = self.server.checksumStore.begin(
-                transport='http',
-                e2ee=bool(encryptor)
-            )
+            checksumSession = self.server.checksumStore.begin(transport='http', e2ee=bool(encryptor))
             shouldCommitChecksum = (not self.range) and start == 0
 
             # Send file/directory data in chunks
@@ -1651,7 +1666,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         finally:
             if checksumSession and not checksumSession.isClosed:
                 checksumSession.abort()
-                
+
             # Always clean up the completion state and progress tracking
             self.server.httpDownloadCompletionStore.unregister(self._downloadId)
             self.server.downloadProgressStore.unregister(self._downloadId)
@@ -1690,7 +1705,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         path, name, size, ctype, reader = self._getFileInfo(quoteName=False)
         content = content.replace(b'{{ fileName }}', name.encode())
         content = content.replace(b'{{ fileSize }}', str(size if size is not None else -1).encode())
-        
+
         mediaContentType = self.guess_type(name) or ctype or ''
         content = content.replace(b'{{ fileContentType }}', mediaContentType.encode())
 
@@ -1710,7 +1725,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         else:
             metaDescription = _('Tap to download {fileName}').format(fileName=name)
             ogType = 'article'
-            
+
         content = content.replace(b'{{ ogTitle }}', ogTitle.encode())
         content = content.replace(b'{{ metaDescription }}', metaDescription.encode())
         content = content.replace(b'{{ ogType }}', ogType.encode())
@@ -1755,7 +1770,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             content = content.replace(b'const DISABLE_WEBRTC = false;', b'const DISABLE_WEBRTC = true;')
         if serverDebugEnabled:
             content = content.replace(b'const SERVER_DEBUG = false;', b'const SERVER_DEBUG = true;')
-            
+
         if streamSaverBlob:
             content = content.replace(b'{{ STREAMSAVER_BLOB }}', b'1')
         else:
@@ -1902,7 +1917,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             scheme = self.headers.get('X-Forwarded-Proto', '')
             if not scheme:
                 scheme = 'https' if (host and '.' in host and 'localhost' not in host) else 'http'
-                
+
             publicBaseUrl = f'{scheme}://{host}' if host else f'http://localhost:{self.server.server_address[1]}'
             uid = self.server.uid
 
@@ -2052,7 +2067,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                     for challengeCiphertext in recipientAuth.getChallengeCiphertexts()
                 ]
                 responseData['encrypted_challenges'] = encryptedChallenges
-                
+
             responseBody = json.dumps(responseData).encode('utf-8')
 
             self.send_response(HTTPStatus.OK)
@@ -2084,7 +2099,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
     def _handleWebRTCOffer(self, args):
         if not self._handleRecipientAuth(args):
             return
-            
+
         try:
             # Check for debug simulation parameters
             debugOptions = self._getWebRTCDebugOptions(args)
@@ -2200,7 +2215,7 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         if extraHeaders:
             for key, value in extraHeaders.items():
                 self.send_header(key, value)
-                
+
         self.end_headers()
         self.wfile.write(payload)
 
@@ -2237,6 +2252,15 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
         downloadId = data.get('downloadId')
         if downloadId:
             connectionType = 'relay'
+
+        payload, contentType = self._buildDownloadCompleteResponse(data)
+
+        extraHeaders = {'FFL-CompleteType': connectionType} if connectionType else None
+        self._sendBytes(payload, contentType, extraHeaders)
+
+        # Acknowledge AFTER sending the response so the file-serving thread (which may call
+        # _forceShutdown) cannot race the response delivery and close the connection first.
+        if downloadId:
             ackStatus = self.server.httpDownloadCompletionStore.acknowledge(downloadId)
             if ackStatus == 'accepted':
                 logger.debug(f"HTTP download complete ACK received for {downloadId[:8]}")
@@ -2245,11 +2269,6 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 logger.debug(f"HTTP download complete ACK duplicate ignored for {downloadId[:8]}")
             else:
                 logger.debug(f"HTTP download complete ACK: unknown downloadId {downloadId[:8]}")
-
-        payload, contentType = self._buildDownloadCompleteResponse(data)
-        
-        extraHeaders = {'FFL-CompleteType': connectionType} if connectionType else None
-        self._sendBytes(payload, contentType, extraHeaders)
 
     def _buildDownloadCompleteResponse(self, data):
         """Return (payload, contentType) for the /complete response. Override to customise."""
@@ -2457,7 +2476,7 @@ class Server(ThreadingHTTPServer):
         self.logicalDownloadRequestStore = LogicalDownloadRequestStore()
         # HTTP relay completion ACK tracking. Both page JS and Service Worker may
         # POST /complete; treat the first ACK as authoritative and ignore duplicates.
-        self.httpDownloadCompletionStore = HTTPDownloadCompletionStore()        
+        self.httpDownloadCompletionStore = HTTPDownloadCompletionStore()
 
         self.downloadCount = 0
         self.startTime = time.time()

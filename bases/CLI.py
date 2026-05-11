@@ -806,6 +806,7 @@ def _handleKeygenCommand(args, shareSubparser):
             logger.warning(f"Failed to delete private key {privPath}: {e}")
 
     FFLEvent.downloadCompleted.subscribe(deletePrivKeyAfterDownload)
+    FFLEvent.webrtcTransferCompleted.subscribe(deletePrivKeyAfterDownload)
 
     flushPrint(_('Sharing private key (download once, then auto-deleted).'))
     if not getattr(args, 'recipientAuth', None):
@@ -998,6 +999,27 @@ def _expandFileList(fileListPath: str):
     return paths
 
 
+def _normalizeAndValidateSharePathList(paths):
+    """Normalize share paths and fail fast if any entry does not exist."""
+    normalizedPathPairs = [(path, os.path.abspath(path)) for path in paths]
+    missingPathPairs = [
+        (originalPath, normalizedPath)
+        for originalPath, normalizedPath in normalizedPathPairs if not os.path.exists(normalizedPath)
+    ]
+
+    if missingPathPairs:
+        for originalPath, normalizedPath in missingPathPairs:
+            logger.debug(
+                "Missing share path during CLI validation: originalPath=%r normalizedPath=%r cwd=%r",
+                originalPath, normalizedPath, os.getcwd()
+            )
+            flushPrint(_('Error: file not found: {path}').format(path=normalizedPath))
+
+        return None
+
+    return [normalizedPath for _originalPath, normalizedPath in normalizedPathPairs]
+
+
 def validateShareArguments(args):
     """
     Validate arguments specifically for the share command.
@@ -1024,12 +1046,22 @@ def validateShareArguments(args):
             expanded = _expandFileList(singlePath[1:])
             if expanded is None:
                 return 1
-                
-            args.file = expanded  # list[str]
-        else:
+
+            args.file = _normalizeAndValidateSharePathList(expanded)
+            if args.file is None:
+                return 1
+        elif singlePath == "-" or singlePath.startswith("vfs://"):
             args.file = singlePath  # str
+        else:
+            normalizedPaths = _normalizeAndValidateSharePathList([singlePath])
+            if normalizedPaths is None:
+                return 1
+                
+            args.file = normalizedPaths[0]  # str
     else:
-        args.file = [os.path.abspath(p) for p in files]  # list[str]
+        args.file = _normalizeAndValidateSharePathList(files)
+        if args.file is None:
+            return 1
 
     # Check if --upload was used without Upload addon
     if args.upload and not settingsGetter.hasUploadSupport():

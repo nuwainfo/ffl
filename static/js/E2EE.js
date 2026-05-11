@@ -82,7 +82,7 @@ function buildAADStringFormat(filename, filesize, chunkIndex) {
 function buildAADStructFormat(filename, filesize, chunkIndex) {
     const filenameBytes = encodeText(filename);
     const filesizeBytes = new Uint8Array(8);
-    new DataView(filesizeBytes.buffer).setBigUint64(0, BigInt(filesize), false); // Big-endian
+    new DataView(filesizeBytes.buffer).setBigInt64(0, BigInt(filesize), false); // Big-endian
     const chunkIndexBytes = new Uint8Array(4);
     new DataView(chunkIndexBytes.buffer).setUint32(0, chunkIndex, false); // Big-endian
 
@@ -1021,7 +1021,7 @@ class TusUploadEncryptor {
         const chunkSizeBytes = new Uint8Array(8);
         const filesizeBytes = new Uint8Array(8);
         new DataView(chunkSizeBytes.buffer).setBigUint64(0, BigInt(chunkSize), false);
-        new DataView(filesizeBytes.buffer).setBigUint64(0, BigInt(filesize), false);
+        new DataView(filesizeBytes.buffer).setBigInt64(0, BigInt(filesize), false);
         const filenameBytes = encodeText(filename);
 
         const message = new Uint8Array(

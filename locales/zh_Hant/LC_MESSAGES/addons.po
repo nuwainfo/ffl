@@ -852,6 +852,9 @@ msgstr "點數不足  ·  需要 1 點，您目前有 {current} 點"
 msgid "🎁 Claim Free Account"
 msgstr "🎁 免費領取帳戶"
 
+msgid "Claim a free account to receive 5 bonus points."
+msgstr "領取免費帳戶即可獲得 5 點紅利。"
+
 msgid "🛒 Buy Points"
 msgstr "🛒 購買點數"
 

@@ -86,6 +86,14 @@ class BrowserTestBase(FastFileLinkTestBase):
         self.activeChromeProfileDirs = []
         self.activeFirefoxProfileDirs = []
 
+    @staticmethod
+    def _safePrint(message):
+        try:
+            print(message)
+        except UnicodeEncodeError:
+            encoded = str(message).encode('cp950', errors='replace').decode('cp950', errors='replace')
+            print(encoded)
+
     def _getBrowserDownloadDir(self, browserName, index=0):
         if browserName == 'chrome':
             baseDir = self.chromeDownloadDir
@@ -840,7 +848,7 @@ class BrowserTestBase(FastFileLinkTestBase):
                 print("[Test] Browser logs at time of failure (all logs):")
                 for logEntry in browserLogs:
                     message, level = self._normalizeLogEntry(logEntry)
-                    print(f"  [{level}] {message}")
+                    self._safePrint(f"  [{level}] {message}")
 
         if not downloadedFile:
             try:
@@ -900,7 +908,7 @@ class BrowserTestBase(FastFileLinkTestBase):
                 message, level = self._normalizeLogEntry(logEntry)
 
                 if logFilter is None or logFilter(message, level):
-                    print(f"  [{level}] {message}")
+                    self._safePrint(f"  [{level}] {message}")
                     print(f"  [{level}] {message}", file=f)
 
     def _withBrowserFallbackDisabled(self, url):

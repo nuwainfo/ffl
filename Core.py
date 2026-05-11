@@ -635,15 +635,6 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
         flushPrint(_('Error: Please select a file or folder to share'))
         return 1
 
-    # Argument predicates.
-    # Allow "-" for stdin and vfs:// URIs, otherwise check file existence.
-    # Lists are already validated path-by-path in CLI.py.
-    isLocalPath = not isinstance(args.file, list) and args.file != "-" and not args.file.startswith("vfs://")
-
-    if isLocalPath and not os.path.exists(args.file):
-        flushPrint(_('{file} does not exist!').format(file=f'"{args.file}"'))
-        return 1
-
     # Subscribe handler for share link creation with bound args
     handler = partial(onShareLinkCreate, args)
     FFLEvent.shareLinkCreate.subscribe(handler)
@@ -672,7 +663,8 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
             flushPrint(_('If a firewall notification appears, please allow the application to connect.\n'))
 
         # Hint user about folder content change detection for strict mode
-        if isLocalPath and os.path.isdir(args.file):
+        isShareableLocalPath = isinstance(args.file, str) and args.file != "-" and not args.file.startswith("vfs://")
+        if isShareableLocalPath and os.path.isdir(args.file):
             flushPrint(_('📁 Sharing folder as ZIP - please keep folder contents unchanged during transfer\n'))
 
         # Get size using Reader abstraction (supports both files and folders)

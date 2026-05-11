@@ -754,6 +754,9 @@ msgstr ""
 msgid "🎁 Claim Free Account"
 msgstr ""
 
+msgid "Claim a free account to receive 5 bonus points."
+msgstr ""
+
 msgid "🛒 Buy Points"
 msgstr ""
 

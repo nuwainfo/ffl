@@ -39,7 +39,7 @@ from cryptography.hazmat.primitives import serialization
 
 from bases.crypto import CryptoInterface
 
-from tests.CoreTestBase import getFileHash, LOCAL_TEST_SERVER_URL
+from tests.CoreTestBase import getFileHash, generateRandomFile, LOCAL_TEST_SERVER_URL
 from tests.ResumeTestBase import ResumeTestBase, ResumeBrowserTestBase
 from tests.BrowserTestBase import CONCURRENT_WEBRTC_DOWNLOADS
 
@@ -323,6 +323,65 @@ class E2EEDownloadTest(ResumeTestBase):
         print(f"[Test] [OK] E2EE HTTP fallback successful")
         print(f"[Test]   Hash: {downloadedHash}")
         print(f"[Test]   Size: {downloadedSize} bytes")
+
+    def testE2EEStdinHttpFallbackAfterStall(self):
+        """Test E2EE stdin download resumes across WebRTC stall using in-memory handoff."""
+        print("\n[TEST] E2EE stdin HTTP fallback resumes after WebRTC stall")
+
+        largeFilePath = os.path.join(self.tempDir, "stdin_handoff_test.bin")
+        originalTestFilePath = self.testFilePath
+        originalFileHash = self.originalFileHash
+        originalFileSize = self.originalFileSize
+
+        try:
+            generateRandomFile(largeFilePath, 16 * 1024 * 1024)
+            self.testFilePath = largeFilePath
+            self.originalFileHash = getFileHash(largeFilePath)
+            self.originalFileSize = os.path.getsize(largeFilePath)
+
+            outputCapture = {}
+            shareLink = self._startFastFileLink(
+                p2p=True,
+                extraArgs=["--e2ee", "--stdin-cache", "off"],
+                captureOutputIn=outputCapture,
+                stdinInputPath=self.testFilePath,
+                stdinFileName="stdin-e2ee.bin"
+            )
+            print(f"[Test] Share link with E2EE stdin source: {shareLink}")
+
+            downloadedPath = os.path.join(self.tempDir, "downloaded_stdin_e2e_fallback.bin")
+            downloadOutputCapture = {}
+            self._downloadWithCore(
+                shareLink,
+                downloadedPath,
+                extraEnvVars={
+                    "WEBRTC_CLI_SIMULATE_STALL": "True",
+                    "WEBRTC_CLI_STALL_AFTER_BYTES": str(4 * 1024 * 1024),
+                },
+                captureOutputIn=downloadOutputCapture
+            )
+
+            downloadOutputText = self._updateCapturedOutput(downloadOutputCapture)
+            self.assertIn("HTTP fallback", downloadOutputText, "HTTP fallback should be triggered when WebRTC stalls")
+
+            downloadedHash = getFileHash(downloadedPath)
+            self.assertEqual(
+                downloadedHash, self.originalFileHash, "E2EE stdin HTTP fallback download should match original"
+            )
+
+            outputText = self._updateCapturedOutput(outputCapture)
+        finally:
+            self.testFilePath = originalTestFilePath
+            self.originalFileHash = originalFileHash
+            self.originalFileSize = originalFileSize
+            
+        self.assertNotIn("E2EE key exchange failed", outputText, "stdin E2EE fallback should not fail key exchange")
+        self.assertNotIn("single-use only", outputText, "stdin handoff should avoid single-use failure during fallback")
+        self.assertNotIn("HTTP download failed", downloadOutputText, "HTTP fallback should finish cleanly")
+
+        print(f"[Test] [OK] E2EE stdin HTTP fallback resumed successfully")
+        print(f"[Test]   Hash: {downloadedHash}")
+        print(f"[Test]   Size: {os.path.getsize(downloadedPath)} bytes")
 
     def testE2EEHttpFallbackWithResume(self):
         """Test E2E encrypted download with resume: partial WebRTC → ICE failure → HTTP fallback with resume"""
@@ -735,6 +794,23 @@ class E2EEBrowserTest(ResumeBrowserTestBase):
     def testE2EEHttpResumeWithFallbackFirefox(self):
         """Test E2EE HTTP resume when WebRTC connection stalls and falls back to HTTP with Firefox"""
         self._testHttpResumeWithFallback('firefox', extraArgs=['--e2ee'])
+
+    def testE2EEStdinHttpResumeWithFallbackChrome(self):
+        """Test E2EE stdin HTTP resume when WebRTC stalls and falls back to HTTP with Chrome"""
+        self._testHttpResumeWithFallback(
+            'chrome',
+            extraArgs=['--e2ee', '--stdin-cache', 'off'],
+            useStdinSource=True,
+        )
+
+    @unittest.skip("DownloadManager blocks E2EE in Firefox passthrough mode for unknown-size (stdin) files")
+    def testE2EEStdinHttpResumeWithFallbackFirefox(self):
+        """Test E2EE stdin HTTP resume when WebRTC stalls and falls back to HTTP with Firefox"""
+        self._testHttpResumeWithFallback(
+            'firefox',
+            extraArgs=['--e2ee', '--stdin-cache', 'off'],
+            useStdinSource=True,
+        )
 
 
 class E2EEUploadResumeBrowserTest(E2EEUploadTestBase, ResumeBrowserTestBase):

@@ -170,9 +170,9 @@ class FolderReaderTest(unittest.TestCase):
         finally:
             shutil.rmtree(tmpdir)
 
-    @unittest.skipUnless(os.name == 'nt', "Windows-specific relative-path resolution breadcrumb")
+    @unittest.skip("Covered by CLI validation fail-fast regression in CLITest")
     def testMultiFileVirtualFSWarningUsesArchivePathForMissingRelativeUnicodeEntries(self):
-        """Missing multi-file entries should log the virtual /archive path, not a fake user path."""
+        """Raw Readers behavior is no longer the expected user-facing path for this regression."""
         tmpdir = tempfile.mkdtemp()
         originalCwd = os.getcwd()
         missingPaths = ["технический", "Портфолио", "продюсер.pdf"]

@@ -21,5 +21,14 @@
     "account":"帳號",
     "clientArea": "個人設定",
     "logout":"登出",
-    "menu": "選單"
+    "menu": "選單",
+    "freeDownloadModal": {
+        "recommendStore": "為了方便您使用，我們建議您從商店下載軟體。",
+        "specificNeedPortable": "但如果您有特殊需求，也可以下載免安裝執行檔版本。",
+        "downloadFromStore": "從商店下載（推薦）",
+        "downloadPortableExecutable": "下載免安裝執行檔",
+        "windowsVersion": "Windows 版本",
+        "macVersion": "Mac 版本",
+        "linuxVersion": "Linux 版本"
+    }
 }

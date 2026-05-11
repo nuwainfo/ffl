@@ -787,6 +787,8 @@ class DownloadManager {
 
         // Server-assigned download ID for POST /complete ACK (relay truncation fix)
         this.serverDownloadId = null;
+        this.serverAckSent = false;
+        this.activeDownloadPath = null;
 
         // Resume support state
         this.resumeConfig = null;
@@ -1137,23 +1139,8 @@ class DownloadManager {
         // Mirrors WebRTC.js _downloadComplete() POST to /complete.
         // Unblocks _waitForHTTPDownloadComplete() on the server so shutdown/doAfterDownload
         // is only triggered after the relay has fully drained to the client.
-        if (this.serverDownloadId && this.uid) {
-            const downloadId = this.serverDownloadId;
-            this.log('DownloadManager', `Notifying server of HTTP download completion, downloadId: ${downloadId}`);
-            fetch(`/${this.uid}/complete`, {
-                method: 'POST',
-                keepalive: true,
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ downloadId, receivedBytes: resolvedTotal || 0 }),
-            }).then(async response => {
-                const data = await response.json().catch(() => null);
-                if (this.receiptConfirmationUI && data && data.confirmRequired) {
-                    this.receiptConfirmationUI.show(data.message);
-                }
-            }).catch(err => {
-                this.log('DownloadManager', `Failed to notify server of HTTP completion: ${err}`);
-            });
-            this.serverDownloadId = null; // Prevent duplicate ACK on re-entry
+        if (this.serverDownloadId && this.uid && !this.serverAckSent) {
+            this.sendServerCompleteAck(resolvedTotal || 0);
         }
 
         // Call external callback if provided
@@ -1170,6 +1157,10 @@ class DownloadManager {
         if (data.serverId) {
             this.serverDownloadId = data.serverId;
         }
+        if (data.downloadPath) {
+            this.activeDownloadPath = data.downloadPath;
+        }
+        this.serverAckSent = this.serverAckSent || !!data.serverAckSent;
 
         this.log('DownloadManager', `Handling download-complete from ${source}`, data);
         this.handleDownloadComplete(data.total || data.sent || this.totalBytesHint || 0);
@@ -2021,6 +2012,98 @@ class DownloadManager {
         return this.activeDlId;
     }
 
+    setDownloadPathParam(downloadUrl, downloadPath) {
+        if (!downloadPath) {
+            downloadUrl.searchParams.delete('dl_path');
+            return;
+        }
+
+        downloadUrl.searchParams.set('dl_path', downloadPath);
+        this.log('DownloadManager', `Download path recorded as ${downloadPath}`);
+    }
+
+    buildServerCompleteAckUrl() {
+        const completeUrl = new URL(`/${this.uid}/complete`, window.location.origin);
+        if (this.activeDownloadPath) {
+            completeUrl.searchParams.set('dl_path', this.activeDownloadPath);
+        }
+        return completeUrl.pathname + completeUrl.search;
+    }
+
+    async sendServerCompleteAck(receivedBytes) {
+        if (!this.serverDownloadId || !this.uid) {
+            return null;
+        }
+
+        if (this.serverAckSent) {
+            this.log('DownloadManager', 'Server completion ACK already sent, skipping duplicate page ACK');
+            return null;
+        }
+
+        const downloadId = this.serverDownloadId;
+        const completeUrl = this.buildServerCompleteAckUrl();
+        this.serverAckSent = true;
+
+        this.log(
+            'DownloadManager',
+            `Notifying server of HTTP download completion, downloadId: ${downloadId}, path: ${this.activeDownloadPath || 'unknown'}`
+        );
+
+        try {
+            const response = await fetch(completeUrl, {
+                method: 'POST',
+                keepalive: true,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ downloadId, receivedBytes: receivedBytes || 0 }),
+            });
+
+            const data = await response.json().catch(() => null);
+            if (this.receiptConfirmationUI && data && data.confirmRequired) {
+                this.receiptConfirmationUI.show(data.message);
+            }
+            return data;
+        } catch (err) {
+            this.log('DownloadManager', `Failed to notify server of HTTP completion: ${err}`);
+            return null;
+        } finally {
+            this.serverDownloadId = null;
+        }
+    }
+
+    resolveDownloadPath({
+        useServiceWorker = false,
+        hasWriter = false,
+        hasResumeConfig = false,
+        forceWriter = false,
+        forceNativeLink = false
+    } = {}) {
+        if (forceNativeLink) {
+            return 'direct_native_link';
+        }
+
+        if (useServiceWorker) {
+            if (hasWriter && hasResumeConfig) {
+                return 'sw_writer_resume';
+            }
+
+            if (hasWriter && forceWriter) {
+                return 'sw_writer';
+            }
+
+            return 'sw_native_link';
+        }
+
+        if (hasWriter && hasResumeConfig) {
+            return 'direct_writer_resume';
+        }
+
+        if (hasWriter) {
+            return 'direct_writer';
+        }
+
+        return 'direct_native_link';
+    }
+
     buildAutomaticWriterResumeUrl(urlPath, resumeConfig = null) {
         const urlObj = new URL(urlPath, window.location.origin);
 
@@ -2056,6 +2139,8 @@ class DownloadManager {
         }
 
         urlObj.searchParams.set('ff_auto_resume', '1');
+        this.setDownloadPathParam(urlObj, 'sw_writer_resume');
+        this.activeDownloadPath = 'sw_writer_resume';
         return urlObj.pathname + urlObj.search;
     }
 
@@ -2090,6 +2175,46 @@ class DownloadManager {
         error.receivedBytes = receivedBytes;
         error.expectedSize = expectedSize;
         return error;
+    }
+
+    parseResumedResponseMetadata(response, activeResume) {
+        const contentRange = response.headers.get('Content-Range');
+        const resumeMode = response.headers.get('FFL-Resume-Mode');
+        const resumeStartHeader = this.parsePositiveNumber(response.headers.get('FFL-Resume-Start'));
+
+        if (response.status === 206 && contentRange) {
+            const match = contentRange.match(/^bytes\s+(\d+)-(\d+)\/(\d+)$/i);
+            if (match) {
+                const start = parseInt(match[1], 10);
+                const full = parseInt(match[3], 10);
+                if (start !== activeResume.rangeStart) {
+                    throw new Error(`Server returned mismatched range start: ${start} != ${activeResume.rangeStart}`);
+                }
+
+                this.log('DownloadManager', `206 Partial Content: ${contentRange}, total=${full}`);
+                return full;
+            }
+        }
+
+        if (
+            response.status === 206 &&
+            resumeMode === 'handoff' &&
+            resumeStartHeader === activeResume.rangeStart
+        ) {
+            this.log(
+                'DownloadManager',
+                `206 handoff resume accepted without Content-Range, start=${resumeStartHeader}`
+            );
+            return activeResume.expectedSize || 0;
+        }
+
+        if (response.status === 200) {
+            this.log('DownloadManager', 'WARNING: Server ignored Range header (200), using client-side discard');
+            const len = response.headers.get('Content-Length');
+            return len ? parseInt(len, 10) : 0;
+        }
+
+        throw new Error(`Unexpected response status for ranged request: ${response.status}`);
     }
 
     async fetchToWriter(urlPath, writer, needsDecryption, resume = null, progressCallback = null, checksumVerifier = null) {
@@ -2145,28 +2270,10 @@ class DownloadManager {
             }
 
             let totalSizeFromServer = 0;
-            const contentRange = response.headers.get('Content-Range');
             if (wantRange) {
-                if (response.status === 206 && contentRange) {
-                    const match = contentRange.match(/^bytes\s+(\d+)-(\d+)\/(\d+)$/i);
-                    if (match) {
-                        const start = parseInt(match[1], 10);
-                        const full = parseInt(match[3], 10);
-                        if (start !== activeResume.rangeStart) {
-                            throw new Error(`Server returned mismatched range start: ${start} != ${activeResume.rangeStart}`);
-                        }
-                        totalSizeFromServer = full;
-                        this.totalBytesHint = Math.max(this.totalBytesHint || 0, full);
-                        this.log('DownloadManager', `206 Partial Content: ${contentRange}, total=${full}`);
-                    }
-                } else if (response.status === 200) {
-                    this.log('DownloadManager', 'WARNING: Server ignored Range header (200), using client-side discard');
-                    const len = response.headers.get('Content-Length');
-                    if (len) {
-                        totalSizeFromServer = parseInt(len, 10);
-                    }
-                } else {
-                    throw new Error(`Unexpected response status for ranged request: ${response.status}`);
+                totalSizeFromServer = this.parseResumedResponseMetadata(response, activeResume);
+                if (totalSizeFromServer > 0) {
+                    this.totalBytesHint = Math.max(this.totalBytesHint || 0, totalSizeFromServer);
                 }
             } else {
                 const len = response.headers.get('Content-Length');
@@ -2334,6 +2441,8 @@ class DownloadManager {
         this.downloadTriggeredOnce = true;
         this.completionHandled = false;
         this.stopCompletionReplayChecks();
+        this.serverAckSent = false;
+        this.activeDownloadPath = null;
 
         this.log('DownloadManager', 'Starting native download', {
             hasWriter: !!writer,
@@ -2345,6 +2454,16 @@ class DownloadManager {
 
         const downloadUrl = new URL(url, location.origin);
         this.ensureDownloadId(downloadUrl);
+        const useServiceWorker = progressSwSupported;
+        const downloadPath = this.resolveDownloadPath({
+            useServiceWorker,
+            hasWriter: !!writer,
+            hasResumeConfig: !!resumeConfig,
+            forceWriter,
+            forceNativeLink
+        });
+        this.setDownloadPathParam(downloadUrl, downloadPath);
+        this.activeDownloadPath = downloadPath;
         this.log('DownloadManager', 'Download URL with token:', downloadUrl.href);
 
         if (forceNativeLink) {
@@ -2353,8 +2472,6 @@ class DownloadManager {
             this.triggerNativeDownloadLink(downloadUrl.pathname + downloadUrl.search);
             return;
         }
-
-        const useServiceWorker = progressSwSupported;
 
         if (this.authHeaders && useServiceWorker && navigator.serviceWorker && navigator.serviceWorker.controller) {
             navigator.serviceWorker.controller.postMessage({

@@ -21,5 +21,14 @@
     "account":"账号",
     "clientArea": "个人设定",
     "logout":"登出",
-    "menu": "选单"
+    "menu": "选单",
+    "freeDownloadModal": {
+        "recommendStore": "为了方便您使用，我们建议您从商店下载软体。",
+        "specificNeedPortable": "但如果您有特殊需求，也可以下载免安装执行档版本。",
+        "downloadFromStore": "从商店下载（推荐）",
+        "downloadPortableExecutable": "下载免安装执行档",
+        "windowsVersion": "Windows 版本",
+        "macVersion": "Mac 版本",
+        "linuxVersion": "Linux 版本"
+    }
 }

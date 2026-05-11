@@ -105,6 +105,10 @@ HTTP_READ_TIMEOUT = getEnv('HTTP_READ_TIMEOUT', 600) # 10 minutes to handle larg
 HEARTBEAT_IDLE_TIMEOUT = getEnv('WEBRTC_HEARTBEAT_IDLE_TIMEOUT', 5 * 60)
 # 2 hours - optional hard limit to prevent infinite waiting
 MAX_WAIT_FOR_START = getEnv('WEBRTC_MAX_WAIT_FOR_START', 2 * 60 * 60)
+# Send-buffer drain timeout: how long to wait for bufferedamountlow before
+# treating an active WebRTC transfer as stalled. This prevents indefinite hangs
+# when the data channel stays open but stops draining.
+WEBRTC_SEND_BUFFER_DRAIN_TIMEOUT = getEnv('WEBRTC_SEND_BUFFER_DRAIN_TIMEOUT', 60)
 
 # Without winloop, Edge will fail to use WebRTC, it will cause consent query timeout after few seconds.
 # It speeds up a lot on Firefox, but slow down a little on Chrome/Edge.
@@ -500,6 +504,15 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         await self._cleanupPeer(peerId)
         raise RuntimeError(errorMsg)
 
+    async def _waitForSendBufferDrain(self, bufferFlushed, peerId, sentBytes, phase):
+        try:
+            await asyncio.wait_for(bufferFlushed.wait(), timeout=WEBRTC_SEND_BUFFER_DRAIN_TIMEOUT)
+        except asyncio.TimeoutError as e:
+            raise RuntimeError(
+                f"WebRTC send buffer stalled during {phase} after sending {sentBytes} bytes "
+                f"for peer {peerId} (waited {WEBRTC_SEND_BUFFER_DRAIN_TIMEOUT}s)"
+            ) from e
+
     async def sendFile(
         self,
         dc: RTCDataChannel,
@@ -654,7 +667,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
                     break
 
                 # Wait until buffer is acceptable for next packet
-                await bufferFlushed.wait()
+                await self._waitForSendBufferDrain(bufferFlushed, peerId, sent, "chunk send")
 
                 # Track plaintext size before encryption
                 plaintextSize = len(chunk)
@@ -696,7 +709,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
 
             # Wait for buffer to drain before sending EOF to prevent race condition
             # where EOF arrives before final chunk on receiver side
-            await bufferFlushed.wait()
+            await self._waitForSendBufferDrain(bufferFlushed, peerId, sent, "EOF send")
 
             if checksumSession and shouldCommitChecksum:
                 checksumSession.commit()
@@ -1132,7 +1145,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         except Exception as e:
             raise ValueError(_("Invalid encryption key: {error}").format(error=e))
 
-    def _getRemoteMetadata(self, url: str, headers: dict, isGenericURL: bool = False) -> Tuple[int, str]:
+    def _getRemoteMetadata(self, url: str, headers: dict, isGenericURL: bool = False) -> Tuple[int, str, dict]:
         """Get file size and name from remote server using HEAD request
 
         Args:
@@ -1155,7 +1168,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
         else:
             fileName = self._parseFileInfo(head.get("Content-Disposition", 'attachment; filename=download.bin'))
 
-        return fileSize, fileName
+        return fileSize, fileName, head
 
     def _resolveOutputPath(self, outputPath: Optional[str], fileName: str) -> str:
         """Resolve output path handling directory vs file path cases"""
@@ -1271,8 +1284,12 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
 
         currentSize = os.path.getsize(filePath)
 
-        # Handle unknown file size (None or -1) - cannot determine completion, always overwrite
+        # Handle unknown file size (None or -1)
         if not self._isKnownSize(fileSize):
+            if allowResume and currentSize > 0:
+                # forceResume=True (WebRTC→HTTP fallback): partial file has valid data, resume from it
+                logger.debug(f"Unknown size file with forceResume - resuming from {formatSize(currentSize)}: {filePath}")
+                return currentSize
             if currentSize > 0:
                 logger.info(f"Unknown size file - overwriting existing {formatSize(currentSize)} file: {filePath}")
             os.remove(filePath)
@@ -1860,7 +1877,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             raise RuntimeError("WebRTC not supported for this URL")
 
         # Get file metadata first using helper
-        fileSize, filename = await asyncio.to_thread(self._getRemoteMetadata, urlInfo.baseURL, authHeaders)
+        fileSize, filename, __ = await asyncio.to_thread(self._getRemoteMetadata, urlInfo.baseURL, authHeaders)
 
         # Resolve output path using helper
         finalOutputPath = self._resolveOutputPath(outputPath, filename)
@@ -2160,7 +2177,9 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
             headers = self._makeHeaders(credentials, authExtra if authExtra else None)
             # For generic URLs, use the actual URL directly; for FastFileLink URLs, use baseURL
             metadataURL = url if urlInfo.isGenericURL else urlInfo.baseURL
-            fileSize, fileName = self._getRemoteMetadata(metadataURL, headers, isGenericURL=urlInfo.isGenericURL)
+            fileSize, fileName, metadataHeaders = self._getRemoteMetadata(
+                metadataURL, headers, isGenericURL=urlInfo.isGenericURL
+            )
         except requests.exceptions.HTTPError as e:
             if e.response and e.response.status_code == 404:
                 raise RuntimeError("File not found or expired")
@@ -2435,7 +2454,7 @@ class WebRTCDownloader(AsyncLoopExceptionMixin):
                 urlInfo = self._extractURLInfo(url)
 
             authHeaders = self._createAuthHeaders(credentials)
-            fileSize, __ = self._getRemoteMetadata(urlInfo.baseURL, authHeaders)
+            fileSize, __, __ = self._getRemoteMetadata(urlInfo.baseURL, authHeaders)
             sharedProgress = self._ensureProgress(fileSize, self._STATUS_HTTP_FALLBACK, 0)
 
         try:

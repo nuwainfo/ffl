@@ -478,7 +478,7 @@ class FastFileLinkTestBase(unittest.TestCase):
         logFile = None
         if captureOutputIn is not None:
             logPath = os.path.join(self.tempDir, "download_log.txt")
-            logFile = open(logPath, "w")
+            logFile = open(logPath, "w", encoding="utf-8", errors="replace")
             captureOutputIn["logPath"] = logPath
             captureOutputIn["logFile"] = logFile
 
@@ -493,7 +493,9 @@ class FastFileLinkTestBase(unittest.TestCase):
                     env=downloadEnv,
                     stdout=logFile,
                     stderr=subprocess.STDOUT,
-                    text=True
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace'
                 )
             else:
                 downloadProcess = subprocess.Popen(
@@ -502,7 +504,9 @@ class FastFileLinkTestBase(unittest.TestCase):
                     env=downloadEnv,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
-                    text=True
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace'
                 )
 
             # Wait for download to complete
@@ -517,8 +521,8 @@ class FastFileLinkTestBase(unittest.TestCase):
                     try:
                         with open(logPath, 'r', encoding='utf-8', errors='replace') as f:
                             output = f.read()
-                        if output:
-                            error_msg += f"\n--- Full Client Output ---\n{output}\n--- End Output ---"
+                            if output:
+                                error_msg += f"\n--- Full Client Output ---\n{output}\n--- End Output ---"
                     except Exception as e:
                         error_msg += f"\n(Failed to read log file: {e})"
                 else:
@@ -536,12 +540,8 @@ class FastFileLinkTestBase(unittest.TestCase):
             # Always parse output to get actual path (handles directory case)
             if logFile:
                 logFile.close()
-                try:
-                    with open(logPath, 'r') as f:
-                        output = f.read()
-                except Exception as e:
-                    with open(logPath, 'r', encoding='utf-8') as f: # Try again.
-                        output = f.read()
+                with open(logPath, 'r', encoding='utf-8', errors='replace') as f:
+                    output = f.read()
             else:
                 output = stdout or ""
 
@@ -778,7 +778,8 @@ class FastFileLinkTestBase(unittest.TestCase):
         waitForCompletion=True,
         binaryCommand=None,
         stdinInputPath=None,
-        stdinFileName=None
+        stdinFileName=None,
+        workingDirectory=None
     ):
         """
         Start the FastFileLink process and wait for the share link to be ready
@@ -797,6 +798,7 @@ class FastFileLinkTestBase(unittest.TestCase):
             binaryCommand (str|list): Optional external command prefix, e.g. "./ffl.com" or "python Core.py --cli"
             stdinInputPath (str): Optional path to pipe into stdin instead of sharing self.testFilePath directly
             stdinFileName (str): Optional filename to advertise when stdinInputPath is used
+            workingDirectory (str): Optional working directory for the launched sharing process
 
         Returns:
             tuple: (share_link, test_server_process) if useTestServer=True, otherwise just share_link
@@ -808,6 +810,13 @@ class FastFileLinkTestBase(unittest.TestCase):
             testServerProcess = self._startTestServer()
 
         try:
+            if self._procLogFile:
+                try:
+                    self._procLogFile.close()
+                except Exception:
+                    pass
+                self._procLogFile = None
+
             useNetworkSimulation = networkFailureRate > 0.0
             modeDesc = "with network simulation" if useNetworkSimulation else "normal mode"
             serverDesc = " + test server" if useTestServer else ""
@@ -915,6 +924,7 @@ class FastFileLinkTestBase(unittest.TestCase):
                         stdin=stdinHandle,
                         text=True,
                         env=env,
+                        cwd=workingDirectory,
                         bufsize=1, # Line buffered
                         universal_newlines=True,
                         creationflags=creationFlags
@@ -934,6 +944,7 @@ class FastFileLinkTestBase(unittest.TestCase):
                         stderr=subprocess.STDOUT, # Merge stderr into stdout
                         text=True,
                         env=env,
+                        cwd=workingDirectory,
                         bufsize=1, # Line buffered
                         creationflags=creationFlags
                     )

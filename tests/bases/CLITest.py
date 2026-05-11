@@ -24,6 +24,7 @@ import subprocess
 import json
 import sys
 import zipfile
+import tempfile
 
 import requests
 
@@ -1188,6 +1189,66 @@ class MultiFileShareTest(FastFileLinkTestBase):
             os.path.basename(self.testFile2),
             os.path.basename(self.testFile3),
         ])
+
+    @unittest.skipUnless(os.name == 'nt', "Windows-specific unicode path regression")
+    def testShareUnicodeRelativePathsValidationAndTransfer(self):
+        """Unicode multi-file CLI input should fail fast for missing files and succeed once files exist."""
+        unicodeNames = ["технический", "Портфолио", "продюсер.pdf"]
+        unicodeDir = os.path.join(self.tempDir, "unicode_share")
+        os.makedirs(unicodeDir)
+        expectedPaths = [os.path.join(unicodeDir, name) for name in unicodeNames]
+        unicodeEnv = {'PYTHONIOENCODING': 'utf-8'}
+
+        savedTestFilePath = self.testFilePath
+        try:
+            self.testFilePath = unicodeNames[0]
+
+            captureOutput = {}
+            with self.assertRaises(AssertionError):
+                self._startFastFileLink(
+                    p2p=True,
+                    extraArgs=unicodeNames[1:],
+                    captureOutputIn=captureOutput,
+                    workingDirectory=unicodeDir,
+                    extraEnvVars=unicodeEnv
+                )
+            output = self._updateCapturedOutput(captureOutput)
+            for expectedPath in expectedPaths:
+                self.assertIn(expectedPath, output)
+            self.assertNotIn("/archive/", output)
+
+            with open(expectedPaths[0], 'w', encoding='utf-8') as f:
+                f.write("Технический документ\n")
+            with open(expectedPaths[1], 'w', encoding='utf-8') as f:
+                f.write("Портфолио\n")
+
+            captureOutput = {}
+            with self.assertRaises(AssertionError):
+                self._startFastFileLink(
+                    p2p=True,
+                    extraArgs=unicodeNames[1:],
+                    captureOutputIn=captureOutput,
+                    workingDirectory=unicodeDir,
+                    extraEnvVars=unicodeEnv
+                )
+            output = self._updateCapturedOutput(captureOutput)
+            self.assertIn(expectedPaths[2], output)
+            self.assertNotIn(expectedPaths[0], output)
+            self.assertNotIn(expectedPaths[1], output)
+            self.assertNotIn("/archive/", output)
+
+            with open(expectedPaths[2], 'w', encoding='utf-8') as f:
+                f.write("Продюсер\n")
+
+            shareLink = self._startFastFileLink(
+                p2p=True,
+                extraArgs=unicodeNames[1:],
+                workingDirectory=unicodeDir,
+                extraEnvVars=unicodeEnv
+            )
+            self._downloadAndVerifyZip(shareLink, unicodeNames)
+        finally:
+            self.testFilePath = savedTestFilePath
 
     def testShareMultipleFilesViaFileList(self):
         """Test sharing multiple files via @filelist.txt syntax."""
