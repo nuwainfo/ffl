@@ -183,10 +183,23 @@ class ResumeBrowserTestBase(BrowserTestBase, ResumeTestBase):
                     if baseMatch:
                         baseBytes = int(baseMatch.group(1))
 
+                if (
+                    "Automatic writer resume triggered" in message or
+                    "Resume request: Range bytes=" in message or
+                    "ff_auto_resume=1" in message or
+                    "sw_writer_resume" in message
+                ):
+                    resumeDetected = True
+
                 # Check for fallback trigger
                 if (
                     "Switching to HTTP download" in message or "DownloadManager started" in message or
-                    "Successfully transitioned from P2P to HTTP" in message or "Fallback" in message
+                    "Successfully transitioned from P2P to HTTP" in message or "Fallback" in message or
+                    "Automatic writer resume triggered" in message or
+                    "Resume request: Range bytes=" in message or
+                    "ff_pass=1 with resume - using passthrough resume handler" in message or
+                    "handlePassthroughForResume" in message or
+                    "sw_writer_resume" in message
                 ):
                     fallbackDetected = True
 

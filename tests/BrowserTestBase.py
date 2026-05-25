@@ -36,7 +36,7 @@ import undetected_chromedriver as uc
 
 from get_gecko_driver import GetGeckoDriver
 from selenium import webdriver
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.chrome.service import Service as ChromeService
@@ -55,6 +55,11 @@ class BrowserTestBase(FastFileLinkTestBase):
     """Base class for browser-based download tests (Chrome, Firefox)"""
 
     USE_BLOB_THRESHOLD = 10 * 1024 * 1024 # 10MB, see static/index.html USE_BLOB_THRESHOLD
+    FIREFOX_CONSOLE_LOG_MAX = int(os.getenv("FFL_FIREFOX_CONSOLE_LOG_MAX", "400"))
+    FIREFOX_DRIVER_START_ATTEMPTS = max(1, int(os.getenv("FFL_FIREFOX_DRIVER_START_ATTEMPTS", "20")))
+    FIREFOX_DRIVER_START_RETRY_DELAY_SECONDS = max(
+        0.0, float(os.getenv("FFL_FIREFOX_DRIVER_START_RETRY_DELAY_SECONDS", "5"))
+    )
 
     DEFAULT_FILE_SIZE = USE_BLOB_THRESHOLD + 2 * 1024 * 1024 # > USE_BLOB_THRESHOLD, so use StreamSaver
     _geckoDriverPath = None
@@ -85,6 +90,7 @@ class BrowserTestBase(FastFileLinkTestBase):
         self.activeDrivers = []
         self.activeChromeProfileDirs = []
         self.activeFirefoxProfileDirs = []
+        self._consoleLogCursorBySession = {}
 
     @staticmethod
     def _safePrint(message):
@@ -551,8 +557,7 @@ class BrowserTestBase(FastFileLinkTestBase):
             firefoxOptions.set_preference("security.mixed_content.block_display_content", False)
             firefoxOptions.set_preference("security.insecure_connection_text.enabled", False)
 
-        service = self._createFirefoxService(geckoDriverPath)
-        driver = webdriver.Firefox(service=service, options=firefoxOptions)
+        driver = self._startFirefoxDriverWithRetry(geckoDriverPath, firefoxOptions)
         self.activeDrivers.append(driver)
         return driver
 
@@ -565,6 +570,28 @@ class BrowserTestBase(FastFileLinkTestBase):
     def _createFirefoxService(self, geckoDriverPath):
         return FirefoxService(executable_path=geckoDriverPath)
 
+    def _startFirefoxDriverWithRetry(self, geckoDriverPath, firefoxOptions):
+        lastError = None
+        for attemptIndex in range(1, self.FIREFOX_DRIVER_START_ATTEMPTS + 1):
+            service = self._createFirefoxService(geckoDriverPath)
+            try:
+                return webdriver.Firefox(service=service, options=firefoxOptions)
+            except WebDriverException as exc:
+                lastError = exc
+                message = str(exc)
+                isConnectableServiceError = "Can not connect to the Service" in message
+                isLastAttempt = attemptIndex >= self.FIREFOX_DRIVER_START_ATTEMPTS
+                if not isConnectableServiceError or isLastAttempt:
+                    raise
+
+                print(
+                    f"[Test] Warning: Firefox WebDriver service did not become connectable "
+                    f"(attempt {attemptIndex}/{self.FIREFOX_DRIVER_START_ATTEMPTS}). Retrying..."
+                )
+                time.sleep(self.FIREFOX_DRIVER_START_RETRY_DELAY_SECONDS)
+
+        raise lastError
+
     def _attachConsoleMirror(self, driver):
         """Attach console log mirroring to capture browser console logs in window.__TEST_LOGS__
 
@@ -576,6 +603,7 @@ class BrowserTestBase(FastFileLinkTestBase):
             (function() {
                 if (window.__TEST_LOGS__) return;
                 window.__TEST_LOGS__ = [];
+                window.__TEST_LOGS_MAX__ = arguments[0];
                 const levels = ['log', 'info', 'warn', 'error', 'debug'];
                 const orig = {};
 
@@ -595,24 +623,44 @@ class BrowserTestBase(FastFileLinkTestBase):
                     console[level] = function(...args) {
                         try {
                             window.__TEST_LOGS__.push([Date.now(), level, args.map(serialize).join(' ')]);
+                            if (window.__TEST_LOGS__.length > window.__TEST_LOGS_MAX__) {
+                                window.__TEST_LOGS__.splice(0, window.__TEST_LOGS__.length - window.__TEST_LOGS_MAX__);
+                            }
                         } catch (_) {}
                         try {
                             return orig[level].apply(console, args);
                         } catch (_) {}
                     };
                 });
-            })();
-        """
+              })();
+          """,
+            self.FIREFOX_CONSOLE_LOG_MAX,
         )
 
-    def _getConsoleLogs(self, driver):
+    def _getConsoleLogs(self, driver, incremental=True):
         """Retrieve captured console logs from window.__TEST_LOGS__
 
         Returns:
             List of tuples: [(timestamp, level, message), ...]
         """
         try:
-            logs = driver.execute_script("return (window.__TEST_LOGS__ || []).slice();")
+            sessionId = getattr(driver, "session_id", None) or "default"
+            cursor = self._consoleLogCursorBySession.get(sessionId, 0) if incremental else 0
+            payload = driver.execute_script(
+                """
+                const allLogs = window.__TEST_LOGS__ || [];
+                const startIndex = Math.max(0, arguments[0] || 0);
+                return {
+                    nextCursor: allLogs.length,
+                    logs: allLogs.slice(startIndex)
+                };
+                """,
+                cursor,
+            )
+            logs = (payload or {}).get("logs") or []
+            nextCursor = (payload or {}).get("nextCursor")
+            if isinstance(nextCursor, int):
+                self._consoleLogCursorBySession[sessionId] = nextCursor
             return logs if logs else []
         except Exception as e:
             print(f"[Test] Warning: Failed to retrieve console logs: {e}")
@@ -681,7 +729,7 @@ class BrowserTestBase(FastFileLinkTestBase):
             print(f"[CDP] Failed to read performance log: {e}")
         return targets
 
-    def _getBrowserLogs(self, driver):
+    def _getBrowserLogs(self, driver, incremental=True):
         """Get browser console logs using appropriate method for the browser type
 
         For Chrome: Uses driver.get_log("browser") (native ChromeDriver support)
@@ -713,7 +761,7 @@ class BrowserTestBase(FastFileLinkTestBase):
                 return []
         elif browserType == 'firefox':
             # Use console mirror for Firefox
-            return self._getConsoleLogs(driver)
+            return self._getConsoleLogs(driver, incremental=incremental)
         else:
             print(f"[Test] Warning: Unknown browser type, cannot retrieve logs")
             return []
@@ -892,7 +940,7 @@ class BrowserTestBase(FastFileLinkTestBase):
         if logs is not None:
             browserLogs = logs
         elif driver is not None:
-            browserLogs = self._getBrowserLogs(driver)
+            browserLogs = self._getBrowserLogs(driver, incremental=False)
         else:
             raise ValueError("Either logs or driver must be provided")
 

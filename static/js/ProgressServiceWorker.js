@@ -81,6 +81,51 @@ function broadcast(msg) {
     dlChannel && dlChannel.postMessage(msg);
 }
 
+function postMessageToClients(msg, clientId = '') {
+    if (!self.clients) {
+        return Promise.resolve();
+    }
+
+    if (clientId && typeof self.clients.get === 'function') {
+        return self.clients.get(clientId)
+            .then((client) => {
+                if (!client) {
+                    return postMessageToClients(msg);
+                }
+                client.postMessage(msg);
+            })
+            .catch((error) => {
+                console.error('[ProgressSW] Failed to post message to target client:', error);
+                return postMessageToClients(msg);
+            });
+    }
+
+    if (typeof self.clients.matchAll !== 'function') {
+        return Promise.resolve();
+    }
+
+    return self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+        .then((clients) => {
+            for (const client of clients) {
+                try {
+                    client.postMessage(msg);
+                } catch (error) {
+                    console.error('[ProgressSW] Failed to post message to client:', error);
+                }
+            }
+        })
+        .catch((error) => {
+            console.error('[ProgressSW] Failed to enumerate clients for message delivery:', error);
+        });
+}
+
+function emitDownloadEvent(msg, { postToClients: shouldPostToClients = false, clientId = '' } = {}) {
+    broadcast(msg);
+    if (shouldPostToClients) {
+        void postMessageToClients(msg, clientId);
+    }
+}
+
 class DownloadCompletionTracker {
     constructor({ ttlMs = 48 * 60 * 60 * 1000, maxRecords = 100 } = {}) {
         this.ttlMs = ttlMs;
@@ -501,6 +546,7 @@ async function handlePassthroughForResume(event, url, downloadId, resumeConfig) 
 async function handleDownloadWithTransform(event, url, downloadId, resumeConfig) {
     const e2eeEnabled = url.searchParams.get('e2ee') === '1';
     const uid = extractUidFromDownloadPath(url.pathname);
+    const targetClientId = event.clientId || event.resultingClientId || '';
     const shouldVerifyChecksum = !resumeConfig && !!uid && typeof FFLChecksum !== 'undefined';
     const checksumVerifier = shouldVerifyChecksum
         ? FFLChecksum.createVerifier({
@@ -625,10 +671,12 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
         // Configurable progress reporting thresholds
         const REPORT_EVERY_BYTES = getConfigFromUrl(url, 'reportBytes', 5 * 1024 * 1024); // Default 5MB
         const REPORT_EVERY_MS = getConfigFromUrl(url, 'reportMs', 250); // Default 250ms
+        const INJECT_PREMATURE_EOF_AFTER = getConfigFromUrl(url, 'inject-premature-eof-after', 0);
 
         log('[ProgressSW] Progress reporting config:', {
             reportEveryBytes: REPORT_EVERY_BYTES,
-            reportEveryMs: REPORT_EVERY_MS
+            reportEveryMs: REPORT_EVERY_MS,
+            injectPrematureEOFAfter: INJECT_PREMATURE_EOF_AFTER
         });
 
         let resolveDone;
@@ -754,7 +802,7 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
                 log('[ProgressSW] Diagnosis report failed:', String(diagErr));
             }
 
-            broadcast({
+            emitDownloadEvent({
                 type: 'download-stall',
                 id: downloadId,
                 phase,
@@ -764,12 +812,13 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
                 probeStatus,
                 rangeOk,
                 stallDurationMs,
-            });
+            }, { postToClients: true, clientId: targetClientId });
         }
 
         scheduleStallWatchdog(); // arm immediately — also catches first-byte stall
 
         let chunkCount = 0;
+        let prematureEOFInjected = false;
         const progressTransform = new TransformStream({
             async transform(chunk, controller) {
                 chunkCount++;
@@ -834,6 +883,37 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
                 lastChunkTime = Date.now();
                 stallReported = false; // allow re-reporting if a new stall follows
                 scheduleStallWatchdog();
+
+                if (
+                    !prematureEOFInjected &&
+                    INJECT_PREMATURE_EOF_AFTER > 0 &&
+                    isValidSize(total) &&
+                    delivered >= INJECT_PREMATURE_EOF_AFTER &&
+                    delivered < total
+                ) {
+                    prematureEOFInjected = true;
+                    const missingBytes = total - delivered;
+                    log(
+                        '[ProgressSW] Injecting synthetic premature EOF event:',
+                        `delivered=${delivered}, total=${total}, missing=${missingBytes}`
+                    );
+                    emitDownloadEvent({
+                        type: 'download-premature-eof',
+                        id: downloadId,
+                        sent: delivered,
+                        total,
+                        missingBytes,
+                        serverId: serverDownloadId
+                    }, { postToClients: true, clientId: targetClientId });
+
+                    if (stallWatchdogTimer) {
+                        clearTimeout(stallWatchdogTimer);
+                        stallWatchdogTimer = null;
+                    }
+                    resolveDone();
+                    controller.terminate();
+                    return;
+                }
 
                 const now = Date.now();
                 const shouldReport = (
@@ -909,14 +989,14 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
                     );
 
                     try {
-                        broadcast({
+                        emitDownloadEvent({
                             type: 'download-premature-eof',
                             id: downloadId,
                             sent: delivered,
                             total: resolvedTotal,
                             missingBytes,
                             serverId: serverDownloadId
-                        });
+                        }, { postToClients: true, clientId: targetClientId });
                     } catch (broadcastError) {
                         console.error('[ProgressSW] Premature EOF broadcast failed:', broadcastError);
                     }

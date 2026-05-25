@@ -378,7 +378,7 @@ class WritePump {
         }
     }
 
-    async prepareForFallback(timeoutMs, reason = 'fallback') {
+    async prepareForFallback(timeoutMs, reason = 'fallback', { notifyFallback = true } = {}) {
         if (!this.intakeOpen) {
             this.log('WritePump', 'Prepare for fallback called but intake already closed');
             return;
@@ -404,7 +404,9 @@ class WritePump {
 
         // DO NOT close writer - let DownloadManager reuse it for HTTP resume
         this.log('WritePump', `Ready for fallback, writer still open for DownloadManager`);
-        this.onFallback(reason);
+        if (notifyFallback) {
+            this.onFallback(reason);
+        }
     }
 
     async _drainLoop() {
@@ -975,7 +977,7 @@ class FallbackManager {
 
         // Prepare WritePump for fallback
         const flushPromise = writePump
-            ? writePump.prepareForFallback(5000, `Fallback: ${reason}`)
+            ? writePump.prepareForFallback(5000, `Fallback: ${reason}`, { notifyFallback: false })
             : Promise.resolve();
 
         // Notify external state manager that connection failure has been handled
@@ -1072,7 +1074,7 @@ class FallbackManager {
         const shouldForceWriter = this.forceWriter || (!!downloadWriter && !this.forceNativeLink);
 
         this.log("Fallback", `Starting DownloadManager with writer: ${downloadWriter ? 'YES' : 'NO'}, resume: ${resumeOptions ? 'YES' : 'NO'}, forceWriter: ${shouldForceWriter}, forceNativeLink: ${this.forceNativeLink}`);
-        this.downloadManager.startDownload({
+        await this.downloadManager.startDownload({
             writer: downloadWriter,
             resume: resumeOptions,
             forceWriter: shouldForceWriter,
@@ -2206,7 +2208,11 @@ class WebRTCManager {
                 this.log("DataChannel", `Preparing for HTTP fallback with resume from ${this.writePump.bytesWritten} bytes`);
 
                 // Prepare for fallback - flush pending writes but keep writer open
-                await this.writePump.prepareForFallback(5000, 'Writer stuck finishing after EOF');
+                await this.writePump.prepareForFallback(
+                    5000,
+                    'Writer stuck finishing after EOF',
+                    { notifyFallback: false }
+                );
 
                 // Trigger HTTP fallback with resume support
                 this._handleTransferFailure('Writer stuck finishing after EOF', true);

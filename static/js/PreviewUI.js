@@ -71,6 +71,13 @@
                 ...options
             };
 
+            // Static mode: switch to relative path-based URL templates (for self-contained export)
+            if (options.staticMode) {
+                this.options.metadataURL = 'manifest';
+                this.options.thumbnailURLTemplate = 'thumb/{hash}';
+                this.options.fileURLTemplate = 'file/{hash}';
+            }
+
             this.isPreviewableZip = false;
             this.overlay = null;
             this.viewer = null;

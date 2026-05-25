@@ -34,6 +34,564 @@ const dmT = (typeof window !== 'undefined' && typeof window.t === 'function') ? 
 };
 
 const DEFAULT_MAX_AUTOMATIC_WRITER_RESUME_ATTEMPTS = 8;
+const WRITER_RESUME_ATTEMPT_SIZE_STEP = 512 * 1024 * 1024;
+const DEFAULT_READER_CANCEL_TIMEOUT_MS = 1500;
+const DEFAULT_WRITER_READ_STALL_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_FETCH_RESPONSE_RESUME_BASE_DELAY_MS = 5000;
+const DEFAULT_FETCH_RESPONSE_RESUME_MAX_DELAY_MS = 60000;
+const DEFAULT_MAX_FETCH_RESPONSE_RETRY_ATTEMPTS = 8;
+
+class WriterResumeDiagnostics {
+    constructor(options = {}) {
+        this.enabled = !!options.enabled;
+        this.latestState = null;
+
+        if (this.enabled && typeof window !== 'undefined') {
+            window.__FFL_GET_WRITER_RESCUE_STATE__ = () => this.snapshot();
+        }
+    }
+
+    record({ transferState = null, pendingResumeRequest = null, readStallTimeoutMs = 0, patch = {} } = {}) {
+        if (!this.enabled || typeof window === 'undefined') {
+            return;
+        }
+
+        const currentBytes = transferState && typeof transferState.getReceivedBytes === 'function'
+            ? transferState.getReceivedBytes()
+            : 0;
+
+        this.latestState = {
+            readStallTimeoutMs,
+            pendingResumeRequest: !!pendingResumeRequest,
+            hasCurrentTransfer: !!transferState,
+            downloadPath: transferState ? (transferState.downloadPath || '') : '',
+            currentBytes,
+            expectedSize: transferState ? (transferState.expectedSize || 0) : 0,
+            externalResumeRequested: !!(transferState && transferState.externalResumeRequested),
+            lastEventAt: Date.now(),
+            ...patch,
+        };
+
+        // Keep a single snapshot object for backward-compatible test introspection.
+        window.__FFL_WRITER_RESCUE_STATE__ = this.snapshot();
+    }
+
+    snapshot() {
+        return this.latestState ? { ...this.latestState } : null;
+    }
+}
+
+class WriterResumeRetryPolicy {
+    constructor(options = {}) {
+        this.fetchResponseBaseDelayMs = Number.isFinite(options.fetchResponseBaseDelayMs)
+            ? Math.max(0, options.fetchResponseBaseDelayMs)
+            : DEFAULT_FETCH_RESPONSE_RESUME_BASE_DELAY_MS;
+        this.fetchResponseMaxDelayMs = Number.isFinite(options.fetchResponseMaxDelayMs)
+            ? Math.max(this.fetchResponseBaseDelayMs, options.fetchResponseMaxDelayMs)
+            : DEFAULT_FETCH_RESPONSE_RESUME_MAX_DELAY_MS;
+        this.maxFetchResponseRetryAttempts = Number.isFinite(options.maxFetchResponseRetryAttempts)
+            ? Math.max(1, options.maxFetchResponseRetryAttempts)
+            : DEFAULT_MAX_FETCH_RESPONSE_RETRY_ATTEMPTS;
+    }
+
+    getRetryDelayMs(error, attemptIndex) {
+        if (!error || error.code !== 'FFL_FETCH_RESPONSE_STALL') {
+            return 0;
+        }
+
+        const normalizedAttempt = Math.max(1, attemptIndex);
+        const delayMs = this.fetchResponseBaseDelayMs * Math.pow(2, normalizedAttempt - 1);
+        return Math.min(delayMs, this.fetchResponseMaxDelayMs);
+    }
+
+    async waitBeforeRetry(error, attemptIndex, logger) {
+        const delayMs = this.getRetryDelayMs(error, attemptIndex);
+        if (!delayMs) {
+            return;
+        }
+
+        if (typeof logger === 'function') {
+            logger(
+                'DownloadManager',
+                `Waiting ${delayMs}ms before automatic writer resume retry (${attemptIndex}) due to ${error.code || 'unknown'}`
+            );
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+
+    resolveRetryDecision(error, context = {}) {
+        const {
+            mainAttemptIndex = 0,
+            mainAttemptLimit = 0,
+            fetchResponseRetryIndex = 0,
+        } = context;
+
+        if (error && error.code === 'FFL_FETCH_RESPONSE_STALL') {
+            const nextFetchResponseRetryIndex = fetchResponseRetryIndex + 1;
+            return {
+                allowed: nextFetchResponseRetryIndex <= this.maxFetchResponseRetryAttempts,
+                countAgainstMainAttempts: false,
+                mainAttemptIndex,
+                mainAttemptLimit,
+                fetchResponseRetryIndex: nextFetchResponseRetryIndex,
+                fetchResponseRetryLimit: this.maxFetchResponseRetryAttempts,
+            };
+        }
+
+        const nextMainAttemptIndex = mainAttemptIndex + 1;
+        return {
+            allowed: nextMainAttemptIndex <= mainAttemptLimit,
+            countAgainstMainAttempts: true,
+            mainAttemptIndex: nextMainAttemptIndex,
+            mainAttemptLimit,
+            fetchResponseRetryIndex: 0,
+            fetchResponseRetryLimit: this.maxFetchResponseRetryAttempts,
+        };
+    }
+}
+
+class WriterResumeController {
+    constructor(manager, options = {}) {
+        this.manager = manager;
+        const pageParams = new URLSearchParams(window.location.search || '');
+        const stallMsFromUrl = pageParams.has('writer-stall-ms')
+            ? WriterResumeController.parseNonNegativeNumber(pageParams.get('writer-stall-ms'))
+            : null;
+        const rescueDebugFromUrl = pageParams.has('writer-rescue-debug')
+            ? !/^(0|false|no|off)$/i.test(String(pageParams.get('writer-rescue-debug') || '').trim())
+            : false;
+        this.readStallTimeoutMs = Number.isFinite(options.readStallTimeoutMs)
+            ? Math.max(0, options.readStallTimeoutMs)
+            : (stallMsFromUrl !== null ? stallMsFromUrl : DEFAULT_WRITER_READ_STALL_TIMEOUT_MS);
+        this.diagnostics = new WriterResumeDiagnostics({
+            enabled: !!(
+                options.debugStateEnabled ||
+                rescueDebugFromUrl ||
+                (typeof window !== 'undefined' && window.__FFL_DEBUG_WRITER_RESCUE__)
+            )
+        });
+        this.currentTransfer = null;
+        this.pendingResumeRequest = null;
+    }
+
+    updateState(transferState, patch = {}) {
+        this.diagnostics.record({
+            transferState: transferState || this.currentTransfer || null,
+            pendingResumeRequest: this.pendingResumeRequest,
+            readStallTimeoutMs: this.readStallTimeoutMs,
+            patch,
+        });
+    }
+
+    getDebugSnapshot() {
+        return this.diagnostics.snapshot();
+    }
+
+    static parseNonNegativeNumber(value) {
+        const num = Number(value);
+        return Number.isFinite(num) && num >= 0 ? num : null;
+    }
+
+    getUrlSizeHint(urlPath) {
+        try {
+            const urlObj = new URL(urlPath, window.location.origin);
+            return WriterResumeController.parseNonNegativeNumber(urlObj.searchParams.get('size')) || 0;
+        } catch (error) {
+            return 0;
+        }
+    }
+
+    resolveTransferTotal(primaryTotal, resumeConfig = null, urlPath = null, totalBytesHint = 0) {
+        const candidates = [
+            primaryTotal,
+            resumeConfig && resumeConfig.expectedSize,
+            totalBytesHint,
+            urlPath ? this.getUrlSizeHint(urlPath) : 0
+        ].filter(value => typeof value === 'number' && value > 0);
+
+        return candidates.length ? Math.max(...candidates) : 0;
+    }
+
+    resolveAttemptLimit(configuredLimit, expectedSize) {
+        const baseLimit = Number.isFinite(configuredLimit) ? Math.max(0, configuredLimit) : 0;
+        if (!expectedSize || expectedSize <= 0) {
+            return baseLimit;
+        }
+
+        const sizeBasedLimit = Math.ceil(expectedSize / WRITER_RESUME_ATTEMPT_SIZE_STEP) + 8;
+        return Math.max(baseLimit, sizeBasedLimit);
+    }
+
+    async cancelReaderAfterTransferError(reader, transferError, timeoutMs = DEFAULT_READER_CANCEL_TIMEOUT_MS) {
+        if (!reader || typeof reader.cancel !== 'function') {
+            return 'missing-reader';
+        }
+
+        const cancelTask = reader.cancel(transferError)
+            .then(() => 'cancelled')
+            .catch(() => 'cancel-error');
+
+        const timeoutTask = new Promise((resolve) => {
+            setTimeout(() => resolve('timeout'), timeoutMs);
+        });
+
+        return Promise.race([cancelTask, timeoutTask]);
+    }
+
+    shouldEnableRescue() {
+        return this.readStallTimeoutMs > 0;
+    }
+
+    beginTransfer(transferState) {
+        this.endTransfer();
+        this.currentTransfer = {
+            ...transferState,
+            externalResumeRequested: false,
+            stallTimer: null,
+            guardSequence: 0
+        };
+        this.updateState(this.currentTransfer, {
+            event: 'begin-transfer',
+            phase: 'idle',
+        });
+        return this.currentTransfer;
+    }
+
+    clearStallTimer(transferState) {
+        if (!transferState || transferState.stallTimer === null) {
+            return;
+        }
+
+        clearTimeout(transferState.stallTimer);
+        transferState.stallTimer = null;
+    }
+
+    endTransfer(transferState = null) {
+        const activeTransfer = transferState || this.currentTransfer;
+        this.clearStallTimer(activeTransfer);
+        this.updateState(activeTransfer, {
+            event: 'end-transfer',
+            phase: 'idle',
+        });
+        if (!transferState || transferState === this.currentTransfer) {
+            this.currentTransfer = null;
+        }
+    }
+
+    createReaderStallError(transferState) {
+        const receivedBytes = transferState.getReceivedBytes();
+        const error = new Error(
+            `Reader stalled at ${receivedBytes}/${transferState.expectedSize || '?'} bytes for ${this.readStallTimeoutMs}ms`
+        );
+        error.code = 'FFL_READER_STALL';
+        error.phase = 'reader.read';
+        error.receivedBytes = receivedBytes;
+        error.expectedSize = transferState.expectedSize || 0;
+        error.stallDurationMs = this.readStallTimeoutMs;
+        return error;
+    }
+
+    createWriterStallError(transferState, chunkBytes = 0) {
+        const receivedBytes = transferState.getReceivedBytes();
+        const error = new Error(
+            `Writer stalled at ${receivedBytes}/${transferState.expectedSize || '?'} bytes for ${this.readStallTimeoutMs}ms`
+        );
+        error.code = 'FFL_WRITER_STALL';
+        error.phase = 'writer.write';
+        error.receivedBytes = receivedBytes;
+        error.expectedSize = transferState.expectedSize || 0;
+        error.stallDurationMs = this.readStallTimeoutMs;
+        error.chunkBytes = chunkBytes;
+        return error;
+    }
+
+    createSwStallError(stallEvent = {}) {
+        const receivedBytes = WriterResumeController.parseNonNegativeNumber(stallEvent.delivered) || 0;
+        const expectedSize = WriterResumeController.parseNonNegativeNumber(stallEvent.total) || 0;
+        const stallDurationMs = WriterResumeController.parseNonNegativeNumber(stallEvent.stallDurationMs) || 0;
+        const error = new Error(
+            `SW stall at ${receivedBytes}/${expectedSize || '?'} bytes after ${stallDurationMs}ms`
+        );
+        error.code = 'FFL_SW_STALL';
+        error.phase = 'reader.read';
+        error.receivedBytes = receivedBytes;
+        error.expectedSize = expectedSize;
+        error.stallDurationMs = stallDurationMs;
+        error.probeStatus = stallEvent.probeStatus || '';
+        error.rangeOk = !!stallEvent.rangeOk;
+        return error;
+    }
+
+    createSwPrematureEOFError(eofEvent = {}) {
+        const receivedBytes = WriterResumeController.parseNonNegativeNumber(eofEvent.sent) || 0;
+        const expectedSize = WriterResumeController.parseNonNegativeNumber(eofEvent.total) || 0;
+        const missingBytes = WriterResumeController.parseNonNegativeNumber(eofEvent.missingBytes) || 0;
+        const error = new Error(
+            `SW premature EOF at ${receivedBytes}/${expectedSize || '?'} bytes, missing=${missingBytes}`
+        );
+        error.code = 'FFL_SW_PREMATURE_EOF';
+        error.phase = 'reader.read';
+        error.receivedBytes = receivedBytes;
+        error.expectedSize = expectedSize;
+        error.missingBytes = missingBytes;
+        error.serverId = eofEvent.serverId || '';
+        return error;
+    }
+
+    createFetchResponseStallError(transferState) {
+        const receivedBytes = transferState.getReceivedBytes();
+        const error = new Error(
+            `Fetch response stalled at ${receivedBytes}/${transferState.expectedSize || '?'} bytes for ${this.readStallTimeoutMs}ms`
+        );
+        error.code = 'FFL_FETCH_RESPONSE_STALL';
+        error.phase = 'fetch.response';
+        error.receivedBytes = receivedBytes;
+        error.expectedSize = transferState.expectedSize || 0;
+        error.stallDurationMs = this.readStallTimeoutMs;
+        return error;
+    }
+
+    async fetchResponseWithGuard(fetchPromise, transferState) {
+        if (!this.shouldEnableRescue()) {
+            return fetchPromise;
+        }
+
+        const responsePromise = Promise.resolve(fetchPromise);
+        const stallPromise = new Promise((_, reject) => {
+            this.updateState(transferState, {
+                event: 'fetch-response-guard-armed',
+                phase: 'fetch.response'
+            });
+            transferState.stallTimer = setTimeout(() => {
+                const error = this.createFetchResponseStallError(transferState);
+                this.updateState(transferState, {
+                    event: 'fetch-response-timeout',
+                    phase: 'fetch.response',
+                    code: error.code,
+                    stallDurationMs: error.stallDurationMs || 0,
+                });
+                try {
+                    transferState.abortController.abort(error);
+                } catch (_) {}
+                reject(error);
+            }, this.readStallTimeoutMs);
+        });
+
+        try {
+            const response = await Promise.race([responsePromise, stallPromise]);
+            this.updateState(transferState, {
+                event: 'fetch-response-received',
+                phase: 'fetch.response'
+            });
+            return response;
+        } finally {
+            this.clearStallTimer(transferState);
+        }
+    }
+
+    requestResume(transferState, error) {
+        if (!transferState || transferState.externalResumeRequested) {
+            return false;
+        }
+
+        transferState.externalResumeRequested = true;
+        this.pendingResumeRequest = error;
+        this.clearStallTimer(transferState);
+
+        this.manager.log(
+            'DownloadManager',
+            `Requesting same-writer resume at ${error.receivedBytes}/${error.expectedSize || '?'} bytes via ${error.code}`
+        );
+        this.updateState(transferState, {
+            event: 'request-resume',
+            phase: error.phase || 'reader.read',
+            code: error.code || '',
+            stallDurationMs: error.stallDurationMs || 0,
+        });
+        try {
+            transferState.abortController.abort(error);
+        } catch (_) {}
+
+        try {
+            if (transferState.reader && typeof transferState.reader.cancel === 'function') {
+                transferState.reader.cancel(error).catch(() => {});
+            }
+        } catch (_) {}
+
+        return true;
+    }
+
+    async readWithGuard(reader, transferState) {
+        if (!this.shouldEnableRescue()) {
+            return reader.read();
+        }
+
+        transferState.guardSequence += 1;
+        const guardSequence = transferState.guardSequence;
+        this.updateState(transferState, {
+            event: 'reader-guard-armed',
+            phase: 'reader.read',
+            guardSequence,
+        });
+        const readPromise = reader.read();
+        const stallPromise = new Promise((_, reject) => {
+            transferState.stallTimer = setTimeout(() => {
+                const error = this.createReaderStallError(transferState);
+                this.updateState(transferState, {
+                    event: 'reader-stall-timeout',
+                    phase: 'reader.read',
+                    guardSequence,
+                    code: error.code,
+                    stallDurationMs: error.stallDurationMs || 0,
+                });
+                this.requestResume(transferState, error);
+                reject(error);
+            }, this.readStallTimeoutMs);
+        });
+
+        try {
+            const result = await Promise.race([readPromise, stallPromise]);
+            this.updateState(transferState, {
+                event: result && result.done ? 'reader-read-done' : 'reader-read-value',
+                phase: 'reader.read',
+                guardSequence,
+            });
+            return result;
+        } finally {
+            this.clearStallTimer(transferState);
+        }
+    }
+
+    async writeWithGuard(writer, chunk, transferState) {
+        if (!this.shouldEnableRescue()) {
+            return writer.write(chunk);
+        }
+
+        const chunkBytes = chunk?.byteLength || 0;
+        let timer = null;
+        const writePromise = Promise.resolve().then(() => writer.write(chunk));
+        const stallPromise = new Promise((_, reject) => {
+            timer = setTimeout(() => {
+                const error = this.createWriterStallError(transferState, chunkBytes);
+                this.updateState(transferState, {
+                    event: 'writer-stall-timeout',
+                    phase: 'writer.write',
+                    code: error.code,
+                    stallDurationMs: error.stallDurationMs || 0,
+                    chunkBytes,
+                });
+                this.requestResume(transferState, error);
+                reject(error);
+            }, this.readStallTimeoutMs);
+        });
+
+        try {
+            return await Promise.race([writePromise, stallPromise]);
+        } finally {
+            if (timer !== null) {
+                clearTimeout(timer);
+            }
+        }
+    }
+
+    handleDownloadStall(stallEvent = {}) {
+        const transferState = this.currentTransfer;
+        if (!transferState || transferState.externalResumeRequested) {
+            return false;
+        }
+
+        if (!String(transferState.downloadPath || '').startsWith('sw_writer')) {
+            return false;
+        }
+
+        if (!this.shouldEnableRescue()) {
+            return false;
+        }
+
+        const canResume = !!stallEvent.rangeOk || stallEvent.probeStatus === '206';
+        if (!canResume) {
+            this.updateState(transferState, {
+                event: 'sw-stall-ignored',
+                phase: 'reader.read',
+                code: 'SW_STALL_NOT_RESUMABLE',
+                probeStatus: stallEvent.probeStatus || '',
+                rangeOk: !!stallEvent.rangeOk,
+                stallDurationMs: stallEvent.stallDurationMs || 0,
+            });
+            return false;
+        }
+
+        this.updateState(transferState, {
+            event: 'sw-stall-resume',
+            phase: 'reader.read',
+            code: 'FFL_SW_STALL',
+            probeStatus: stallEvent.probeStatus || '',
+            rangeOk: !!stallEvent.rangeOk,
+            stallDurationMs: stallEvent.stallDurationMs || 0,
+        });
+        return this.requestResume(transferState, this.createSwStallError(stallEvent));
+    }
+
+    handlePrematureEOF(eofEvent = {}) {
+        const transferState = this.currentTransfer;
+        if (!transferState || transferState.externalResumeRequested) {
+            return false;
+        }
+
+        if (!String(transferState.downloadPath || '').startsWith('sw_writer')) {
+            return false;
+        }
+
+        if (!this.shouldEnableRescue()) {
+            return false;
+        }
+
+        const receivedBytes = WriterResumeController.parseNonNegativeNumber(eofEvent.sent) || 0;
+        const expectedSize = WriterResumeController.parseNonNegativeNumber(eofEvent.total) || 0;
+        if (receivedBytes <= 0 || expectedSize <= 0 || receivedBytes >= expectedSize) {
+            return false;
+        }
+
+        this.updateState(transferState, {
+            event: 'sw-premature-eof-resume',
+            phase: 'reader.read',
+            code: 'FFL_SW_PREMATURE_EOF',
+            receivedBytes,
+            expectedSize,
+            missingBytes: WriterResumeController.parseNonNegativeNumber(eofEvent.missingBytes) || 0,
+        });
+        return this.requestResume(transferState, this.createSwPrematureEOFError(eofEvent));
+    }
+
+    consumePendingResumeRequest(fallbackReceivedBytes, fallbackExpectedSize, originalError) {
+        if (!this.pendingResumeRequest) {
+            return null;
+        }
+
+        const resumeError = this.pendingResumeRequest;
+        this.pendingResumeRequest = null;
+
+        const mergedError = new Error(resumeError.message || (originalError && originalError.message) || 'resume requested');
+        mergedError.code = resumeError.code;
+        mergedError.phase = resumeError.phase || 'reader.read';
+        mergedError.receivedBytes = Math.max(fallbackReceivedBytes || 0, resumeError.receivedBytes || 0);
+        mergedError.expectedSize = Math.max(fallbackExpectedSize || 0, resumeError.expectedSize || 0);
+        mergedError.stallDurationMs = resumeError.stallDurationMs;
+        mergedError.probeStatus = resumeError.probeStatus;
+        mergedError.rangeOk = resumeError.rangeOk;
+        mergedError.missingBytes = resumeError.missingBytes;
+        mergedError.cause = originalError || null;
+        this.updateState(this.currentTransfer, {
+            event: 'consume-pending-resume',
+            phase: mergedError.phase || 'reader.read',
+            code: mergedError.code || '',
+            receivedBytes: mergedError.receivedBytes || 0,
+            expectedSize: mergedError.expectedSize || 0,
+        });
+        return mergedError;
+    }
+}
 
 /**
  * AuthGateRegistry — collects auth gates (pickup code, pubkey, E2EE key, …) and runs them
@@ -795,6 +1353,8 @@ class DownloadManager {
         this.maxAutomaticWriterResumeAttempts = Number.isFinite(options.maxAutomaticWriterResumeAttempts)
             ? Math.max(0, options.maxAutomaticWriterResumeAttempts)
             : DEFAULT_MAX_AUTOMATIC_WRITER_RESUME_ATTEMPTS;
+        this.writerResumeRetryPolicy = new WriterResumeRetryPolicy(options.writerResumeRetryPolicy || {});
+        this.writerResumeController = new WriterResumeController(this, options.writerResumeController || {});
         
         // Configurable adaptive unlock delay options
         this.ADAPTIVE_DELAY_CONFIG = options.adaptiveDelayConfig || {
@@ -822,6 +1382,7 @@ class DownloadManager {
 
         // BroadcastChannel for SW progress updates
         this.dlChannel = ('BroadcastChannel' in window) ? new BroadcastChannel('dl-progress') : null;
+        this.serviceWorkerMessageHandler = null;
 
         // Bind methods
         this.log = this.log.bind(this);
@@ -831,6 +1392,7 @@ class DownloadManager {
         
         // Initialize
         this.setupBroadcastChannel();
+        this.setupServiceWorkerMessageHandler();
         this.setupVisibilityChangeHandler();
     }
     
@@ -926,6 +1488,21 @@ class DownloadManager {
         }
 
         return null;
+    }
+
+    propagatePageDownloadDebugParams(downloadUrl) {
+        const searchParams = new URLSearchParams(window.location.search || '');
+        const paramMappings = [
+            ['inject-premature-eof-after', 'inject-premature-eof-after'],
+            ['writer-stall-ms', 'stallMs']
+        ];
+
+        for (const [sourceParam, targetParam] of paramMappings) {
+            if (!searchParams.has(sourceParam) || downloadUrl.searchParams.has(targetParam)) {
+                continue;
+            }
+            downloadUrl.searchParams.set(targetParam, searchParams.get(sourceParam));
+        }
     }
 
     applyRouteProfile(plan, routeOverride) {
@@ -1290,39 +1867,64 @@ class DownloadManager {
         });
     }
 
+    handleDownloadSignal(eventData, source = 'broadcast') {
+        if (!eventData || typeof eventData !== 'object') {
+            return;
+        }
+
+        const { type, sent, total, id } = eventData;
+        if (!type) {
+            return;
+        }
+
+        this.log('DownloadManager', `${source} event received:`, eventData);
+
+        // Filter events by download ID to prevent cross-tab interference
+        if (id && this.activeDlId && id !== this.activeDlId) {
+            return;
+        }
+
+        if (type === 'download-started') {
+            this.handleDownloadStarted(id, total, sent);
+        } else if (type === 'download-progress') {
+            this.handleDownloadProgress(sent, total);
+        } else if (type === 'download-complete') {
+            this.handleDownloadCompleteEvent(eventData, eventData.replayed ? 'sw-replay' : source);
+        } else if (type === 'download-premature-eof') {
+            const handled = this.writerResumeController.handlePrematureEOF(eventData);
+            this.log(
+                'DownloadManager',
+                `SW premature EOF detected: sent=${eventData.sent}/${eventData.total}, missing=${eventData.missingBytes}, handled=${handled}`
+            );
+        } else if (type === 'download-stall') {
+            this.log('DownloadManager', `SW stall [${eventData.phase}]: delivered=${eventData.delivered}/${eventData.total} (${eventData.percent}%), probe=${eventData.probeStatus}, rangeOk=${eventData.rangeOk}, stallMs=${eventData.stallDurationMs}`);
+            this.writerResumeController.handleDownloadStall(eventData);
+        } else if (type === 'download-error') {
+            this.handleDownloadError(eventData.message);
+        } else if (type === 'download-checksum') {
+            this.handleChecksumVerificationResult(eventData, eventData.transport || 'http');
+        } else if (type === 'debug' && eventData.message) {
+            this.log('ProgressSW', eventData.message);
+        }
+    }
+
     setupBroadcastChannel() {
         if (this.dlChannel) {
             this.dlChannel.onmessage = (evt) => {
-                const { type, sent, total, id } = evt.data;
-                this.log('DownloadManager', 'Broadcast event received:', evt.data);
-
-                // Filter events by download ID to prevent cross-tab interference
-                if (id && this.activeDlId && id !== this.activeDlId) {
-                    return;
-                }
-
-                if (type === 'download-started') {
-                    this.handleDownloadStarted(id, total, sent);
-                } else if (type === 'download-progress') {
-                    this.handleDownloadProgress(sent, total);
-                } else if (type === 'download-complete') {
-                    this.handleDownloadCompleteEvent(evt.data, evt.data.replayed ? 'sw-replay' : 'broadcast');
-                } else if (type === 'download-premature-eof') {
-                    this.log(
-                        'DownloadManager',
-                        `SW premature EOF detected: sent=${evt.data.sent}/${evt.data.total}, missing=${evt.data.missingBytes}`
-                    );
-                } else if (type === 'download-stall') {
-                    this.log('DownloadManager', `SW stall [${evt.data.phase}]: delivered=${evt.data.delivered}/${evt.data.total} (${evt.data.percent}%), probe=${evt.data.probeStatus}, rangeOk=${evt.data.rangeOk}, stallMs=${evt.data.stallDurationMs}`);
-                } else if (type === 'download-error') {
-                    this.handleDownloadError(evt.data.message);
-                } else if (type === 'download-checksum') {
-                    this.handleChecksumVerificationResult(evt.data, evt.data.transport || 'http');
-                } else if (type === 'debug' && evt.data.message) {
-                    this.log('ProgressSW', evt.data.message);
-                }
+                this.handleDownloadSignal(evt.data, 'broadcast');
             };
         }
+    }
+
+    setupServiceWorkerMessageHandler() {
+        if (!('serviceWorker' in navigator) || !navigator.serviceWorker) {
+            return;
+        }
+
+        this.serviceWorkerMessageHandler = (event) => {
+            this.handleDownloadSignal(event.data, 'sw-message');
+        };
+        navigator.serviceWorker.addEventListener('message', this.serviceWorkerMessageHandler);
     }
     
     setupVisibilityChangeHandler() {
@@ -1660,6 +2262,10 @@ class DownloadManager {
             this.dlChannel.close();
             this.dlChannel = null;
             this.log('DownloadManager', 'Closed broadcast channel to prevent cross-tab interference');
+        }
+        if (this.serviceWorkerMessageHandler && 'serviceWorker' in navigator && navigator.serviceWorker) {
+            navigator.serviceWorker.removeEventListener('message', this.serviceWorkerMessageHandler);
+            this.serviceWorkerMessageHandler = null;
         }
         
         // Mark download as stopped
@@ -2157,14 +2763,36 @@ class DownloadManager {
         });
     }
 
-    resolveWriterTransferTotal(primaryTotal, resumeConfig = null) {
-        const candidates = [
-            primaryTotal,
-            resumeConfig && resumeConfig.expectedSize,
-            this.totalBytesHint
-        ].filter(value => typeof value === 'number' && value > 0);
+    getUrlSizeHint(urlPath) {
+        return this.writerResumeController.getUrlSizeHint(urlPath);
+    }
 
-        return candidates.length ? Math.max(...candidates) : 0;
+    resolveWriterTransferTotal(primaryTotal, resumeConfig = null, urlPath = null) {
+        return this.writerResumeController.resolveTransferTotal(
+            primaryTotal,
+            resumeConfig,
+            urlPath,
+            this.totalBytesHint
+        );
+    }
+
+    resolveWriterResumeAttemptLimit(expectedSize) {
+        return this.writerResumeController.resolveAttemptLimit(
+            this.maxAutomaticWriterResumeAttempts,
+            expectedSize
+        );
+    }
+
+    async cancelReaderAfterTransferError(reader, transferError, timeoutMs = DEFAULT_READER_CANCEL_TIMEOUT_MS) {
+        return this.writerResumeController.cancelReaderAfterTransferError(
+            reader,
+            transferError,
+            timeoutMs
+        );
+    }
+
+    getWriterRescueDebugSnapshot() {
+        return this.writerResumeController.getDebugSnapshot();
     }
 
     createPrematureEOFError(receivedBytes, expectedSize) {
@@ -2172,6 +2800,7 @@ class DownloadManager {
             `Premature EOF while reading download stream: received ${receivedBytes} of ${expectedSize} bytes`
         );
         error.code = 'FFL_PREMATURE_EOF';
+        error.phase = 'reader.read';
         error.receivedBytes = receivedBytes;
         error.expectedSize = expectedSize;
         return error;
@@ -2225,6 +2854,7 @@ class DownloadManager {
         let activeProgressCallback = progressCallback;
         let finalTotalSize = 0;
         let attemptIndex = 0;
+        let fetchResponseRetryIndex = 0;
 
         while (true) {
             if (needsDecryption) {
@@ -2259,46 +2889,67 @@ class DownloadManager {
                 }
             }
 
-            const response = await fetch(activeUrlPath, { headers, cache: 'no-cache' });
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            const serverDlId = response.headers.get('FFL-DownloadId');
-            if (serverDlId) {
-                this.serverDownloadId = serverDlId;
-            }
-
-            let totalSizeFromServer = 0;
-            if (wantRange) {
-                totalSizeFromServer = this.parseResumedResponseMetadata(response, activeResume);
-                if (totalSizeFromServer > 0) {
-                    this.totalBytesHint = Math.max(this.totalBytesHint || 0, totalSizeFromServer);
-                }
-            } else {
-                const len = response.headers.get('Content-Length');
-                if (len) {
-                    totalSizeFromServer = parseInt(len, 10);
-                }
-            }
-
-            this.log('DownloadManager', 'Fetch response received, reading stream');
-
             const baseBytes = activeResume?.baseBytes || 0;
-            const expectedTotal = this.resolveWriterTransferTotal(totalSizeFromServer, activeResume);
-            const reader = response.body.getReader();
+            let totalSizeFromServer = 0;
+            let expectedTotal = this.resolveWriterTransferTotal(0, activeResume, activeUrlPath);
+            let reader = null;
             let totalWritten = 0;
             let firstChunk = true;
             let bytesToDiscard = activeResume?.skipBytes ? Math.max(0, activeResume.skipBytes) : 0;
+            const abortController = new AbortController();
+            const transferState = this.writerResumeController.beginTransfer({
+                urlPath: activeUrlPath,
+                downloadPath: this.activeDownloadPath,
+                abortController,
+                reader: null,
+                expectedSize: expectedTotal,
+                getReceivedBytes: () => baseBytes + totalWritten
+            });
 
             try {
+                const response = await this.writerResumeController.fetchResponseWithGuard(
+                    fetch(activeUrlPath, {
+                        headers,
+                        cache: 'no-cache',
+                        signal: abortController.signal
+                    }),
+                    transferState
+                );
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const serverDlId = response.headers.get('FFL-DownloadId');
+                if (serverDlId) {
+                    this.serverDownloadId = serverDlId;
+                }
+
+                if (wantRange) {
+                    totalSizeFromServer = this.parseResumedResponseMetadata(response, activeResume);
+                    if (totalSizeFromServer > 0) {
+                        this.totalBytesHint = Math.max(this.totalBytesHint || 0, totalSizeFromServer);
+                    }
+                } else {
+                    const len = response.headers.get('Content-Length');
+                    if (len) {
+                        totalSizeFromServer = parseInt(len, 10);
+                    }
+                }
+
+                expectedTotal = this.resolveWriterTransferTotal(totalSizeFromServer, activeResume, activeUrlPath);
+                transferState.expectedSize = expectedTotal;
+                reader = response.body.getReader();
+                transferState.reader = reader;
+                this.log('DownloadManager', 'Fetch response received, reading stream');
+
                 while (true) {
                     let readResult;
                     try {
-                        readResult = await reader.read();
+                        readResult = await this.writerResumeController.readWithGuard(reader, transferState);
                     } catch (readError) {
                         const error = new Error(`Reader failed while streaming download: ${readError.message || readError}`);
                         error.code = 'FFL_STREAM_READ_ERROR';
+                        error.phase = 'reader.read';
                         error.cause = readError;
                         error.receivedBytes = baseBytes + totalWritten;
                         error.expectedSize = expectedTotal;
@@ -2331,7 +2982,13 @@ class DownloadManager {
                             );
                         } catch (decryptError) {
                             this.log('DownloadManager', 'ERROR: E2EE decryption failed during resume:', decryptError);
-                            throw new Error('E2EE decryption failed: ' + decryptError.message);
+                            const error = new Error('E2EE decryption failed: ' + decryptError.message);
+                            error.code = 'FFL_E2EE_DECRYPT_ERROR';
+                            error.phase = 'decrypt';
+                            error.cause = decryptError;
+                            error.receivedBytes = baseBytes + totalWritten;
+                            error.expectedSize = expectedTotal;
+                            throw error;
                         }
                     }
 
@@ -2354,29 +3011,57 @@ class DownloadManager {
                     }
                     firstChunk = false;
 
-                    await writer.write(chunk);
+                    try {
+                        await this.writerResumeController.writeWithGuard(writer, chunk, transferState);
+                    } catch (writeError) {
+                        const error = new Error(`Writer failed while writing download chunk: ${writeError.message || writeError}`);
+                        error.code = 'FFL_WRITER_WRITE_ERROR';
+                        error.phase = 'writer.write';
+                        error.cause = writeError;
+                        error.receivedBytes = baseBytes + totalWritten;
+                        error.expectedSize = expectedTotal;
+                        throw error;
+                    }
                     totalWritten += chunk.byteLength;
+                    fetchResponseRetryIndex = 0;
 
                     if (activeProgressCallback) {
                         activeProgressCallback(baseBytes + totalWritten, expectedTotal || totalSizeFromServer);
                     }
                 }
             } catch (transferError) {
-                try {
-                    await reader.cancel(transferError);
-                } catch (cancelError) {
-                    this.log('DownloadManager', 'Reader cancel after failure did not complete cleanly:', cancelError);
+                const pendingResumeError = this.writerResumeController.consumePendingResumeRequest(
+                    baseBytes + totalWritten,
+                    expectedTotal || this.resolveWriterTransferTotal(totalSizeFromServer, activeResume, activeUrlPath),
+                    transferError
+                );
+                if (pendingResumeError) {
+                    transferError = pendingResumeError;
+                }
+
+                const cancelResult = await this.cancelReaderAfterTransferError(reader, transferError);
+                if (cancelResult === 'cancel-error') {
+                    this.log('DownloadManager', 'Reader cancel after failure did not complete cleanly');
+                } else if (cancelResult === 'timeout') {
+                    this.log('DownloadManager', 'Reader cancel after failure timed out, continuing with resume');
                 }
 
                 const writtenBytes = baseBytes + totalWritten;
-                const retryExpectedSize = expectedTotal || this.resolveWriterTransferTotal(totalSizeFromServer, activeResume);
-                const canRetry = attemptIndex < this.maxAutomaticWriterResumeAttempts;
+                const retryExpectedSize = expectedTotal || this.resolveWriterTransferTotal(totalSizeFromServer, activeResume, activeUrlPath);
+                const attemptLimit = this.resolveWriterResumeAttemptLimit(retryExpectedSize);
+                const retryDecision = this.writerResumeRetryPolicy.resolveRetryDecision(transferError, {
+                    mainAttemptIndex: attemptIndex,
+                    mainAttemptLimit: attemptLimit,
+                    fetchResponseRetryIndex,
+                });
+                const canRetry = retryDecision.allowed;
 
                 if (!canRetry || (!writtenBytes && !retryExpectedSize)) {
                     throw transferError;
                 }
 
-                attemptIndex += 1;
+                attemptIndex = retryDecision.mainAttemptIndex;
+                fetchResponseRetryIndex = retryDecision.fetchResponseRetryIndex;
                 this.writerAutoResumeUsed = true;
                 activeResume = this.buildAutomaticWriterResumeConfig(writtenBytes, retryExpectedSize);
                 this.resumeConfig = activeResume;
@@ -2387,11 +3072,20 @@ class DownloadManager {
 
                 this.log(
                     'DownloadManager',
-                    `Automatic writer resume triggered (${attemptIndex}/${this.maxAutomaticWriterResumeAttempts}) after ${writtenBytes} bytes:`,
+                    retryDecision.countAgainstMainAttempts
+                        ? `Automatic writer resume triggered (${attemptIndex}/${attemptLimit}) after ${writtenBytes} bytes:`
+                        : `Automatic writer resume triggered (fetch-response ${fetchResponseRetryIndex}/${retryDecision.fetchResponseRetryLimit}, main ${attemptIndex}/${attemptLimit}) after ${writtenBytes} bytes:`,
                     transferError
                 );
                 this.log('DownloadManager', 'Automatic writer resume URL:', activeUrlPath);
+                await this.writerResumeRetryPolicy.waitBeforeRetry(
+                    transferError,
+                    retryDecision.countAgainstMainAttempts ? attemptIndex : fetchResponseRetryIndex,
+                    this.log.bind(this)
+                );
                 continue;
+            } finally {
+                this.writerResumeController.endTransfer(transferState);
             }
 
             break;
@@ -2454,6 +3148,7 @@ class DownloadManager {
 
         const downloadUrl = new URL(url, location.origin);
         this.ensureDownloadId(downloadUrl);
+        this.propagatePageDownloadDebugParams(downloadUrl);
         const useServiceWorker = progressSwSupported;
         const downloadPath = this.resolveDownloadPath({
             useServiceWorker,

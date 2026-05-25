@@ -89,10 +89,10 @@ class Authenticator:
         self.hmac = HMAC(key=hashedSecret, digestmod=sha256)
         logger.debug("Authenticator initialized with hashed secret")
 
-    def answer(self, challenge_uuid):
+    def answer(self, challengeUuid):
         """Generate a reply message for a challenge."""
         hmacCopy = self.hmac.copy()
-        hmacCopy.update(challenge_uuid.bytes)
+        hmacCopy.update(challengeUuid.bytes)
         return hmacCopy.hexdigest()
 
 
@@ -617,13 +617,13 @@ class BoreClient:
             logger.debug("Received challenge UUID: %s", challengeUuidStr)
 
             try:
-                challenge_uuid = uuid.UUID(challengeUuidStr)
+                challengeUuid = uuid.UUID(challengeUuidStr)
             except ValueError as e:
                 logger.error("Invalid UUID format: %s", challengeUuidStr)
                 raise ConnectionError(f"Invalid UUID format in challenge: {e}")
 
             # Calculate the response
-            authResponse = self.authenticator.answer(challenge_uuid)
+            authResponse = self.authenticator.answer(challengeUuid)
             logger.debug("Generated authentication response (length %s)", len(authResponse))
 
             # Build authentication message with token
@@ -670,6 +670,9 @@ class BoreClient:
                     serverHostname=host,
                     timeout=NETWORK_TIMEOUT,
                 )
+            except TimeoutError as e:
+                logger.warning(f"Failed to open data channel {connectionId}: timed out connecting to {host}:{port}")
+                return
             except Exception as e:
                 logger.error(f"Failed to open data channel {connectionId}: {type(e).__name__}: {e}")
                 logger.error(traceback.format_exc())

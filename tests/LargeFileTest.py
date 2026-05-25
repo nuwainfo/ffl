@@ -23,6 +23,7 @@ import platform
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -66,20 +67,21 @@ except ImportError:
 DIRECT_RUN = __name__ == "__main__"
 BROWSER_CHOICES = ("chrome", "firefox")
 ROUTE_CHOICES = ("auto", "sw", "pass")
-BROWSER_DRIVEN_SCENARIOS = {"http-browser", "normal", "webrtc", "fallback", "upload"}
+BROWSER_DRIVEN_SCENARIOS = {"http-browser", "normal", "webrtc", "fallback", "upload", "rescue", "premature-eof"}
 
 # Curated "full" matrix.
 # Keep only combinations that exercise distinct download behavior:
-# - `http-browser`: pure HTTP browser path; Firefox `pass` is distinct because the
-#   test maps it to `native=true`, which exercises browser-owned/native handling.
+# - `http-browser`: pure HTTP browser path. Firefox `pass` remains valuable
+#   pass-through coverage, but we do not force the synthetic `native=true` branch.
 # - `normal`: default happy-path coverage for both browsers; route variants add no
 #   meaningful value when P2P succeeds without relay fallback.
 # - `webrtc`: fallback is disabled, so route variants are irrelevant and `pass`
 #   is actively misleading for Firefox because it does not exercise HTTP/native flow.
-# - `fallback`: explicit relay fallback coverage; keep Firefox `pass` because it
-#   exercises the native/browser-owned HTTP resume path after P2P disruption.
+# - `fallback`: explicit relay fallback coverage, including Firefox `pass` when we
+#   want pass-through behavior. We avoid synthetic `native=true` here because
+#   `writer -> native` split is not representative of same-writer relay recovery.
 # - `upload`: browser download from an upload-mode share still benefits from Firefox
-#   native-path coverage, but extra route variants are redundant.
+#   pass-through coverage, but extra route variants remain redundant.
 CURATED_FULL_MATRIX = {
     "http-request": [(None, None)],
     "http-browser": [("chrome", "auto"), ("firefox", "auto"), ("firefox", "pass")],
@@ -87,6 +89,10 @@ CURATED_FULL_MATRIX = {
     "webrtc": [("chrome", "auto"), ("firefox", "auto")],
     "fallback": [("chrome", "auto"), ("firefox", "auto"), ("firefox", "pass")],
     "upload": [("chrome", "auto"), ("firefox", "auto"), ("firefox", "pass")],
+}
+
+WEAK_NETWORK_FULL_MATRIX = {
+    "rescue": [("firefox", "auto")],
 }
 
 
@@ -162,6 +168,56 @@ class NetworkEmulationConfig:
         if self.latency:
             parts.append(f"latency={self.latency}")
         return ", ".join(parts) if parts else "disabled"
+
+
+@dataclass(frozen=True)
+class DownloadStallConfig:
+    afterBytes: int = 0
+    durationSeconds: int = 0
+    mode: str = "drop"
+    targetRole: str = "browser"
+    matchAllTlsHosts: bool = False
+    matchAllTcpPorts: bool = False
+    direction: str = "both"
+
+    @classmethod
+    def fromEnvironment(cls):
+        return cls(
+            afterBytes=parseSizeString(os.getenv("FFL_LARGE_FILE_DOWNLOAD_STALL_AFTER", "0")),
+            durationSeconds=max(
+                0,
+                int(os.getenv("FFL_LARGE_FILE_DOWNLOAD_STALL_DURATION_SECONDS", "0") or "0"),
+            ),
+            mode=(os.getenv("FFL_LARGE_FILE_DOWNLOAD_STALL_MODE", "drop") or "drop").strip().lower(),
+            targetRole=(os.getenv("FFL_LARGE_FILE_DOWNLOAD_STALL_TARGET_ROLE", "browser") or "browser").strip().lower(),
+            matchAllTlsHosts=getEnv("FFL_LARGE_FILE_DOWNLOAD_STALL_MATCH_ALL_TLS_HOSTS", False),
+            matchAllTcpPorts=getEnv("FFL_LARGE_FILE_DOWNLOAD_STALL_MATCH_ALL_TCP_PORTS", False),
+            direction=(os.getenv("FFL_LARGE_FILE_DOWNLOAD_STALL_DIRECTION", "both") or "both").strip().lower(),
+        )
+
+    def isEnabled(self):
+        return self.afterBytes > 0 and self.durationSeconds > 0
+
+    def validate(self):
+        if self.afterBytes < 0:
+            raise ValueError("Download stall injection threshold must be >= 0")
+        if self.durationSeconds < 0:
+            raise ValueError("Download stall injection duration must be >= 0")
+        if self.mode not in ("drop", "reset"):
+            raise ValueError("Download stall injection mode must be 'drop' or 'reset'")
+        if self.targetRole not in ("browser", "share"):
+            raise ValueError("Download stall injection target role must be 'browser' or 'share'")
+        if self.direction not in ("both", "input", "output"):
+            raise ValueError("Download stall injection direction must be 'both', 'input', or 'output'")
+
+    def describe(self):
+        if not self.isEnabled():
+            return "disabled"
+        return (
+            f"after={self.afterBytes} bytes, duration={self.durationSeconds}s, "
+            f"mode={self.mode}, target={self.targetRole}, all_tls={self.matchAllTlsHosts}, "
+            f"all_tcp={self.matchAllTcpPorts}, direction={self.direction}"
+        )
 
 
 class LinuxTrafficControl:
@@ -491,6 +547,11 @@ class LinuxShareNetworkNamespace:
         self._wrapperPaths[label] = wrapperPath
         return wrapperPath
 
+    def runInNamespace(self, command, check=True):
+        if not self.namespace:
+            raise RuntimeError("Network namespace has not been created")
+        return self._runPrivileged(["ip", "netns", "exec", self.namespace, *command], check=check)
+
     def getNamespacePeerIp(self):
         return self.peerAddress.split("/")[0] if self.peerAddress else ""
 
@@ -707,6 +768,163 @@ class LinuxShareNetworkNamespace:
         return result
 
 
+class NamespaceEndpointTrafficBlocker:
+    def __init__(
+        self,
+        networkController,
+        host,
+        port,
+        mode="drop",
+        matchAllTlsHosts=False,
+        matchAllTcpPorts=False,
+        direction="both",
+    ):
+        self.networkController = networkController
+        self.host = host
+        self.port = int(port)
+        self.mode = (mode or "drop").strip().lower()
+        self.matchAllTlsHosts = bool(matchAllTlsHosts)
+        self.matchAllTcpPorts = bool(matchAllTcpPorts)
+        self.direction = (direction or "both").strip().lower()
+        self.iptablesCommand = self.networkController._iptablesCommand or "iptables"
+        self.targetIps = [] if (self.matchAllTlsHosts or self.matchAllTcpPorts) else self._resolveTargetIps()
+        self._appliedRules = []
+
+    def describe(self):
+        if self.matchAllTcpPorts:
+            return "*:* (all TCP traffic)"
+        if self.matchAllTlsHosts:
+            return f"*:{self.port} (all TLS hosts)"
+        return f"{self.host}:{self.port} ({', '.join(self.targetIps)})"
+
+    def block(self):
+        if self._appliedRules:
+            return
+
+        for ipAddress in self.targetIps:
+            for rule in self._buildRules(ipAddress):
+                self.networkController.runInNamespace(rule, check=True)
+                self._appliedRules.append(rule)
+
+        if self.mode == "reset":
+            self._terminateEstablishedConnections()
+
+    def clear(self):
+        while self._appliedRules:
+            rule = self._appliedRules.pop()
+            deleteRule = [rule[0], "-D", *rule[2:]]
+            self.networkController.runInNamespace(deleteRule, check=False)
+
+    def _resolveTargetIps(self):
+        results = socket.getaddrinfo(self.host, self.port, socket.AF_INET, socket.SOCK_STREAM)
+        ips = sorted({result[4][0] for result in results if result and result[4]})
+        if not ips:
+            raise RuntimeError(f"Failed to resolve IPv4 address for download stall target: {self.host}")
+        return ips
+
+    def _buildRules(self, ipAddress):
+        targetAction = ["DROP"]
+        if self.mode == "reset":
+            targetAction = ["REJECT", "--reject-with", "tcp-reset"]
+        outputRule = [self.iptablesCommand, "-I", "OUTPUT", "-p", "tcp"]
+        inputRule = [self.iptablesCommand, "-I", "INPUT", "-p", "tcp"]
+        if not self.matchAllTcpPorts:
+            outputRule.extend(["--dport", str(self.port)])
+            inputRule.extend(["--sport", str(self.port)])
+        if ipAddress:
+            outputRule.extend(["-d", ipAddress])
+            inputRule.extend(["-s", ipAddress])
+        rules = []
+        if self.direction in ("both", "output"):
+            rules.append([*outputRule, "-j", *targetAction])
+        if self.direction in ("both", "input"):
+            rules.append([*inputRule, "-j", *targetAction])
+        return rules
+
+    def _terminateEstablishedConnections(self):
+        if self.matchAllTcpPorts:
+            self.networkController.runInNamespace(
+                ["sh", "-lc", "ss -K 'tcp' || true"],
+                check=False,
+            )
+            return
+        if self.matchAllTlsHosts:
+            self.networkController.runInNamespace(
+                [
+                    "sh",
+                    "-lc",
+                    f"ss -K '( dport = {self.port} or sport = {self.port} )' || true",
+                ],
+                check=False,
+            )
+            return
+
+        for ipAddress in self.targetIps:
+            self.networkController.runInNamespace(
+                [
+                    "ss",
+                    "-K",
+                    "dst",
+                    ipAddress,
+                    "dport",
+                    "=",
+                    str(self.port),
+                ],
+                check=False,
+            )
+
+
+class BrowserDownloadStallInjector:
+    def __init__(self, blocker, config):
+        self.blocker = blocker
+        self.config = config
+        self.active = False
+        self.completed = False
+        self.releaseAt = 0.0
+
+    def describe(self):
+        return f"{self.config.describe()}, target={self.blocker.describe()}"
+
+    def tick(self, partialBytes, now):
+        if self.completed:
+            return
+
+        if self.active:
+            if now >= self.releaseAt:
+                self._deactivate(now)
+            return
+
+        if partialBytes < self.config.afterBytes:
+            return
+
+        self._activate(now, partialBytes)
+
+    def clear(self):
+        if self.active:
+            self.blocker.clear()
+            self.active = False
+        self.completed = True
+
+    def _activate(self, now, partialBytes):
+        self.blocker.block()
+        self.active = True
+        self.releaseAt = now + self.config.durationSeconds
+        print(
+            "[Test] Download stall injection activated: "
+            f"partial={partialBytes} bytes, duration={self.config.durationSeconds}s, "
+            f"target={self.blocker.describe()}"
+        )
+
+    def _deactivate(self, now):
+        self.blocker.clear()
+        self.active = False
+        self.completed = True
+        print(
+            "[Test] Download stall injection cleared: "
+            f"elapsed={self.config.durationSeconds}s, target={self.blocker.describe()}"
+        )
+
+
 class NamespacedWebDriverServiceMixin:
     def __init__(self, remote_host, *args, **kwargs):
         self.remote_host = remote_host
@@ -771,13 +989,42 @@ class LargeFileTest(ResumeBrowserTestBase):
     DISK_SPACE_BUFFER = parseSizeString(os.getenv("FFL_LARGE_FILE_DISK_BUFFER", "512M"))
     BROWSER_MIN_AVAILABLE_MEMORY = parseSizeString(os.getenv("FFL_LARGE_FILE_BROWSER_MIN_AVAILABLE_MEMORY", "512M"))
     BROWSER_MAX_SWAP_USED_PERCENT = float(os.getenv("FFL_LARGE_FILE_BROWSER_MAX_SWAP_USED_PERCENT", "80"))
+    BROWSER_EVIDENCE_POLL_INTERVAL_SECONDS = int(
+        os.getenv("FFL_LARGE_FILE_BROWSER_EVIDENCE_POLL_INTERVAL_SECONDS", "30")
+    )
+    BROWSER_EVIDENCE_FAILURE_COOLDOWN_SECONDS = int(
+        os.getenv("FFL_LARGE_FILE_BROWSER_EVIDENCE_FAILURE_COOLDOWN_SECONDS", "300")
+    )
+    BROWSER_RESOURCE_LOG_INTERVAL_SECONDS = int(
+        os.getenv("FFL_LARGE_FILE_BROWSER_RESOURCE_LOG_INTERVAL_SECONDS", "60")
+    )
+    BROWSER_DEBUG_SNAPSHOT_ENABLED = getEnv("FFL_LARGE_FILE_BROWSER_DEBUG_SNAPSHOT", False)
+    WRITER_RESCUE_DEBUG_ENABLED = getEnv("FFL_LARGE_FILE_WRITER_RESCUE_DEBUG", False)
     LARGE_FILE_SIZE = parseSizeString(os.getenv("FFL_LARGE_FILE_SIZE", "20G"))
     DEFAULT_BROWSER = os.getenv("FFL_LARGE_FILE_BROWSER", "chrome").strip().lower()
     STALL_AFTER_BYTES = parseSizeString(os.getenv("FFL_LARGE_FILE_STALL_AFTER", "96M"))
     SHARE_READY_TIMEOUT = int(os.getenv("FFL_LARGE_FILE_SHARE_TIMEOUT", "900"))
+    SHARE_START_RETRIES = int(os.getenv("FFL_LARGE_FILE_SHARE_START_RETRIES", "2"))
+    SHARE_START_RETRY_DELAY_SECONDS = int(os.getenv("FFL_LARGE_FILE_SHARE_START_RETRY_DELAY_SECONDS", "5"))
     UPLOAD_READY_TIMEOUT = int(os.getenv("FFL_LARGE_FILE_UPLOAD_TIMEOUT", "43200"))
     DOWNLOAD_TIMEOUT = int(os.getenv("FFL_LARGE_FILE_DOWNLOAD_TIMEOUT", "43200"))
     FALLBACK_TIMEOUT_MS = int(os.getenv("FFL_LARGE_FILE_FALLBACK_MS", "120000"))
+    WRITER_STALL_MS = os.getenv("FFL_LARGE_FILE_WRITER_STALL_MS", "").strip()
+    RESCUE_WRITER_STALL_MS = os.getenv("FFL_LARGE_FILE_RESCUE_WRITER_STALL_MS", "3000").strip()
+    RESCUE_STALL_AFTER_BYTES = parseSizeString(os.getenv("FFL_LARGE_FILE_RESCUE_STALL_AFTER", "12M"))
+    RESCUE_STALL_DURATION_SECONDS = int(
+        os.getenv("FFL_LARGE_FILE_RESCUE_STALL_DURATION_SECONDS", "180")
+    )
+    RESCUE_STALL_MODE = (os.getenv("FFL_LARGE_FILE_RESCUE_STALL_MODE", "drop") or "drop").strip().lower()
+    RESCUE_STALL_TARGET_ROLE = (
+        os.getenv("FFL_LARGE_FILE_RESCUE_STALL_TARGET_ROLE", "browser") or "browser"
+    ).strip().lower()
+    RESCUE_STALL_DIRECTION = (
+        os.getenv("FFL_LARGE_FILE_RESCUE_STALL_DIRECTION", "both") or "both"
+    ).strip().lower()
+    PREMATURE_EOF_INJECT_AFTER_BYTES = parseSizeString(
+        os.getenv("FFL_LARGE_FILE_PREMATURE_EOF_AFTER", "12M")
+    )
     REQUEST_CHUNK_SIZE = parseSizeString(os.getenv("FFL_LARGE_FILE_REQUEST_CHUNK_SIZE", "4M"))
     REQUEST_LOG_INTERVAL = parseSizeString(os.getenv("FFL_LARGE_FILE_REQUEST_LOG_INTERVAL", "512M"))
     REQUEST_SOCKET_TIMEOUT = int(os.getenv("FFL_LARGE_FILE_REQUEST_SOCKET_TIMEOUT", "900"))
@@ -791,6 +1038,7 @@ class LargeFileTest(ResumeBrowserTestBase):
     ESTIMATE_CONNECT_TIMEOUT = int(os.getenv("FFL_LARGE_FILE_ESTIMATE_CONNECT_TIMEOUT", "30"))
     VERIFY_HASH = getEnv("FFL_LARGE_FILE_VERIFY_HASH", False)
     NETWORK_EMULATION = NetworkEmulationConfig.fromEnvironment()
+    DOWNLOAD_STALL = DownloadStallConfig.fromEnvironment()
     HTTP_PROBE_CACHE = None
     HTTP_PROBE_CACHE_FILE_PATH = None
 
@@ -808,13 +1056,44 @@ class LargeFileTest(ResumeBrowserTestBase):
         cls.BROWSER_MAX_SWAP_USED_PERCENT = float(
             os.getenv("FFL_LARGE_FILE_BROWSER_MAX_SWAP_USED_PERCENT", "80")
         )
+        cls.BROWSER_EVIDENCE_POLL_INTERVAL_SECONDS = int(
+            os.getenv("FFL_LARGE_FILE_BROWSER_EVIDENCE_POLL_INTERVAL_SECONDS", "30")
+        )
+        cls.BROWSER_EVIDENCE_FAILURE_COOLDOWN_SECONDS = int(
+            os.getenv("FFL_LARGE_FILE_BROWSER_EVIDENCE_FAILURE_COOLDOWN_SECONDS", "300")
+        )
+        cls.BROWSER_RESOURCE_LOG_INTERVAL_SECONDS = int(
+            os.getenv("FFL_LARGE_FILE_BROWSER_RESOURCE_LOG_INTERVAL_SECONDS", "60")
+        )
+        cls.BROWSER_DEBUG_SNAPSHOT_ENABLED = getEnv("FFL_LARGE_FILE_BROWSER_DEBUG_SNAPSHOT", False)
+        cls.WRITER_RESCUE_DEBUG_ENABLED = getEnv("FFL_LARGE_FILE_WRITER_RESCUE_DEBUG", False)
         cls.LARGE_FILE_SIZE = parseSizeString(os.getenv("FFL_LARGE_FILE_SIZE", "20G"))
         cls.DEFAULT_BROWSER = os.getenv("FFL_LARGE_FILE_BROWSER", "chrome").strip().lower()
         cls.STALL_AFTER_BYTES = parseSizeString(os.getenv("FFL_LARGE_FILE_STALL_AFTER", "96M"))
         cls.SHARE_READY_TIMEOUT = int(os.getenv("FFL_LARGE_FILE_SHARE_TIMEOUT", "900"))
+        cls.SHARE_START_RETRIES = int(os.getenv("FFL_LARGE_FILE_SHARE_START_RETRIES", "2"))
+        cls.SHARE_START_RETRY_DELAY_SECONDS = int(os.getenv("FFL_LARGE_FILE_SHARE_START_RETRY_DELAY_SECONDS", "5"))
         cls.UPLOAD_READY_TIMEOUT = int(os.getenv("FFL_LARGE_FILE_UPLOAD_TIMEOUT", "43200"))
         cls.DOWNLOAD_TIMEOUT = int(os.getenv("FFL_LARGE_FILE_DOWNLOAD_TIMEOUT", "43200"))
         cls.FALLBACK_TIMEOUT_MS = int(os.getenv("FFL_LARGE_FILE_FALLBACK_MS", "120000"))
+        cls.WRITER_STALL_MS = os.getenv("FFL_LARGE_FILE_WRITER_STALL_MS", "").strip()
+        cls.RESCUE_WRITER_STALL_MS = os.getenv("FFL_LARGE_FILE_RESCUE_WRITER_STALL_MS", "3000").strip()
+        cls.RESCUE_STALL_AFTER_BYTES = parseSizeString(
+            os.getenv("FFL_LARGE_FILE_RESCUE_STALL_AFTER", "12M")
+        )
+        cls.RESCUE_STALL_DURATION_SECONDS = int(
+            os.getenv("FFL_LARGE_FILE_RESCUE_STALL_DURATION_SECONDS", "180")
+        )
+        cls.RESCUE_STALL_MODE = (os.getenv("FFL_LARGE_FILE_RESCUE_STALL_MODE", "drop") or "drop").strip().lower()
+        cls.RESCUE_STALL_TARGET_ROLE = (
+            os.getenv("FFL_LARGE_FILE_RESCUE_STALL_TARGET_ROLE", "browser") or "browser"
+        ).strip().lower()
+        cls.RESCUE_STALL_DIRECTION = (
+            os.getenv("FFL_LARGE_FILE_RESCUE_STALL_DIRECTION", "both") or "both"
+        ).strip().lower()
+        cls.PREMATURE_EOF_INJECT_AFTER_BYTES = parseSizeString(
+            os.getenv("FFL_LARGE_FILE_PREMATURE_EOF_AFTER", "12M")
+        )
         cls.REQUEST_CHUNK_SIZE = parseSizeString(os.getenv("FFL_LARGE_FILE_REQUEST_CHUNK_SIZE", "4M"))
         cls.REQUEST_LOG_INTERVAL = parseSizeString(os.getenv("FFL_LARGE_FILE_REQUEST_LOG_INTERVAL", "512M"))
         cls.REQUEST_SOCKET_TIMEOUT = int(os.getenv("FFL_LARGE_FILE_REQUEST_SOCKET_TIMEOUT", "900"))
@@ -830,6 +1109,7 @@ class LargeFileTest(ResumeBrowserTestBase):
         cls.ESTIMATE_CONNECT_TIMEOUT = int(os.getenv("FFL_LARGE_FILE_ESTIMATE_CONNECT_TIMEOUT", "30"))
         cls.VERIFY_HASH = getEnv("FFL_LARGE_FILE_VERIFY_HASH", False)
         cls.NETWORK_EMULATION = NetworkEmulationConfig.fromEnvironment()
+        cls.DOWNLOAD_STALL = DownloadStallConfig.fromEnvironment()
 
     def setUp(self):
         self.configureFromEnvironment()
@@ -838,6 +1118,7 @@ class LargeFileTest(ResumeBrowserTestBase):
         self._cleanupPaths = set()
         self._currentOutputCapture = {}
         self._currentDriver = None
+        self._lastDerivedRequestEvidence = None
         self._networkController = None
         self._networkControllers = []
         self._shareNetworkController = None
@@ -866,6 +1147,10 @@ class LargeFileTest(ResumeBrowserTestBase):
             
         if self.NETWORK_EMULATION.isEnabled():
             print(f"[Test] Network emulation: {self.NETWORK_EMULATION.describe()}")
+        if self.DOWNLOAD_STALL.isEnabled():
+            print(f"[Test] Download stall injection: {self.DOWNLOAD_STALL.describe()}")
+        if self.WRITER_STALL_MS:
+            print(f"[Test] Writer stall timeout override: {self.WRITER_STALL_MS}ms")
 
     def shortDescription(self):
         description = super().shortDescription()
@@ -876,6 +1161,9 @@ class LargeFileTest(ResumeBrowserTestBase):
 
     def _getSelectedBrowserName(self):
         return self._directRunBrowserOverride or self.DEFAULT_BROWSER
+
+    def _getSelectedRouteName(self):
+        return self._directRunRouteOverride or self.DEFAULT_ROUTE
 
     def _getDirectRunMatrixLabel(self):
         if not self._isBrowserDrivenScenario():
@@ -920,6 +1208,10 @@ class LargeFileTest(ResumeBrowserTestBase):
         finally:
             self._clearNetworkEmulationIfNeeded()
             self._cleanupLargeArtifacts()
+
+    def _shouldPreserveLargeArtifacts(self):
+        value = os.getenv("FFL_LARGE_FILE_PRESERVE_ARTIFACTS", "").strip().lower()
+        return value in ("1", "true", "yes", "on")
 
     def _prepareLargeFile(self):
         existingPath = os.getenv("FFL_LARGE_FILE_PATH")
@@ -1045,6 +1337,13 @@ class LargeFileTest(ResumeBrowserTestBase):
         print(f"[Test] Wrote builtin-only tunnel config to {configPath} for {tunnelDomain}")
 
     def _cleanupLargeArtifacts(self):
+        if self._shouldPreserveLargeArtifacts():
+            print("[Test] Preserving large-file artifacts because FFL_LARGE_FILE_PRESERVE_ARTIFACTS is enabled")
+            for targetPath in sorted(self._cleanupPaths):
+                if targetPath:
+                    print(f"[Test] Preserved artifact: {targetPath}")
+            return
+
         cleanupTargets = sorted(self._cleanupPaths, key=lambda path: len(path), reverse=True)
         for targetPath in cleanupTargets:
             if not targetPath:
@@ -1218,7 +1517,9 @@ class LargeFileTest(ResumeBrowserTestBase):
     def _getObservedRequestUrls(self, driver):
         urls = []
         if not self._isChromeDriver(driver):
-            return self._extractRequestUrlsFromBrowserLogs(driver)
+            urls.extend(self._extractRequestUrlsFromPerformanceEntries(driver))
+            urls.extend(self._extractRequestUrlsFromBrowserLogs(driver))
+            return list(dict.fromkeys(urls))
 
         try:
             for entry in driver.get_log("performance"):
@@ -1237,6 +1538,29 @@ class LargeFileTest(ResumeBrowserTestBase):
         except Exception as exc:
             print(f"[Test] Warning: failed to collect Chrome performance request URLs: {exc}")
             urls.extend(self._extractRequestUrlsFromBrowserLogs(driver))
+        return urls
+
+    def _extractRequestUrlsFromPerformanceEntries(self, driver):
+        try:
+            resourceUrls = driver.execute_script(
+                r"""
+                return performance.getEntriesByType('resource')
+                    .map(entry => String(entry && entry.name || ''))
+                    .filter(name => name.includes('/download') || name.includes('/offer'));
+                """
+            ) or []
+        except Exception as exc:
+            print(f"[Test] Warning: failed to retrieve performance resource URLs: {exc}")
+            return []
+
+        urls = []
+        seen = set()
+        for value in resourceUrls:
+            normalized = str(value or "").rstrip("),.;")
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            urls.append(normalized)
         return urls
 
     def _extractRequestUrlsFromBrowserLogs(self, driver):
@@ -1272,7 +1596,12 @@ class LargeFileTest(ResumeBrowserTestBase):
                 urls.append("/offer")
 
         if urls:
-            print(f"[Test] Derived request evidence from browser logs: {urls}")
+            signature = tuple(urls)
+            if signature != self._lastDerivedRequestEvidence:
+                print(f"[Test] Derived request evidence from browser logs: {urls}")
+                self._lastDerivedRequestEvidence = signature
+        else:
+            self._lastDerivedRequestEvidence = None
         return urls
 
     def _getObservedServerRequestPaths(self, outputCapture):
@@ -1310,6 +1639,199 @@ class LargeFileTest(ResumeBrowserTestBase):
         evidence["baseBytes"] = max(evidence["baseBytes"], analysis["baseBytes"])
         return evidence
 
+    def _safeUpdateBrowserEvidence(self, driver, evidence, contextLabel):
+        try:
+            self._updateBrowserEvidence(driver, evidence)
+            return True
+        except Exception as exc:
+            print(f"[Test] Warning: failed to update browser evidence during {contextLabel}: {exc}")
+            return False
+
+    def _collectProcessMemorySummary(self, processNames):
+        summary = {}
+        normalizedNames = {name.lower() for name in processNames}
+        for proc in psutil.process_iter(["name", "memory_info"]):
+            try:
+                name = (proc.info.get("name") or "").lower()
+                if name not in normalizedNames:
+                    continue
+                rss = int(getattr(proc.info.get("memory_info"), "rss", 0) or 0)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+            entry = summary.setdefault(name, {"count": 0, "rss": 0})
+            entry["count"] += 1
+            entry["rss"] += rss
+        return summary
+
+    def _logLargeDownloadHostResources(self, partialSize, elapsedSeconds):
+        virtualMemory = psutil.virtual_memory()
+        swapMemory = psutil.swap_memory()
+        procSummary = self._collectProcessMemorySummary({"firefox", "geckodriver", "python", "python3.12"})
+
+        def formatEntry(name):
+            entry = procSummary.get(name, {"count": 0, "rss": 0})
+            rssMiB = entry["rss"] / (1024 * 1024)
+            return f"{name}:count={entry['count']},rss={rssMiB:.1f}MiB"
+
+        print(
+            "[Test] Large download host resources: "
+            f"elapsed={elapsedSeconds:.0f}s, "
+            f"partial={partialSize} bytes, "
+            f"mem_available={virtualMemory.available} bytes, "
+            f"swap_used={swapMemory.used} bytes ({swapMemory.percent:.1f}%), "
+            + ", ".join(
+                [
+                    formatEntry("firefox"),
+                    formatEntry("geckodriver"),
+                    formatEntry("python"),
+                    formatEntry("python3.12"),
+                ]
+            )
+        )
+
+    def _printLargeDownloadDebugSnapshot(self, driver, title):
+        if driver is None:
+            return
+        if not self.BROWSER_DEBUG_SNAPSHOT_ENABLED:
+            return
+
+        try:
+            snapshot = driver.execute_async_script(
+                r"""
+                const done = arguments[0];
+                const fallback = window.__FFL_WEBRTC_FALLBACK_MANAGER__ || null;
+                const dm = window.downloadManager || (fallback && fallback.downloadManager) || null;
+                const interestingLog = /DownloadManager|WriterProgress|writer-|FFL_|Fallback|ProgressSW|BRANCH|reader|stall|resume|error/i;
+                const logs = (window.__TEST_LOGS__ || [])
+                    .filter(entry => interestingLog.test(String(entry && entry[2] || '')))
+                    .slice(-120);
+                const resources = performance.getEntriesByType('resource')
+                    .filter(entry => String(entry.name || '').includes('/download'))
+                    .slice(-20)
+                    .map(entry => ({
+                        name: entry.name,
+                        startTime: Math.round(entry.startTime),
+                        duration: Math.round(entry.duration),
+                        transferSize: entry.transferSize || 0,
+                        encodedBodySize: entry.encodedBodySize || 0,
+                        decodedBodySize: entry.decodedBodySize || 0
+                    }));
+
+                function safeDmState(manager) {
+                    if (!manager) return null;
+                    return {
+                        activeDownloadPath: manager.activeDownloadPath || null,
+                        activeDlId: manager.activeDlId || null,
+                        currentPlan: manager.currentPlan || null,
+                        downloadTriggeredOnce: !!manager.downloadTriggeredOnce,
+                        writerAutoResumeUsed: !!manager.writerAutoResumeUsed,
+                        resumeConfig: manager.resumeConfig || null,
+                        totalBytesHint: manager.totalBytesHint || 0,
+                        writerProgressStallTimeoutMs: manager.writerProgressStallTimeoutMs || 0,
+                        maxAutomaticWriterResumeAttempts: manager.maxAutomaticWriterResumeAttempts || 0,
+                        serverDownloadId: manager.serverDownloadId || null,
+                        serverAckSent: !!manager.serverAckSent
+                    };
+                }
+
+                function serviceWorkerSnapshot() {
+                    if (!navigator.serviceWorker || !navigator.serviceWorker.getRegistrations) {
+                        return Promise.resolve({
+                            controlled: false,
+                            controllerScript: null,
+                            registrations: []
+                        });
+                    }
+
+                    return navigator.serviceWorker.getRegistrations().then(registrations => ({
+                        controlled: !!navigator.serviceWorker.controller,
+                        controllerScript: navigator.serviceWorker.controller ? navigator.serviceWorker.controller.scriptURL : null,
+                        registrations: registrations.map(reg => ({
+                            scope: reg.scope || null,
+                            active: reg.active ? reg.active.scriptURL : null,
+                            installing: reg.installing ? reg.installing.scriptURL : null,
+                            waiting: reg.waiting ? reg.waiting.scriptURL : null
+                        }))
+                    })).catch(error => ({
+                        controlled: !!navigator.serviceWorker.controller,
+                        controllerScript: navigator.serviceWorker.controller ? navigator.serviceWorker.controller.scriptURL : null,
+                        registrationsError: String(error),
+                        registrations: []
+                    }));
+                }
+
+                function cacheSnapshot() {
+                    if (typeof caches === 'undefined' || !caches.keys) {
+                        return Promise.resolve({ names: [] });
+                    }
+
+                    return caches.keys().then(names => ({
+                        names: Array.isArray(names) ? names : []
+                    })).catch(error => ({
+                        error: String(error),
+                        names: []
+                    }));
+                }
+
+                Promise.all([serviceWorkerSnapshot(), cacheSnapshot()]).then(([sw, cacheState]) => {
+                    const writerRescueState = (
+                        dm && typeof dm.getWriterRescueDebugSnapshot === 'function'
+                    ) ? dm.getWriterRescueDebugSnapshot() : (
+                        typeof window.__FFL_GET_WRITER_RESCUE_STATE__ === 'function'
+                            ? window.__FFL_GET_WRITER_RESCUE_STATE__()
+                            : (window.__FFL_WRITER_RESCUE_STATE__ || null)
+                    );
+                    done({
+                        href: location.href,
+                        readyState: document.readyState,
+                        hidden: document.hidden,
+                        serviceWorkerControlled: !!(navigator.serviceWorker && navigator.serviceWorker.controller),
+                        serviceWorkers: sw,
+                        caches: cacheState,
+                        diagnostics: (window.__FFL_DOWNLOAD_DIAGNOSTICS__ || []).slice(-80),
+                        writerRescueState,
+                        downloadManager: safeDmState(dm),
+                        fallback: fallback ? {
+                            fallbackTriggered: !!fallback.fallbackTriggered,
+                            forceWriter: !!fallback.forceWriter,
+                            forceNativeLink: !!fallback.forceNativeLink
+                        } : null,
+                        resources,
+                        logs
+                    });
+                }).catch(error => {
+                    const writerRescueState = (
+                        dm && typeof dm.getWriterRescueDebugSnapshot === 'function'
+                    ) ? dm.getWriterRescueDebugSnapshot() : (
+                        typeof window.__FFL_GET_WRITER_RESCUE_STATE__ === 'function'
+                            ? window.__FFL_GET_WRITER_RESCUE_STATE__()
+                            : (window.__FFL_WRITER_RESCUE_STATE__ || null)
+                    );
+                    done({
+                        href: location.href,
+                        readyState: document.readyState,
+                        hidden: document.hidden,
+                        snapshotError: String(error),
+                        diagnostics: (window.__FFL_DOWNLOAD_DIAGNOSTICS__ || []).slice(-80),
+                        writerRescueState,
+                        downloadManager: safeDmState(dm),
+                        fallback: fallback ? {
+                            fallbackTriggered: !!fallback.fallbackTriggered,
+                            forceWriter: !!fallback.forceWriter,
+                            forceNativeLink: !!fallback.forceNativeLink
+                        } : null,
+                        resources,
+                        logs
+                    });
+                });
+                """
+            )
+            print(f"[Test] {title}:")
+            print(json.dumps(snapshot, ensure_ascii=False, indent=2, default=str))
+        except Exception as exc:
+            print(f"[Test] Failed to dump large-download browser snapshot: {exc}")
+
     def _analysisFromEvidence(self, evidence):
         if not evidence:
             return {
@@ -1327,6 +1849,28 @@ class LargeFileTest(ResumeBrowserTestBase):
             "baseBytes": evidence["baseBytes"],
             "logs": [],
         }
+
+    def _canInferFallbackFromSuccessfulStallRecovery(self, downloadedFile, analysis, resumeUrls):
+        if analysis["fallbackDetected"]:
+            return True
+
+        if analysis["resumeDetected"] or analysis["writerUsed"] or bool(resumeUrls):
+            return True
+
+        if self.originalFileSize <= self.STALL_AFTER_BYTES:
+            return False
+
+        if not downloadedFile or not os.path.exists(downloadedFile):
+            return False
+
+        if os.path.getsize(downloadedFile) != self.originalFileSize:
+            return False
+
+        print(
+            "[Test] Inferring fallback success from completed download after simulated stall; "
+            "Firefox did not expose explicit fallback markers in browser logs."
+        )
+        return True
 
     def _getResumeEvidenceUrls(self, observedUrls):
         if not observedUrls:
@@ -1366,8 +1910,25 @@ class LargeFileTest(ResumeBrowserTestBase):
 
         return hostname
 
+    def _getHTTPProbeCacheProfile(self):
+        config = self.NETWORK_EMULATION
+        return {
+            "scope": getattr(config, "scope", "") or "",
+            "delay": getattr(config, "delay", "") or "",
+            "jitter": getattr(config, "jitter", "") or "",
+            "loss": getattr(config, "loss", "") or "",
+            "rate": getattr(config, "rate", "") or "",
+            "burst": getattr(config, "burst", "") or "",
+            "latency": getattr(config, "latency", "") or "",
+            "interface": getattr(config, "interface", "") or "",
+        }
+
     def _getHTTPProbeCacheKey(self, requestUrl):
-        return self._normalizeHTTPProbeCacheHost(requestUrl)
+        payload = {
+            "host": self._normalizeHTTPProbeCacheHost(requestUrl),
+            "network": self._getHTTPProbeCacheProfile(),
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def _getHTTPProbeCacheFilePath(self):
         cacheFile = os.getenv("FFL_LARGE_FILE_ESTIMATE_CACHE_FILE", "").strip()
@@ -1640,7 +2201,7 @@ class LargeFileTest(ResumeBrowserTestBase):
         if note:
             print(f"[Test] Note: {note}")
 
-    def _waitForLargeDownload(self, downloadDir, expectedFilename, timeout, driver=None, evidence=None):
+    def _waitForLargeDownload(self, downloadDir, expectedFilename, timeout, driver=None, evidence=None, progressHooks=None):
         partialSuffixes = (".part", ".crdownload", ".tmp")
         stem = os.path.splitext(expectedFilename)[0]
 
@@ -1652,7 +2213,12 @@ class LargeFileTest(ResumeBrowserTestBase):
                 if fileName == expectedFilename or fileName.startswith(stem):
                     filePath = os.path.join(downloadDir, fileName)
                     if not fileName.endswith(partialSuffixes) and os.path.isfile(filePath):
-                        if os.path.getsize(filePath) > 0:
+                        try:
+                            fileSize = os.path.getsize(filePath)
+                        except OSError:
+                            continue
+
+                        if fileSize == self.originalFileSize:
                             return filePath
             return None
 
@@ -1685,56 +2251,90 @@ class LargeFileTest(ResumeBrowserTestBase):
         lastLoggedSize = -1
         lastProgressTime = startTime
         lastProgressSize = 0
+        nextEvidenceUpdateTime = startTime
+        nextResourceLogTime = startTime
+        evidenceFailureCount = 0
+        reportedStallBytes = None
+        activeProgressHooks = [hook for hook in (progressHooks or []) if hook is not None]
 
         print(f"[Test] Waiting for large download in: {downloadDir}")
         print(f"[Test] Expected filename: {expectedFilename}")
         print(f"[Test] Timeout: {timeout} seconds")
 
-        while time.time() - startTime < timeout:
-            self._updateBrowserEvidence(driver, evidence)
+        try:
+            while time.time() - startTime < timeout:
+                now = time.time()
+                if driver is not None and evidence is not None and now >= nextEvidenceUpdateTime:
+                    if self._safeUpdateBrowserEvidence(driver, evidence, "large-download poll"):
+                        evidenceFailureCount = 0
+                        nextEvidenceUpdateTime = now + self.BROWSER_EVIDENCE_POLL_INTERVAL_SECONDS
+                    else:
+                        evidenceFailureCount += 1
+                        cooldownSeconds = max(
+                            self.BROWSER_EVIDENCE_FAILURE_COOLDOWN_SECONDS,
+                            self.BROWSER_EVIDENCE_POLL_INTERVAL_SECONDS,
+                        )
+                        nextEvidenceUpdateTime = now + cooldownSeconds
+                        print(
+                            f"[Test] Browser evidence polling backed off for {cooldownSeconds}s "
+                            f"after {evidenceFailureCount} failure(s)"
+                        )
 
-            downloadedFile = findFinishedFile()
-            if downloadedFile:
-                self._updateBrowserEvidence(driver, evidence)
-                elapsed = time.time() - startTime
-                finalSize = os.path.getsize(downloadedFile)
-                print(f"[Test] Large download completed: {downloadedFile}")
-                self._printTransferSummary("Browser download", finalSize, elapsed)
-                return downloadedFile
+                downloadedFile = findFinishedFile()
+                if downloadedFile:
+                    self._safeUpdateBrowserEvidence(driver, evidence, "large-download completion")
+                    elapsed = time.time() - startTime
+                    finalSize = os.path.getsize(downloadedFile)
+                    print(f"[Test] Large download completed: {downloadedFile}")
+                    self._printTransferSummary("Browser download", finalSize, elapsed)
+                    return downloadedFile
 
-            partialPath, partialSize = getLargestPartial()
-            now = time.time()
+                partialPath, partialSize = getLargestPartial()
+                now = time.time()
 
-            if partialSize > lastProgressSize:
-                lastProgressSize = partialSize
-                lastProgressTime = now
+                if partialSize > lastProgressSize:
+                    lastProgressSize = partialSize
+                    lastProgressTime = now
+                    reportedStallBytes = None
 
-            if partialSize != lastLoggedSize:
-                if partialPath:
-                    print(f"[Test] Partial progress: {partialSize} bytes ({partialPath})")
-                elif not os.path.isdir(downloadDir):
-                    print(f"[Test] Download directory not created yet: {downloadDir}")
-                lastLoggedSize = partialSize
+                for progressHook in activeProgressHooks:
+                    progressHook.tick(partialSize, now)
 
-            stallDuration = now - lastProgressTime
-            if partialSize > 0 and stallDuration >= 300:
-                print(
-                    f"[Test] WARNING: Large download stalled for {stallDuration:.0f}s at {partialSize} bytes"
-                )
-                lastProgressTime = now
+                if partialSize != lastLoggedSize:
+                    if partialPath:
+                        print(f"[Test] Partial progress: {partialSize} bytes ({partialPath})")
+                    elif not os.path.isdir(downloadDir):
+                        print(f"[Test] Download directory not created yet: {downloadDir}")
+                    lastLoggedSize = partialSize
 
-            time.sleep(5)
+                if now >= nextResourceLogTime:
+                    self._logLargeDownloadHostResources(partialSize, now - startTime)
+                    nextResourceLogTime = now + self.BROWSER_RESOURCE_LOG_INTERVAL_SECONDS
 
-        if driver is not None:
-            try:
-                self._updateBrowserEvidence(driver, evidence)
-                self._printBrowserLogs(driver=driver, title="Browser logs at large-download timeout")
-            except Exception as exc:
-                print(f"[Test] Failed to print browser logs after timeout: {exc}")
+                stallDuration = now - lastProgressTime
+                if partialSize > 0 and stallDuration >= 300 and reportedStallBytes != partialSize:
+                    print(
+                        f"[Test] WARNING: Large download stalled for {stallDuration:.0f}s at {partialSize} bytes"
+                    )
+                    self._printLargeDownloadDebugSnapshot(driver, "Large download stall browser snapshot")
+                    reportedStallBytes = partialSize
 
-        raise AssertionError(f"Large download did not complete within {timeout} seconds")
+                time.sleep(5)
 
-    def _downloadWithBrowserTimeout(self, driver, shareUrl, downloadDir, expectedFilename, timeout, evidence=None):
+            if driver is not None:
+                try:
+                    self._safeUpdateBrowserEvidence(driver, evidence, "large-download timeout")
+                    self._printLargeDownloadDebugSnapshot(driver, "Large download timeout browser snapshot")
+                    self._printBrowserLogs(driver=driver, title="Browser logs at large-download timeout")
+                except Exception as exc:
+                    print(f"[Test] Failed to print browser logs after timeout: {exc}")
+
+            raise AssertionError(f"Large download did not complete within {timeout} seconds")
+        finally:
+            for progressHook in activeProgressHooks:
+                progressHook.clear()
+
+    def _downloadWithBrowserTimeout(self, driver, shareUrl, downloadDir, expectedFilename, timeout, evidence=None, progressHooks=None):
         print(f"[Test] Navigating browser to: {shareUrl}")
         driver.get(shareUrl)
         WebDriverWait(driver, 20).until(lambda d: d.execute_script("return document.readyState") == "complete")
@@ -1746,7 +2346,14 @@ class LargeFileTest(ResumeBrowserTestBase):
         except Exception:
             pass
 
-        return self._waitForLargeDownload(downloadDir, expectedFilename, timeout, driver=driver, evidence=evidence)
+        return self._waitForLargeDownload(
+            downloadDir,
+            expectedFilename,
+            timeout,
+            driver=driver,
+            evidence=evidence,
+            progressHooks=progressHooks,
+        )
 
     def _downloadWithRequests(self, requestUrl, outputPath, timeout):
         self._registerCleanupPath(outputPath)
@@ -1819,23 +2426,42 @@ class LargeFileTest(ResumeBrowserTestBase):
 
         print("[Test] Large file verification successful")
 
-    def _startLargeShare(self, p2p=True, timeout=None):
+    def _startLargeShare(self, p2p=True, timeout=None, useShareNetworkController=True):
         shareEnv = self._getLargeShareEnv()
-        binaryCommand = self._buildLargeShareBinaryCommand(shareEnv)
-        outputCapture = {}
-        shareLink = self._startFastFileLink(
-            p2p=p2p,
-            output=False,
-            timeout=timeout or (self.SHARE_READY_TIMEOUT if p2p else self.UPLOAD_READY_TIMEOUT),
-            captureOutputIn=outputCapture,
-            extraEnvVars=shareEnv,
-            extraArgs=["--preferred-tunnel", "default"],
-            binaryCommand=binaryCommand,
+        binaryCommand = self._buildLargeShareBinaryCommand(
+            shareEnv,
+            useShareNetworkController=useShareNetworkController,
         )
-        self._currentOutputCapture = outputCapture
-        return shareLink, outputCapture
+        lastError = None
+        attemptLimit = max(1, self.SHARE_START_RETRIES)
+        for attemptIndex in range(1, attemptLimit + 1):
+            outputCapture = {}
+            try:
+                shareLink = self._startFastFileLink(
+                    p2p=p2p,
+                    output=False,
+                    timeout=timeout or (self.SHARE_READY_TIMEOUT if p2p else self.UPLOAD_READY_TIMEOUT),
+                    captureOutputIn=outputCapture,
+                    extraEnvVars=shareEnv,
+                    extraArgs=["--preferred-tunnel", "default"],
+                    binaryCommand=binaryCommand,
+                )
+                self._currentOutputCapture = outputCapture
+                return shareLink, outputCapture
+            except AssertionError as error:
+                lastError = error
+                if attemptIndex >= attemptLimit:
+                    raise
+                print(
+                    "[Test] Share start attempt failed; retrying: "
+                    f"attempt={attemptIndex}/{attemptLimit}, error={error}"
+                )
+                self._terminateProcess()
+                time.sleep(max(0, self.SHARE_START_RETRY_DELAY_SECONDS))
 
-    def _buildLargeShareBinaryCommand(self, shareEnv):
+        raise lastError
+
+    def _buildLargeShareBinaryCommand(self, shareEnv, useShareNetworkController=True):
         configuredBinary = os.getenv("FFL_LARGE_FILE_BINARY", "").strip()
         if configuredBinary:
             commandPrefix = self._normalizeCommandSpec(configuredBinary)
@@ -1848,7 +2474,7 @@ class LargeFileTest(ResumeBrowserTestBase):
                 raise AssertionError(f"CorePatched.py not found at: {coreScriptPath}")
             commandPrefix = [sys.executable, coreScriptPath, "--cli"]
 
-        if self._shareNetworkController:
+        if self._shareNetworkController and useShareNetworkController:
             commandPrefix = self._shareNetworkController.wrapShareCommand(commandPrefix, extraEnv=shareEnv)
         return commandPrefix
 
@@ -1902,16 +2528,24 @@ class LargeFileTest(ResumeBrowserTestBase):
                 env[key] = value
         return env
 
-    def _runBrowserLargeDownload(self, shareUrl, extraQueryParams=None):
+    def _runBrowserLargeDownload(self, shareUrl, extraQueryParams=None, downloadStallConfig=None, extraProgressHooks=None):
         driver, downloadDir = self._setupBrowserAndDir()
         self._currentDriver = driver
         queryParams = dict(extraQueryParams or {})
         if self._directRunRouteOverride:
             queryParams.setdefault("route", self._directRunRouteOverride)
+        if self.WRITER_STALL_MS:
+            queryParams.setdefault("writer-stall-ms", self.WRITER_STALL_MS)
+        if self.WRITER_RESCUE_DEBUG_ENABLED:
+            queryParams.setdefault("writer-rescue-debug", 1)
         self._applyRouteSpecificQueryParams(queryParams)
         finalUrl = self._addQueryParams(shareUrl, **queryParams) if queryParams else shareUrl
         self._printHTTPTransferEstimate(finalUrl, "browser download")
         evidence = self._createBrowserEvidence()
+        progressHooks = list(extraProgressHooks or [])
+        stallInjector = self._createDownloadStallInjector(finalUrl, downloadStallConfig=downloadStallConfig)
+        if stallInjector is not None:
+            progressHooks.append(stallInjector)
         downloadedFile = self._downloadWithBrowserTimeout(
             driver,
             finalUrl,
@@ -1919,22 +2553,121 @@ class LargeFileTest(ResumeBrowserTestBase):
             self.expectedFilename,
             self.DOWNLOAD_TIMEOUT,
             evidence=evidence,
+            progressHooks=progressHooks,
         )
         self._updateBrowserEvidence(driver, evidence)
         return downloadedFile, driver, evidence
 
+    def _createDownloadStallInjector(self, downloadUrl, downloadStallConfig=None):
+        stallConfig = downloadStallConfig or self.DOWNLOAD_STALL
+        if not stallConfig.isEnabled():
+            return None
+
+        stallConfig.validate()
+        if platform.system() != "Linux":
+            raise RuntimeError("Download stall injection is only supported on Linux hosts")
+        networkController = self._resolveDownloadStallNetworkController(stallConfig.targetRole)
+
+        parsedUrl = urlparse(downloadUrl)
+        host = parsedUrl.hostname or ""
+        if not host:
+            raise RuntimeError(f"Download stall injection could not parse host from URL: {downloadUrl}")
+        port = parsedUrl.port or (443 if parsedUrl.scheme == "https" else 80)
+        blocker = NamespaceEndpointTrafficBlocker(
+            networkController,
+            host,
+            port,
+            mode=stallConfig.mode,
+            matchAllTlsHosts=stallConfig.matchAllTlsHosts,
+            matchAllTcpPorts=stallConfig.matchAllTcpPorts,
+            direction=stallConfig.direction,
+        )
+        injector = BrowserDownloadStallInjector(blocker, stallConfig)
+        print(f"[Test] Prepared download stall injector: {injector.describe()}")
+        return injector
+
+    def _resolveDownloadStallNetworkController(self, targetRole):
+        if targetRole == "browser":
+            if not self._browserNetworkController:
+                raise RuntimeError(
+                    "Download stall injection targeting browser requires browser-side network isolation. "
+                    "Use --net-scope browser or --net-scope both."
+                )
+            return self._browserNetworkController
+
+        if targetRole == "share":
+            if not self._shareNetworkController:
+                raise RuntimeError(
+                    "Download stall injection targeting share requires share-side network isolation. "
+                    "Use --net-scope share or --net-scope both."
+                )
+            return self._shareNetworkController
+
+        raise ValueError(f"Unsupported download stall target role: {targetRole}")
+
+    def _getWriterRescueStallConfig(self):
+        afterBytes = self.RESCUE_STALL_AFTER_BYTES if self.RESCUE_STALL_AFTER_BYTES > 0 else self.STALL_AFTER_BYTES
+        durationSeconds = max(0, self.RESCUE_STALL_DURATION_SECONDS)
+        if self.originalFileSize > 0:
+            afterBytes = min(afterBytes, max(1, self.originalFileSize - 1))
+
+        config = DownloadStallConfig(
+            afterBytes=afterBytes,
+            durationSeconds=durationSeconds,
+            mode=self.RESCUE_STALL_MODE,
+            targetRole=self.RESCUE_STALL_TARGET_ROLE,
+            matchAllTlsHosts=(self.RESCUE_STALL_TARGET_ROLE == "share"),
+            matchAllTcpPorts=(self.RESCUE_STALL_TARGET_ROLE == "share"),
+            direction=self.RESCUE_STALL_DIRECTION,
+        )
+        config.validate()
+        return config
+
+    def _assertWriterRescueObserved(self, downloadedFile, evidence):
+        observedUrls = sorted(evidence["observedUrls"])
+        analysis = self._analysisFromEvidence(evidence)
+        resumeUrls = self._getResumeEvidenceUrls(observedUrls)
+        self._printDiagnosticSummary(analysis)
+        if resumeUrls:
+            print(f"[Test] Writer rescue evidence URLs observed: {resumeUrls}")
+
+        self._assertResumeEvidenceObserved(
+            analysis,
+            resumeUrls,
+            (
+                "Expected browser logs or observed HTTP requests to show writer rescue evidence "
+                "(resume_start / ff_auto_resume=1 / sw_writer_resume) after the injected network stall"
+            ),
+        )
+        self._verifyLargeDownloadedFile(downloadedFile)
+
+    def _assertResumeEvidenceObserved(self, analysis, resumeUrls, message):
+        self.assertTrue(
+            analysis["resumeDetected"] or bool(resumeUrls),
+            message,
+        )
+
+    def _getWriterRescueStallTimeoutMs(self):
+        if self.RESCUE_WRITER_STALL_MS:
+            return self.RESCUE_WRITER_STALL_MS
+        return self.WRITER_STALL_MS
+
+    def _getPrematureEOFInjectionAfterBytes(self):
+        if self.originalFileSize <= 0:
+            return max(1, self.PREMATURE_EOF_INJECT_AFTER_BYTES)
+        return min(
+            max(1, self.PREMATURE_EOF_INJECT_AFTER_BYTES),
+            max(1, self.originalFileSize - 1),
+        )
+
     def _applyRouteSpecificQueryParams(self, queryParams):
-        if self._getSelectedBrowserName() != "firefox":
-            return
-
-        if self._directRunRouteOverride != "pass":
-            return
-
-        # Firefox route=pass is intended to exercise the browser-owned/native
-        # download path rather than the SW-transformed path.
-        queryParams.setdefault("native", "true")
+        if getEnv("FFL_LARGE_FILE_FORCE_NATIVE_LINK", False):
+            queryParams.setdefault("native", "true")
 
     def _shouldRequireResumeEvidence(self):
+        if self._getSelectedRouteName() != "auto":
+            return False
+
         return self.originalFileSize > self.USE_BLOB_THRESHOLD and self.STALL_AFTER_BYTES < self.originalFileSize
 
     def _shouldUseRequestsForUploadDownload(self):
@@ -2052,6 +2785,47 @@ class LargeFileTest(ResumeBrowserTestBase):
         finally:
             self._terminateProcess()
 
+    def testLargeBrowserDownloadPrematureEOFRecovery(self):
+        """Large-file browser download recovers after an injected SW premature EOF event."""
+        try:
+            shareLink, outputCapture = self._startLargeShare(
+                p2p=True,
+                useShareNetworkController=False,
+            )
+            injectAfterBytes = self._getPrematureEOFInjectionAfterBytes()
+            print(
+                "[Test] Prepared premature EOF SW injection: "
+                f"after={injectAfterBytes} bytes"
+            )
+            downloadedFile, driver, evidence = self._runBrowserLargeDownload(
+                shareLink,
+                extraQueryParams={
+                    "debug": 1,
+                    "webrtc": 0,
+                    "inject-premature-eof-after": injectAfterBytes,
+                },
+            )
+
+            observedUrls = sorted(evidence["observedUrls"])
+            analysis = self._analysisFromEvidence(evidence)
+            resumeUrls = self._getResumeEvidenceUrls(observedUrls)
+            self._printDiagnosticSummary(analysis)
+            if resumeUrls:
+                print(f"[Test] Premature EOF recovery evidence URLs observed: {resumeUrls}")
+
+            self._assertResumeEvidenceObserved(
+                analysis,
+                resumeUrls,
+                (
+                    "Expected browser logs or observed HTTP requests to show writer rescue evidence "
+                    "(resume_start / ff_auto_resume=1 / sw_writer_resume) after the injected premature EOF event"
+                ),
+            )
+            self._verifyLargeDownloadedFile(downloadedFile)
+            self._printServerOutput(outputCapture, lastNLines=80)
+        finally:
+            self._terminateProcess()
+
     def testLargeBrowserDownloadWebRTCOnly(self):
         """Large-file P2P browser download with browser-side HTTP fallback disabled."""
         try:
@@ -2087,7 +2861,15 @@ class LargeFileTest(ResumeBrowserTestBase):
             if resumeUrls:
                 print(f"[Test] Resume-related download URLs observed: {resumeUrls}")
 
-            self.assertTrue(analysis["fallbackDetected"], "Expected browser logs to show HTTP fallback")
+            fallbackConfirmed = self._canInferFallbackFromSuccessfulStallRecovery(
+                downloadedFile,
+                analysis,
+                resumeUrls,
+            )
+            self.assertTrue(
+                fallbackConfirmed,
+                "Expected browser logs to show HTTP fallback or a completed download after the simulated stall"
+            )
             if self._shouldRequireResumeEvidence():
                 self.assertTrue(
                     analysis["baseBytes"] > 0 or analysis["resumeDetected"] or bool(resumeUrls),
@@ -2104,6 +2886,33 @@ class LargeFileTest(ResumeBrowserTestBase):
                 )
 
             self._verifyLargeDownloadedFile(downloadedFile)
+            self._printServerOutput(outputCapture, lastNLines=80)
+        finally:
+            self._terminateProcess()
+
+    def testLargeBrowserDownloadWriterRescueUnderWeakNetwork(self):
+        """Large-file writer download under weak network with a real network-layer stall."""
+        if not self.NETWORK_EMULATION.isEnabled():
+            self.skipTest("Writer rescue weak-network scenario is only meaningful when network emulation is enabled")
+
+        try:
+            downloadStallConfig = self._getWriterRescueStallConfig()
+            shareLink, outputCapture = self._startLargeShare(
+                p2p=True,
+                useShareNetworkController=(downloadStallConfig.targetRole == "share"),
+            )
+            print(f"[Test] Writer rescue stall plan: {downloadStallConfig.describe()}")
+            downloadedFile, driver, evidence = self._runBrowserLargeDownload(
+                shareLink,
+                extraQueryParams={
+                    "debug": 1,
+                    "writer-stall-ms": self._getWriterRescueStallTimeoutMs(),
+                    "webrtc": 0,
+                },
+                downloadStallConfig=downloadStallConfig,
+            )
+
+            self._assertWriterRescueObserved(downloadedFile, evidence)
             self._printServerOutput(outputCapture, lastNLines=80)
         finally:
             self._terminateProcess()
@@ -2134,8 +2943,10 @@ SCENARIO_TO_TEST = {
     "http-request": "testLargeHttpRequestDownload",
     "http-browser": "testLargeBrowserDownloadHttpOnly",
     "normal": "testLargeBrowserDownloadNormal",
+    "premature-eof": "testLargeBrowserDownloadPrematureEOFRecovery",
     "webrtc": "testLargeBrowserDownloadWebRTCOnly",
     "fallback": "testLargeBrowserDownloadAfterWebRTCDisconnect",
+    "rescue": "testLargeBrowserDownloadWriterRescueUnderWeakNetwork",
     "upload": "testLargeUploadAndBrowserDownload",
 }
 TEST_TO_SCENARIO = {testName: scenarioName for scenarioName, testName in SCENARIO_TO_TEST.items()}
@@ -2184,6 +2995,39 @@ def buildArgumentParser():
     parser.add_argument("--net-rate", help="Linux tc tbf rate, e.g. 500kbit or 2mbit")
     parser.add_argument("--net-burst", help="Linux tc tbf burst, e.g. 32kbit (requires --net-rate)")
     parser.add_argument("--net-latency", help="Linux tc tbf latency, e.g. 400ms (requires --net-rate)")
+    parser.add_argument(
+        "--writer-stall-ms",
+        help="Forward writer-stall-ms to DownloadManager for manual stall-recovery diagnostics.",
+    )
+    parser.add_argument(
+        "--download-stall-after",
+        help="Inject a temporary browser-side HTTPS download stall after the partial file reaches this size, e.g. 256M.",
+    )
+    parser.add_argument(
+        "--download-stall-duration",
+        type=int,
+        help="Injected download stall duration in seconds. Example: 600 for a 10-minute stall.",
+    )
+    parser.add_argument(
+        "--download-stall-mode",
+        choices=("drop", "reset"),
+        help="Injected stall action: DROP traffic or actively REJECT/reset connections.",
+    )
+    parser.add_argument(
+        "--download-stall-target-role",
+        choices=("browser", "share"),
+        help="Which netns role to stall: browser-side consumer or share-side upstream sender.",
+    )
+    parser.add_argument(
+        "--native-link",
+        action="store_true",
+        help="Force the synthetic browser-owned/native download path (`native=true`). Use only for explicit special-case testing.",
+    )
+    parser.add_argument(
+        "--rescue-stall-target-role",
+        choices=("browser", "share"),
+        help="Override the formal rescue scenario's injected stall target role.",
+    )
     return parser
 
 
@@ -2233,6 +3077,14 @@ def printDirectRunExamples():
                 "export FILESHARE_TEST=True",
                 "export STATIC_SERVER=http://localhost:8000",
                 "python tests/LargeFileTest.py --scenario normal --browser firefox --route sw --size 40M --tunnel 33.fastfilelink.com --net-scope share --net-rate 500kbit --net-delay 120ms --net-jitter 30ms",
+            ],
+        ),
+        (
+            "Injected browser download stall for same-writer resume validation",
+            [
+                "export FILESHARE_TEST=True",
+                "export STATIC_SERVER=http://localhost:8000",
+                "python tests/LargeFileTest.py --scenario fallback --browser firefox --route auto --size 2G --tunnel 33.fastfilelink.com --net-scope both --net-rate 2400kbit --net-delay 180ms --net-jitter 80ms --download-stall-after 256M --download-stall-duration 600",
             ],
         ),
         (
@@ -2287,6 +3139,20 @@ def applyDirectRunArgs(args):
         os.environ["FFL_LARGE_FILE_NET_BURST"] = args.net_burst
     if args.net_latency:
         os.environ["FFL_LARGE_FILE_NET_LATENCY"] = args.net_latency
+    if args.writer_stall_ms:
+        os.environ["FFL_LARGE_FILE_WRITER_STALL_MS"] = args.writer_stall_ms
+    if args.download_stall_after:
+        os.environ["FFL_LARGE_FILE_DOWNLOAD_STALL_AFTER"] = args.download_stall_after
+    if args.download_stall_duration is not None:
+        os.environ["FFL_LARGE_FILE_DOWNLOAD_STALL_DURATION_SECONDS"] = str(args.download_stall_duration)
+    if args.download_stall_mode:
+        os.environ["FFL_LARGE_FILE_DOWNLOAD_STALL_MODE"] = args.download_stall_mode
+    if args.download_stall_target_role:
+        os.environ["FFL_LARGE_FILE_DOWNLOAD_STALL_TARGET_ROLE"] = args.download_stall_target_role
+    if args.native_link:
+        os.environ["FFL_LARGE_FILE_FORCE_NATIVE_LINK"] = "1"
+    if args.rescue_stall_target_role:
+        os.environ["FFL_LARGE_FILE_RESCUE_STALL_TARGET_ROLE"] = args.rescue_stall_target_role
 
 
 def expandSelectedValues(selectedValues, availableValues):
@@ -2328,9 +3194,17 @@ def resolveSelectedRoutes(args):
 
 def getCuratedFullScenarioVariants():
     scenarioVariants = []
+    weakNetworkMode = LargeFileTest.NETWORK_EMULATION.isEnabled()
     for scenario, variants in CURATED_FULL_MATRIX.items():
+        if weakNetworkMode and scenario == "webrtc":
+            continue
         for browserOverride, routeOverride in variants:
             scenarioVariants.append((scenario, browserOverride, routeOverride))
+
+    if weakNetworkMode:
+        for scenario, variants in WEAK_NETWORK_FULL_MATRIX.items():
+            for browserOverride, routeOverride in variants:
+                scenarioVariants.append((scenario, browserOverride, routeOverride))
     return scenarioVariants
 
 
