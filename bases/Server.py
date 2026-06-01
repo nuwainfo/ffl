@@ -1179,6 +1179,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(response)
 
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            logger.debug("Client disconnected in E2EE tags endpoint")
         except Exception as e:
             logger.error(f"[E2EE] Tags endpoint error: {e}")
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
@@ -1210,6 +1212,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(response)
 
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            logger.debug("Client disconnected in E2EE init endpoint")
         except Exception as e:
             logger.error(f"E2EE init error: {e}")
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
@@ -1335,6 +1339,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            logger.debug("Client disconnected in email OTP request")
         except Exception as e:
             logger.warning(f'Email OTP request proxy failed: {e}')
             self.send_error(502, 'Failed to reach OTP service')
@@ -1811,6 +1817,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                     self.copyfile(f, self.wfile)
             finally:
                 f.close()
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            logger.debug("Client disconnected while serving static file")
         except Exception as e:
             logger.exception(e)
             self.send_error(500, str(e))
@@ -1862,6 +1870,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
 
             logger.error(f"Failed to fetch {scriptPath} from {remoteUrl}: {e}")
             self.send_error(HTTPStatus.BAD_GATEWAY, f"Failed to fetch from remote server: {str(e)}")
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            logger.debug("Client disconnected while proxying static script")
         except Exception as e:
             logger.exception(e)
             self.send_error(500, str(e))
@@ -1979,6 +1989,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(responseBody)
 
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            logger.debug("Client disconnected in status endpoint")
         except Exception as e:
             logger.exception(f"Status endpoint error: {e}")
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Status endpoint error")
@@ -2077,6 +2089,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(responseBody)
 
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            logger.debug("Client disconnected in checksum endpoint")
         except Exception as e:
             logger.exception(f"Checksum endpoint error: {e}")
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Checksum endpoint error")
@@ -2148,6 +2162,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             logger.info(f"WebRTC offer rejected by policy: {e.reason}")
             self.send_error(HTTPStatus.FORBIDDEN, e.reason)
 
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            logger.debug("Client disconnected in WebRTC offer endpoint")
         except Exception as e:
             logger.exception(e)
             self.send_error(500, str(e))
@@ -2176,6 +2192,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 self.send_response(HTTPStatus.NO_CONTENT)
                 self.end_headers()
 
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            logger.debug("Client disconnected in WebRTC candidate polling")
         except Exception as e:
             logger.exception(e)
             self.send_error(500, str(e))
@@ -2204,6 +2222,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             # Default handling for other paths
             try:
                 super().do_GET()
+            except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+                logger.debug("Client disconnected in GET handler")
             except Exception as e:
                 logger.exception(e)
                 self.send_error(500, str(e))
@@ -2311,6 +2331,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
             response = {"status": "success"}
             self._sendBytes(json.dumps(response).encode(), "application/json; charset=utf-8")
 
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            logger.debug("Client disconnected in debug log handler")
         except Exception as e:
             logger.exception(f"Error handling debug log: {e}")
             self.send_error(500, f"Debug log handler error: {str(e)}")
@@ -2338,6 +2360,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
                 handler(data)
             else:
                 self._handle404("Not Found")
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            logger.debug("Client disconnected in POST handler")
         except Exception as e:
             logger.exception(e)
             self.send_error(500, str(e))
@@ -2418,6 +2442,8 @@ class DownloadHandler(AuthMixin, SimpleHTTPRequestHandler):
     def handle_one_request(self) -> None:
         try:
             super().handle_one_request()
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            logger.debug("Client disconnected during request handling")
         except OSError as e:
             if "read() should have returned a bytes object" in str(e):
                 # Ignore this error which does not affect the server

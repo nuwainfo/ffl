@@ -211,6 +211,10 @@ def _safeMimeTypesRead(self, filename, strict=True):
 
 mimetypes.MimeTypes.read = _safeMimeTypesRead
 
+# Ensure .webp is recognized even if not in system mime database.
+if not mimetypes.guess_type('test.webp')[0]:
+    mimetypes.add_type('image/webp', '.webp')
+
 if 'Cosmopolitan' in platform.version():
     BASE_DIR = os.path.dirname(os.path.dirname(__file__))
     lib = os.path.join(BASE_DIR, 'Lib', 'site-packages')

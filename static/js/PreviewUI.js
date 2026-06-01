@@ -104,6 +104,11 @@
                 ? window.t
                 : (key, defaultValue) => defaultValue || key;
 
+            // Optional promise that resolves when i18n translations are ready.
+            // Inline hint display is deferred until this resolves so translations apply.
+            // Callers in environments with async i18n loading should pass this explicitly.
+            this._i18nReadyPromise = options.i18nReadyPromise || null;
+
             this.log('PreviewUI', 'Constructed');
 
             // Initialize immediately in constructor
@@ -161,13 +166,15 @@
                 this.enhancePreviewButton();
             }
 
-            // Auto-show inline hint on page load
+            // Wait for i18n before showing the hint so translations apply.
+            // _i18nReadyPromise is provided by callers in async-i18n environments; null means show immediately.
+            if (this._i18nReadyPromise) {
+                await this._i18nReadyPromise;
+            }
             this.showInlineHint();
-
+            
             // Auto-hide after 5 seconds
-            setTimeout(() => {
-                this.hideInlineHint();
-            }, 5000);
+            setTimeout(() => this.hideInlineHint(), 5000);
 
             this.log('ZipPreview', 'Initialization complete - inline hint shown, will auto-hide after 5s');
         }
@@ -1264,13 +1271,10 @@
                 // Display full image
                 const url = URL.createObjectURL(blob);
                 imgEl.src = url;
-                imgEl.style.maxWidth = '100%';
-                imgEl.style.maxHeight = '100%';
-                imgEl.style.objectFit = 'contain';
                 imgEl.alt = entry.name || 'Preview';
                 imgEl.onload = () => {
                     URL.revokeObjectURL(url);
-                    imgEl.style.display = 'block'; // Show image only after it loads
+                    imgEl.style.display = 'block';
                     this._hideFileViewerLoading();
                 };
                 imgEl.onerror = () => {
@@ -1751,8 +1755,8 @@
             const detailsText = this.t('Download:zipPreview.hint.inlineDetails', 'for details');
             const previewText = this.t('Download:zipPreview.hint.inlinePreview', 'to preview');
             const hintText = this.isPreviewableZip ?
-                `<i class="fas fa-info-circle" style="color: #007bff; font-size: 16px;"></i> ${detailsText}, <i class="fas fa-eye" style="color: #28a745; font-size: 16px;"></i> ${previewText}` :
-                `<i class="fas fa-info-circle" style="color: #007bff; font-size: 16px;"></i> ${detailsText}`;
+                `<i class="fas fa-info-circle" data-hint-action="info" style="color: #007bff; font-size: 16px; cursor: pointer;"></i> ${detailsText}, <i class="fas fa-eye" data-hint-action="preview" style="color: #28a745; font-size: 16px; cursor: pointer;"></i> ${previewText}` :
+                `<i class="fas fa-info-circle" data-hint-action="info" style="color: #007bff; font-size: 16px; cursor: pointer;"></i> ${detailsText}`;
 
             let hintHTML = `
                 <strong>${fileName}</strong>${folderIcon} (${simpleSize}) • ${hintText}
@@ -1760,13 +1764,21 @@
 
             inlineText.innerHTML = hintHTML;
 
-            // Make inline hint clickable for ZIP files (only initialize once)
-            if (this.isPreviewableZip && !inlineHint.dataset.clickInitialized) {
-                inlineHint.style.cursor = 'pointer';
-                inlineHint.addEventListener('click', () => {
-                    this.log('InlineHint', 'Inline hint clicked, opening preview');
-                    this.hideInlineHint(); // Hide the hint first
-                    this.openPreviewWithStateCheck();
+            // Delegate clicks inside the hint (only wire up once)
+            if (!inlineHint.dataset.clickInitialized) {
+                inlineHint.addEventListener('click', (e) => {
+                    const action = e.target.closest('[data-hint-action]')?.dataset.hintAction;
+                    this.hideInlineHint();
+                    if (action === 'info') {
+                        this.log('InlineHint', 'Info icon clicked, showing file info popup');
+                        this.showFileInfoHint();
+                    } else if (action === 'preview' || this.isPreviewableZip) {
+                        this.log('InlineHint', 'Preview action, opening preview');
+                        this.openPreviewWithStateCheck();
+                    } else {
+                        this.log('InlineHint', 'Hint clicked, showing file info popup');
+                        this.showFileInfoHint();
+                    }
                 });
                 inlineHint.dataset.clickInitialized = 'true';
                 this.log('InlineHint', 'Click handler initialized for inline hint');

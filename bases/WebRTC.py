@@ -494,7 +494,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
             errorMsg: Error message to log and raise
             errorCode: Error code to send to client (e.g., "ERROR:STALE", "ERROR:TIMEOUT")
         """
-        logger.error(errorMsg)
+        logger.info(errorMsg)
 
         try:
             dc.send(errorCode)

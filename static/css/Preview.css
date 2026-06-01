@@ -933,7 +933,7 @@
     max-height: 70vh;
     overflow: auto;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
 }
 
