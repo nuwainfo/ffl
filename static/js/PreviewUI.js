@@ -99,6 +99,12 @@
             this._maxConcurrentThumbnails = 5; // Limit concurrent thumbnail requests
             this._thumbnailLoadToken = 0;
 
+            // Sort and filter state — defaults, then overridden by URL params
+            this._sortBy = null; // null = no sort (original manifest order)
+            this._sortAsc = true;
+            this._filterMedia = false;
+            this._applyURLParams();
+
             // Translation helper (uses window.t if available)
             this.t = (typeof window !== 'undefined' && typeof window.t === 'function')
                 ? window.t
@@ -349,6 +355,9 @@
                                 <button class="zip-preview-play-btn" id="zip-preview-play-btn" title="${this.t('Download:zipPreview.startDownload', 'Start download')}">
                                     <i class="fas fa-download"></i>
                                 </button>
+                                <button class="zip-preview-settings-btn" id="zip-preview-settings-btn" title="${this.t('Download:zipPreview.sortFilter', 'Sort & Filter')}">
+                                    <i class="fas fa-sliders-h"></i>
+                                </button>
                                 <button class="zip-preview-close-btn" id="zip-preview-close" title="${this.t('Download:zipPreview.closePreview', 'Close preview')}">
                                     <i class="fas fa-times"></i>
                                 </button>
@@ -384,6 +393,35 @@
                                 <div class="zip-preview-empty-text">${this.t('Download:zipPreview.noFiles', 'No previewable files found')}</div>
                             </div>
                         </div>
+                    </div>
+                </div>
+
+                <!-- Settings Panel (Sort & Filter) -->
+                <div class="zip-preview-settings-panel" id="zip-preview-settings-panel" style="display: none;">
+                    <div class="zip-preview-settings-section">
+                        <div class="zip-preview-settings-title">${this.t('Download:zipPreview.sort', 'Sort')}</div>
+                        <div class="zip-preview-settings-sort-options">
+                            <button class="zip-preview-settings-sort-btn" data-sort="name" id="zip-sort-name">
+                                ${this.t('Download:zipPreview.sortName', 'Name')}
+                                <i class="fas fa-sort-alpha-down" id="zip-sort-icon-name"></i>
+                            </button>
+                            <button class="zip-preview-settings-sort-btn" data-sort="size" id="zip-sort-size">
+                                ${this.t('Download:zipPreview.sortSize', 'Size')}
+                                <i class="fas fa-sort-amount-down" id="zip-sort-icon-size"></i>
+                            </button>
+                            <button class="zip-preview-settings-sort-btn" data-sort="type" id="zip-sort-type">
+                                ${this.t('Download:zipPreview.sortType', 'Type')}
+                                <i class="fas fa-sort-alpha-down" id="zip-sort-icon-type"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="zip-preview-settings-divider"></div>
+                    <div class="zip-preview-settings-section">
+                        <div class="zip-preview-settings-title">${this.t('Download:zipPreview.filter', 'Filter')}</div>
+                        <button class="zip-preview-settings-filter-btn" id="zip-filter-media">
+                            <i class="fas fa-photo-film"></i>
+                            ${this.t('Download:zipPreview.mediaOnly', 'Media only')}
+                        </button>
                     </div>
                 </div>
 
@@ -505,6 +543,9 @@
                     }
                 }
             });
+
+            this._attachSettingsListeners();
+            this._updateSettingsUI();
         }
 
         // ====================================================================
@@ -837,6 +878,18 @@
                 return;
             }
 
+            const entries = this._getFilteredSortedEntries();
+
+            if (entries.length === 0) {
+                if (loadingEl)
+                    loadingEl.style.display = 'none';
+                if (gridEl)
+                    gridEl.style.display = 'none';
+                if (emptyEl)
+                    emptyEl.style.display = 'flex';
+                return;
+            }
+
             // Hide loading, show grid
             if (loadingEl)
                 loadingEl.style.display = 'none';
@@ -844,21 +897,208 @@
             if (gridEl)
                 gridEl.style.display = 'grid';
 
+            if (emptyEl)
+                emptyEl.style.display = 'none';
+
             // Clear existing cards
             gridEl.innerHTML = '';
 
             // Render cards
-            this.extractor?.meta.entries.forEach((entry) => {
+            entries.forEach((entry) => {
                 const card = this.createCard(entry);
                 gridEl.appendChild(card);
             });
 
-            this.log('ZipPreview', `Rendered ${this.extractor?.meta.entries.length} cards`);
+            this.log('ZipPreview', `Rendered ${entries.length} cards`);
 
             // Set up lazy loading for thumbnails using IntersectionObserver
             this._thumbnailQueue = [];
             this._thumbnailLoadToken += 1;
             this._setupThumbnailLazyLoading();
+        }
+
+        _applyURLParams() {
+            const params = new URLSearchParams(window.location.search);
+
+            const sort = params.get('sort');
+            if (sort === 'name' || sort === 'size' || sort === 'type') {
+                this._sortBy = sort;
+            }
+
+            const order = params.get('order');
+            if (order === 'desc') {
+                this._sortAsc = false;
+            } else if (order === 'asc') {
+                this._sortAsc = true;
+            }
+
+            if (params.get('filter') === 'media') {
+                this._filterMedia = true;
+            }
+        }
+
+        _syncURLParams() {
+            const params = new URLSearchParams(window.location.search);
+
+            if (this._sortBy) {
+                params.set('sort', this._sortBy);
+            } else {
+                params.delete('sort');
+            }
+
+            if (this._sortBy && !this._sortAsc) {
+                params.set('order', 'desc');
+            } else {
+                params.delete('order');
+            }
+
+            if (this._filterMedia) {
+                params.set('filter', 'media');
+            } else {
+                params.delete('filter');
+            }
+
+            const qs = params.toString();
+            history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '') + window.location.hash);
+        }
+
+        _attachSettingsListeners() {
+            const settingsBtn = document.getElementById('zip-preview-settings-btn');
+            if (settingsBtn) {
+                settingsBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this._toggleSettingsPanel();
+                });
+            }
+
+            ['name', 'size', 'type'].forEach(sortKey => {
+                const btn = document.getElementById(`zip-sort-${sortKey}`);
+                if (!btn) return;
+                btn.addEventListener('click', () => {
+                    if (this._sortBy === sortKey) {
+                        this._sortAsc = !this._sortAsc;
+                    } else {
+                        this._sortBy = sortKey;
+                        this._sortAsc = true;
+                    }
+                    this._updateSettingsUI();
+                    this._syncURLParams();
+                    this.renderGallery();
+                });
+            });
+
+            const mediaBtn = document.getElementById('zip-filter-media');
+            if (mediaBtn) {
+                mediaBtn.addEventListener('click', () => {
+                    this._filterMedia = !this._filterMedia;
+                    this._updateSettingsUI();
+                    this._syncURLParams();
+                    this.renderGallery();
+                });
+            }
+
+            // Click outside settings panel to close it
+            document.addEventListener('click', (e) => {
+                const panel = document.getElementById('zip-preview-settings-panel');
+                const settingsBtn = document.getElementById('zip-preview-settings-btn');
+                if (panel && panel.style.display !== 'none' &&
+                    !panel.contains(e.target) && e.target !== settingsBtn) {
+                    panel.style.display = 'none';
+                    if (settingsBtn) settingsBtn.classList.remove('active');
+                }
+            });
+        }
+
+        _toggleSettingsPanel() {
+            const panel = document.getElementById('zip-preview-settings-panel');
+            const btn = document.getElementById('zip-preview-settings-btn');
+            if (!panel || !btn) return;
+
+            const isVisible = panel.style.display !== 'none';
+            if (isVisible) {
+                panel.style.display = 'none';
+                btn.classList.remove('active');
+                return;
+            }
+
+            // Position panel below gear button
+            const rect = btn.getBoundingClientRect();
+            panel.style.top = `${rect.bottom + 6}px`;
+            panel.style.right = `${window.innerWidth - rect.right}px`;
+            panel.style.display = 'block';
+            btn.classList.add('active');
+        }
+
+        _updateSettingsUI() {
+            const sortIcons = {
+                name: { asc: 'fas fa-sort-alpha-down', desc: 'fas fa-sort-alpha-up-alt' },
+                size: { asc: 'fas fa-sort-amount-down', desc: 'fas fa-sort-amount-up' },
+                type: { asc: 'fas fa-sort-alpha-down', desc: 'fas fa-sort-alpha-up-alt' }
+            };
+
+            ['name', 'size', 'type'].forEach(sortKey => {
+                const btn = document.getElementById(`zip-sort-${sortKey}`);
+                const icon = document.getElementById(`zip-sort-icon-${sortKey}`);
+                if (!btn) return;
+
+                const isActive = this._sortBy === sortKey;
+                btn.classList.toggle('active', isActive);
+
+                if (icon) {
+                    const icons = sortIcons[sortKey];
+                    if (isActive) {
+                        icon.className = this._sortAsc ? icons.asc : icons.desc;
+                        icon.style.opacity = '1';
+                    } else {
+                        icon.className = icons.asc;
+                        icon.style.opacity = '0.3';
+                    }
+                }
+            });
+
+            const settingsBtn = document.getElementById('zip-preview-settings-btn');
+            if (settingsBtn) {
+                settingsBtn.classList.toggle('has-active', this._filterMedia || this._sortBy !== null);
+            }
+
+            const mediaBtn = document.getElementById('zip-filter-media');
+            if (mediaBtn) mediaBtn.classList.toggle('active', this._filterMedia);
+        }
+
+        _getFilteredSortedEntries() {
+            let entries = [...(this.extractor?.meta?.entries || [])];
+
+            if (this._filterMedia) {
+                entries = entries.filter(entry => {
+                    const mime = entry.mime || '';
+                    return mime.startsWith('image/') || mime.startsWith('video/');
+                });
+            }
+
+            if (this._sortBy) {
+                entries.sort((a, b) => {
+                    let cmp = 0;
+                    if (this._sortBy === 'name') {
+                        cmp = (a.name || '').localeCompare(b.name || '');
+                    } else if (this._sortBy === 'size') {
+                        cmp = (a.size || 0) - (b.size || 0);
+                    } else if (this._sortBy === 'type') {
+                        const extA = this._getFileExtension(a.name || '');
+                        const extB = this._getFileExtension(b.name || '');
+                        cmp = extA.localeCompare(extB);
+                        if (cmp === 0)
+                            cmp = (a.name || '').localeCompare(b.name || '');
+                    }
+                    return this._sortAsc ? cmp : -cmp;
+                });
+            }
+
+            return entries;
+        }
+
+        _getFileExtension(filename) {
+            const dot = filename.lastIndexOf('.');
+            return dot >= 0 ? filename.substring(dot + 1).toLowerCase() : '';
         }
 
         createCard(entry) {

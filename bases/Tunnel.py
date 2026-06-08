@@ -162,7 +162,18 @@ class AsyncTunnelThread(threading.Thread):
     def kill(self):
         self.stopRequested = True
         if self.client:
+            self.client.stop()
+
+        if not self.client or not self.is_alive():
+            return
+
+        if not self.loop or self.loop.is_closed():
+            return
+
             try:
+                if not self.loop.is_running():
+                    return
+
                 # Use proper shutdown method that handles task cancellation
                 future = asyncio.run_coroutine_threadsafe(self.client.shutdown(), self.loop)
                 future.result(timeout=2) # Wait up to 2 seconds for shutdown

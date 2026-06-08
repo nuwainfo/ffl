@@ -243,6 +243,13 @@
         "actions": {
             "viewFullSize": "檢視原圖",
             "downloadFile": "下載檔案"
-        }
+        },
+        "sortFilter": "排序與篩選",
+        "sort": "排序",
+        "sortName": "名稱",
+        "sortSize": "大小",
+        "sortType": "類型",
+        "filter": "篩選",
+        "mediaOnly": "僅顯示媒體（圖片與影片）"
     }
 }

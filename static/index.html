@@ -71,7 +71,7 @@ Licensed under Apache-2.0 license.
                                 <i id="file-preview-btn" class="fas fa-eye"
                                    style="display: none; margin-right: 8px; color: #28a745; cursor: pointer; font-size: 0.8em;"
                                    data-i18n="[title]Download:zipPreview.button"></i>
-                                <span data-i18n="Download:ellipsis">...</span>
+                                <span class="downloadPagePrimaryText" data-i18n="Download:ellipsis">...</span>
                             </h4>
                             <!-- Inline file info hint (auto fade-out) - starts hidden but occupies space -->
                             <div id="file-intro-inline-hint" class="file-intro-inline-hint">
@@ -83,15 +83,15 @@ Licensed under Apache-2.0 license.
                         <!-- InApp Browser Warning -->
                         <div id="inapp-warning" class="inapp-warning">
                             <i class="fas fa-exclamation-triangle warning-icon"></i>
-                            <div class="warning-title" data-i18n="Download:warning.title">Download may not work in this browser</div>
-                            <div id="warning-text" class="warning-text" data-i18n="Download:warning.text">
+                            <div class="warning-title statusInfo" data-i18n="Download:warning.title">Download may not work in this browser</div>
+                            <div id="warning-text" class="warning-text statusInfo" data-i18n="Download:warning.text">
                                 To download this file, please open this link in your browser.
                             </div>
                             <a id="open-browser-btn" href="#" class="open-browser-btn">
-                                <i class="fas fa-download"></i> <span data-i18n="Download:warning.button">Download in Browser</span>
+                                <i class="fas fa-download"></i> <span class="statusInfo" data-i18n="Download:warning.button">Download in Browser</span>
                             </a>
                             <a id="copy-link-btn" href="#" class="open-browser-btn" style="margin-top: 8px;">
-                                <i class="fas fa-copy"></i> <span data-i18n="Download:warning.copyButton">Copy Link</span>
+                                <i class="fas fa-copy"></i> <span class="statusInfo" data-i18n="Download:warning.copyButton">Copy Link</span>
                             </a>
                             <a id="play-here-btn-video" href="#" class="open-browser-btn play-here-btn" style="display: none; margin-top: 8px;">
                                 <i class="fas fa-play-circle"></i> <span data-i18n="Download:warning.watchButton">Watch Video Here</span>
@@ -111,8 +111,8 @@ Licensed under Apache-2.0 license.
                                 <div class="border-button">
                                     <!-- Pickup gate (visible if PICKUP_REQUIRED) -->
                                     <div id="pickupGate">
-                                        <h6 data-i18n="Download:pickup.title">🔑 Pickup Code Required</h6>
-                                        <p class="auth-gate-description" data-i18n="Download:pickup.description">
+                                        <h6 data-i18n="Download:pickup.title" class="pickupCodeInfo">🔑 Pickup Code Required</h6>
+                                        <p class="auth-gate-description pickupCodeInfo" data-i18n="Download:pickup.description">
                                             The sender requires a 6-digit pickup code to download this file.
                                         </p>
                                         <input type="text" id="pickup-code-input" class="auth-gate-code-input"
@@ -126,8 +126,8 @@ Licensed under Apache-2.0 license.
 
                                     <!-- Pubkey gate (visible if PUBKEY_REQUIRED) -->
                                     <div id="pubkeyGate">
-                                        <h6 data-i18n="Download:pubkey.title">🔐 Private Key Required</h6>
-                                        <p class="auth-gate-description" data-i18n="Download:pubkey.description">
+                                        <h6 data-i18n="Download:pubkey.title" class="pubkeyInfo">🔐 Private Key Required</h6>
+                                        <p class="auth-gate-description pubkeyInfo" data-i18n="Download:pubkey.description">
                                             This file is protected with your public key.
                                             Upload your private key file (<code>.fflkey</code>) to unlock.
                                         </p>

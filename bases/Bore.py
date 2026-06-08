@@ -45,6 +45,7 @@ MAX_FRAME_LENGTH = 256
 NETWORK_TIMEOUT = 60 # seconds
 LOCAL_CONNECT_RETRY_TIMEOUT = 5.0 # seconds
 LOCAL_CONNECT_RETRY_INTERVAL = 0.1 # seconds
+DEFAULT_CONTROL_IDLE_TIMEOUT = int(os.getenv("BORE_CONTROL_IDLE_TIMEOUT", "90"))
 
 BORE_DEBUG = os.getenv('BORE_DEBUG', False)
 BORE_VERBOSE = os.getenv('BORE_VERBOSE', False)
@@ -178,6 +179,10 @@ class DelimitedStream:
             raise TimeoutError(f"Timed out waiting for response after {timeout} seconds")
 
 
+class ControlConnectionStaleError(ConnectionError):
+    """Raised when the control channel stops delivering frames for too long."""
+
+
 class BoreClient:
     """Python implementation of the bore client."""
 
@@ -208,6 +213,7 @@ class BoreClient:
         self.runningTasks = set() # Task management per instance
         self.proxyConfig = proxyConfig # Store proxy configuration
         self.tokenProvider = tokenProvider
+        self.controlIdleTimeout = max(0, DEFAULT_CONTROL_IDLE_TIMEOUT)
 
         # Force HTTPS mode for security (ignores useHttps parameter)
         self.useHttps = True # Always True for security
@@ -234,6 +240,40 @@ class BoreClient:
 
         if not self.secret:
             logger.warning("No secret provided and BORE_SECRET environment variable not set")
+
+    async def _recvControlMessage(self):
+        """
+        Receive one control message, with an idle timeout if enabled.
+
+        When the control channel silently wedges, we prefer to break out to the
+        reconnect loop instead of waiting forever on recv().
+        """
+        if self.controlIdleTimeout > 0:
+            try:
+                return await asyncio.wait_for(self.controlConnection.recv(), self.controlIdleTimeout)
+            except asyncio.TimeoutError as e:
+                raise ControlConnectionStaleError(
+                    f"Control connection idle for {self.controlIdleTimeout} seconds"
+                ) from e
+
+        return await self.controlConnection.recv()
+
+    async def _closeControlConnection(self, forceAbort=False):
+        if not self.controlConnection or not hasattr(self.controlConnection, 'writer'):
+            return
+
+        writer = self.controlConnection.writer
+        transport = getattr(writer, "transport", None)
+
+        try:
+            if forceAbort and transport is not None and hasattr(transport, "abort"):
+                transport.abort()
+                return
+
+            writer.close()
+            await asyncio.wait_for(writer.wait_closed(), timeout=5)
+        except Exception as e:
+            logger.debug("Error closing control connection: %s", e)
 
     def _setSecret(self, secret):
         self.secret = secret
@@ -747,11 +787,12 @@ class BoreClient:
     async def listen(self):
         """Start listening for connections from the server."""
         self.running = True
+        forceAbortControlConnection = False
         try:
             logger.info("Starting to listen for incoming connections")
             while self.running:
                 try:
-                    message = await self.controlConnection.recv()
+                    message = await self._recvControlMessage()
                     if not message:
                         logger.info("Control connection closed by server")
                         break
@@ -778,6 +819,10 @@ class BoreClient:
                 except asyncio.CancelledError:
                     logger.info("Listen task cancelled")
                     break
+                except ControlConnectionStaleError as e:
+                    logger.warning("%s; forcing reconnect", e)
+                    forceAbortControlConnection = True
+                    break
                 except Exception as e:
                     logger.error(f"Error in listen loop: {type(e).__name__}: {e}")
                     logger.error(traceback.format_exc())
@@ -789,12 +834,7 @@ class BoreClient:
 
         finally:
             self.running = False
-            if self.controlConnection and hasattr(self.controlConnection, 'writer'):
-                try:
-                    self.controlConnection.writer.close()
-                    await self.controlConnection.writer.wait_closed()
-                except Exception as e:
-                    logger.debug("Error closing control connection: %s", e)
+            await self._closeControlConnection(forceAbort=forceAbortControlConnection)
             logger.debug("Client stopped")
 
     def stop(self):
@@ -807,6 +847,10 @@ class BoreClient:
         This method cancels all running background tasks and waits for them to complete.
         """
         self.stop() # Set self.running = False to stop the main listen() loop
+
+        # If the control channel is wedged in recv(), actively abort it so listen()
+        # can unwind immediately instead of waiting for an idle timeout or EOF.
+        await self._closeControlConnection(forceAbort=True)
 
         # 1. Get all running tasks to be cancelled.
         # Create a list from the set to avoid issues with changing size during iteration.

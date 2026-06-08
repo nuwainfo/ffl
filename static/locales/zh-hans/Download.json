@@ -243,6 +243,13 @@
         "actions": {
             "viewFullSize": "检视原图",
             "downloadFile": "下载档案"
-        }
+        },
+        "sortFilter": "排序与筛选",
+        "sort": "排序",
+        "sortName": "名称",
+        "sortSize": "大小",
+        "sortType": "类型",
+        "filter": "筛选",
+        "mediaOnly": "仅显示媒体（图片与视频）"
     }
 }

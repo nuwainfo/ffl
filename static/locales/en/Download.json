@@ -243,6 +243,13 @@
         "actions": {
             "viewFullSize": "View full size",
             "downloadFile": "Download file"
-        }
+        },
+        "sortFilter": "Sort & Filter",
+        "sort": "Sort",
+        "sortName": "Name",
+        "sortSize": "Size",
+        "sortType": "Type",
+        "filter": "Filter",
+        "mediaOnly": "Media only (images & videos)"
     }
 }

@@ -585,13 +585,41 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
 
     let upstream;
     try {
-        upstream = await fetch(request);
-        log('[ProgressSW] Fetch completed, status:', upstream.status, 'statusText:', upstream.statusText);
+        // Use cors mode so cross-origin redirects (EdgeWorker → DownloadWorker on 0.2.fastfilelink.com)
+        // return a readable response. Navigate mode yields an opaque redirect (status=0).
+        // Do NOT copy event.request.headers — navigation headers (Sec-Fetch-*, Upgrade-Insecure-Requests)
+        // make the request non-simple and trigger a CORS preflight that fails, giving status=0.
+        // Build a minimal clean header set with only the headers we explicitly control.
+        const corsHeaders = new Headers({
+            'Accept': '*/*',
+        });
+        if (authHeaders) {
+            for (const [k, v] of Object.entries(authHeaders)) {
+                corsHeaders.set(k, v);
+            }
+        }
+        if (resumeConfig && typeof resumeConfig.rangeStart === 'number' && resumeConfig.rangeStart > 0) {
+            corsHeaders.set('Range', `bytes=${resumeConfig.rangeStart}-`);
+            corsHeaders.set('Cache-Control', 'no-cache');
+        }
+        log('[ProgressSW] Fetching with cors mode, clean headers');
+        
+        upstream = await fetch(new Request(request.url, {
+            method: 'GET',
+            headers: corsHeaders,
+            mode: 'cors',
+            credentials: 'omit',
+            redirect: 'follow',
+        }));
+        log('[ProgressSW] Fetch completed, status:', upstream.status, 'type:', upstream.type, 'statusText:', upstream.statusText);
+        
         const headersObj = {};
         upstream.headers.forEach((value, key) => { headersObj[key] = value; });
         log('[ProgressSW] Response headers count:', upstream.headers.size || Object.keys(headersObj).length);
+        
         log('[ProgressSW] Content-Range:', upstream.headers.get('Content-Range'));
         log('[ProgressSW] Content-Length:', upstream.headers.get('Content-Length'));
+        
         log('[ProgressSW] Checking 416 status, status is:', upstream.status);
         if (resumeConfig && upstream.status === 416) {
             log('[ProgressSW] Resume request returned 416 (Range Not Satisfiable) - retrying without Range');
