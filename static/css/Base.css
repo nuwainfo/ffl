@@ -14,15 +14,15 @@
 }
 
 .dropdown-content a {
-    display: flex !important;               /* 使用 flex 對齊 */
-    align-items: center !important;         /* 垂直置中 */
-    justify-content: center !important;     /* 水平置中 */
-    padding: 10px 16px;          /* 用 padding 控制高度，響應式 */
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 10px 16px;
     color: #007bff !important;
     text-decoration: none;
-    line-height: 1.4;            /* 保持文字自然高度 */
+    line-height: 1.4;
     white-space: nowrap;
-    width: 100%;                 /* 讓 flex 正常填滿 dropdown */
+    width: 100%;
     box-sizing: border-box;
 }
 
@@ -156,4 +156,18 @@
 
 .copyLinkIcon.copied .copyFeedbackText {
     opacity: 1;
+}
+
+/* Progress bar text centering */
+.progress-bar {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    color: white !important;
+    font-weight: bold !important;
+    text-shadow: 0 0 2px rgba(0,0,0,0.5) !important;
+}
+
+.progressInfo,.statusInfo {
+    color: #666;
 }

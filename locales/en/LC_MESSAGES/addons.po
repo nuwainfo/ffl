@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-04-06 13:21+0800\n"
+"POT-Creation-Date: 2026-06-13 10:49+0800\n"
 "PO-Revision-Date: 2025-12-18 10:23+0800\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -538,12 +538,6 @@ msgid ""
 "If you'd like to cancel, click below."
 msgstr ""
 
-msgid "Device activation canceled."
-msgstr ""
-
-msgid "Canceled"
-msgstr ""
-
 msgid "Device activation successful!"
 msgstr ""
 
@@ -554,6 +548,23 @@ msgid "Device activation failed."
 msgstr ""
 
 msgid "Login Error"
+msgstr ""
+
+msgid "Device activation canceled."
+msgstr ""
+
+msgid "Canceled"
+msgstr ""
+
+msgid ""
+"Claim your free account — it's completely free!\n"
+"You'll receive 5 bonus points after checkout.\n"
+"\n"
+"After claiming, activate your device right away:\n"
+"Go to Account → Activate This Device in the menu."
+msgstr ""
+
+msgid "Next Steps"
 msgstr ""
 
 msgid "👤 Account – Free"
@@ -581,6 +592,25 @@ msgid "🧅 Use Tor to Enhance Privacy"
 msgstr ""
 
 msgid "📊 Enable Error Reporting"
+msgstr ""
+
+msgid "Show in OS Context Menu"
+msgstr ""
+
+msgid "Show in OS Context Menu (Unavailable)"
+msgstr ""
+
+msgid "This feature is unavailable on this build."
+msgstr ""
+
+msgid "OS Context Menu"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Failed to update OS context menu integration.\n"
+"\n"
+"{error}"
 msgstr ""
 
 msgid "🔐 User Settings"
@@ -721,17 +751,6 @@ msgid ""
 "3. Share your file again using Upload mode"
 msgstr ""
 
-msgid "Next Steps"
-msgstr ""
-
-msgid ""
-"Claim your free account — it's completely free!\n"
-"You'll receive 5 bonus points after checkout.\n"
-"\n"
-"After claiming, activate your device right away:\n"
-"Go to Account → Activate This Device in the menu."
-msgstr ""
-
 msgid "Upload to Cloud"
 msgstr ""
 
@@ -751,10 +770,10 @@ msgstr ""
 msgid "Not enough points  ·  You need 1, you have {current}"
 msgstr ""
 
-msgid "🎁 Claim Free Account"
+msgid "Claim a free account to receive 5 bonus points."
 msgstr ""
 
-msgid "Claim a free account to receive 5 bonus points."
+msgid "🎁 Claim Free Account"
 msgstr ""
 
 msgid "🛒 Buy Points"
@@ -829,6 +848,124 @@ msgid "FastFileLink"
 msgstr ""
 
 msgid "FastFileLink makes file sharing fast, simple, and secure."
+msgstr ""
+
+msgid "Share with FastFileLink"
+msgstr ""
+
+msgid "Share"
+msgstr ""
+
+msgid "Share  —  One Download Only"
+msgstr ""
+
+msgid "Share Encrypted"
+msgstr ""
+
+msgid "Share Encrypted  —  One Download Only"
+msgstr ""
+
+msgid "FastFileLink Share"
+msgstr ""
+
+msgid "FastFileLink Share Once"
+msgstr ""
+
+msgid "FastFileLink Share Encrypted"
+msgstr ""
+
+msgid "FastFileLink Share Encrypted Once"
+msgstr ""
+
+msgid "OS context menu integration is not available on this platform."
+msgstr ""
+
+msgid "FastFileLink could not verify OS context menu registration."
+msgstr ""
+
+msgid "Windows registry support is unavailable in this runtime."
+msgstr ""
+
+msgid "OS context menu integration is unavailable in Windows Store builds."
+msgstr ""
+
+msgid "Unable to locate the FastFileLink executable."
+msgstr ""
+
+msgid "FastFileLink could not read the Windows context menu registration."
+msgstr ""
+
+msgid "OS context menu integration is unavailable in sandboxed macOS builds."
+msgstr ""
+
+msgid "OS context menu integration on macOS requires the packaged .app bundle."
+msgstr ""
+
+msgid "Unable to locate Core.py for shell integration."
+msgstr ""
+
+msgid "FastFileLink could not read the macOS Services registration."
+msgstr ""
+
+msgid "Open the selected file or folder in FastFileLink"
+msgstr ""
+
+msgid "Windows Explorer (Context Menu)"
+msgstr ""
+
+msgid "macOS Services (Finder)"
+msgstr ""
+
+msgid "Linux (Open With)"
+msgstr ""
+
+msgid "Unknown"
+msgstr ""
+
+msgid "OS Context Menu Integration"
+msgstr ""
+
+msgid "  Status:   Unavailable"
+msgstr ""
+
+#, python-brace-format
+msgid "  Reason:   {reason}"
+msgstr ""
+
+#, python-brace-format
+msgid "  Platform: {platform}"
+msgstr ""
+
+msgid "  Status:   Installed"
+msgstr ""
+
+msgid "  Status:   Not installed"
+msgstr ""
+
+msgid "Run 'ffl shell --install' to add FastFileLink to your OS context menu."
+msgstr ""
+
+#, python-brace-format
+msgid "Error: {reason}"
+msgstr ""
+
+msgid "OS context menu integration installed."
+msgstr ""
+
+#, python-brace-format
+msgid "Error: {error}"
+msgstr ""
+
+msgid "OS context menu integration removed."
+msgstr ""
+
+msgid "Install OS context menu (right-click) integration"
+msgstr ""
+
+msgid "Remove OS context menu (right-click) integration"
+msgstr ""
+
+msgid "Manage OS context menu (right-click) integration"
 msgstr ""
 
 #, python-brace-format
@@ -915,6 +1052,10 @@ msgstr ""
 msgid ""
 "\n"
 "You can adjust the point limit and other settings for this link below: "
+msgstr ""
+
+#, python-brace-format
+msgid "Upload commit is still in progress, retrying in {delay:.1f} seconds..."
 msgstr ""
 
 #, python-brace-format

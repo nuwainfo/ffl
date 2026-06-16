@@ -99,6 +99,10 @@
             this._maxConcurrentThumbnails = 5; // Limit concurrent thumbnail requests
             this._thumbnailLoadToken = 0;
 
+            // Viewer navigation state
+            this._currentViewEntries = [];
+            this._currentViewIndex = -1;
+
             // Sort and filter state — defaults, then overridden by URL params
             this._sortBy = null; // null = no sort (original manifest order)
             this._sortAsc = true;
@@ -443,8 +447,14 @@
                                 <div class="zip-file-viewer-loading-text">${this.t('Download:zipPreview.loading', 'Loading...')}</div>
                             </div>
                             <img id="zip-viewer-img" src="" alt="" style="display: none;" />
-                            <video id="zip-viewer-video" controls style="display: none; max-width: 100%; max-height: 100%;"></video>
+                            <video id="zip-viewer-video" controls style="display: none;"></video>
                         </div>
+                        <button class="zip-viewer-nav-btn zip-viewer-prev" id="zip-viewer-prev" title="Previous file">
+                            <i class="fas fa-chevron-left"></i>
+                        </button>
+                        <button class="zip-viewer-nav-btn zip-viewer-next" id="zip-viewer-next" title="Next file">
+                            <i class="fas fa-chevron-right"></i>
+                        </button>
                     </div>
                 </div>
             `;
@@ -533,7 +543,7 @@
                 }
             });
 
-            // ESC key to close
+            // ESC key to close, arrow keys to navigate
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') {
                     if (this.viewer.classList.contains('active')) {
@@ -541,8 +551,32 @@
                     } else if (this.overlay.classList.contains('active')) {
                         this.closePreview();
                     }
+                } else if (this.viewer.classList.contains('active')) {
+                    if (e.key === 'ArrowLeft') {
+                        e.preventDefault();
+                        this._navigateViewer(-1);
+                    } else if (e.key === 'ArrowRight') {
+                        e.preventDefault();
+                        this._navigateViewer(1);
+                    }
                 }
             });
+
+            // Viewer prev/next nav buttons
+            const viewerPrevBtn = document.getElementById('zip-viewer-prev');
+            if (viewerPrevBtn) {
+                viewerPrevBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this._navigateViewer(-1);
+                });
+            }
+            const viewerNextBtn = document.getElementById('zip-viewer-next');
+            if (viewerNextBtn) {
+                viewerNextBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this._navigateViewer(1);
+                });
+            }
 
             this._attachSettingsListeners();
             this._updateSettingsUI();
@@ -1460,6 +1494,13 @@
         async openFileViewer(entry) {
             this.log('ZipPreview', `Opening file viewer for: ${entry.name}`);
 
+            // Build navigable entries (media only from current filtered+sorted list)
+            this._currentViewEntries = this._getFilteredSortedEntries().filter(e =>
+                this._getPreviewStrategy(e.name) !== 'default'
+            );
+            this._currentViewIndex = this._currentViewEntries.findIndex(e => e.index === entry.index);
+            this._updateViewerNavButtons();
+
             // Determine preview strategy
             const strategy = this._getPreviewStrategy(entry.name);
 
@@ -1777,6 +1818,19 @@
             if (viewer) {
                 viewer.classList.remove('active');
             }
+        }
+
+        _navigateViewer(delta) {
+            const newIndex = this._currentViewIndex + delta;
+            if (newIndex < 0 || newIndex >= this._currentViewEntries.length) return;
+            this.openFileViewer(this._currentViewEntries[newIndex]);
+        }
+
+        _updateViewerNavButtons() {
+            const prevBtn = document.getElementById('zip-viewer-prev');
+            const nextBtn = document.getElementById('zip-viewer-next');
+            if (prevBtn) prevBtn.disabled = this._currentViewIndex <= 0;
+            if (nextBtn) nextBtn.disabled = this._currentViewIndex >= this._currentViewEntries.length - 1;
         }
 
         // ====================================================================

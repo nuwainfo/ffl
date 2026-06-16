@@ -1018,6 +1018,7 @@
 }
 
 .zip-file-viewer-content {
+    position: relative;
     max-width: 90vw;
     max-height: 85vh;
     /* Transparent glass like main overlay */
@@ -1104,6 +1105,40 @@
     transform: scale(1.05);
 }
 
+.zip-viewer-nav-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(255, 255, 255, 0.45);
+    background: rgba(255, 255, 255, 0.22);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    color: #333;
+    font-size: 15px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 5;
+    transition: background 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+}
+.zip-viewer-nav-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.55);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+    color: #111;
+}
+.zip-viewer-nav-btn:disabled {
+    opacity: 0.18;
+    cursor: default;
+    pointer-events: none;
+}
+.zip-viewer-prev { left: 8px; }
+.zip-viewer-next { right: 8px; }
+
 .zip-file-viewer-body {
     max-width: 90vw;
     max-height: 70vh;
@@ -1121,9 +1156,13 @@
 
 .zip-file-viewer-body video {
     max-width: 100%;
-    max-height: 70vh;
+    max-height: 65vh;
+    width: auto;
+    height: auto;
     border-radius: 12px;
     background: #000;
+    display: block;
+    object-fit: contain;
 }
 
 /* ============================================================================

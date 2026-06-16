@@ -24,6 +24,7 @@ the official install scripts from the GitHub repository.
 """
 
 import os
+import sys
 import subprocess
 import tempfile
 import logging
@@ -38,14 +39,18 @@ import requests
 
 from bases.Kernel import PUBLIC_VERSION, getLogger, AddonsManager
 from bases.Settings import SettingsGetter
-from bases.Utils import flushPrint, sendException, compareVersions
+from bases.Utils import flushPrint, sendException, compareVersions, getEnv
 from bases.I18n import _
 
 logger = getLogger(__name__)
 
 REPO_OWNER = "nuwainfo"
 REPO_NAME = "ffl"
-INSTALL_SCRIPT_BASE_URL = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/refs/heads/main/dist"
+GITHUB_RAW_BASE_URL = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
+GITHUB_MAIN_REF = "refs/heads/main"
+DIST_RELATIVE_PATH = "dist"
+WINDOWS_UPDATER_RELATIVE_PATH = "dist/CLI/windows/ffl-updater.exe"
+WINDOWS_UPDATER_NAME = "ffl-updater.exe"
 
 
 class UpgradeError(Exception):
@@ -209,37 +214,140 @@ def getLatestVersionFromGitHub() -> Optional[str]:
         return None
 
 
-def downloadInstallScript(osType: str) -> Path:
+def normalizeGitHubTagRef(targetVersion: Optional[str]) -> Optional[str]:
+    """Normalize a version string into a GitHub raw tag ref"""
+    if not targetVersion:
+        return None
+
+    version = targetVersion.strip()
+    if not version:
+        return None
+
+    if version.startswith('refs/'):
+        return version
+
+    if not version.startswith('v'):
+        version = f"v{version}"
+
+    return f"refs/tags/{version}"
+
+
+def getGitHubRawRefs(targetVersion: Optional[str]):
+    """Return preferred GitHub raw refs: target tag first, then main fallback"""
+    refs = []
+
+    tagRef = normalizeGitHubTagRef(targetVersion)
+    if tagRef:
+        refs.append(tagRef)
+
+    refs.append(GITHUB_MAIN_REF)
+
+    # De-duplicate while preserving order
+    uniqueRefs = []
+    for ref in refs:
+        if ref not in uniqueRefs:
+            uniqueRefs.append(ref)
+
+    return uniqueRefs
+
+
+def buildGitHubRawUrl(ref: str, relativePath: str) -> str:
+    """Build a raw.githubusercontent.com URL for a ref and repository path"""
+    return f"{GITHUB_RAW_BASE_URL}/{ref}/{relativePath}"
+
+
+def downloadGitHubRawFile(relativePath: str, destinationPath: Path, targetVersion: Optional[str], description: str) -> Path:
+    """Download a repository file from the target tag first, falling back to main"""
+    lastError = None
+
+    for ref in getGitHubRawRefs(targetVersion):
+        url = buildGitHubRawUrl(ref, relativePath)
+
+        try:
+            flushPrint(_("Downloading {description} from: {url}").format(description=description, url=url))
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+
+            destinationPath.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(destinationPath, 'wb') as f:
+                f.write(response.content)
+
+            flushPrint(_("{description} downloaded successfully").format(description=description))
+            flushPrint("")
+            return destinationPath
+
+        except requests.RequestException as e:
+            lastError = e
+            logger.warning(f'Failed to download {description} from {url}: {e}')
+
+    raise UpgradeError(
+        _("Failed to download {description}: {error}").format(description=description, error=lastError)
+    )
+
+
+def downloadInstallScript(osType: str, targetVersion: Optional[str]) -> Path:
     """Download the appropriate install script for the OS"""
     if osType == "windows":
         scriptName = "install.ps1"
     else:
         scriptName = "install.sh"
 
-    url = f"{INSTALL_SCRIPT_BASE_URL}/{scriptName}"
+    tmpDir = Path(tempfile.gettempdir())
+    scriptPath = tmpDir / scriptName
+    relativePath = f"{DIST_RELATIVE_PATH}/{scriptName}"
 
-    try:
-        flushPrint(_("Downloading install script from: {url}").format(url=url))
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
+    scriptPath = downloadGitHubRawFile(
+        relativePath,
+        scriptPath,
+        targetVersion,
+        _("install script")
+    )
 
-        # Save to temporary file
-        tmpDir = Path(tempfile.gettempdir())
-        scriptPath = tmpDir / scriptName
+    # Make executable on Unix-like systems
+    if osType != "windows":
+        scriptPath.chmod(0o755)
 
-        with open(scriptPath, 'wb') as f:
-            f.write(response.content)
+    return scriptPath
 
-        # Make executable on Unix-like systems
-        if osType != "windows":
-            scriptPath.chmod(0o755)
 
-        flushPrint(_("Install script downloaded successfully"))
-        flushPrint("")
-        return scriptPath
+def downloadWindowsUpdater(targetVersion: Optional[str]) -> Path:
+    """Download the Windows updater helper executable"""
+    localUpdaterPath = getEnv('FFL_UPDATER_PATH', None)
+    if localUpdaterPath:
+        path = Path(localUpdaterPath)
+        logger.debug(f'Using local Windows updater from FFL_UPDATER_PATH: {path}')
+        return path
 
-    except requests.RequestException as e:
-        raise UpgradeError(_("Failed to download install script: {error}").format(error=e))
+    tmpDir = Path(tempfile.gettempdir())
+    updaterPath = tmpDir / WINDOWS_UPDATER_NAME
+
+    return downloadGitHubRawFile(
+        WINDOWS_UPDATER_RELATIVE_PATH,
+        updaterPath,
+        targetVersion,
+        _("Windows updater")
+    )
+
+
+def launchWindowsUpdater(updaterPath: Path, sourcePath: Path, targetPath: Path) -> None:
+    """Launch the Windows updater helper to replace the current executable after this process exits"""
+    command = [
+        str(updaterPath),
+        "--pid", str(os.getpid()),
+        "--source", str(sourcePath),
+        "--target", str(targetPath),
+        "--timeout-ms", "60000",
+        "--retry-ms", "500",
+        "--restart",
+    ]
+
+    creationFlags = 0
+    creationFlags |= getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
+    creationFlags |= getattr(subprocess, 'DETACHED_PROCESS', 0)
+
+    logger.debug(f'Launching Windows updater: {command=}')
+    subprocess.Popen(command, close_fds=True, creationflags=creationFlags)
 
 
 def executeInstallScript(scriptPath: Path, targetVersion: str, osType: str, targetBinary: Optional[str] = None) -> bool:
@@ -247,6 +355,12 @@ def executeInstallScript(scriptPath: Path, targetVersion: str, osType: str, targ
 
     # Get SettingsGetter instance (needed for both development and normal modes)
     settingsGetter = SettingsGetter.getInstance()
+
+    currentExecutable = None
+    tempTarget = None
+    backupPath = None
+    windowsUpdaterLaunched = False
+    replacementError = None
 
     try:
         # Get target executable path (either specified or current)
@@ -273,9 +387,11 @@ def executeInstallScript(scriptPath: Path, targetVersion: str, osType: str, targ
 
         flushPrint(_("Target executable: {path}").format(path=currentExecutable))
 
-        # Backup existing file if it exists (copy, not move, since it might be running)
-        backupPath = None
-        if currentExecutable.exists():
+        useWindowsUpdater = osType == "windows" and not targetBinary
+
+        # Backup existing file if it exists (copy, not move, since it might be running).
+        # Windows self-upgrade is handled by ffl-updater.exe, which creates its own backup.
+        if currentExecutable.exists() and not useWindowsUpdater:
             backupPath = currentExecutable.with_suffix(currentExecutable.suffix + '.old')
             try:
                 shutil.copy2(currentExecutable, backupPath)
@@ -396,7 +512,8 @@ def executeInstallScript(scriptPath: Path, targetVersion: str, osType: str, targ
 
         # Execute and stream output
         process = subprocess.Popen(
-            command, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+            command, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding='utf-8', errors='replace', bufsize=1
         )
 
         # Stream output in real-time
@@ -409,6 +526,20 @@ def executeInstallScript(scriptPath: Path, targetVersion: str, osType: str, targ
 
         if returncode != 0:
             raise UpgradeError(_("Install script failed with exit code {code}").format(code=returncode))
+
+        if useWindowsUpdater:
+            if not tempTarget.exists():
+                raise UpgradeError(_("Install script completed, but upgraded binary was not created: {path}").format(
+                    path=tempTarget
+                ))
+
+            updaterPath = downloadWindowsUpdater(targetVersion)
+            launchWindowsUpdater(updaterPath, tempTarget, currentExecutable)
+            windowsUpdaterLaunched = True
+
+            flushPrint(_("Windows updater started. The upgrade will be applied after this process exits."))
+            flushPrint("")
+            return True
 
         return True
 
@@ -439,61 +570,88 @@ def executeInstallScript(scriptPath: Path, targetVersion: str, osType: str, targ
                     logFunc = logger.warning if errorLevel == 'warning' else logger.debug
                     logFunc(f'{errorMsg}: {e}')
 
-        # Move temp file to target location if it exists
-        if tempTarget.exists():
-            try:
-                # Try to rename current executable out of the way first
-                # This works on Unix/Linux even for running executables
-                # On Windows, it only works if the executable is not running (development mode)
-                if currentExecutable.exists():
-                    tempOldPath = currentExecutable.with_suffix(currentExecutable.suffix + '.tmp')
-                    try:
-                        currentExecutable.rename(tempOldPath)
-                        logger.debug(f'Renamed {currentExecutable} to {tempOldPath}')
-                    except OSError as e:
-                        logger.debug(f'Could not rename current executable (might be running): {e}')
+        if windowsUpdaterLaunched:
+            # Leave tempTarget and ffl-updater.exe for the helper process.
+            logger.debug('Windows updater launched; skipping in-process replacement and temp cleanup')
+        else:
+            # Move temp file to target location if it exists
+            if tempTarget and tempTarget.exists():
+                try:
+                    # Try to rename current executable out of the way first
+                    # This works on Unix/Linux even for running executables
+                    # On Windows, it only works if the executable is not running (development mode)
+                    if currentExecutable and currentExecutable.exists():
+                        tempOldPath = currentExecutable.with_suffix(currentExecutable.suffix + '.tmp')
+                        try:
+                            currentExecutable.rename(tempOldPath)
+                            logger.debug(f'Renamed {currentExecutable} to {tempOldPath}')
+                        except OSError as e:
+                            logger.debug(f'Could not rename current executable (might be running): {e}')
+                            tempOldPath = None
+                    else:
                         tempOldPath = None
-                else:
-                    tempOldPath = None
 
-                # Move new binary into place
-                shutil.move(str(tempTarget), str(currentExecutable))
-                logger.debug(f'Moved {tempTarget} to {currentExecutable}')
+                    # Move new binary into place
+                    shutil.move(str(tempTarget), str(currentExecutable))
+                    logger.debug(f'Moved {tempTarget} to {currentExecutable}')
 
-                # Clean up the temporarily renamed old file
-                if tempOldPath and tempOldPath.exists():
+                    # Clean up the temporarily renamed old file
+                    if tempOldPath and tempOldPath.exists():
+                        cleanupFile(
+                            tempOldPath,
+                            f'Deleted old executable {tempOldPath}',
+                            'Could not delete old executable',
+                            errorLevel='debug'
+                        )
+
+                    # Clean up backup
                     cleanupFile(
-                        tempOldPath,
-                        f'Deleted old executable {tempOldPath}',
-                        'Could not delete old executable',
-                        errorLevel='debug'
+                        backupPath,
+                        f'Deleted backup file {backupPath}',
+                        'Could not delete backup file',
+                        errorLevel='warning'
                     )
+                except OSError as e:
+                    logger.error(f'Failed to move upgrade file: {e}')
+                    restoreBackup()
+                    replacementError = UpgradeError(
+                        _("Failed to replace binary with upgraded version: {error}").format(error=e)
+                    )
+            else:
+                # Upgrade failed - restore backup
+                restoreBackup()
 
-                # Clean up backup
+            # Clean up temp file if it still exists
+            cleanupFile(tempTarget, f'Cleaned up temp file {tempTarget}', 'Could not delete temp file')
+
+            # Clean up .tmp file if it still exists (in case move failed)
+            if tempOldPath:
                 cleanupFile(
-                    backupPath,
-                    f'Deleted backup file {backupPath}',
-                    'Could not delete backup file',
+                    tempOldPath,
+                    f'Cleaned up temp old file {tempOldPath}',
+                    'Could not delete temp old file',
                     errorLevel='warning'
                 )
-            except OSError as e:
-                logger.error(f'Failed to move upgrade file: {e}')
-                restoreBackup()
-        else:
-            # Upgrade failed - restore backup
-            restoreBackup()
 
-        # Clean up temp file if it still exists
-        cleanupFile(tempTarget, f'Cleaned up temp file {tempTarget}', 'Could not delete temp file')
+            # Raise replacement error only when the try block completed normally
+            # (sys.exc_info()[1] is not None means an exception is already propagating)
+            if replacementError is not None and sys.exc_info()[1] is None:
+                raise replacementError
 
-        # Clean up .tmp file if it still exists (in case move failed)
-        if tempOldPath:
-            cleanupFile(
-                tempOldPath,
-                f'Cleaned up temp old file {tempOldPath}',
-                'Could not delete temp old file',
-                errorLevel='warning'
-            )
+
+def _showManualInstallHint(osType: Optional[str], settingsGetter=None) -> None:
+    flushPrint(_("To install manually, run:"))
+    
+    isAPE = settingsGetter and settingsGetter.isRunOnCosmopolitanLibc()
+    if isAPE:
+        apeVariant = detectAPEVariant()
+        flushPrint(f'  curl -fL https://fastfilelink.com/{apeVariant} -o {apeVariant} && chmod +x {apeVariant}')
+    elif osType == "windows":
+        flushPrint('  iwr -useb https://fastfilelink.com/install.ps1 | iex')
+    else:
+        flushPrint('  curl -fsSL https://fastfilelink.com/install.sh | bash')
+        
+    flushPrint("")
 
 
 def performUpgrade(
@@ -536,7 +694,9 @@ def performUpgrade(
     if not latestVersion:
         if not targetVersion:
             sendException(logger, Exception(_("Could not determine latest version from GitHub")))
+            _showManualInstallHint(osType, settingsGetter)
             return False
+            
         logger.warning(_("Could not check latest version from GitHub, proceeding with specified version"))
     else:
         flushPrint(_("Latest version available: {version}").format(version=latestVersion))
@@ -561,6 +721,8 @@ def performUpgrade(
             targetVersion = f"v{latestVersion}"
         else:
             sendException(logger, Exception(_("Could not determine target version from GitHub")))
+            _showManualInstallHint(osType, settingsGetter)
+            
             return False
 
     flushPrint(_("Upgrading to {version}...").format(version=targetVersion))
@@ -576,6 +738,8 @@ def performUpgrade(
             osType = "darwin"
         else:
             sendException(logger, UpgradeError(_(f"Unsupported operating system: {platform.system()=}")))
+            _showManualInstallHint(osType, settingsGetter)
+            
             return False
 
     flushPrint(_("Platform: {os}").format(os=osType))
@@ -583,19 +747,28 @@ def performUpgrade(
 
     # Download install script
     try:
-        scriptPath = downloadInstallScript(osType)
+        scriptPath = downloadInstallScript(osType, targetVersion)
     except UpgradeError as e:
         sendException(logger, e)
+        _showManualInstallHint(osType, settingsGetter)
+        
         return False
 
     # Execute install script
     success = False
+    showHint = True
     try:
         success = executeInstallScript(scriptPath, targetVersion, osType, targetBinary)
 
         if success:
+            showHint = False
             flushPrint("")
-            flushPrint(_("✓ Successfully upgraded to {version}!").format(version=targetVersion))
+            if osType == "windows" and not targetBinary:
+                flushPrint(_("✓ Upgrade prepared for {version}. It will finish after this process exits.").format(
+                    version=targetVersion
+                ))
+            else:
+                flushPrint(_("✓ Successfully upgraded to {version}!").format(version=targetVersion))
             flushPrint("")
             return True
         else:
@@ -605,6 +778,9 @@ def performUpgrade(
         sendException(logger, e)
         return False
     finally:
+        if showHint:
+            _showManualInstallHint(osType, settingsGetter)
+            
         # Handle both Logger and LoggerAdapter
         underlyingLogger = getattr(logger, 'logger', logger)
         if underlyingLogger.getEffectiveLevel() == logging.DEBUG and not success:

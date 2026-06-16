@@ -7,6 +7,7 @@
     "cli":"开源 CLI 版本",
     "mcp":"MCP",
     "featureList":"完整功能列表",
+    "serverUpload":"使用云端上传的好处",
     "comparison":"竞品比较",
     "p2pVsCloud":"直传与上云怎么选",
     "faq":"FAQ",
@@ -22,6 +23,8 @@
     "clientArea": "个人设定",
     "createNewShare":"建立新分享",
     "logout":"登出",
+    "login": "登入",
+    "getFreeAccount": "取得免费帐号",
     "menu": "选单",
     "freeDownloadModal": {
         "recommendStore": "为了方便您使用，我们建议您从商店下载软体。",

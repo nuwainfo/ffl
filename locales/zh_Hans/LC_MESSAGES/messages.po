@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-04-06 13:21+0800\n"
+"POT-Creation-Date: 2026-06-13 10:49+0800\n"
 "PO-Revision-Date: 2025-12-21 08:43+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -160,10 +160,6 @@ msgstr "VFS 伺服器已停止。"
 msgid "Error: Please select a file or folder to share"
 msgstr "错误：请选择要分享的文件或文件夹"
 
-#, python-brace-format
-msgid "{file} does not exist!"
-msgstr "{file} 不存在！"
-
 msgid "Error: Upload functionality requires Upload addon (addons/Upload.py)"
 msgstr "错误：上传功能需要 Upload 附加元件 (addons/Upload.py)"
 
@@ -226,6 +222,9 @@ msgstr ""
 
 msgid "Unable to get uploaded link"
 msgstr "无法获取上传链接"
+
+msgid "Download complete"
+msgstr ""
 
 #, python-brace-format
 msgid "Downloaded: {outputPath}"
@@ -460,6 +459,11 @@ msgid ""
 "only, works with --port)"
 msgstr "启动 VFS 伺服器并提供 vfs:// URI 而不是 HTTPS 连结（仅限 P2P 模式，与 --port 一起使用）"
 
+msgid ""
+"Enable or disable stdin caching ('off' means a second read raises an "
+"error)"
+msgstr ""
+
 #, python-brace-format
 msgid "Invalid log level '{logLevel}'. Valid levels are: {validLevels}"
 msgstr "无效的记录层级 '{logLevel}'。有效层级为：{validLevels}"
@@ -531,6 +535,11 @@ msgstr "下载时提供的取件码（与 --recipient-auth pickup 或 pubkey+pic
 #, python-brace-format
 msgid "Path to recipient's RSA private key file ({ext}) for pubkey auth"
 msgstr "用于公钥验证的收件人 RSA 私钥文件路径（{ext}）"
+
+msgid ""
+"Write downloaded content to stdout instead of a file (useful for piping, "
+"e.g. | tar -xf -)"
+msgstr ""
 
 msgid "Upgrade to latest version or specified version"
 msgstr "升级到最新版本或指定版本"
@@ -604,6 +613,10 @@ msgstr "错误：文件列表未找到：{path}"
 #, python-brace-format
 msgid "Error: file list is empty: {path}"
 msgstr "错误：文件列表为空：{path}"
+
+#, python-brace-format
+msgid "Error: file not found: {path}"
+msgstr ""
 
 msgid "Error: --upload option requires Upload addon (addons/Upload.py)"
 msgstr "错误：--upload 选项需要 Upload 附加元件（addons/Upload.py）"
@@ -1122,4 +1135,7 @@ msgstr "正在尝试 WebRTC 下载..."
 
 #~ msgid "Choose a file or folder you want to share (use '-' for stdin)"
 #~ msgstr "选择要分享的文件或文件夹（使用 '-' 表示标准输入）"
+
+#~ msgid "{file} does not exist!"
+#~ msgstr "{file} 不存在！"
 

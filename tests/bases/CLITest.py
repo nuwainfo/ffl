@@ -938,7 +938,9 @@ class CLIArgumentParsingTest(unittest.TestCase):
         env['FFL_YES'] = 'True'
 
         try:
-            result = subprocess.run(command, capture_output=True, text=True, timeout=10, env=env)
+            result = subprocess.run(
+                command, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10, env=env
+            )
             return result.stdout + result.stderr, result.returncode
         except subprocess.TimeoutExpired:
             return "Process timed out", 1

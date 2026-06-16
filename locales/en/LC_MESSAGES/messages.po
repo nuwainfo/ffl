@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-04-06 13:21+0800\n"
+"POT-Creation-Date: 2026-06-13 10:49+0800\n"
 "PO-Revision-Date: 2025-12-17 09:22+0800\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -147,10 +147,6 @@ msgstr ""
 msgid "Error: Please select a file or folder to share"
 msgstr ""
 
-#, python-brace-format
-msgid "{file} does not exist!"
-msgstr ""
-
 msgid "Error: Upload functionality requires Upload addon (addons/Upload.py)"
 msgstr ""
 
@@ -210,6 +206,9 @@ msgid ""
 msgstr ""
 
 msgid "Unable to get uploaded link"
+msgstr ""
+
+msgid "Download complete"
 msgstr ""
 
 #, python-brace-format
@@ -433,6 +432,11 @@ msgid ""
 "only, works with --port)"
 msgstr ""
 
+msgid ""
+"Enable or disable stdin caching ('off' means a second read raises an "
+"error)"
+msgstr ""
+
 #, python-brace-format
 msgid "Invalid log level '{logLevel}'. Valid levels are: {validLevels}"
 msgstr ""
@@ -498,6 +502,11 @@ msgstr ""
 
 #, python-brace-format
 msgid "Path to recipient's RSA private key file ({ext}) for pubkey auth"
+msgstr ""
+
+msgid ""
+"Write downloaded content to stdout instead of a file (useful for piping, "
+"e.g. | tar -xf -)"
 msgstr ""
 
 msgid "Upgrade to latest version or specified version"
@@ -569,6 +578,10 @@ msgstr ""
 
 #, python-brace-format
 msgid "Error: file list is empty: {path}"
+msgstr ""
+
+#, python-brace-format
+msgid "Error: file not found: {path}"
 msgstr ""
 
 msgid "Error: --upload option requires Upload addon (addons/Upload.py)"
@@ -1077,5 +1090,8 @@ msgstr ""
 #~ msgstr ""
 
 #~ msgid "Choose a file or folder you want to share (use '-' for stdin)"
+#~ msgstr ""
+
+#~ msgid "{file} does not exist!"
 #~ msgstr ""
 

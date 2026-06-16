@@ -72,6 +72,11 @@ def isProcessRunning(pid):
         return True
 
 
+# Sentinel distinguishing "use the default cwd" from "explicitly pass cwd=None"
+# (None is a legitimate value, meaning "inherit the caller's own cwd").
+_UNSET = object()
+
+
 # ---------------------------
 # Base test class
 # ---------------------------
@@ -438,8 +443,8 @@ class FastFileLinkTestBase(unittest.TestCase):
         """
         print(f"[Test] Downloading file using Core.py from: {shareLink}")
 
-        # Prepare download command
-        downloadArgs = [sys.executable, "Core.py", "--cli"]
+        # Build download args: --cli [globalArgs] <shareLink> [downloadSpecificArgs] [-o outputPath]
+        downloadArgs = ["--cli"]
 
         # Separate global args (like --log-level) from download-specific args (like --resume)
         globalArgs = []
@@ -468,12 +473,7 @@ class FastFileLinkTestBase(unittest.TestCase):
         if outputPath:
             downloadArgs.extend(["-o", outputPath])
 
-        # Prepare environment variables
-        downloadEnv = os.environ.copy()
-        if extraEnvVars:
-            downloadEnv.update(extraEnvVars)
-
-        # Prepare output capture
+        # Prepare output capture (log file, so callers can re-read it via _updateCapturedOutput)
         logPath = None
         logFile = None
         if captureOutputIn is not None:
@@ -483,56 +483,32 @@ class FastFileLinkTestBase(unittest.TestCase):
             captureOutputIn["logFile"] = logFile
 
         try:
-            # Run download process
-            print(f"[Test] Running download command: {' '.join(downloadArgs)}")
+            # disableGuiAddon=False: `--cli` already forces CLI mode, matching prior behavior
+            output, returnCode = self._runCoreCommand(
+                downloadArgs,
+                extraEnvVars=extraEnvVars,
+                disableGuiAddon=False,
+                timeout=120,
+                outputTarget=logFile,
+            )
 
-            if logFile:
-                downloadProcess = subprocess.Popen(
-                    downloadArgs,
-                    cwd=os.path.dirname(os.path.abspath(__file__ + "/..")),
-                    env=downloadEnv,
-                    stdout=logFile,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding='utf-8',
-                    errors='replace'
-                )
-            else:
-                downloadProcess = subprocess.Popen(
-                    downloadArgs,
-                    cwd=os.path.dirname(os.path.abspath(__file__ + "/..")),
-                    env=downloadEnv,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding='utf-8',
-                    errors='replace'
-                )
-
-            # Wait for download to complete
-            stdout, stderr = downloadProcess.communicate(timeout=120)
-
-            if downloadProcess.returncode != 0:
-                error_msg = f"Download process failed with exit code {downloadProcess.returncode}"
+            if returnCode != 0:
+                errorMessage = f"Download process failed with exit code {returnCode}"
 
                 # Read from log file if output was captured to file
                 if logFile:
                     logFile.close()
                     try:
                         with open(logPath, 'r', encoding='utf-8', errors='replace') as f:
-                            output = f.read()
-                            if output:
-                                error_msg += f"\n--- Full Client Output ---\n{output}\n--- End Output ---"
+                            fileOutput = f.read()
+                            if fileOutput:
+                                errorMessage += f"\n--- Full Client Output ---\n{fileOutput}\n--- End Output ---"
                     except Exception as e:
-                        error_msg += f"\n(Failed to read log file: {e})"
-                else:
-                    # Read from stdout/stderr if captured directly
-                    if stdout:
-                        error_msg += f"\nOutput: {stdout}"
-                    if stderr:
-                        error_msg += f"\nError: {stderr}"
+                        errorMessage += f"\n(Failed to read log file: {e})"
+                elif output:
+                    errorMessage += f"\nOutput: {output}"
 
-                raise AssertionError(error_msg)
+                raise AssertionError(errorMessage)
 
             print("[Test] Download completed successfully")
 
@@ -542,8 +518,6 @@ class FastFileLinkTestBase(unittest.TestCase):
                 logFile.close()
                 with open(logPath, 'r', encoding='utf-8', errors='replace') as f:
                     output = f.read()
-            else:
-                output = stdout or ""
 
             # Look for "Downloaded: <path>" pattern
             downloadedPath = None
@@ -566,12 +540,128 @@ class FastFileLinkTestBase(unittest.TestCase):
             print(f"[Test] Downloaded file saved to: {downloadedPath}")
             return downloadedPath
 
-        except subprocess.TimeoutExpired:
-            downloadProcess.kill()
-            raise AssertionError("Download process timed out")
         finally:
             if logFile and not logFile.closed:
                 logFile.close()
+
+    # -----------------------------------------------------------------
+    # Shared FFL CLI process runner
+    # -----------------------------------------------------------------
+    # _runCoreCommand() is the one place that knows how to build the command
+    # line / environment and launch Core.py (or an external FFL binary).
+    # _downloadWithCore() (the `download` subcommand) and _startFastFileLink()
+    # (the `share` subcommand) both delegate to it, adding only their own
+    # command-specific argument placement and result parsing on top.
+
+    def _buildCoreCommand(self, args, commandPrefix=None):
+        """Build the full command line: a prefix (default: `python Core.py`) plus args."""
+        prefix = list(commandPrefix) if commandPrefix else [sys.executable, "Core.py"]
+        return prefix + list(args)
+
+    def _buildCoreEnv(self, extraEnvVars=None, disableGuiAddon=True):
+        """Build the environment dict for launching an FFL CLI subprocess."""
+        env = os.environ.copy()
+        
+        if disableGuiAddon:
+            env['DISABLE_ADDONS'] = 'GUI'
+            env['FFL_YES'] = 'True'
+            
+        if extraEnvVars:
+            for key, value in extraEnvVars.items():
+                env[key] = str(value)
+                
+        return env
+
+    def _projectRootDir(self):
+        """Absolute path to the project root (where Core.py lives)."""
+        return os.path.dirname(os.path.abspath(__file__ + "/.."))
+
+    def _runCoreCommand(
+        self,
+        args,
+        commandPrefix=None,
+        extraEnvVars=None,
+        disableGuiAddon=True,
+        cwd=_UNSET,
+        timeout=30,
+        stdin=None,
+        outputTarget=None,
+        passthrough=False,
+        wait=True,
+        bufsize=1,
+        creationFlags=0,
+    ):
+        """
+        Build an FFL command line + environment and launch it.
+
+        This is the shared low-level primitive behind:
+          - _downloadWithCore (the `download` subcommand): wait=True, parses the
+            "Downloaded:" line from the captured output.
+          - _startFastFileLink (the `share` subcommand): wait=False, since the
+            process is a long-running server that must be polled for a JSON
+            marker file while it keeps running, rather than waited on.
+          - One-shot subcommands (`shell`, `keygen`, `--version`, ...): the
+            wait=True default returns (output, returncode) directly.
+
+        Args:
+            args (list): CLI arguments appended after the command prefix
+            commandPrefix (list, optional): Override for [sys.executable, "Core.py"]
+                (e.g. an external binary like ["./ffl.com"])
+            extraEnvVars (dict, optional): Additional/overriding environment variables
+            disableGuiAddon (bool): Set DISABLE_ADDONS=GUI / FFL_YES=True. Most
+                one-shot subcommands want this; `download`/`share` don't need it
+                since `--cli` already forces CLI mode and FFL_YES is already
+                inherited from the test's own setUp().
+            cwd (str, optional): Working directory; defaults to the project root.
+                Pass explicit None to inherit the caller's own working directory.
+            timeout (int): Seconds to wait when wait=True
+            stdin: Optional file handle to pipe into stdin
+            outputTarget: Optional open file object to redirect combined
+                stdout+stderr into, instead of capturing via pipe (avoids
+                pipe-buffer deadlocks for long-running/large-output processes)
+            passthrough (bool): Let stdout/stderr inherit the parent console
+                instead of being captured at all (only meaningful with wait=False)
+            wait (bool): If True, block until the process exits and return
+                (output, returncode). If False, return the started
+                subprocess.Popen immediately so the caller can poll/manage a
+                long-running process itself.
+            bufsize, creationFlags: Passed through to subprocess.Popen
+
+        Returns:
+            (output, returncode) if wait=True, otherwise the live subprocess.Popen.
+        """
+        command = self._buildCoreCommand(args, commandPrefix)
+        env = self._buildCoreEnv(extraEnvVars, disableGuiAddon)
+        runCwd = self._projectRootDir() if cwd is _UNSET else cwd
+
+        try:
+            print(f"[Test] Running command: {' '.join(command)}")
+        except UnicodeEncodeError:
+            print("[Test] Running command: <contains unicode characters>")
+
+        popenKwargs = dict(stdin=stdin, env=env, cwd=runCwd, text=True, bufsize=bufsize, creationflags=creationFlags)
+        if passthrough:
+            popenKwargs['universal_newlines'] = True
+        else:
+            popenKwargs.update(
+                stdout=outputTarget or subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                encoding='utf-8',
+                errors='replace',
+            )
+
+        process = subprocess.Popen(command, **popenKwargs)
+
+        if not wait:
+            return process
+
+        try:
+            stdout, _ = process.communicate(timeout=timeout)
+            return stdout or "", process.returncode
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            return "Process timed out", 1
 
     def _updateCapturedOutput(self, captureDict):
         """
@@ -849,15 +939,16 @@ class FastFileLinkTestBase(unittest.TestCase):
                 )
             print(f"[Test] Mode: {'P2P' if p2p else 'Server'}")
 
-            # Prepare the command - use 'share' subcommand for file sharing
+            # Prepare the args - use 'share' subcommand for file sharing
+            # (commandPrefix is prepended by _runCoreCommand)
             sourcePath = "-" if stdinInputPath else self.testFilePath
-            command = commandPrefix + ["share", sourcePath, "--json", self.jsonOutputPath]
+            coreArgs = ["share", sourcePath, "--json", self.jsonOutputPath]
             if stdinInputPath and stdinFileName:
-                command.extend(["--name", stdinFileName])
+                coreArgs.extend(["--name", stdinFileName])
 
             # Add network instability parameters if needed
             if useNetworkSimulation:
-                command.extend([
+                coreArgs.extend([
                     "--network-failure-rate",
                     str(networkFailureRate),
                     "--max-consecutive-failures",
@@ -866,91 +957,73 @@ class FastFileLinkTestBase(unittest.TestCase):
 
             # Use debug logging tests to help diagnose issues
             if os.getenv("TEST_CASE_DEBUG") == "True":
-                command.extend([
+                coreArgs.extend([
                     "--log-level",
                     os.path.join(os.path.dirname(__file__), "presets", "TestCaseDebugLogging.json")
                 ])
 
             # Add mode-specific parameters
             if not p2p:
-                command.extend(["--upload", "3 hours"])
+                coreArgs.extend(["--upload", "3 hours"])
 
             # Add extra arguments if provided
             if extraArgs:
-                command.extend(extraArgs)
+                coreArgs.extend(extraArgs)
 
-            # Print command with encoding handling for Windows console
-            try:
-                print(f"[Test] Command: {' '.join(command)}")
-            except UnicodeEncodeError:
-                print(f"[Test] Command: <contains unicode characters>")
             if showOutput:
                 print(f"[Test] Real-time output enabled - you will see live progress...")
 
-            # Prepare environment variables
-            env = os.environ.copy()
-
-            # Add environment variable to force output flushing
-            env['PYTHONUNBUFFERED'] = '1'
+            # Build the environment overrides specific to this long-running share/upload process
+            # (PYTHONUNBUFFERED for prompt output, Xvfb DISPLAY auto-detection on Linux, the test
+            # server URL, and finally the caller's own extraEnvVars, which can override any of these)
+            mergedEnvVars = {'PYTHONUNBUFFERED': '1'}
 
             # Auto-detect Xvfb display for wx support on Linux (when DISPLAY not already set)
-            if sys.platform.startswith('linux') and 'DISPLAY' not in env:
+            if sys.platform.startswith('linux') and 'DISPLAY' not in os.environ:
                 import glob as _glob
                 for xLock in sorted(_glob.glob('/tmp/.X*-lock')):
                     displayNum = xLock.replace('/tmp/.X', '').replace('-lock', '')
-                    env['DISPLAY'] = f':{displayNum}'
+                    mergedEnvVars['DISPLAY'] = f':{displayNum}'
                     break
 
             # Add test server environment variable if using test server
             if useTestServer:
-                env['FILESHARE_TEST'] = LOCAL_TEST_SERVER_URL
+                mergedEnvVars['FILESHARE_TEST'] = LOCAL_TEST_SERVER_URL
                 print(f"[Test] Using test server: FILESHARE_TEST={LOCAL_TEST_SERVER_URL}")
 
             # Add extra environment variables if provided
             if extraEnvVars:
                 for key, value in extraEnvVars.items():
-                    env[key] = str(value)
+                    mergedEnvVars[key] = str(value)
                     print(f"[Test] Extra env var: {key}={value}")
 
-            # Launch in a separate process with conditional output capture
-            stdinHandle = open(stdinInputPath, 'rb') if stdinInputPath else None
-            if showOutput:
-                # Real-time output: don't capture stdout/stderr, let them show directly
-                # Force line buffering to ensure output appears immediately
-                creationFlags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
-                try:
-                    self.coreProcess = subprocess.Popen(
-                        command,
-                        stdin=stdinHandle,
-                        text=True,
-                        env=env,
-                        cwd=workingDirectory,
-                        bufsize=1, # Line buffered
-                        universal_newlines=True,
-                        creationflags=creationFlags
-                    )
-                finally:
-                    if stdinHandle:
-                        stdinHandle.close()
-            else:
+            if not showOutput:
                 # File-based output: redirect stdout/stderr to log file to avoid pipe buffer deadlock
                 self._procLogFile = open(self.procLogPath, "w+", encoding="utf-8", buffering=1)
-                creationFlags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
-                try:
-                    self.coreProcess = subprocess.Popen(
-                        command,
-                        stdin=stdinHandle,
-                        stdout=self._procLogFile,
-                        stderr=subprocess.STDOUT, # Merge stderr into stdout
-                        text=True,
-                        env=env,
-                        cwd=workingDirectory,
-                        bufsize=1, # Line buffered
-                        creationflags=creationFlags
-                    )
-                finally:
-                    if stdinHandle:
-                        stdinHandle.close()
+
+            # Launch in a separate process with conditional output capture.
+            # disableGuiAddon=False: `--cli` already forces CLI mode and FFL_YES is already
+            # inherited from the test's own setUp(), matching prior behavior.
+            # wait=False: this is a long-running server process, polled below for the JSON
+            # marker file rather than waited on for completion.
+            creationFlags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
+            stdinHandle = open(stdinInputPath, 'rb') if stdinInputPath else None
+            try:
+                self.coreProcess = self._runCoreCommand(
+                    coreArgs,
+                    commandPrefix=commandPrefix,
+                    extraEnvVars=mergedEnvVars,
+                    disableGuiAddon=False,
+                    cwd=workingDirectory,
+                    stdin=stdinHandle,
+                    outputTarget=None if showOutput else self._procLogFile,
+                    passthrough=showOutput,
+                    wait=False,
+                    creationFlags=creationFlags,
+                )
+            finally:
+                if stdinHandle:
+                    stdinHandle.close()
 
             # Determine appropriate timeout
             if timeout is None:

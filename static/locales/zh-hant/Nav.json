@@ -7,6 +7,7 @@
     "cli":"開源 CLI 版本",
     "mcp":"MCP",
     "featureList":"完整功能列表",
+    "serverUpload":"使用雲端上傳的好處",
     "comparison":"競品比較",
     "p2pVsCloud":"直傳與上雲怎麼選",
     "faq":"FAQ",
@@ -22,6 +23,8 @@
     "clientArea": "個人設定",
     "createNewShare":"建立新分享",
     "logout":"登出",
+    "login": "登入",
+    "getFreeAccount": "取得免費帳號",
     "menu": "選單",
     "freeDownloadModal": {
         "recommendStore": "為了方便您使用，我們建議您從商店下載軟體。",

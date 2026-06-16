@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-04-06 13:21+0800\n"
+"POT-Creation-Date: 2026-06-13 10:49+0800\n"
 "PO-Revision-Date: 2025-12-21 14:22+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -615,12 +615,6 @@ msgstr ""
 "🌐 您的浏览器已开启以完成登入并启用此装置。🌐\n"
 "如要取消，请点选下方按钮。"
 
-msgid "Device activation canceled."
-msgstr "装置启用已取消。"
-
-msgid "Canceled"
-msgstr "已取消"
-
 msgid "Device activation successful!"
 msgstr "装置启用成功！"
 
@@ -632,6 +626,27 @@ msgstr "装置启用失败。"
 
 msgid "Login Error"
 msgstr "登入错误"
+
+msgid "Device activation canceled."
+msgstr "装置启用已取消。"
+
+msgid "Canceled"
+msgstr "已取消"
+
+msgid ""
+"Claim your free account — it's completely free!\n"
+"You'll receive 5 bonus points after checkout.\n"
+"\n"
+"After claiming, activate your device right away:\n"
+"Go to Account → Activate This Device in the menu."
+msgstr ""
+"免费领取账户，结账后即获赠 5 点数！\n"
+"\n"
+"领取后请立即激活设备：\n"
+"前往菜单「账户 → 激活此设备」即可完成。"
+
+msgid "Next Steps"
+msgstr "后续步骤"
 
 msgid "👤 Account – Free"
 msgstr "👤 帐户 – 免费版"
@@ -659,6 +674,28 @@ msgstr "🧅 使用 Tor 增强隐私"
 
 msgid "📊 Enable Error Reporting"
 msgstr "📊 启用错误回报"
+
+msgid "Show in OS Context Menu"
+msgstr "在系统右键菜单中显示"
+
+msgid "Show in OS Context Menu (Unavailable)"
+msgstr "在系统右键菜单中显示（不可用）"
+
+msgid "This feature is unavailable on this build."
+msgstr "此功能在此版本中不可用。"
+
+msgid "OS Context Menu"
+msgstr "系统右键菜单"
+
+#, python-brace-format
+msgid ""
+"Failed to update OS context menu integration.\n"
+"\n"
+"{error}"
+msgstr ""
+"更新系统右键菜单集成失败。\n"
+"\n"
+"{error}"
 
 msgid "🔐 User Settings"
 msgstr "🔐 使用者设定"
@@ -813,21 +850,6 @@ msgstr ""
 "2. 使用注册邮箱激活设备\n"
 "3. 再次使用上传模式分享文件"
 
-msgid "Next Steps"
-msgstr "后续步骤"
-
-msgid ""
-"Claim your free account — it's completely free!\n"
-"You'll receive 5 bonus points after checkout.\n"
-"\n"
-"After claiming, activate your device right away:\n"
-"Go to Account → Activate This Device in the menu."
-msgstr ""
-"免费领取账户，结账后即获赠 5 点数！\n"
-"\n"
-"领取后请立即激活设备：\n"
-"前往菜单「账户 → 激活此设备」即可完成。"
-
 msgid "Upload to Cloud"
 msgstr "上传到云端"
 
@@ -849,11 +871,11 @@ msgstr "消耗 1 点数  ·  当前余额：{current}"
 msgid "Not enough points  ·  You need 1, you have {current}"
 msgstr "点数不足  ·  需要 1 点，您当前有 {current} 点"
 
-msgid "🎁 Claim Free Account"
-msgstr "🎁 免费领取账户"
-
 msgid "Claim a free account to receive 5 bonus points."
 msgstr "领取免费账户即可获得 5 点数。"
+
+msgid "🎁 Claim Free Account"
+msgstr "🎁 免费领取账户"
 
 msgid "🛒 Buy Points"
 msgstr "🛒 购买点数"
@@ -928,6 +950,124 @@ msgstr "快档连结"
 
 msgid "FastFileLink makes file sharing fast, simple, and secure."
 msgstr "快档连结让档案分享变得快速、简单又安全。"
+
+msgid "Share with FastFileLink"
+msgstr "使用快档连结分享"
+
+msgid "Share"
+msgstr "分享"
+
+msgid "Share  —  One Download Only"
+msgstr "分享 — 仅限一次下载"
+
+msgid "Share Encrypted"
+msgstr "加密分享"
+
+msgid "Share Encrypted  —  One Download Only"
+msgstr "加密分享 — 仅限一次下载"
+
+msgid "FastFileLink Share"
+msgstr "快档连结分享"
+
+msgid "FastFileLink Share Once"
+msgstr "快档连结分享（一次）"
+
+msgid "FastFileLink Share Encrypted"
+msgstr "快档连结加密分享"
+
+msgid "FastFileLink Share Encrypted Once"
+msgstr "快档连结加密分享（一次）"
+
+msgid "OS context menu integration is not available on this platform."
+msgstr "此平台不支持系统右键菜单集成。"
+
+msgid "FastFileLink could not verify OS context menu registration."
+msgstr "快档连结无法验证系统右键菜单的注册。"
+
+msgid "Windows registry support is unavailable in this runtime."
+msgstr "此运行环境不支持 Windows 注册表访问。"
+
+msgid "OS context menu integration is unavailable in Windows Store builds."
+msgstr "Windows Store 版本不支持系统右键菜单集成。"
+
+msgid "Unable to locate the FastFileLink executable."
+msgstr "找不到快档连结可执行文件。"
+
+msgid "FastFileLink could not read the Windows context menu registration."
+msgstr "快档连结无法读取 Windows 右键菜单的注册。"
+
+msgid "OS context menu integration is unavailable in sandboxed macOS builds."
+msgstr "沙盒化的 macOS 版本不支持系统右键菜单集成。"
+
+msgid "OS context menu integration on macOS requires the packaged .app bundle."
+msgstr "macOS 系统右键菜单集成需要打包的 .app 套件。"
+
+msgid "Unable to locate Core.py for shell integration."
+msgstr "找不到 Shell 集成所需的 Core.py。"
+
+msgid "FastFileLink could not read the macOS Services registration."
+msgstr "快档连结无法读取 macOS 服务的注册。"
+
+msgid "Open the selected file or folder in FastFileLink"
+msgstr "在快档连结中打开选取的文件或文件夹"
+
+msgid "Windows Explorer (Context Menu)"
+msgstr "Windows 文件资源管理器（右键菜单）"
+
+msgid "macOS Services (Finder)"
+msgstr "macOS 服务（Finder）"
+
+msgid "Linux (Open With)"
+msgstr "Linux（用此程序打开）"
+
+msgid "Unknown"
+msgstr "未知"
+
+msgid "OS Context Menu Integration"
+msgstr "系统右键菜单集成"
+
+msgid "  Status:   Unavailable"
+msgstr "  状态：   不可用"
+
+#, python-brace-format
+msgid "  Reason:   {reason}"
+msgstr "  原因：   {reason}"
+
+#, python-brace-format
+msgid "  Platform: {platform}"
+msgstr "  平台：{platform}"
+
+msgid "  Status:   Installed"
+msgstr "  状态：   已安装"
+
+msgid "  Status:   Not installed"
+msgstr "  状态：   未安装"
+
+msgid "Run 'ffl shell --install' to add FastFileLink to your OS context menu."
+msgstr "执行 'ffl shell --install' 将快档连结加入系统右键菜单。"
+
+#, python-brace-format
+msgid "Error: {reason}"
+msgstr "错误：{reason}"
+
+msgid "OS context menu integration installed."
+msgstr "系统右键菜单集成已安装。"
+
+#, python-brace-format
+msgid "Error: {error}"
+msgstr "错误：{error}"
+
+msgid "OS context menu integration removed."
+msgstr "系统右键菜单集成已移除。"
+
+msgid "Install OS context menu (right-click) integration"
+msgstr "安装系统右键菜单集成"
+
+msgid "Remove OS context menu (right-click) integration"
+msgstr "移除系统右键菜单集成"
+
+msgid "Manage OS context menu (right-click) integration"
+msgstr "管理系统右键菜单集成"
 
 #, python-brace-format
 msgid "Set preferred tunnel for future runs. Available: {tunnels}"
@@ -1016,6 +1156,10 @@ msgid ""
 msgstr ""
 "\n"
 "您可以在下方调整此连结的点数限制和其他设定： "
+
+#, python-brace-format
+msgid "Upload commit is still in progress, retrying in {delay:.1f} seconds..."
+msgstr "上传提交仍在进行中，将在 {delay:.1f} 秒后重试..."
 
 #, python-brace-format
 msgid "Resuming upload: {completed}/{total} chunks already completed"

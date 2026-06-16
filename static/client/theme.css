@@ -406,7 +406,7 @@ header
   padding-right: 20px;
 }
 
-.header-area .main-nav .nav li:nth-child(6) {
+/*.header-area .main-nav .nav li:nth-child(6) {
   padding-right: 0px;
   padding-left: 40px;
 }
@@ -415,6 +415,17 @@ header
 .background-header .main-nav .nav li:last-child a,
 .header-area .main-nav .nav li:nth-child(6) a ,
 .background-header .main-nav .nav li:nth-child(6) a {
+  padding: 0px 20px !important;
+  font-weight: 400;
+}*/
+
+.header-area .main-nav .nav li:last-child {
+  padding-right: 0px;
+  padding-left: 40px;
+}
+
+.header-area .main-nav .nav li:last-child a ,
+.background-header .main-nav .nav li:last-child a {
   padding: 0px 20px !important;
   font-weight: 400;
 }

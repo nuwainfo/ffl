@@ -7,6 +7,7 @@
     "cli": "Open-Source CLI",
     "mcp": "MCP",
     "featureList": "Full Feature List",
+    "serverUpload":"Benefits of Using Server Upload",
     "comparison": "Compare Alternatives",
     "p2pVsCloud": "P2P vs Cloud",
     "faq": "FAQ",
@@ -22,6 +23,8 @@
     "clientArea": "Settings",
     "createNewShare":"Create New Share",
     "logout": "Log out",
+    "login": "Login",
+    "getFreeAccount": "Get Free Account",
     "menu": "Menu",
     "freeDownloadModal":{
         "recommendStore":"For your convenience, we recommend downloading the software from the store.",

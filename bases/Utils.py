@@ -25,6 +25,8 @@ import ssl
 import sys
 import webbrowser
 
+from pathlib import Path
+
 from typing import Optional, TypedDict
 
 import bitmath
@@ -521,6 +523,100 @@ def validateCompatibleWithServer(action=flushPrint):
         webbrowser.open(user.updateURL)
         return False
     return True
+
+
+class StoreHelper:
+    """Detects whether the application is running as a store-packaged app (Windows Store or macOS App Store)."""
+
+    # Windows API constants
+    _APPMODEL_ERROR_NO_PACKAGE = 15700
+    _ERROR_INSUFFICIENT_BUFFER = 122
+
+    _cachedIsAppleStore = None
+    _cachedIsWindowsStore = None
+    _cachedPackageName = None
+
+    @classmethod
+    def isPackaged(cls):
+        return cls.isAppleStore() or cls.isWindowsStore()
+
+    @classmethod
+    def getPackageName(cls):
+        if cls._cachedIsWindowsStore is None:
+            cls.isWindowsStore()
+            
+        return cls._cachedPackageName
+
+    @classmethod
+    def isAppleStore(cls):
+        if cls._cachedIsAppleStore is not None:
+            return cls._cachedIsAppleStore
+            
+        if sys.platform != 'darwin':
+            cls._cachedIsAppleStore = False
+        else:
+            cls._cachedIsAppleStore = cls._isMacSandboxed()
+            
+        return cls._cachedIsAppleStore
+
+    @classmethod
+    def isWindowsStore(cls):
+        if cls._cachedIsWindowsStore is not None:
+            return cls._cachedIsWindowsStore
+            
+        if sys.platform != 'win32':
+            cls._cachedIsWindowsStore = False
+        else:
+            cls._cachedIsWindowsStore, cls._cachedPackageName = cls._getWindowsPackageInfo()
+            
+        return cls._cachedIsWindowsStore
+
+    @classmethod
+    def _isMacSandboxed(cls):
+        if os.environ.get('APP_SANDBOX_CONTAINER_ID'):
+            return True
+            
+        homeStr = str(Path.home())
+        return '/Library/Containers/' in homeStr and homeStr.endswith('/Data')
+
+    @classmethod
+    def _getWindowsPackageInfo(cls):
+        try:
+            import ctypes
+            from ctypes import wintypes
+        except ImportError:
+            return False, None
+
+        try:
+            kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+            kernel32.GetCurrentPackageFullName.argtypes = [
+                ctypes.POINTER(ctypes.c_uint32),
+                wintypes.LPWSTR,
+            ]
+            kernel32.GetCurrentPackageFullName.restype = wintypes.LONG
+
+            length = ctypes.c_uint32(0)
+            rc = kernel32.GetCurrentPackageFullName(ctypes.byref(length), None)
+
+            if rc == cls._APPMODEL_ERROR_NO_PACKAGE:
+                return False, None
+
+            if rc != cls._ERROR_INSUFFICIENT_BUFFER and rc != 0:
+                logger.debug(f"GetCurrentPackageFullName unexpected rc={rc}")
+                return False, None
+
+            buf = ctypes.create_unicode_buffer(length.value)
+            rc = kernel32.GetCurrentPackageFullName(ctypes.byref(length), buf)
+
+            if rc != 0:
+                logger.debug(f"GetCurrentPackageFullName failed on second call rc={rc}")
+                return False, None
+
+            return True, buf.value
+
+        except Exception as e:
+            logger.debug(f"Failed to check Windows package status: {e}")
+            return False, None
 
 
 class ObjectProxy:
