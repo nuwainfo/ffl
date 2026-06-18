@@ -46,7 +46,7 @@ class ExternalTunnelThread(threading.Thread):
         self.client = client
         self.resultQueue = resultQueue
         self.e = None
-        super().__init__()
+        super().__init__(daemon=True)
 
     def run(self):
         try:
