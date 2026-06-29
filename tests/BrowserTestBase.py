@@ -45,7 +45,7 @@ from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from .CoreTestBase import FastFileLinkTestBase, generateRandomFile, getFileHash
+from .CoreTestBase import FastFileLinkTestBase
 
 
 # ---------------------------
@@ -839,13 +839,13 @@ class BrowserTestBase(FastFileLinkTestBase):
             if os.path.exists(downloadDir):
                 try:
                     currentFiles = os.listdir(downloadDir)
-                    print(f"[Test] Current files in download dir: {currentFiles}")
+                    print(f"[Test] Current files in download dir: {self._getConsoleSafeText(currentFiles)}")
                     if currentFiles:
                         for filename in currentFiles:
                             filePath = os.path.join(downloadDir, filename)
                             try:
                                 size = os.path.getsize(filePath)
-                                print(f"[Test]   {filename}: {size} bytes")
+                                print(f"[Test]   {self._getConsoleSafeText(filename)}: {size} bytes")
                                 # Track .crdownload file size for stall detection
                                 if filename.endswith('.crdownload') or filename.endswith('.part'):
                                     currentProgressSize = max(currentProgressSize, size)
@@ -1174,6 +1174,16 @@ class BrowserTestBase(FastFileLinkTestBase):
 
             print(f"[Test] Navigating to: {targetUrl}")
             driver.get(targetUrl)
+
+            # Drain the CDP performance log before calling execute_script.
+            # Network.enable floods the buffer with loadingFailed events during page load;
+            # when the buffer is large Chrome fails to serialize the CDP response for
+            # execute_script with "CBOR: stack limit exceeded".
+            if self._isChromeDriver(driver):
+                try:
+                    driver.get_log('performance')
+                except Exception:
+                    pass
 
             WebDriverWait(driver,
                           10).until(lambda driver: driver.execute_script("return document.readyState") == "complete")

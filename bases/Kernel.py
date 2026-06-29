@@ -45,7 +45,7 @@ from signalslot import Signal
 from sentry_sdk.integrations.logging import SentryHandler, LoggingIntegration
 from sentry_sdk.integrations import atexit as sentryAtexit
 
-PUBLIC_VERSION = '3.9.11'
+PUBLIC_VERSION = '3.9.12'
 
 # Map string levels to logging constants for standard level names
 LOG_LEVEL_MAPPING = {'DEBUG': logging.DEBUG, 'INFO': logging.INFO, 'WARNING': logging.WARNING, 'ERROR': logging.ERROR}
@@ -1218,10 +1218,17 @@ class FFLEvent:
     tunnelFallback = Event('/tunnel/fallback')
 
     # Server lifecycle events
-    serverStarting = Event('/server/create')
+    serverStarting = Event('/server/create')  # fires in createServer() (Core.py mode); hook compat
     serverEndpointsRegister = Event('/server/endpoints/create')
     serverShutdown = Event('/server/shutdown')
-    serverTimeout = Event('/server/timeout')
+
+    # Session lifecycle events
+    sessionStarted = Event('/session/create') # fires per session added
+    sessionRemoved = Event('/session/delete') # fires per session removed
+    sessionTimeout = Event('/session/timeout')
+
+    # Backward-compat aliases
+    serverTimeout = sessionTimeout
 
     # Download events (P2P server side)
     downloadStarted = Event('/download/create')

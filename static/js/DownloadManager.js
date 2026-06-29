@@ -33,6 +33,623 @@ const dmT = (typeof window !== 'undefined' && typeof window.t === 'function') ? 
     return defaultValue || key;
 };
 
+class DownloadIssueReporter {
+    static FORM_ID = 'downloadIssueForm';
+    static STORAGE_KEY = 'ffl_download_issue_report_v2';
+    static FEEDBACK_TONE_COLORS = {
+        info: '#0c5460',
+        success: '#155724',
+        error: '#721c24',
+    };
+
+    constructor(config = {}) {
+        if (typeof config.log !== 'function' || !config.log.logger || typeof config.log.logger.addReporter !== 'function') {
+            throw new Error('DownloadIssueReporter requires log.logger');
+        }
+
+        this.senderEndpoint = config.senderEndpoint || '';
+        this.developerEndpoint = config.developerEndpoint || '';
+        this.reportModeParam = config.reportModeParam || 'report_error';
+        this.reportModeValue = config.reportModeValue || 'true';
+        this.reportIdParam = config.reportIdParam || 'report_id';
+        this.batchSize = Number.isFinite(config.batchSize) ? Math.max(1, config.batchSize) : 20;
+        this.flushDelayMs = Number.isFinite(config.flushDelayMs) ? Math.max(250, config.flushDelayMs) : 2500;
+        this.source = config.source || 'download-page';
+        this.logFunction = config.log;
+
+        this.buffer = [];
+        this.flushTimer = null;
+        this.activeDraft = null;
+        this.isDiagnosticActive = false;
+        this.listenersInstalled = false;
+        this.diagnosticFinalized = false;
+        this.boundDownloadManager = null;
+        this.downloadManagerUnsubscribers = [];
+        this.logFunction.logger.addReporter(this);
+        this._initialize();
+    }
+
+    static safeStringify(value) {
+        if (value instanceof Error) {
+            return `${value.name}: ${value.message}${value.stack ? `\n${value.stack}` : ''}`;
+        }
+
+        if (typeof value === 'string') {
+            return value;
+        }
+
+        try {
+            return JSON.stringify(value);
+        } catch (jsonErr) {
+            try {
+                return String(value);
+            } catch (stringErr) {
+                return '[unserializable value]';
+            }
+        }
+    }
+
+    static createId() {
+        if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+            return crypto.randomUUID();
+        }
+
+        return `report-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+
+    _initialize() {
+        this.bindModalActions();
+
+        if (this.isDiagnosticMode()) {
+            this.startDiagnosticMode();
+        }
+    }
+
+    attachToDownloadManager(downloadManager) {
+        if (
+            !downloadManager
+            || typeof downloadManager.registerOnDownloadComplete !== 'function'
+            || typeof downloadManager.registerOnDownloadError !== 'function'
+        ) {
+            throw new Error('DownloadIssueReporter requires a DownloadManager instance');
+        }
+
+        if (this.boundDownloadManager === downloadManager) {
+            return;
+        }
+
+        this.detachFromDownloadManager();
+        this.boundDownloadManager = downloadManager;
+        this.downloadManagerUnsubscribers = [
+            downloadManager.registerOnDownloadComplete(() => {
+                this.markDownloadComplete();
+            }),
+            downloadManager.registerOnDownloadError((message) => {
+                this.markDownloadError(message);
+            }),
+        ].filter((unsubscribe) => typeof unsubscribe === 'function');
+    }
+
+    detachFromDownloadManager() {
+        this.downloadManagerUnsubscribers.forEach((unsubscribe) => {
+            unsubscribe();
+        });
+        this.downloadManagerUnsubscribers = [];
+        this.boundDownloadManager = null;
+    }
+
+    log(logObj) {
+        const normalizedLogObj = (
+            typeof window !== 'undefined'
+            && window.FFLLogging
+            && typeof window.FFLLogging.normalizeLogObject === 'function'
+        )
+            ? window.FFLLogging.normalizeLogObject(logObj)
+            : {
+                category: logObj.category || logObj.tag || 'log',
+                message: typeof logObj.args?.[0] === 'undefined' ? '' : DownloadIssueReporter.safeStringify(logObj.args[0]),
+                args: Array.isArray(logObj.args)
+                    ? logObj.args.slice(1).map((arg) => DownloadIssueReporter.safeStringify(arg))
+                    : [],
+                timestamp: logObj.date instanceof Date ? logObj.date.toISOString() : new Date(logObj.date).toISOString(),
+            };
+
+        this.captureLog({
+            category: normalizedLogObj.category,
+            message: normalizedLogObj.message,
+            args: normalizedLogObj.args,
+            timestamp: normalizedLogObj.timestamp,
+        });
+    }
+
+    isDiagnosticMode() {
+        const params = new URLSearchParams(window.location.search || '');
+        return params.get(this.reportModeParam) === this.reportModeValue;
+    }
+
+    currentReportIdFromUrl() {
+        const params = new URLSearchParams(window.location.search || '');
+        return params.get(this.reportIdParam) || '';
+    }
+
+    extractUid() {
+        const parts = (window.location.pathname || '').split('/').filter(Boolean);
+        return parts.length > 0 ? parts[0] : '';
+    }
+
+    bindModalActions() {
+        const form = document.getElementById(DownloadIssueReporter.FORM_ID);
+        if (!form) {
+            return;
+        }
+
+        const submitButton = document.getElementById('downloadIssueSubmitBtn');
+        const diagnoseButton = document.getElementById('downloadIssueDiagnoseBtn');
+
+        if (submitButton) {
+            submitButton.addEventListener('click', () => {
+                this.submitIssue({ requestDiagnostics: false });
+            });
+        }
+
+        if (diagnoseButton) {
+            diagnoseButton.addEventListener('click', () => {
+                this.submitIssue({ requestDiagnostics: true });
+            });
+        }
+    }
+
+    showFeedback(message, tone = 'info') {
+        const feedback = document.getElementById('downloadIssueFeedback');
+        if (!feedback) {
+            return;
+        }
+
+        feedback.textContent = message;
+        feedback.style.display = 'block';
+        feedback.style.color = DownloadIssueReporter.FEEDBACK_TONE_COLORS[tone]
+            || DownloadIssueReporter.FEEDBACK_TONE_COLORS.info;
+    }
+
+    setButtonsDisabled(disabled) {
+        ['downloadIssueSubmitBtn', 'downloadIssueDiagnoseBtn'].forEach((id) => {
+            const button = document.getElementById(id);
+            if (button) {
+                button.disabled = disabled;
+            }
+        });
+    }
+
+    collectFormPayload() {
+        const form = document.getElementById(DownloadIssueReporter.FORM_ID);
+        if (!form) {
+            return null;
+        }
+
+        const selectedReason = form.querySelector('input[name="downloadIssueReason"]:checked');
+        if (!selectedReason) {
+            if (typeof form.reportValidity === 'function') {
+                form.reportValidity();
+            }
+
+            return null;
+        }
+
+        const detailsElement = document.getElementById('downloadIssueDetails');
+        return {
+            reportId: DownloadIssueReporter.createId(),
+            uid: this.extractUid(),
+            reason: selectedReason.value,
+            details: detailsElement ? detailsElement.value.trim() : '',
+            path: window.location.pathname,
+            url: window.location.href,
+            referrer: document.referrer || '',
+            userAgent: navigator.userAgent,
+            source: this.source,
+            submittedAt: new Date().toISOString(),
+        };
+    }
+
+    collectDeliveryOptions() {
+        const notifySenderElement = document.getElementById('downloadIssueNotifySender');
+        const sendDeveloperElement = document.getElementById('downloadIssueSendDeveloper');
+
+        return {
+            notifySender: !!(notifySenderElement && notifySenderElement.checked),
+            sendDeveloper: !!(sendDeveloperElement && sendDeveloperElement.checked),
+        };
+    }
+
+    buildSubmissionState({ requestDiagnostics }) {
+        const basePayload = this.collectFormPayload();
+        if (!basePayload) {
+            return null;
+        }
+
+        const deliveryOptions = this.collectDeliveryOptions();
+        if (requestDiagnostics) {
+            deliveryOptions.sendDeveloper = true;
+        }
+
+        if (!deliveryOptions.notifySender && !deliveryOptions.sendDeveloper) {
+            this.showFeedback('Please choose at least one report option.', 'error');
+            return null;
+        }
+
+        if (deliveryOptions.notifySender && !this.resolveSenderEndpoint(basePayload.uid)) {
+            this.showFeedback('Unable to notify the sender for this download.', 'error');
+            return null;
+        }
+
+        if (deliveryOptions.sendDeveloper && !this.developerEndpoint) {
+            this.showFeedback('FastFileLink diagnostics are unavailable for this download.', 'error');
+            return null;
+        }
+
+        return { basePayload, deliveryOptions };
+    }
+
+    resolveSenderEndpoint(uid) {
+        if (this.senderEndpoint) {
+            return this.senderEndpoint;
+        }
+
+        if (!uid) {
+            return '';
+        }
+
+        return `/${uid}/download/issue`;
+    }
+
+    buildDiagnosticUrl(reportId) {
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.set('debug', 'true');
+        nextUrl.searchParams.set(this.reportModeParam, this.reportModeValue);
+        nextUrl.searchParams.set(this.reportIdParam, reportId);
+        return nextUrl.toString();
+    }
+
+    async submitIssue({ requestDiagnostics }) {
+        const submissionState = this.buildSubmissionState({ requestDiagnostics });
+        if (!submissionState) {
+            return;
+        }
+
+        const { basePayload, deliveryOptions } = submissionState;
+        this.setButtonsDisabled(true);
+
+        try {
+            if (deliveryOptions.notifySender) {
+                await this.sendSenderPayload({
+                    ...basePayload,
+                    action: requestDiagnostics ? 'diagnostic_requested' : 'submit',
+                    diagnosticRequested: !!requestDiagnostics,
+                });
+            }
+
+            if (requestDiagnostics) {
+                const draft = {
+                    ...basePayload,
+                    action: 'diagnostic_requested',
+                    diagnosticRequested: true,
+                    debugUrl: this.buildDiagnosticUrl(basePayload.reportId),
+                };
+
+                this.saveDraft(draft);
+                await this.sendDeveloperPayload(draft);
+                this.showFeedback(
+                    'Diagnostic mode will reload the page once. Please retry the download, then you can close this page after the problem happens again or the download finishes.',
+                    'info'
+                );
+
+                setTimeout(() => {
+                    window.location.href = draft.debugUrl;
+                }, 250);
+                return;
+            }
+
+            if (deliveryOptions.sendDeveloper) {
+                await this.sendDeveloperPayload({
+                    ...basePayload,
+                    action: 'submit',
+                    diagnosticRequested: false,
+                });
+            }
+
+            this.showFeedback('Your report has been sent. Thank you.', 'success');
+            this.hideModalSoon();
+        } catch (sendErr) {
+            this.showFeedback('Unable to send the report right now. Please try again.', 'error');
+        } finally {
+            this.setButtonsDisabled(false);
+        }
+    }
+
+    hideModalSoon() {
+        const modalElement = document.getElementById('downloadIssueModal');
+        if (!modalElement || !window.bootstrap || !window.bootstrap.Modal) {
+            return;
+        }
+
+        const modal = window.bootstrap.Modal.getInstance(modalElement);
+        if (!modal) {
+            return;
+        }
+
+        setTimeout(() => {
+            modal.hide();
+        }, 900);
+    }
+
+    saveDraft(draft) {
+        try {
+            sessionStorage.setItem(DownloadIssueReporter.STORAGE_KEY, JSON.stringify(draft));
+        } catch (storageErr) {
+        }
+    }
+
+    loadDraft() {
+        try {
+            const raw = sessionStorage.getItem(DownloadIssueReporter.STORAGE_KEY);
+            return raw ? JSON.parse(raw) : null;
+        } catch (storageErr) {
+            return null;
+        }
+    }
+
+    clearDraft() {
+        try {
+            sessionStorage.removeItem(DownloadIssueReporter.STORAGE_KEY);
+        } catch (storageErr) {
+        }
+    }
+
+    startDiagnosticMode() {
+        const draft = this.loadDraft();
+        const reportId = this.currentReportIdFromUrl() || (draft && draft.reportId) || DownloadIssueReporter.createId();
+
+        this.activeDraft = {
+            reportId,
+            uid: (draft && draft.uid) || this.extractUid(),
+            reason: (draft && draft.reason) || '',
+            details: (draft && draft.details) || '',
+            submittedAt: (draft && draft.submittedAt) || new Date().toISOString(),
+            source: (draft && draft.source) || this.source,
+        };
+        this.isDiagnosticActive = true;
+        this.diagnosticFinalized = false;
+        this.clearDraft();
+        this.showDiagnosticBanner();
+        this.installWindowListeners();
+
+        this.sendDeveloperPayload({
+            ...this.activeDraft,
+            action: 'diagnostic_started',
+            path: window.location.pathname,
+            url: window.location.href,
+            referrer: document.referrer || '',
+            userAgent: navigator.userAgent,
+        }).catch(() => {
+        });
+    }
+
+    showDiagnosticBanner() {
+        const downloadBlock = document.getElementById('downloadBlock');
+        if (!downloadBlock || document.getElementById('download-report-error-status')) {
+            return;
+        }
+
+        const banner = document.createElement('div');
+        banner.id = 'download-report-error-status';
+        banner.className = 'alert alert-info';
+        banner.style.marginTop = '15px';
+        banner.style.textAlign = 'left';
+        banner.textContent = 'Diagnostic mode is active for this retry. Please retry the download once, then you can close this page after the same problem happens again or after the download finishes.';
+        downloadBlock.insertBefore(banner, downloadBlock.firstChild);
+    }
+
+    installWindowListeners() {
+        if (this.listenersInstalled) {
+            return;
+        }
+
+        this.listenersInstalled = true;
+
+        window.addEventListener('error', (event) => {
+            this.captureLog({
+                category: 'window.error',
+                message: event.error
+                    ? DownloadIssueReporter.safeStringify(event.error)
+                    : `${event.message} @ ${event.filename}:${event.lineno}:${event.colno}`,
+                args: [],
+                timestamp: new Date().toISOString(),
+            });
+        });
+
+        window.addEventListener('unhandledrejection', (event) => {
+            this.captureLog({
+                category: 'window.unhandledrejection',
+                message: DownloadIssueReporter.safeStringify(event.reason),
+                args: [],
+                timestamp: new Date().toISOString(),
+            });
+        });
+
+        const flushOnExit = () => {
+            this.flush({ final: true, state: 'page_exit', useBeacon: true });
+        };
+
+        window.addEventListener('pagehide', flushOnExit);
+        window.addEventListener('beforeunload', flushOnExit);
+    }
+
+    shouldIgnoreLog(entry) {
+        if (!entry) {
+            return true;
+        }
+
+        if (entry.category === 'Status') {
+            return true;
+        }
+
+        const renderedArgs = Array.isArray(entry.args)
+            ? entry.args.map((arg) => DownloadIssueReporter.safeStringify(arg)).join(' ')
+            : '';
+        const fullText = `${entry.message || ''} ${renderedArgs}`;
+        return fullText.includes('/status');
+    }
+
+    captureLog(entry) {
+        if (!this.isDiagnosticActive || this.shouldIgnoreLog(entry)) {
+            return;
+        }
+
+        const normalizedEntry = {
+            timestamp: entry.timestamp || new Date().toISOString(),
+            category: entry.category || 'log',
+            message: entry.message || '',
+            args: Array.isArray(entry.args)
+                ? entry.args.map((arg) => DownloadIssueReporter.safeStringify(arg))
+                : [],
+        };
+
+        this.buffer.push(normalizedEntry);
+        this.scheduleFlush();
+    }
+
+    scheduleFlush() {
+        if (this.diagnosticFinalized) {
+            return;
+        }
+
+        if (this.buffer.length >= this.batchSize) {
+            this.flush({ final: false }).catch(() => {
+            });
+            return;
+        }
+
+        if (this.flushTimer) {
+            clearTimeout(this.flushTimer);
+        }
+
+        this.flushTimer = setTimeout(() => {
+            this.flush({ final: false }).catch(() => {
+            });
+        }, this.flushDelayMs);
+    }
+
+    async flush({ final, state = '', useBeacon = false }) {
+        if (!this.isDiagnosticActive || !this.activeDraft) {
+            return;
+        }
+
+        if (final && this.diagnosticFinalized) {
+            return;
+        }
+
+        if (this.flushTimer) {
+            clearTimeout(this.flushTimer);
+            this.flushTimer = null;
+        }
+
+        const entries = this.buffer.splice(0, this.buffer.length);
+        if (!entries.length && !final) {
+            return;
+        }
+
+        const payload = {
+            ...this.activeDraft,
+            action: 'diagnostic_logs',
+            path: window.location.pathname,
+            url: window.location.href,
+            referrer: document.referrer || '',
+            userAgent: navigator.userAgent,
+            state,
+            final: !!final,
+            entries,
+            sentAt: new Date().toISOString(),
+        };
+
+        await this.sendDeveloperPayload(payload, { useBeacon });
+
+        if (final) {
+            this.diagnosticFinalized = true;
+        }
+    }
+
+    markDownloadComplete() {
+        if (!this.isDiagnosticActive) {
+            return;
+        }
+
+        this.flush({ final: true, state: 'download_complete' }).catch(() => {
+        });
+    }
+
+    markDownloadError(message) {
+        if (!this.isDiagnosticActive) {
+            return;
+        }
+
+        this.captureLog({
+            category: 'download.error',
+            message: String(message || 'download_error'),
+            args: [],
+            timestamp: new Date().toISOString(),
+        });
+        this.flush({ final: true, state: 'download_error' }).catch(() => {
+        });
+    }
+
+    async sendSenderPayload(payload) {
+        const endpoint = this.resolveSenderEndpoint(payload.uid);
+        if (!endpoint) {
+            return;
+        }
+
+        await this.sendJSON(endpoint, payload, {
+            mode: 'same-origin',
+            credentials: 'same-origin',
+        });
+    }
+
+    async sendDeveloperPayload(payload, { useBeacon = false } = {}) {
+        if (!this.developerEndpoint) {
+            return;
+        }
+
+        await this.sendJSON(this.developerEndpoint, payload, {
+            mode: 'cors',
+            credentials: 'omit',
+            useBeacon,
+        });
+    }
+
+    async sendJSON(endpoint, payload, { mode, credentials, useBeacon = false }) {
+        const body = JSON.stringify(payload);
+        if (useBeacon && navigator.sendBeacon) {
+            const blob = new Blob([body], { type: 'application/json' });
+            navigator.sendBeacon(endpoint, blob);
+            return;
+        }
+
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            mode,
+            credentials,
+            keepalive: useBeacon,
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body,
+        });
+
+        if (!response.ok) {
+            throw new Error(`Download issue report failed: ${response.status}`);
+        }
+    }
+}
+
 const DEFAULT_MAX_AUTOMATIC_WRITER_RESUME_ATTEMPTS = 8;
 const WRITER_RESUME_ATTEMPT_SIZE_STEP = 512 * 1024 * 1024;
 const DEFAULT_READER_CANCEL_TIMEOUT_MS = 1500;
@@ -1372,10 +1989,16 @@ class DownloadManager {
         this.receiptConfirmationUI = options.receiptConfirmationUI || null;
 
         // Callback functions for external integration
-        this.onServiceWorkerReadyCallback = options.onServiceWorkerReadyCallback || null;
-        this.onDownloadStartCallback = options.onDownloadStartCallback || null;
-        this.onDownloadCompleteCallback = options.onDownloadCompleteCallback || null;
-        this.onDownloadErrorCallback = options.onDownloadErrorCallback || null;
+        this._lifecycleCallbacks = {
+            serviceWorkerReady: new Set(),
+            downloadStart: new Set(),
+            downloadComplete: new Set(),
+            downloadError: new Set(),
+        };
+        this._registerLifecycleCallback('serviceWorkerReady', options.onServiceWorkerReadyCallback, { allowMissing: true });
+        this._registerLifecycleCallback('downloadStart', options.onDownloadStartCallback, { allowMissing: true });
+        this._registerLifecycleCallback('downloadComplete', options.onDownloadCompleteCallback, { allowMissing: true });
+        this._registerLifecycleCallback('downloadError', options.onDownloadErrorCallback, { allowMissing: true });
 
         // Custom log function (if provided, use it; otherwise use default dmLog)
         this.customLogFn = options.logFunction || null;
@@ -1394,6 +2017,50 @@ class DownloadManager {
         this.setupBroadcastChannel();
         this.setupServiceWorkerMessageHandler();
         this.setupVisibilityChangeHandler();
+    }
+
+    _registerLifecycleCallback(eventName, callback, { allowMissing = false } = {}) {
+        if (typeof callback !== 'function') {
+            if (allowMissing) {
+                return null;
+            }
+            throw new Error(`${eventName} callback must be a function`);
+        }
+
+        this._lifecycleCallbacks[eventName].add(callback);
+        return () => {
+            this._lifecycleCallbacks[eventName].delete(callback);
+        };
+    }
+
+    registerOnServiceWorkerReady(callback) {
+        return this._registerLifecycleCallback('serviceWorkerReady', callback);
+    }
+
+    registerOnDownloadStart(callback) {
+        return this._registerLifecycleCallback('downloadStart', callback);
+    }
+
+    registerOnDownloadComplete(callback) {
+        return this._registerLifecycleCallback('downloadComplete', callback);
+    }
+
+    registerOnDownloadError(callback) {
+        return this._registerLifecycleCallback('downloadError', callback);
+    }
+
+    async _notifyLifecycleCallbacks(eventName, args = [], { awaitCallbacks = false } = {}) {
+        const callbacks = Array.from(this._lifecycleCallbacks[eventName] || []);
+        for (const callback of callbacks) {
+            try {
+                const result = callback(...args);
+                if (awaitCallbacks) {
+                    await result;
+                }
+            } catch (e) {
+                this.log('DownloadManager', `Error in ${eventName} callback:`, e);
+            }
+        }
     }
     
     extractUidFromPath() {
@@ -1643,13 +2310,7 @@ class DownloadManager {
         this.onDownloadStart(total, initialSent);
 
         // Call external callback if provided
-        if (this.onDownloadStartCallback) {
-            try {
-                this.onDownloadStartCallback(id, total);
-            } catch (e) {
-                this.log('DownloadManager', 'Error in onDownloadStartCallback:', e);
-            }
-        }
+        this._notifyLifecycleCallbacks('downloadStart', [id, total]).catch(() => {});
     }
 
     handleDownloadProgress(sent, total) {
@@ -1721,13 +2382,7 @@ class DownloadManager {
         }
 
         // Call external callback if provided
-        if (this.onDownloadCompleteCallback) {
-            try {
-                this.onDownloadCompleteCallback(total);
-            } catch (e) {
-                this.log('DownloadManager', 'Error in onDownloadCompleteCallback:', e);
-            }
-        }
+        this._notifyLifecycleCallbacks('downloadComplete', [total]).catch(() => {});
     }
 
     handleDownloadCompleteEvent(data = {}, source = 'event') {
@@ -1756,13 +2411,7 @@ class DownloadManager {
         }
 
         // Call external callback if provided
-        if (this.onDownloadErrorCallback) {
-            try {
-                this.onDownloadErrorCallback(message);
-            } catch (e) {
-                this.log('DownloadManager', 'Error in onDownloadErrorCallback:', e);
-            }
-        }
+        this._notifyLifecycleCallbacks('downloadError', [message]).catch(() => {});
     }
 
     handleChecksumVerificationResult(result, transport = 'http') {
@@ -2581,13 +3230,7 @@ class DownloadManager {
             this.log('DownloadManager', 'Progress SW is ready and controlling');
 
             // Invoke callback when Service Worker is ready and WAIT for it to complete
-            if (this.onServiceWorkerReadyCallback) {
-                try {
-                    await this.onServiceWorkerReadyCallback(controller);
-                } catch (e) {
-                    this.log('DownloadManager', 'Error in onServiceWorkerReadyCallback:', e);
-                }
-            }
+            await this._notifyLifecycleCallbacks('serviceWorkerReady', [controller], { awaitCallbacks: true });
 
             return true;
         } catch (err) {
@@ -3238,7 +3881,7 @@ class DownloadManager {
                     return totalSize;
                 }).catch(err => {
                     this.log('DownloadManager', 'Writer-based download failed:', err);
-                    this.onDownloadErrorCallback && this.onDownloadErrorCallback(String(err));
+                    this._notifyLifecycleCallbacks('downloadError', [String(err)]).catch(() => {});
                 });
             } else {
                 // Has SW + no resumeConfig (or no writer)
@@ -3765,9 +4408,10 @@ class WriterFactory {
 
 // Export for use in other scripts
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { DownloadManager, BlobWriter, WriterFactory };
+    module.exports = { DownloadManager, BlobWriter, WriterFactory, DownloadIssueReporter };
 } else {
     window.DownloadManager = DownloadManager;
     window.BlobWriter = BlobWriter;
     window.WriterFactory = WriterFactory;
+    window.DownloadIssueReporter = DownloadIssueReporter;
 }

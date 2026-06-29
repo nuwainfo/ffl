@@ -29,13 +29,15 @@ import zipfile
 
 import requests
 
+from types import SimpleNamespace
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+from io import BytesIO
 
 from functools import partial
 
-from bases.Hook import HookServer, HookClient, HookError, HookAuthError, HookEventSerializer
+from bases.Hook import HookServer, HookClient, HookError, HookAuthError, HookEventSerializer, HookEndpointRouter
 from bases.crypto import CryptoInterface
 from bases.E2EE import StreamDecryptor
 from ..CoreTestBase import FastFileLinkTestBase
@@ -49,6 +51,45 @@ except ImportError:
 
 class HookTest(unittest.TestCase):
     """Test HTTP webhook mechanism"""
+
+    class _FakeMultiShareServer:
+        def __init__(self, serverAddress, sessions):
+            self.server_address = serverAddress
+            self._sessions = sessions
+            self._sessionsLock = threading.Lock()
+
+        def getSessionCount(self):
+            return len(self._sessions)
+
+    @staticmethod
+    def _makeHookSession(uid, domain, fileName, fileSize):
+        return SimpleNamespace(
+            uid=uid,
+            domain=domain,
+            config=SimpleNamespace(
+                authPassword='secret',
+                defaultWebRTC=True,
+                e2eeEnabled=False,
+                torEnabled=False,
+            ),
+            reader=SimpleNamespace(contentName=fileName, size=fileSize),
+            e2eeManager=None,
+        )
+
+    @staticmethod
+    def _makeExpectedRegisterContext(session, port, sessionCount):
+        return {
+            'uid': session.uid,
+            'domain': session.domain,
+            'fileName': session.reader.contentName,
+            'fileSize': session.reader.size,
+            'authEnabled': True,
+            'defaultWebRTC': True,
+            'e2eeEnabled': False,
+            'torEnabled': False,
+            'port': port,
+            'sessionCount': sessionCount,
+        }
 
     def testBasicServerClient(self):
         """Test basic server-client communication"""
@@ -314,6 +355,195 @@ class HookTest(unittest.TestCase):
             client.registerServerEndpoints({'uid': 'abc123'})
 
         server.stop()
+
+    def testFetchRoutesSupportsMultiShareSession(self):
+        """Hook endpoint registration should use the active session context."""
+        server = HookServer(host='127.0.0.1', port=0, path='/events')
+        server.start()
+        session = self._makeHookSession('abc123', 'https://example.com/', 'demo.txt', 12)
+        multiShareServer = self._FakeMultiShareServer(('127.0.0.1', 8080), {'abc123': session, 'def456': session})
+        expectedContext = self._makeExpectedRegisterContext(session, 8080, 2)
+
+        def onEvent(eventName, eventData):
+            if eventName == '/hook/server/endpoints/register':
+                self.assertEqual(eventData, expectedContext)
+                return {'routes': [{'method': 'GET', 'path': '/manifest'}]}
+            return {'status': 200}
+
+        server.onEvent = onEvent
+        client = HookClient(server.getHookURL())
+
+        routes = HookEndpointRouter._fetchRoutes(multiShareServer, session, client)
+        self.assertEqual(routes, [{'method': 'GET', 'path': '/manifest', 'encryptResponse': False}])
+
+        server.stop()
+
+    def testFetchRoutesSupportsMultipleSessions(self):
+        """Hook endpoint registration should cache one route set per session."""
+        server = HookServer(host='127.0.0.1', port=0, path='/events')
+        server.start()
+        session1 = self._makeHookSession('abc123', 'https://example.com/a', 'a.txt', 12)
+        session2 = self._makeHookSession('def456', 'https://example.com/b', 'b.txt', 34)
+        multiShareServer = self._FakeMultiShareServer(
+            ('127.0.0.1', 8080),
+            {'abc123': session1, 'def456': session2}
+        )
+
+        seenContexts = []
+
+        def onEvent(eventName, eventData):
+            if eventName == '/hook/server/endpoints/register':
+                seenContexts.append(dict(eventData))
+                return {'routes': [{'method': 'GET', 'path': '/manifest'}]}
+            return {'status': 200}
+
+        server.onEvent = onEvent
+        client = HookClient(server.getHookURL())
+
+        routes1 = HookEndpointRouter._getRoutesForSession(multiShareServer, session1, client)
+        routes2 = HookEndpointRouter._getRoutesForSession(multiShareServer, session2, client)
+        routes3 = HookEndpointRouter._getRoutesForSession(multiShareServer, session1, client)
+
+        self.assertEqual(routes1, [{'method': 'GET', 'path': '/manifest', 'encryptResponse': False}])
+        self.assertEqual(routes2, [{'method': 'GET', 'path': '/manifest', 'encryptResponse': False}])
+        self.assertEqual(routes3, [{'method': 'GET', 'path': '/manifest', 'encryptResponse': False}])
+        self.assertEqual(seenContexts, [
+            self._makeExpectedRegisterContext(session1, 8080, 2),
+            self._makeExpectedRegisterContext(session2, 8080, 2),
+        ])
+
+        server.stop()
+
+    def testRegisterForHandlerSupportsMultipleSessions(self):
+        """Hook routes should register per session and forward the active session identity."""
+        state = {'registerContexts': [], 'requestUids': []}
+        authUser = 'ffl'
+        authPassword = 'test-hook-token'
+        authHeader = f"Basic {base64.b64encode(f'{authUser}:{authPassword}'.encode()).decode()}"
+
+        class HookEndpointHandler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                return
+
+            def _checkAuth(self):
+                return self.headers.get('Authorization') == authHeader
+
+            def do_GET(self):
+                if not self._checkAuth():
+                    self.send_response(HTTPStatus.UNAUTHORIZED)
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                    return
+
+                state['requestUids'].append(self.headers.get('X-FFL-UID'))
+                body = b'ok'
+                self.send_response(HTTPStatus.OK)
+                self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_POST(self):
+                if not self._checkAuth():
+                    self.send_response(HTTPStatus.UNAUTHORIZED)
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                    return
+
+                parsed = urlparse(self.path)
+                if parsed.path != '/events':
+                    self.send_response(HTTPStatus.NOT_FOUND)
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                    return
+
+                contentLength = int(self.headers.get('Content-Length', 0))
+                requestData = json.loads(self.rfile.read(contentLength)) if contentLength else {}
+                eventName = requestData.get('event')
+                eventData = requestData.get('data', {})
+                if eventName == '/hook/server/endpoints/register':
+                    state['registerContexts'].append(dict(eventData))
+                    responseData = {'routes': [{'method': 'GET', 'path': '/hello'}]}
+                else:
+                    responseData = {'status': 'ok'}
+
+                responseBody = json.dumps(responseData).encode('utf-8')
+                self.send_response(HTTPStatus.OK)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(responseBody)))
+                self.end_headers()
+                self.wfile.write(responseBody)
+
+        hookServer = ThreadingHTTPServer(('127.0.0.1', 0), HookEndpointHandler)
+        hookThread = threading.Thread(target=hookServer.serve_forever, daemon=True)
+        hookThread.start()
+
+        try:
+            client = HookClient(f'http://{authUser}:{authPassword}@127.0.0.1:{hookServer.server_address[1]}/events')
+
+            session1 = self._makeHookSession('abc123', 'https://example.com/a', 'a.txt', 12)
+            session2 = self._makeHookSession('def456', 'https://example.com/b', 'b.txt', 34)
+            multiShareServer = self._FakeMultiShareServer(
+                ('127.0.0.1', hookServer.server_address[1]),
+                {'abc123': session1, 'def456': session2}
+            )
+
+            class FakeHeaders(dict):
+                def get(self, key, default=None):
+                    return super().get(key, default)
+
+            class FakeHandler:
+                def __init__(self, server, session):
+                    self.server = server
+                    self.session = session
+                    self.headers = FakeHeaders()
+                    self.sentHeaders = []
+                    self.status = None
+                    self.wfile = BytesIO()
+
+                def send_response(self, status):
+                    self.status = status
+
+                def send_header(self, key, value):
+                    self.sentHeaders.append((key, value))
+
+                def end_headers(self):
+                    return
+
+                def send_error(self, code, message):
+                    raise AssertionError(f"Unexpected proxy error {code}: {message}")
+
+            for session in (session1, session2):
+                fakeHandler = FakeHandler(multiShareServer, session)
+                getPathMap = {}
+                postPathMap = {}
+                headPathMap = {}
+
+                HookEndpointRouter.registerForHandler(
+                    handler=fakeHandler,
+                    server=multiShareServer,
+                    session=session,
+                    hookClient=client,
+                    getPathMap=getPathMap,
+                    postPathMap=postPathMap,
+                    headPathMap=headPathMap
+                )
+
+                self.assertIn('/hello', getPathMap)
+                getPathMap['/hello']({})
+                self.assertEqual(fakeHandler.status, 200)
+                self.assertEqual(fakeHandler.wfile.getvalue(), b'ok')
+
+            self.assertEqual(state['registerContexts'], [
+                self._makeExpectedRegisterContext(session1, hookServer.server_address[1], 2),
+                self._makeExpectedRegisterContext(session2, hookServer.server_address[1], 2),
+            ])
+            self.assertEqual(state['requestUids'], ['abc123', 'def456'])
+
+        finally:
+            hookServer.shutdown()
+            hookServer.server_close()
+            hookThread.join(timeout=5)
 
 
 class HookEventSerializerTest(unittest.TestCase):

@@ -89,6 +89,7 @@ class ResumeTestBase(FastFileLinkTestBase):
         extraArgs=None,
         extraEnv=None,
         useTestServer=False,
+        timeout=None,
     ):
         """Resume an interrupted upload and return share link plus log."""
         capture = outputCapture if outputCapture is not None else {}
@@ -102,6 +103,7 @@ class ResumeTestBase(FastFileLinkTestBase):
             captureOutputIn=capture,
             extraEnvVars=extraEnv,
             useTestServer=useTestServer,
+            timeout=timeout,
         )
 
         if isinstance(resumeResult, tuple):
@@ -127,7 +129,6 @@ import threading
 from selenium.webdriver.support.ui import WebDriverWait
 
 from tests.BrowserTestBase import BrowserTestBase
-from tests.CoreTestBase import generateRandomFile, getFileHash
 
 
 class TestTimeoutError(Exception):
@@ -314,9 +315,9 @@ class ResumeBrowserTestBase(BrowserTestBase, ResumeTestBase):
         try:
             # Create large test file for resume testing
             largeFilePath = os.path.join(self.tempDir, "resume_test.bin")
-            generateRandomFile(largeFilePath, largeFileSize)
+            self.generateRandomFile(largeFilePath, largeFileSize)
 
-            originalHash = getFileHash(largeFilePath)
+            originalHash = self.getFileHash(largeFilePath)
             originalSize = os.path.getsize(largeFilePath)
 
             print(f"[Test] Created large test file for resume testing")

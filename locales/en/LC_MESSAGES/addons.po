@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-06-13 10:49+0800\n"
+"POT-Creation-Date: 2026-06-16 14:22+0800\n"
 "PO-Revision-Date: 2025-12-18 10:23+0800\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -594,10 +594,10 @@ msgstr ""
 msgid "📊 Enable Error Reporting"
 msgstr ""
 
-msgid "Show in OS Context Menu"
+msgid "🖱️ Show in OS Context Menu"
 msgstr ""
 
-msgid "Show in OS Context Menu (Unavailable)"
+msgid "🖱️ Show in OS Context Menu (Unavailable)"
 msgstr ""
 
 msgid "This feature is unavailable on this build."
@@ -759,7 +759,10 @@ msgstr ""
 
 msgid ""
 "Looks like your recipient hasn't connected yet.\n"
-"Upload to our cloud so they can download it whenever they're ready."
+"Upload to our cloud so they can download it whenever they're ready.\n"
+"\n"
+"If the upload succeeds, your current share link will keep working until the "
+"selected upload duration expires."
 msgstr ""
 
 #, python-brace-format
@@ -1313,3 +1316,8 @@ msgstr ""
 #~ msgid "🎁 Get Free Points"
 #~ msgstr ""
 
+#~ msgid "Show in OS Context Menu"
+#~ msgstr ""
+
+#~ msgid "Show in OS Context Menu (Unavailable)"
+#~ msgstr ""

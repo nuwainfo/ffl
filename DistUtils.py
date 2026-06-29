@@ -61,6 +61,7 @@ packageData = [
     ('static/index.html', 'static'),
     ('static/js/WebRTC.js', 'static/js'),
     ('locales', 'locales'), # i18n translation files
+    ('addons/impl/assets', 'addons/impl/assets'), # addons assets
 ]
 
 featuresSupported = True

@@ -493,7 +493,7 @@ self.addEventListener('fetch', (event) => {
 
     // ---- C. Normal interception with TransformStream (Chromium or Firefox small files) ----
     log('[ProgressSW] Using TransformStream mode', resumeConfig ? 'with resume' : '');
-    event.respondWith(handleDownloadWithTransform(event, url, downloadId, resumeConfig));
+    event.respondWith(handleDownloadWithTransform(event, url, downloadId, resumeConfig, ffPass));
 });
 
 async function handlePassthroughForResume(event, url, downloadId, resumeConfig) {
@@ -543,7 +543,7 @@ async function handlePassthroughForResume(event, url, downloadId, resumeConfig) 
     }
 }
 
-async function handleDownloadWithTransform(event, url, downloadId, resumeConfig) {
+async function handleDownloadWithTransform(event, url, downloadId, resumeConfig, ffPass = false) {
     const e2eeEnabled = url.searchParams.get('e2ee') === '1';
     const uid = extractUidFromDownloadPath(url.pathname);
     const targetClientId = event.clientId || event.resultingClientId || '';
@@ -782,15 +782,17 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
                 const probeEnd = isValidSize(total)
                     ? Math.min(delivered + 1023, total - 1)
                     : delivered + 1023;
+                    
                 const probeHeaders = new Headers({
                     'Range': `bytes=${delivered}-${probeEnd}`,
-                    'Cache-Control': 'no-cache',
                 });
+                
                 if (authHeaders) {
                     for (const [k, v] of Object.entries(authHeaders)) {
                         probeHeaders.set(k, v);
                     }
                 }
+                
                 const probeResp = await fetch(new Request(`${url.origin}${url.pathname}`, { headers: probeHeaders }));
                 probeStatus = String(probeResp.status);
                 if (probeResp.status === 206) {
@@ -798,8 +800,13 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
                     const cr = parseContentRange(probeResp.headers.get('Content-Range'));
                     rangeOk = cr !== null && cr.start === delivered;
                 }
+                
                 // Consume the tiny body completely for a clean connection close.
-                try { await probeResp.arrayBuffer(); } catch (_e) {}
+                try { 
+                    await probeResp.arrayBuffer(); 
+                } catch (_e) {
+                }
+                
                 log('[ProgressSW] Probe: HTTP', probeStatus, '| rangeOk (start===delivered):', rangeOk);
             } catch (probeErr) {
                 probeStatus = 'fetch-error';
@@ -1090,7 +1097,12 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig)
         // Prepare headers - try keeping Content-Length first
         const headers = new Headers(upstream.headers);
         if (!headers.has('Content-Disposition')) {
-            headers.set('Content-Disposition', 'attachment');
+            const encodedFileName = upstream.headers.get('FFL-FileName');
+            if (encodedFileName) {
+                headers.set('Content-Disposition', `attachment; filename*=UTF-8''${encodedFileName}`);
+            } else {
+                headers.set('Content-Disposition', 'attachment');
+            }
         }
         
         // Only delete Content-Length for Firefox to prevent early cutoff

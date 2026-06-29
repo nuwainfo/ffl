@@ -139,7 +139,8 @@ class CLITest(FastFileLinkTestBase):
             except Exception as e:
                 print(f"[Test] Failed to read process log file: {e}")
 
-        print(f"[Test] Process output: {combinedOutput}")
+        safeOutput = self._getConsoleSafeText(combinedOutput)
+        print(f"[Test] Process output: {safeOutput}")
 
         if expectedMessage not in combinedOutput:
             self.fail(f"Expected termination message '{expectedMessage}' not found in output: {combinedOutput}")
@@ -802,7 +803,8 @@ class CLITest(FastFileLinkTestBase):
         alias = "测试文件" # Chinese characters meaning "test file"
         extraArgs = ["--alias", alias, "--timeout", "3"]
 
-        print(f"[Test] Testing --alias with Unicode: '{alias}'")
+        aliasForConsole = self._getConsoleSafeText(alias)
+        print(f"[Test] Testing --alias with Unicode: '{aliasForConsole}'")
         combinedOutput = self._runCommandAndGetOutput(extraArgs)
 
         print(f"[Test] Process output: {combinedOutput}")
@@ -939,9 +941,10 @@ class CLIArgumentParsingTest(unittest.TestCase):
 
         try:
             result = subprocess.run(
-                command, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10, env=env
+                command, capture_output=True, text=True, encoding='utf-8', errors='replace',
+                timeout=10, env=env
             )
-            return result.stdout + result.stderr, result.returncode
+            return (result.stdout or '') + (result.stderr or ''), result.returncode
         except subprocess.TimeoutExpired:
             return "Process timed out", 1
 

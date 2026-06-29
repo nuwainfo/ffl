@@ -20,6 +20,7 @@
 import locale
 import os
 import re
+import signal
 import socket
 import ssl
 import sys
@@ -835,3 +836,45 @@ class StallResilientAdapter(HTTPAdapter):
             kwargs["ssl_context"] = ssl_context
 
         self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, **kwargs)
+
+
+try:
+    import psutil
+
+    class _ProcessHelper:
+        @staticmethod
+        def isAlive(pid: int) -> bool:
+            try:
+                proc = psutil.Process(pid)
+                return proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                return False
+
+        @staticmethod
+        def kill(pid: int) -> None:
+            proc = psutil.Process(pid)
+            proc.kill()
+            proc.wait(timeout=5)
+
+except ImportError:
+    logger.debug("psutil not available; falling back to OS-level process utilities")
+
+    class _ProcessHelper:
+        @staticmethod
+        def isAlive(pid: int) -> bool:
+            try:
+                os.kill(pid, 0)
+                return True
+            except PermissionError as e:
+                logger.debug(f"Process {pid} exists but permission denied: {e}")
+                return True  # process exists but we lack permission
+            except OSError as e:
+                logger.debug(f"Process {pid} not found: {e}")
+                return False
+
+        @staticmethod
+        def kill(pid: int) -> None:
+            os.kill(pid, getattr(signal, 'SIGKILL', signal.SIGTERM))
+
+
+ProcessHelper = _ProcessHelper

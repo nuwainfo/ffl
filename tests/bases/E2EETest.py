@@ -39,7 +39,7 @@ from cryptography.hazmat.primitives import serialization
 
 from bases.crypto import CryptoInterface
 
-from tests.CoreTestBase import getFileHash, generateRandomFile, LOCAL_TEST_SERVER_URL
+from tests.CoreTestBase import LOCAL_TEST_SERVER_URL
 from tests.ResumeTestBase import ResumeTestBase, ResumeBrowserTestBase
 from tests.BrowserTestBase import CONCURRENT_WEBRTC_DOWNLOADS
 
@@ -139,7 +139,7 @@ class E2EEDownloadTest(ResumeTestBase):
             raise
 
         # Verify downloaded file matches original
-        downloadedHash = getFileHash(downloadedPath)
+        downloadedHash = self.getFileHash(downloadedPath)
         self.assertEqual(downloadedHash, self.originalFileHash, "E2E decrypted file should match original")
 
         downloadedSize = os.path.getsize(downloadedPath)
@@ -190,7 +190,7 @@ class E2EEDownloadTest(ResumeTestBase):
         self._downloadWithCore(shareLink, partialPath, extraArgs=["--resume"], extraEnvVars={'DISABLE_WEBRTC': 'True'})
 
         # Verify resumed file matches original
-        resumedHash = getFileHash(partialPath)
+        resumedHash = self.getFileHash(partialPath)
         self.assertEqual(resumedHash, self.originalFileHash, "E2EE resumed file should match original")
 
         resumedSize = os.path.getsize(partialPath)
@@ -220,7 +220,7 @@ class E2EEDownloadTest(ResumeTestBase):
             raise
 
         # Verify downloaded file matches original
-        downloadedHash = getFileHash(downloadedPath)
+        downloadedHash = self.getFileHash(downloadedPath)
         self.assertEqual(downloadedHash, self.originalFileHash, "E2EE WebRTC decrypted file should match original")
 
         downloadedSize = os.path.getsize(downloadedPath)
@@ -265,7 +265,7 @@ class E2EEDownloadTest(ResumeTestBase):
         downloadedPath = os.path.join(self.tempDir, "downloaded_stdin_e2e.bin")
         self._downloadWithCore(shareLink, downloadedPath)
 
-        downloadedHash = getFileHash(downloadedPath)
+        downloadedHash = self.getFileHash(downloadedPath)
         self.assertEqual(downloadedHash, self.originalFileHash, "E2EE stdin download should match original")
 
         outputText = self._updateCapturedOutput(outputCapture)
@@ -310,7 +310,7 @@ class E2EEDownloadTest(ResumeTestBase):
             raise AssertionError("HTTP fallback should be triggered on ICE failure")
 
         # Verify downloaded file matches original
-        downloadedHash = getFileHash(downloadedPath)
+        downloadedHash = self.getFileHash(downloadedPath)
         self.assertEqual(
             downloadedHash, self.originalFileHash, "E2EE HTTP fallback decrypted file should match original"
         )
@@ -334,9 +334,9 @@ class E2EEDownloadTest(ResumeTestBase):
         originalFileSize = self.originalFileSize
 
         try:
-            generateRandomFile(largeFilePath, 16 * 1024 * 1024)
+            self.generateRandomFile(largeFilePath, 16 * 1024 * 1024)
             self.testFilePath = largeFilePath
-            self.originalFileHash = getFileHash(largeFilePath)
+            self.originalFileHash = self.getFileHash(largeFilePath)
             self.originalFileSize = os.path.getsize(largeFilePath)
 
             outputCapture = {}
@@ -364,7 +364,7 @@ class E2EEDownloadTest(ResumeTestBase):
             downloadOutputText = self._updateCapturedOutput(downloadOutputCapture)
             self.assertIn("HTTP fallback", downloadOutputText, "HTTP fallback should be triggered when WebRTC stalls")
 
-            downloadedHash = getFileHash(downloadedPath)
+            downloadedHash = self.getFileHash(downloadedPath)
             self.assertEqual(
                 downloadedHash, self.originalFileHash, "E2EE stdin HTTP fallback download should match original"
             )
@@ -434,7 +434,7 @@ class E2EEDownloadTest(ResumeTestBase):
             print(f"[Test] WARNING: Resume message not found in output")
 
         # Verify resumed file matches original
-        resumedHash = getFileHash(partialPath)
+        resumedHash = self.getFileHash(partialPath)
         self.assertEqual(resumedHash, self.originalFileHash, "E2EE HTTP fallback resumed file should match original")
 
         resumedSize = os.path.getsize(partialPath)
@@ -829,14 +829,14 @@ class E2EEUploadResumeBrowserTest(E2EEUploadTestBase, ResumeBrowserTestBase):
             testServerProcess, pauseLog = self._pauseUpload(
                 pausePercentage=40, outputCapture=pauseOutput, extraArgs=['--e2ee', *loggingArgs], useTestServer=True
             )
-            print(f"[Test] Pause log: {pauseLog.strip()}")
+            print(f"[Test] Pause log: {self._getConsoleSafeText(pauseLog.strip())}")
 
             resumeShareLink, resumeLog = self._resumeUpload(
                 outputCapture=resumeOutput,
                 extraArgs=['--e2ee', *loggingArgs],
                 extraEnv={'FILESHARE_TEST': LOCAL_TEST_SERVER_URL}
             )
-            print(f"[Test] Resume log: {resumeLog.strip()}")
+            print(f"[Test] Resume log: {self._getConsoleSafeText(resumeLog.strip())}")
 
             encryptionKey = self._extractEncryptionKey(pauseLog) or self._extractEncryptionKey(resumeLog)
             if not encryptionKey:
@@ -917,7 +917,7 @@ class E2EEUploadDownloadTest(E2EEUploadTestBase, ResumeTestBase):
             )
 
             # Verify downloaded file matches original
-            downloadedHash = getFileHash(downloadedPath)
+            downloadedHash = self.getFileHash(downloadedPath)
             self.assertEqual(downloadedHash, self.originalFileHash, "Downloaded file should match original")
 
             downloadedSize = os.path.getsize(downloadedPath)

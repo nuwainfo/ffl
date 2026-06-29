@@ -25,6 +25,7 @@ import signal
 import json
 import atexit
 import time
+import threading
 
 if 'Cosmopolitan' in platform.version():
     if sys.prefix not in sys.path:
@@ -45,7 +46,7 @@ import segno
 from functools import partial
 
 from bases.Kernel import UIDGenerator, getLogger, FFLEvent
-from bases.Server import createServer, DownloadHandler, ServerConfig
+from bases.Server import DownloadHandler, ServerConfig, createServer
 from bases.Tunnel import TunnelRunner, TunnelUnavailableError
 from bases.WebRTC import DummyWebRTCManager, WebRTCManager, WebRTCDownloader
 from bases.Settings import DEFAULT_STATIC_ROOT, SettingsGetter, ExecutionMode
@@ -380,6 +381,8 @@ def processUpload(args, reader, proxyConfig: ProxyConfig):
                 extraArgs['receipt'] = args.receipt
             if getattr(args, 'receiptConfirm', None) is not None:
                 extraArgs['receiptConfirm'] = args.receiptConfirm
+            if getattr(args, 'legacyLink', None):
+                extraArgs['legacyLink'] = args.legacyLink
 
             if resume:
                 # Resume mode: use resume() instead of tell()
@@ -832,7 +835,16 @@ def processSharing(args, proxyConfig: ProxyConfig = None):
                 # Reader provides file and directory information
                 server = createServer(reader, port, uid, domain, handlerClass, webRTCManagerClass, serverConfig)
 
-                server.start()
+                threading.Thread(target=server.serve_forever, daemon=True, name='http-server').start()
+                try:
+                    server._doneEvent.wait()
+                finally:
+                    server.shutdown()
+
+                if server.error:
+                    logger.error("Server encountered an error during file sharing")
+                    raise ChildProcessError()
+                    
             except KeyboardInterrupt:
                 flushPrint(_('\nExiting on user request (Ctrl+C)...'))
 

@@ -89,7 +89,7 @@ class AsyncTunnelThread(threading.Thread):
         self.loop = asyncio.new_event_loop()
         self.loop.set_exception_handler(self._silencePendingTask)
         self.stopRequested = False
-        super().__init__()
+        super().__init__(daemon=True)
 
     def _silencePendingTask(self, loop, context):
         msg = context.get("message", "")
@@ -170,15 +170,16 @@ class AsyncTunnelThread(threading.Thread):
         if not self.loop or self.loop.is_closed():
             return
 
-            try:
-                if not self.loop.is_running():
-                    return
+        try:
+            if not self.loop.is_running():
+                return
 
-                # Use proper shutdown method that handles task cancellation
-                future = asyncio.run_coroutine_threadsafe(self.client.shutdown(), self.loop)
-                future.result(timeout=2) # Wait up to 2 seconds for shutdown
-            except Exception as e:
-                logger.debug(f"Error during tunnel shutdown: {e}")
+            # Use proper shutdown method that handles task cancellation and aborts
+            # the control connection so listen() can unwind immediately.
+            future = asyncio.run_coroutine_threadsafe(self.client.shutdown(), self.loop)
+            future.result(timeout=2) # Wait up to 2 seconds for shutdown
+        except Exception as e:
+            logger.debug(f"Error during tunnel shutdown: {e}")
 
 
 class TunnelRunner:

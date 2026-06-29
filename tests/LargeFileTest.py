@@ -56,13 +56,11 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 try:
     from .ResumeTestBase import ResumeBrowserTestBase
-    from .CoreTestBase import getFileHash
 except ImportError:
     if repoRoot not in sys.path:
         sys.path.insert(0, repoRoot)
         
     from tests.ResumeTestBase import ResumeBrowserTestBase
-    from tests.CoreTestBase import getFileHash
 
 DIRECT_RUN = __name__ == "__main__"
 BROWSER_CHOICES = ("chrome", "firefox")
@@ -1133,7 +1131,7 @@ class LargeFileTest(ResumeBrowserTestBase):
 
         if self.VERIFY_HASH:
             print("[Test] Computing full SHA-256 for the large test file...")
-            self.originalFileHash = getFileHash(self.largeFilePath)
+            self.originalFileHash = self.getFileHash(self.largeFilePath)
             print(f"[Test] Large file SHA-256: {self.originalFileHash}")
         else:
             self.originalFileHash = None
@@ -2419,7 +2417,7 @@ class LargeFileTest(ResumeBrowserTestBase):
 
         if self.originalFileHash:
             print("[Test] Computing downloaded file SHA-256...")
-            downloadedHash = getFileHash(downloadedFilePath)
+            downloadedHash = self.getFileHash(downloadedFilePath)
             print(f"[Test] Downloaded file SHA-256: {downloadedHash}")
             if downloadedHash != self.originalFileHash:
                 raise AssertionError("Downloaded large file hash does not match the original")

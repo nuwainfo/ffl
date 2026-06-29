@@ -48,6 +48,7 @@ import base64
 import json
 import secrets
 import threading
+import weakref
 
 from dataclasses import is_dataclass, asdict
 from datetime import datetime, date
@@ -670,10 +671,14 @@ class HookClient:
 
 
 class HookEndpointRouter:
+
     ALLOWED_METHODS = {'GET', 'POST', 'HEAD'}
     BLOCKED_RESPONSE_HEADERS = {
         'content-length', 'content-encoding', 'connection', 'transfer-encoding', 'server', 'date'
     }
+
+    _routesByServer = weakref.WeakKeyDictionary()
+    _routesLock = threading.Lock()
 
     @classmethod
     def _normalizeRoute(cls, route: dict) -> Optional[dict]:
@@ -698,18 +703,27 @@ class HookEndpointRouter:
         return {'method': method, 'path': path, 'encryptResponse': bool(route.get('encryptResponse', False))}
 
     @classmethod
-    def _fetchRoutes(cls, server, hookClient: HookClient) -> list:
-        context = {
-            'uid': server.uid,
-            'domain': server.domain,
-            'port': server.server_address[1],
-            'authEnabled': bool(server.config.authPassword),
-            'defaultWebRTC': bool(server.config.defaultWebRTC),
-            'e2eeEnabled': bool(server.config.e2eeEnabled),
-            'torEnabled': bool(server.config.torEnabled),
-            'fileName': server.reader.contentName,
-            'fileSize': server.reader.size,
+    def _buildSessionContext(cls, server, session) -> dict:
+        # Keep /hook/server/endpoints/register payload single-session-shaped for
+        # protocol compatibility. Multi-session support is additive: each share
+        # session registers independently, and request-time X-FFL-* headers let
+        # newer hook servers distinguish sessions without breaking older ones.
+        return {
+            'uid': session.uid,
+            'domain': session.domain,
+            'port': server.server_address[1],           
+            'fileName': session.reader.contentName,
+            'fileSize': session.reader.size,
+            'authEnabled': bool(session.config.authPassword),
+            'defaultWebRTC': bool(session.config.defaultWebRTC),
+            'e2eeEnabled': bool(session.config.e2eeEnabled),
+            'torEnabled': bool(session.config.torEnabled),
+            'sessionCount': server.getSessionCount(),
         }
+
+    @classmethod
+    def _fetchRoutes(cls, server, session, hookClient: HookClient) -> list:
+        context = cls._buildSessionContext(server, session)
 
         routes = []
         try:
@@ -722,6 +736,28 @@ class HookEndpointRouter:
                     logger.warning(f"Ignored invalid hook endpoint route: {route}")
         except Exception as e:
             logger.warning(f"Hook endpoint registration failed: {e}")
+
+        return routes
+
+    @classmethod
+    def _getRoutesForSession(cls, server, session, hookClient: HookClient) -> list:
+        # DownloadHandler is constructed per request by Python's HTTP server.
+        # Without this cache, each new handler would call _fetchRoutes() again
+        # and re-register the same hook endpoints for the same share session.
+        with cls._routesLock:
+            routesBySession = cls._routesByServer.get(server)
+            if routesBySession is None:
+                routesBySession = {}
+                cls._routesByServer[server] = routesBySession
+
+            existing = routesBySession.get(session.uid)
+            if existing is not None:
+                return existing
+
+        routes = cls._fetchRoutes(server, session, hookClient)
+
+        with cls._routesLock:
+            cls._routesByServer[server][session.uid] = routes
 
         return routes
 
@@ -751,7 +787,7 @@ class HookEndpointRouter:
     def _encryptAndSendHookResponse(cls, handler, data: bytes, streamId: str, contentType: str):
         """Encrypt hook response data with the server's E2EE manager and send to client."""
         originalSize = len(data)
-        e2eeManager = handler.server.e2eeManager
+        e2eeManager = handler.session.e2eeManager
         encryptor = e2eeManager.createEncryptor(
             filename=streamId,
             filesize=originalSize,
@@ -798,6 +834,23 @@ class HookEndpointRouter:
         headers['Accept-Encoding'] = 'identity'
         return headers
 
+    @staticmethod
+    def _addSessionForwardHeaders(handler, headers):
+        session = handler.session
+
+        # These headers are additive multi-session context for hook servers.
+        # Older single-session hook servers can ignore them and still work from
+        # the original registration payload alone.
+        headers['X-FFL-UID'] = str(session.uid)
+        headers['X-FFL-Domain'] = str(session.domain or '')
+        headers['X-FFL-FileName'] = str(session.reader.contentName)
+        headers['X-FFL-FileSize'] = str(session.reader.size)
+        headers['X-FFL-AuthEnabled'] = str(bool(session.config.authPassword)).lower()
+        headers['X-FFL-DefaultWebRTC'] = str(bool(session.config.defaultWebRTC)).lower()
+        headers['X-FFL-E2EEEnabled'] = str(bool(session.config.e2eeEnabled)).lower()
+        headers['X-FFL-TorEnabled'] = str(bool(session.config.torEnabled)).lower()
+        return headers
+
     @classmethod
     def _sendProxyResponse(cls, handler, method: str, response: requests.Response):
         status = response.status_code
@@ -839,6 +892,7 @@ class HookEndpointRouter:
         try:
             url = cls._buildProxyURL(hookClient, path, args=args)
             requestHeaders = cls._buildForwardHeaders(handler)
+            requestHeaders = cls._addSessionForwardHeaders(handler, requestHeaders)
 
             requestArgs = {
                 'url': url,
@@ -853,9 +907,9 @@ class HookEndpointRouter:
 
             response = requests.request(method, **requestArgs)
 
-            serverObj = getattr(handler, 'server', None)
-            e2eeManager = getattr(serverObj, 'e2eeManager', None)
-            e2eeEnabled = getattr(getattr(serverObj, 'config', None), 'e2eeEnabled', False)
+            session = handler.session
+            e2eeManager = session.e2eeManager
+            e2eeEnabled = bool(session.config.e2eeEnabled)
 
             if (
                 encryptResponse and method != 'HEAD' and response.status_code == 200 and e2eeManager is not None and
@@ -873,8 +927,8 @@ class HookEndpointRouter:
             handler.send_error(502, "Hook endpoint request failed")
 
     @classmethod
-    def registerForHandler(cls, handler, server, hookClient: HookClient, getPathMap, postPathMap, headPathMap):
-        routes = cls._fetchRoutes(server, hookClient)
+    def registerForHandler(cls, handler, server, session, hookClient: HookClient, getPathMap, postPathMap, headPathMap):
+        routes = cls._getRoutesForSession(server, session, hookClient)
         for route in routes:
             method = route['method']
             path = route['path']
@@ -893,17 +947,6 @@ class HookEndpointRouter:
                 )
             elif method == 'HEAD':
                 headPathMap[path] = (lambda _path=path: cls._proxyRequest(handler, hookClient, 'HEAD', _path))
-
-
-def registerHookEndpointsForHandler(handler, server, hookClient: HookClient, getPathMap, postPathMap, headPathMap):
-    HookEndpointRouter.registerForHandler(
-        handler=handler,
-        server=server,
-        hookClient=hookClient,
-        getPathMap=getPathMap,
-        postPathMap=postPathMap,
-        headPathMap=headPathMap
-    )
 
 
 _hookResponseHandlers: dict = {}
@@ -928,10 +971,18 @@ def registerHookResponseHandler(eventName: str, handler, timeout: float = 10.0) 
 
 def forwardEventToHook(hookSender, eventName, **eventData):
     if eventName == FFLEvent.serverEndpointsRegister.key:
+        # This event is triggered from DownloadHandler._mergeAdditionalEndpointMaps().
+        # `handler` is the active RequestHandler instance and should be a DownloadHandler subclass.
+        # `server` is the active FFL server instance. For HookClient senders we use this special
+        # request/response path to discover extra HTTP endpoints and merge them into the handler maps.
+        # The design goal is to add multi-session capability without breaking the
+        # old single-session hook protocol: registration stays per-session with
+        # the original payload shape, while request-time headers add extra context.
         if isinstance(hookSender, HookClient):
-            registerHookEndpointsForHandler(
+            HookEndpointRouter.registerForHandler(
                 handler=eventData['handler'],
                 server=eventData['server'],
+                session=eventData['session'],
                 hookClient=hookSender,
                 getPathMap=eventData['getPathMap'],
                 postPathMap=eventData['postPathMap'],

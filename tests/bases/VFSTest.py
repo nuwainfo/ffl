@@ -31,7 +31,7 @@ import zipfile
 import threading
 import concurrent.futures
 
-from ..CoreTestBase import FastFileLinkTestBase, getFileHash
+from ..CoreTestBase import FastFileLinkTestBase
 
 
 class VFSIntegrationTest(FastFileLinkTestBase):
@@ -120,8 +120,8 @@ class VFSIntegrationTest(FastFileLinkTestBase):
         with open(file2Path, 'w') as f:
             f.write("Test content from file2\n" * 100)
 
-        file1Hash = getFileHash(file1Path)
-        file2Hash = getFileHash(file2Path)
+        file1Hash = self.getFileHash(file1Path)
+        file2Hash = self.getFileHash(file2Path)
         print(f"[Test] Created test folder with 2 files")
 
         # Step 1: Share folder via VFS
@@ -153,8 +153,8 @@ class VFSIntegrationTest(FastFileLinkTestBase):
         self.assertTrue(os.path.exists(extractedFile1), "file1.txt not in ZIP")
         self.assertTrue(os.path.exists(extractedFile2), "file2.txt not in ZIP")
 
-        self.assertEqual(getFileHash(extractedFile1), file1Hash, "file1 hash mismatch")
-        self.assertEqual(getFileHash(extractedFile2), file2Hash, "file2 hash mismatch")
+        self.assertEqual(self.getFileHash(extractedFile1), file1Hash, "file1 hash mismatch")
+        self.assertEqual(self.getFileHash(extractedFile2), file2Hash, "file2 hash mismatch")
 
         print("\n[Test] ========== VFS Folder Test PASSED ==========")
 
@@ -359,7 +359,7 @@ class VFSIntegrationTest(FastFileLinkTestBase):
             try:
                 print(f"[Test] Thread-{threadId}: Starting download...")
                 self.downloadFileWithRequests(httpShareLink, downloadPath)
-                fileHash = getFileHash(downloadPath)
+                fileHash = self.getFileHash(downloadPath)
                 fileSize = os.path.getsize(downloadPath)
                 print(f"[Test] Thread-{threadId}: Completed (size={fileSize}, hash={fileHash[:16]}...)")
 
@@ -393,7 +393,7 @@ class VFSIntegrationTest(FastFileLinkTestBase):
         self.assertEqual(len(results), numConcurrent, f"Expected {numConcurrent} results")
 
         # Get expected hash from original file
-        expectedHash = getFileHash(self.testFilePath)
+        expectedHash = self.getFileHash(self.testFilePath)
         print(f"[Test] Expected hash: {expectedHash[:16]}...")
 
         # Verify all downloads have correct hash

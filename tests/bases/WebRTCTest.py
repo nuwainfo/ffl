@@ -27,7 +27,7 @@ import subprocess
 
 from selenium.webdriver.support.ui import WebDriverWait
 
-from ..CoreTestBase import generateRandomFile, getFileHash, FastFileLinkTestBase
+from ..CoreTestBase import FastFileLinkTestBase
 from ..BrowserTestBase import BrowserTestBase
 
 
@@ -65,7 +65,7 @@ class WebRTCTest(BrowserTestBase):
             # After download is successful, update captured output for P2P verification
             outputText = self._updateCapturedOutput(outputCapture)
             if outputText:
-                print(f"[Test] Core.py captured output:\n{outputText}")
+                print(f"[Test] Core.py captured output:\n{self._getConsoleSafeText(outputText)}")
 
             # Assert that P2P is mentioned in the output (indicating WebRTC usage)
             if "P2P" not in outputText:
@@ -176,7 +176,7 @@ class WebRTCTest(BrowserTestBase):
             # After downloads, update captured output for WebRTC verification
             outputText = self._updateCapturedOutput(outputCapture)
             if outputText:
-                print(f"[Test] Core.py captured output:\n{outputText}")
+                print(f"[Test] Core.py captured output:\n{self._getConsoleSafeText(outputText)}")
 
             # Check for WebRTC patterns like [#b9c12]
             import re
@@ -209,10 +209,10 @@ class WebRTCTest(BrowserTestBase):
             unicodeFilePath = os.path.join(self.tempDir, unicodeFilename)
 
             # Generate test file with same size as default
-            generateRandomFile(unicodeFilePath, self.fileSizeBytes)
+            self.generateRandomFile(unicodeFilePath, self.fileSizeBytes)
 
             # Store original file info for verification
-            originalHash = getFileHash(unicodeFilePath)
+            originalHash = self.getFileHash(unicodeFilePath)
             originalSize = os.path.getsize(unicodeFilePath)
 
             # Print with encoding handling for Windows console
@@ -848,7 +848,7 @@ class DownloadTest(FastFileLinkTestBase):
 
             # Verify downloaded file matches original
             self.assertTrue(os.path.exists(downloadedPath), "Downloaded file should exist")
-            downloadedHash = getFileHash(downloadedPath)
+            downloadedHash = self.getFileHash(downloadedPath)
             self.assertEqual(
                 downloadedHash, self.originalFileHash, "Downloaded file should match original (stdin streaming)"
             )
@@ -895,7 +895,7 @@ class DownloadTest(FastFileLinkTestBase):
                 f"Stdout download failed (exit {downloadProcess.returncode}):\n{stderrOutput.decode(errors='replace')}"
             )
 
-        print(f"[Test] Stderr output:\n{stderrOutput.decode(errors='replace')}")
+        print(f"[Test] Stderr output:\n{self._getConsoleSafeText(stderrOutput)}")
         return rawBytes, stderrOutput.decode(errors='replace')
 
     def testStdoutDownload(self):

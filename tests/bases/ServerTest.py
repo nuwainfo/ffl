@@ -157,15 +157,16 @@ class DownloadCompleteHandlerTest(unittest.TestCase):
             'Host': 'example.fastfilelink.com',
         }
         handler.server = type('ServerStub', (), {})()
-        handler.server.httpDownloadCompletionStore = HTTPDownloadCompletionStore()
-        handler.server.webRTC = mock.Mock()
+        handler.session = type('SessionStub', (), {})()
+        handler.session.httpDownloadCompletionStore = HTTPDownloadCompletionStore()
+        handler.session.webRTC = mock.Mock()
         handler._sendBytes = mock.Mock()
         return handler
 
     def testDuplicateHttpCompleteAckTriggersReceiptOnlyOnce(self):
         handler = self._createHandler()
         downloadId = 'download-3'
-        handler.server.httpDownloadCompletionStore.register(downloadId)
+        handler.session.httpDownloadCompletionStore.register(downloadId)
 
         with mock.patch('bases.Server.FFLEvent.receiptCreated.trigger') as triggerMock:
             handler._handleDownloadComplete({'downloadId': downloadId, 'receivedBytes': 123})

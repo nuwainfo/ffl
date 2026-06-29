@@ -78,7 +78,9 @@ def _pyAutoGuiAvailable():
         import pyautogui  # noqa: F401
         import pyperclip  # noqa: F401
         return True
-    except ImportError:
+    except Exception:
+        # ImportError when packages missing; Xlib.error.XauthError on headless
+        # servers without ~/.Xauthority (e.g. Jenkins CI)
         return False
 
 
@@ -130,9 +132,13 @@ def _killFFLProcesses():
         for proc in psutil.process_iter(['pid', 'cmdline']):
             try:
                 cmdline = proc.info.get('cmdline') or []
-                if any('Core.py' in arg for arg in cmdline):
+                if any('Core.py' in arg or 'CorePatched.py' in arg for arg in cmdline):
                     proc.terminate()
-                    proc.wait(timeout=3)
+                    try:
+                        proc.wait(timeout=3)
+                    except psutil.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=3)
             except Exception:
                 pass
     except Exception:
@@ -287,12 +293,13 @@ class ShellIntegrationDirectTest(_ShellIntegrationOSBase):
         if _PYAUTOGUI_AVAILABLE:
             pyperclip.copy('')
 
+        creationFlags = subprocess.CREATE_NEW_PROCESS_GROUP if _IS_WINDOWS else 0
         self.fflProc = subprocess.Popen(
             cmdLine,
-            shell=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            creationflags=creationFlags,
         )
 
         shareLink = self._findShareLink(timeout=90)

@@ -32,7 +32,7 @@ import shutil
 
 from unittest.mock import patch
 
-from tests.CoreTestBase import FastFileLinkTestBase, getFileHash
+from tests.CoreTestBase import FastFileLinkTestBase
 
 from bases.FileSystems import LocalFileSystem
 from bases.Kernel import FFLEvent
@@ -969,7 +969,7 @@ class StdinStreamingTest(FastFileLinkTestBase):
             self.downloadFileWithRequests(shareLink, downloadedFilePath)
 
             # Verify downloaded file matches original
-            downloadedHash = getFileHash(downloadedFilePath)
+            downloadedHash = self.getFileHash(downloadedFilePath)
             self.assertEqual(downloadedHash, self.originalFileHash, "Downloaded file hash should match original")
 
             print("[Test] Stdin streaming successful - file verified")
@@ -1001,7 +1001,7 @@ class StdinStreamingTest(FastFileLinkTestBase):
             self.downloadFileWithRequests(shareLink, downloadedFilePath, expectedFileName=customName)
 
             # Verify downloaded file matches original
-            downloadedHash = getFileHash(downloadedFilePath)
+            downloadedHash = self.getFileHash(downloadedFilePath)
             self.assertEqual(downloadedHash, self.originalFileHash, "Downloaded file hash should match original")
 
             print(f"[Test] Stdin streaming with custom name '{customName}' successful")
@@ -1034,7 +1034,7 @@ class StdinStreamingTest(FastFileLinkTestBase):
                 raise AssertionError("curl did not create output file")
 
             # Verify downloaded file matches original
-            downloadedHash = getFileHash(downloadedFilePath)
+            downloadedHash = self.getFileHash(downloadedFilePath)
             self.assertEqual(downloadedHash, self.originalFileHash, "Downloaded file hash should match original")
 
             print("[Test] curl download successful - no HTTP/2 stream errors")
@@ -1049,9 +1049,8 @@ class StdinStreamingTest(FastFileLinkTestBase):
         # Create larger test file (10MB)
         largeFilePath = os.path.join(self.tempDir, "large_testfile.bin")
         print("[Test] Generating 10MB test file...")
-        from tests.CoreTestBase import generateRandomFile
-        generateRandomFile(largeFilePath, 10 * 1024 * 1024)
-        largeFileHash = getFileHash(largeFilePath)
+        self.generateRandomFile(largeFilePath, 10 * 1024 * 1024)
+        largeFileHash = self.getFileHash(largeFilePath)
 
         try:
             # Start stdin streaming with large file
@@ -1062,7 +1061,7 @@ class StdinStreamingTest(FastFileLinkTestBase):
             self.downloadFileWithRequests(shareLink, downloadedFilePath)
 
             # Verify downloaded file matches original
-            downloadedHash = getFileHash(downloadedFilePath)
+            downloadedHash = self.getFileHash(downloadedFilePath)
             self.assertEqual(downloadedHash, largeFileHash, "Large file hash should match original")
 
             print("[Test] Large file stdin streaming successful")
@@ -1081,13 +1080,13 @@ class StdinStreamingTest(FastFileLinkTestBase):
             # First download should succeed and cache the data
             downloadedFilePath1 = self._getDownloadedFilePath("stdin_first")
             self.downloadFileWithRequests(shareLink, downloadedFilePath1)
-            downloadedHash1 = getFileHash(downloadedFilePath1)
+            downloadedHash1 = self.getFileHash(downloadedFilePath1)
             print("[Test] First download successful")
 
             # Second download should succeed using cached data
             downloadedFilePath2 = self._getDownloadedFilePath("stdin_second")
             self.downloadFileWithRequests(shareLink, downloadedFilePath2)
-            downloadedHash2 = getFileHash(downloadedFilePath2)
+            downloadedHash2 = self.getFileHash(downloadedFilePath2)
             print("[Test] Second download successful (from cache)")
 
             # Verify both downloads match

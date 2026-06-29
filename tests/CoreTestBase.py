@@ -42,36 +42,6 @@ import psutil
 LOCAL_TEST_SERVER_PORT = 5000
 LOCAL_TEST_SERVER_URL = f'http://localhost:{LOCAL_TEST_SERVER_PORT}'
 
-# ---------------------------
-# File I/O helpers
-# ---------------------------
-def generateRandomFile(path, sizeBytes):
-    """Generate a random file of the specified size"""
-    with open(path, 'wb') as f:
-        f.write(os.urandom(sizeBytes))
-
-
-def getFileHash(path):
-    """Get the SHA-256 hash of a file"""
-    sha256 = hashlib.sha256()
-    with open(path, 'rb') as f:
-        for block in iter(lambda: f.read(65536), b''):
-            sha256.update(block)
-    return sha256.hexdigest()
-
-
-def isProcessRunning(pid):
-    """Check if a process is running"""
-    try:
-        process = psutil.Process(pid)
-        return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
-    except psutil.NoSuchProcess:
-        return False
-    except Exception as e:
-        print(f"[Test] Error checking process status: {e}")
-        return True
-
-
 # Sentinel distinguishing "use the default cwd" from "explicitly pass cwd=None"
 # (None is a legitimate value, meaning "inherit the caller's own cwd").
 _UNSET = object()
@@ -108,13 +78,13 @@ class FastFileLinkTestBase(unittest.TestCase):
 
         # Generate a random test file with specified size
         self.testFilePath = os.path.join(self.tempDir, "testfile.bin")
-        generateRandomFile(self.testFilePath, self.fileSizeBytes)
+        self.generateRandomFile(self.testFilePath, self.fileSizeBytes)
 
         # Create paths for output JSON
         self.jsonOutputPath = os.path.join(self.tempDir, "share_info.json")
 
         # Calculate hash of the original file for later comparison
-        self.originalFileHash = getFileHash(self.testFilePath)
+        self.originalFileHash = self.getFileHash(self.testFilePath)
         self.originalFileSize = os.path.getsize(self.testFilePath)
 
         print(f"[Test] Generated test file: {self.testFilePath}")
@@ -163,24 +133,62 @@ class FastFileLinkTestBase(unittest.TestCase):
         captureOutputIn['output'] = outputText
         return outputText
 
+    def _getConsoleSafeText(self, value):
+        if isinstance(value, bytes):
+            value = value.decode(errors='replace')
+        return str(value).encode('unicode_escape').decode('ascii')
+
+    @staticmethod
+    def generateRandomFile(path, sizeBytes):
+        """Generate a random file of the specified size"""
+        with open(path, 'wb') as fileHandle:
+            fileHandle.write(os.urandom(sizeBytes))
+
+    @staticmethod
+    def getFileHash(path):
+        """Get the SHA-256 hash of a file"""
+        sha256 = hashlib.sha256()
+        with open(path, 'rb') as fileHandle:
+            for block in iter(lambda: fileHandle.read(65536), b''):
+                sha256.update(block)
+        return sha256.hexdigest()
+
+    @staticmethod
+    def isProcessRunning(pid):
+        """Check if a process is running"""
+        try:
+            process = psutil.Process(pid)
+            return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            return False
+        except Exception as e:
+            print(f"[Test] Error checking process status: {e}")
+            return True
+
     def _terminateProcess(self):
         """Terminate the FastFileLink process gracefully"""
-        if self.coreProcess:
+        if not self.coreProcess:
+            return
+
+        process = self.coreProcess
+        pid = process.pid
+
+        try:
             # Check if process is still running
-            if self.coreProcess.poll() is None:
+            if process.poll() is None:
                 print("[Test] Process is still running, sending graceful shutdown signal")
                 try:
                     if sys.platform == 'win32':
                         import signal
-                        self.coreProcess.send_signal(signal.CTRL_BREAK_EVENT)
+                        process.send_signal(signal.CTRL_BREAK_EVENT)
                     else:
                         import signal
-                        os.kill(self.coreProcess.pid, signal.SIGINT)
+                        os.kill(pid, signal.SIGINT)
 
                     # Give the process some time to handle the signal
-                    for _ in range(5): # Wait up to 5 seconds
+                    for _i in range(5): # Wait up to 5 seconds
                         time.sleep(1)
-                        if self.coreProcess.poll() is not None:
+                        if process.poll() is not None:
                             print("[Test] Process terminated after graceful shutdown signal")
                             break
                 except KeyboardInterrupt:
@@ -189,25 +197,88 @@ class FastFileLinkTestBase(unittest.TestCase):
                 except Exception as e:
                     print(f"[Test] Failed to send graceful shutdown signal: {e}")
 
-            # If process is still running after Ctrl+C, terminate it
-            if isProcessRunning(self.coreProcess.pid):
-                try:
-                    self.coreProcess.terminate()
+            if self.isProcessRunning(pid):
+                self._terminateProcessTree(pid)
 
-                    # Wait for termination
-                    try:
-                        self.coreProcess.wait(timeout=5)
-                        print("[Test] Process terminated after explicit termination")
-                    except subprocess.TimeoutExpired:
-                        print("[Test] Process didn't terminate, killing it")
-                        self.coreProcess.kill()
-                        self.coreProcess.wait()
-                except KeyboardInterrupt:
-                    pass
+                try:
+                    process.wait(timeout=5)
+                    print("[Test] Process tree terminated")
+                except subprocess.TimeoutExpired:
+                    print("[Test] Process handle still active after tree termination")
                 except Exception as e:
-                    print(f"[Test] Failed terminate: {e}")
+                    print(f"[Test] Failed waiting for process exit: {e}")
             else:
                 print("[Test] Process already terminated")
+        finally:
+            for streamName in ('stdout', 'stderr', 'stdin'):
+                stream = getattr(process, streamName, None)
+                if stream:
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+
+            self.coreProcess = None
+
+    def _terminateProcessTree(self, pid, waitTimeout=5):
+        """Terminate a process and its descendants, with a hard kill fallback."""
+        try:
+            rootProcess = psutil.Process(pid)
+        except psutil.NoSuchProcess:
+            return
+        except Exception as e:
+            print(f"[Test] Failed to inspect process tree for PID {pid}: {e}")
+            return
+
+        processTree = rootProcess.children(recursive=True)
+        processTree.append(rootProcess)
+        liveProcesses = []
+
+        for proc in processTree:
+            try:
+                if proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE:
+                    liveProcesses.append(proc)
+            except psutil.NoSuchProcess:
+                continue
+            except Exception as e:
+                print(f"[Test] Failed to inspect process {getattr(proc, 'pid', '?')}: {e}")
+
+        if not liveProcesses:
+            return
+
+        for proc in reversed(liveProcesses):
+            try:
+                proc.terminate()
+            except psutil.NoSuchProcess:
+                continue
+            except Exception as e:
+                print(f"[Test] Failed to terminate process {proc.pid}: {e}")
+
+        _gone, aliveProcesses = psutil.wait_procs(liveProcesses, timeout=waitTimeout)
+        if not aliveProcesses:
+            return
+
+        print(f"[Test] Force killing remaining processes: {[proc.pid for proc in aliveProcesses]}")
+        for proc in reversed(aliveProcesses):
+            try:
+                proc.kill()
+            except psutil.NoSuchProcess:
+                continue
+            except Exception as e:
+                print(f"[Test] Failed to kill process {proc.pid}: {e}")
+
+        _gone, aliveProcesses = psutil.wait_procs(aliveProcesses, timeout=waitTimeout)
+        if aliveProcesses and sys.platform == 'win32':
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False
+                )
+            except Exception as e:
+                print(f"[Test] taskkill fallback failed for PID {pid}: {e}")
 
     def _getChecksumUrl(self, shareLink):
         return shareLink.rstrip('/') + '/checksum'
@@ -239,7 +310,12 @@ class FastFileLinkTestBase(unittest.TestCase):
 
         output = (result.stdout or "").strip()
         if not output:
-            raise AssertionError(f"b2sum returned empty output for file: {filePath}")
+            # Some Windows b2sum builds do not handle Unicode paths reliably.
+            hasher = hashlib.blake2b()
+            with open(filePath, 'rb') as inputFile:
+                for chunk in iter(lambda: inputFile.read(1024 * 1024), b''):
+                    hasher.update(chunk)
+            return hasher.hexdigest().lower()
 
         checksum = output.split()[0].strip().lower()
         if not checksum:
@@ -869,7 +945,8 @@ class FastFileLinkTestBase(unittest.TestCase):
         binaryCommand=None,
         stdinInputPath=None,
         stdinFileName=None,
-        workingDirectory=None
+        workingDirectory=None,
+        serverTimeout=None
     ):
         """
         Start the FastFileLink process and wait for the share link to be ready
@@ -889,6 +966,8 @@ class FastFileLinkTestBase(unittest.TestCase):
             stdinInputPath (str): Optional path to pipe into stdin instead of sharing self.testFilePath directly
             stdinFileName (str): Optional filename to advertise when stdinInputPath is used
             workingDirectory (str): Optional working directory for the launched sharing process
+            serverTimeout (int): Optional `share --timeout` guard. When omitted, tests
+                get a finite timeout so abandoned share processes cannot live forever.
 
         Returns:
             tuple: (share_link, test_server_process) if useTestServer=True, otherwise just share_link
@@ -969,6 +1048,11 @@ class FastFileLinkTestBase(unittest.TestCase):
             # Add extra arguments if provided
             if extraArgs:
                 coreArgs.extend(extraArgs)
+
+            hasExplicitServerTimeout = '--timeout' in coreArgs
+            if not hasExplicitServerTimeout:
+                effectiveServerTimeout = serverTimeout if serverTimeout is not None else 180
+                coreArgs.extend(["--timeout", str(effectiveServerTimeout)])
 
             if showOutput:
                 print(f"[Test] Real-time output enabled - you will see live progress...")
@@ -1284,6 +1368,11 @@ class FastFileLinkTestBase(unittest.TestCase):
             print(f"[Test] Starting stdin streaming...")
 
             # Start Core.py with stdin from file
+            # CREATE_NEW_PROCESS_GROUP is required on Windows so that
+            # _terminateProcess's CTRL_BREAK_EVENT only affects this child's
+            # process group and does not propagate to the test runner or the
+            # Claude Code session.
+            creationFlags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
             self.coreProcess = subprocess.Popen(
                 coreArgs,
                 cwd=workingDir,
@@ -1291,7 +1380,8 @@ class FastFileLinkTestBase(unittest.TestCase):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                env=env
+                env=env,
+                creationflags=creationFlags,
             )
 
             print(f"[Test] Process started with PID: {self.coreProcess.pid}")
@@ -1362,7 +1452,7 @@ class FastFileLinkTestBase(unittest.TestCase):
             raise AssertionError(f"Downloaded file does not exist: {downloadedFilePath}")
 
         # Calculate hash of downloaded file
-        downloadedFileHash = getFileHash(downloadedFilePath)
+        downloadedFileHash = self.getFileHash(downloadedFilePath)
         downloadedFileSize = os.path.getsize(downloadedFilePath)
         downloadedBlake2b = self._calculateBlake2b(downloadedFilePath)
 

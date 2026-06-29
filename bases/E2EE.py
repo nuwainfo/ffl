@@ -31,7 +31,7 @@ from typing import Optional, Callable
 import requests
 
 from bases.crypto import CryptoInterface
-from bases.Kernel import getLogger, Singleton
+from bases.Kernel import getLogger
 from bases.I18n import _
 
 logger = getLogger(__name__)
@@ -466,21 +466,15 @@ class StreamDecryptor:
 # ============================================================================
 
 
-class E2EEManager(Singleton):
-    """Manager for E2E encryption operations - thread-safe singleton
+class E2EEManager:
+    """Manager for E2E encryption operations - per-session instance
 
-    Ensures all clients receive the same content key (Kc) wrapped with their
-    individual public keys (Ki).
+    Ensures all clients for a given session receive the same content key (Kc)
+    wrapped with their individual public keys (Ki). Each session gets its own
+    E2EEManager instance to prevent cross-session key leakage.
     """
 
-    def initialize(self, chunkSize):
-        """Initialize E2EE manager (called only once by Singleton base class)
-
-        Args:
-            chunkSize: Transfer chunk size to use for encryption
-        """
-        logger.debug("[E2EE] Initializing E2EEManager singleton")
-
+    def __init__(self, chunkSize):
         self.chunkSize = chunkSize
         self.encryptionMetaStorage = EncryptionMetaStorage()
         self.crypto = CryptoInterface()

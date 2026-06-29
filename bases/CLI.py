@@ -30,6 +30,7 @@ from bases.Kernel import (
 from bases.Settings import DEFAULT_AUTH_USER_NAME, DEFAULT_UPLOAD_DURATION, SettingsGetter
 from bases.Utils import flushPrint, checkVersionCompatibility, getEnv, parseProxyString, setupProxyEnvironment
 from bases.Hook import HookClient, HookFileWriter, forwardEventToHook
+from bases.Daemon import DaemonManager, DaemonClient
 from bases.Upgrade import performUpgrade
 from bases.Auth import PICKUP_CODE_LENGTH, PUBKEY_PUBLIC_EXT, PUBKEY_PRIVATE_EXT, RecipientAuth
 from bases.crypto import CryptoInterface
@@ -370,6 +371,12 @@ def configureCLIParser():
             dest="yes"
         )
         parser.add_argument(
+            "--legacy-link",
+            metavar="URL",
+            help=_("Legacy P2P share link to recover after this server upload completes"),
+            dest="legacyLink",
+        )
+        parser.add_argument(
             "--max-downloads",
             type=validateMaxDownloads,
             default=0,
@@ -453,6 +460,20 @@ def configureCLIParser():
             default="on",
             help=_("Enable or disable stdin caching ('off' means a second read raises an error)"),
             dest="stdinCache"
+        )
+        parser.add_argument(
+            "--background",
+            action="store_true",
+            default=False,
+            help=_("Submit share to background daemon (auto-starts daemon if needed)"),
+            dest="background"
+        )
+        parser.add_argument(
+            "--foreground",
+            action="store_true",
+            default=False,
+            help=_("Run share in foreground even if a daemon is running"),
+            dest="foreground"
         )
 
         # Allow addons to register additional arguments for share command
@@ -654,13 +675,80 @@ def configureCLIParser():
 
     _addRecipientAuthArguments(keygenSubparser)
 
+    # Daemon management command
+    daemonSubparser = subparsers.add_parser(
+        'daemon',
+        help=_('Manage background daemon for multi-session sharing'),
+        parents=[globalsParent],
+        exit_on_error=False
+    )
+    daemonSubparser.add_argument(
+        '--stop',
+        action='store_true',
+        default=False,
+        help=_('Stop the daemon and all managed shares'),
+        dest='daemonStop'
+    )
+    daemonSubparser.add_argument(
+        '--status',
+        action='store_true',
+        default=False,
+        help=_('Show daemon status'),
+        dest='daemonStatus'
+    )
+    daemonSubparser.add_argument(
+        '--force',
+        action='store_true',
+        default=False,
+        help=_('Force stop the daemon (use with --stop)'),
+        dest='force'
+    )
+    # Internal flag: DaemonManager._startDaemon() passes --start when spawning the background
+    # daemon subprocess so that subprocess enters the server loop (DaemonServer().start()).
+    # Hidden from --help because users should never call this directly.
+    daemonSubparser.add_argument(
+        '--start',
+        action='store_true',
+        default=False,
+        help=argparse.SUPPRESS,
+        dest='daemonRunServer'
+    )
+
+    # Shares management command
+    sharesSubparser = subparsers.add_parser(
+        'shares',
+        help=_('Manage daemon-managed shares'),
+        parents=[globalsParent],
+        exit_on_error=False
+    )
+    sharesActions = sharesSubparser.add_subparsers(dest='sharesAction')
+    sharesActions.add_parser('list', help=_('List active managed shares'), parents=[globalsParent], exit_on_error=False)
+    sharesStopParser = sharesActions.add_parser(
+        'stop', help=_('Stop a specific share'), parents=[globalsParent], exit_on_error=False
+    )
+    sharesStopParser.add_argument('id', metavar='ID', nargs='?', help=_('Share ID to stop'))
+    sharesStopParser.add_argument(
+        '--all',
+        action='store_true',
+        help=_('Stop all managed shares'),
+        dest='all'
+    )
+    sharesOpenParser = sharesActions.add_parser(
+        'open', help=_('Open a share link in the browser'), parents=[globalsParent], exit_on_error=False
+    )
+    sharesOpenParser.add_argument('id', metavar='ID', help=_('Share ID to open'))
+    sharesQrParser = sharesActions.add_parser(
+        'qr', help=_('Show the share QR code in the terminal'), parents=[globalsParent], exit_on_error=False
+    )
+    sharesQrParser.add_argument('id', metavar='ID', help=_('Share ID to render as QR'))
+
     # Let addons create their command parsers (same pattern - inherit globalsParent)
     for cmdName, cmdConfig in commandRegistry.items():
         cmdParser = subparsers.add_parser(cmdName, help=cmdConfig['help'], parents=[globalsParent], exit_on_error=False)
         cmdConfig['setupFunction'](cmdParser)
 
     # Collect all valid subcommand names (including core commands)
-    commandNames = {'share', 'download', 'upgrade', 'keygen', *commandRegistry.keys()}
+    commandNames = {'share', 'download', 'upgrade', 'keygen', 'daemon', 'shares', *commandRegistry.keys()}
     return parser, globalsParent, commandNames, shareSubparser
 
 
@@ -859,6 +947,16 @@ def processArgumentsAndCommands(args, shareSubparser=None):
 
     if argPolicy['exitCode'] is not None:
         return argPolicy['exitCode']
+
+    if command == 'daemon':
+        return DaemonManager.handleCLICommand(args)
+
+    if command == 'shares':
+        return DaemonManager.handleSharesCLICommand(args)
+
+    if command == 'share':
+        if not args.foreground and (args.background or DaemonClient.isRunning()):
+            return DaemonManager.handleBackgroundShare(args)
 
     # Validate share arguments for:
     # - CLI mode: when command is 'share'
@@ -1088,6 +1186,11 @@ def validateShareArguments(args):
         if not args.upload:
             flushPrint(_('Error: --resume flag can only be used with --upload'))
             return 1
+
+    if args.legacyLink and not args.upload:
+        flushPrint(_('Error: --legacy-link requires --upload'))
+        flushPrint(_('Use: --upload <duration> --legacy-link <old-share-url>'))
+        return 1
 
     # Validate conflicting --pause and --resume flags
     if args.pause is not None and args.resume:

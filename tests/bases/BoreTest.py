@@ -34,6 +34,7 @@ import requests
 
 from bases.Bore import BoreClient # isort:skip
 from bases.Tunnel import AsyncTunnelThread, fetchTunnelToken # isort:skip
+from tests.CoreTestBase import FastFileLinkTestBase
 
 # ---------------------------
 # Silence noisy logs
@@ -45,19 +46,6 @@ STALE_TEST_TUNNEL_DOMAIN = os.getenv("BORE_STALE_TEST_DOMAIN", "33.fastfilelink.
 STALE_PUBLIC_GET_TIMEOUT = float(os.getenv("BORE_STALE_PUBLIC_GET_TIMEOUT", "8"))
 STALE_RECOVERY_DEADLINE = float(os.getenv("BORE_STALE_RECOVERY_DEADLINE", "30"))
 STALE_CONTROL_IDLE_TIMEOUT = float(os.getenv("BORE_STALE_CONTROL_IDLE_TIMEOUT", "5"))
-
-
-# ---------------------------
-# File I/O helpers
-# ---------------------------
-def generateRandomFile(path, sizeBytes):
-    with open(path, 'wb') as f:
-        f.write(os.urandom(sizeBytes))
-
-
-def writeFile(path, content):
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(content)
 
 
 # ---------------------------
@@ -342,8 +330,9 @@ class BoreHttpsTest(unittest.TestCase):
         self.indexPath = os.path.join(self.tempDir, "index.html")
         self.dataPath = os.path.join(self.tempDir, "data.bin")
 
-        writeFile(self.indexPath, "<html><body>Hello Bore!</body></html>")
-        generateRandomFile(self.dataPath, 1024 * 1024) # 1MB
+        with open(self.indexPath, 'w', encoding='utf-8') as fileHandle:
+            fileHandle.write("<html><body>Hello Bore!</body></html>")
+        FastFileLinkTestBase.generateRandomFile(self.dataPath, 1024 * 1024) # 1MB
 
         self.httpProcess = subprocess.Popen(["python", "-m", "http.server",
                                              str(self.testPort)],

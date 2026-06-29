@@ -50,7 +50,7 @@ COPYRIGHT = 'Copyright (c) 2026 FastFileLink Contributors. Licensed under Apache
 # Default download note for open source users (complete HTML block placed into {{ DOWNLOAD_NOTE_HTML }})
 DOWNLOAD_NOTE = (
     '<div class="border-button">'
-    '<p style="font-size: 14px; margin-top: 10px; line-height: 1.2;">'
+    '<p class="downloadPagePrimaryText" style="font-size: 14px; margin-top: 10px; line-height: 1.2;">'
     '<span data-i18n="Download:downloadFooter.message">'
     'PS: Wishing you a great day! Download your free file sharing app at</span> '
     '<a href="https://github.com/nuwainfo/ffl" target="_blank">GitHub</a>'

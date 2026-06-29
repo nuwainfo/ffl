@@ -18,7 +18,7 @@ Licensed under Apache-2.0 license.
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin=""/>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@100;300;400;500;700;900&amp;display=swap"
           rel="stylesheet"/>
-    <title>{{ PAGE_TITLE }}</title>
+    <title>{{ pageTitle }}</title>
     <!-- Bootstrap core CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet"
           integrity="sha384-1BmE4kWBq78iYhFldvKuhfTAU6auU8tT94WrHftjDbrCEXSU1oBoqyl2QvZ6jIW3" crossorigin="anonymous">
@@ -28,44 +28,45 @@ Licensed under Apache-2.0 license.
           integrity="sha384-50oBUHEmvpQ+1lW4y57PTFmhCaXp0ML5d60M1M7uH2+nqUivzIebhndOJK28anvf" crossorigin="anonymous"/>
 
     <!-- Custom CSS Files -->
-    <link rel="stylesheet" href="{{ STATIC_SERVER }}/static/client/theme.css">
+    <link rel="stylesheet" href="{{ staticServer }}/static/client/theme.css">
 
     <!-- To avoid favicon.ico not found error -->
-    <link rel="icon" href="{{ STATIC_SERVER }}/static/client/Logo.png" type="image/x-icon">
-        
+    <link rel="icon" href="{{ staticServer }}/static/client/Logo.png" type="image/x-icon">
+
     <!-- InApp Browser Detection Warning Styles -->
-    <link rel="stylesheet" href="{{ STATIC_SERVER }}/static/css/InAppGuard.css">
-    
+    <link rel="stylesheet" href="{{ staticServer }}/static/css/InAppGuard.css">
+
     <!-- DownloadManager Styles -->
-    <link rel="stylesheet" href="{{ STATIC_SERVER }}/static/css/DownloadUI.css">
+    <link rel="stylesheet" href="{{ staticServer }}/static/css/DownloadUI.css">
 
     <!-- E2EE (End-to-End Encryption) UI Styles -->
-    <link rel="stylesheet" href="{{ STATIC_SERVER }}/static/css/E2EE.css">
+    <link rel="stylesheet" href="{{ staticServer }}/static/css/E2EE.css">
 
     <!-- Preview Components (File hint + ZIP preview) -->
-    <link rel="stylesheet" href="{{ STATIC_SERVER }}/static/css/Preview.css">
+    <link rel="stylesheet" href="{{ staticServer }}/static/css/Preview.css">
 
     <!-- Extra head styles: injected by addons at serve time, empty by default -->
-    {{ EXTRA_HEAD_STYLES }}
+    {{ extraHeadStyles | safe }}
 
     <!-- i18next internationalization scripts -->
     <script src="https://unpkg.com/i18next@25.5.2/dist/umd/i18next.js"></script>
     <script src="https://unpkg.com/i18next-http-backend@3.0.2/i18nextHttpBackend.js"></script>
     <script src="https://unpkg.com/i18next-browser-languagedetector@8.2.0/dist/umd/i18nextBrowserLanguageDetector.min.js"></script>
     <script src="https://unpkg.com/jquery-i18next@1.2.1/dist/umd/jquery-i18next.min.js"></script>
-    <script src="{{ STATIC_SERVER }}/static/js/FFLI18n.js"></script>
+    <script src="{{ staticServer }}/static/js/FFLI18n.js"></script>
 </head>
     <body>
         <!-- Page header: injected by addons at serve time, empty by default -->
-        {{ PAGE_HEADER }}
-        <div id="pricing" class="{{ DOWNLOAD_CONTAINER_CLASS }} wow fadeIn pricing-tables">
+        {{ pageHeader | safe }}
+
+        <div id="pricing" class="{{ downloadContainerClass }} wow fadeIn pricing-tables">
             <div class="container">
                 <div class="right-image wow fadeInRight row">
                     <div class="col-lg-8 offset-lg-2">
                         <div class="section-heading">
                             <h4>
-                                <span data-i18n="Download:title" class="{{ TITLE_PRIMARY_CLASS }}">Downloading</span>
-                                <em><span data-i18n="Download:file" class="{{ TITLE_ACCENT_CLASS }}">File</span></em>
+                                <span data-i18n="Download:title" class="{{ titlePrimaryClass }}">Downloading</span>
+                                <em><span data-i18n="Download:file" class="{{ titleAccentClass }}">File</span></em>
                                 <i id="file-info-icon" class="fas fa-info-circle downloadPageAccentText"
                                    style="margin-left: 8px; margin-right: 8px; color: #007bff; cursor: help; font-size: 0.8em;"></i>
                                 <i id="file-preview-btn" class="fas fa-eye"
@@ -248,7 +249,7 @@ Licensed under Apache-2.0 license.
                                 <!-- Fallback Download Button - Hidden; also serves as DownloadManager URL source -->
                                 <div id="fallback-container" style="display: none;">
                                     <div class="border-button">
-                                        <a id="download-link" href="/uid=****/download" data-i18n="Download:client.manualDownload">Download</a>
+                                        <a id="download-link" href="/{{ uid }}/download" data-i18n="Download:client.manualDownload">Download</a>
                                     </div>
                                 </div>
 
@@ -270,7 +271,7 @@ Licensed under Apache-2.0 license.
                                 <p id="fileContentType" style="display:none;">{{ fileContentType }}</p>
 
                                 <!-- Download note: injected by addons, default footer message otherwise -->
-                                {{ DOWNLOAD_NOTE_HTML }}
+                                {{ downloadNoteHtml | safe }}
 
                             </div><!-- /#downloadBlock -->
                         </div>
@@ -326,11 +327,11 @@ Licensed under Apache-2.0 license.
         <br>
         <footer class="justify-content-center align-items-center d-flex footerAlign">
             <div class="footerTextColor">
-                {{ PAGE_FOOTER_NOTE }}
+                {{ pageFooterNote | safe }}
             </div>
             <div class="copyright-text">
                 <p>
-                    <span>{{ COPYRIGHT }}</span>
+                    <span>{{ copyright }}</span>
                 </p>
             </div>
         </footer>
@@ -339,18 +340,20 @@ Licensed under Apache-2.0 license.
         <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"
                 integrity="sha384-ka7Sk0Gln4gmtz2MlQnikT1wXgYsOg+OMhuP+IlRH9sENBO0LRn5q+8nbTov4+1p"
                 crossorigin="anonymous"></script>
-        <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js" 
-                integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" 
+        <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"
+                integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo="
                 crossorigin="anonymous"></script>
         <!--<script src="https://cdn.jsdelivr.net/npm/streamsaver@2.0.6/StreamSaver.min.js"></script>-->
         <!-- Support blob for debugging -->
-        <script src="{{ STATIC_SERVER }}/static/js/StreamSaver.js?blob={{ STREAMSAVER_BLOB }}"></script>
+        <script src="{{ staticServer }}/static/js/StreamSaver.js?blob={{ streamSaverBlob }}"></script>
+        <script src="https://cdn.jsdelivr.net/npm/loglevel@1.9.2/dist/loglevel.min.js"></script>
+        <script src="{{ staticServer }}/static/js/FFLLogging.js"></script>
 
         <!-- Shared Logging -->
         <script>
             // Debug configuration and logging setup (must be first)
-            const DEBUG = false; // Set to true to enable detailed logging
-            const SERVER_DEBUG = false; // Server-injected: enables mobile debugging via JS_LOG_TO_SERVER_DEBUG + ?debug=server
+            const DEBUG = {{ debug | tojson }}; // Set by server (JS_DEBUG env var or ?debug=true URL param)
+            const SERVER_DEBUG = {{ serverDebug | tojson }}; // Set by server (JS_LOG_TO_SERVER_DEBUG env var or ?debug=server URL param)
 
             // Generate unique session ID for this client session (for multi-user debug logging)
             const generateSessionId = () => {
@@ -363,97 +366,44 @@ Licensed under Apache-2.0 license.
             };
             const DEBUG_SESSION_ID = SERVER_DEBUG ? generateSessionId() : null;
 
-            // Function to send logs to server for mobile debugging
-            const sendLogToServer = (category, message, timestamp) => {
-                try {
-                    fetch('/debug/log', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
+            const log = FFLLogging.getLogFunction(
+                DEBUG,
+                [
+                    FFLLogging.createServerReporter({
+                        enabled: () => SERVER_DEBUG,
+                        endpoint: '/debug/log',
+                        sessionId: DEBUG_SESSION_ID,
+                        onError: (err) => {
+                            if (DEBUG) {
+                                console.warn('Error in serverReporter:', err);
+                            }
                         },
-                        body: JSON.stringify({
-                            category: category,
-                            message: message,
-                            timestamp: timestamp,
-                            sessionId: DEBUG_SESSION_ID
-                        })
-                    }).catch(err => {
-                        // Silently ignore server logging errors to avoid infinite loops
-                        if (DEBUG) console.warn('Failed to send log to server:', err);
-                    });
-                } catch (err) {
-                    // Silently ignore errors
-                    if (DEBUG) console.warn('Error in sendLogToServer:', err);
+                    })
+                ],
+                {
+                    defaultMethodLevel: 'info',
+                    categoryLevels: {
+                        'Status': 'warn',
+                    },
                 }
-            };
-
-            // Global logger function (available to all scripts)
-            const log = (category, message, ...args) => {
-                // First determine whether to output to console/server (preserve original switch semantics)
-                let printToConsole = !!DEBUG;
-                let sendToServer = !!SERVER_DEBUG;
-
-                // Check if the last parameter is an "options" object
-                if (args.length > 0) {
-                    const last = args[args.length - 1];
-
-                    if (typeof last === 'boolean') {
-                        // Last param is boolean: controls whether to send to server
-                        sendToServer = sendToServer && last;   // false => disable sending; true => maintain original gating
-                        args.pop(); // Remove flag from args to avoid it being included in the message
-                    } else if (
-                        last &&
-                        typeof last === 'object' &&
-                        !Array.isArray(last) &&
-                        (Object.prototype.hasOwnProperty.call(last, 'server') ||
-                         Object.prototype.hasOwnProperty.call(last, 'console'))
-                    ) {
-                        // Last param is options object: { server?: boolean, console?: boolean }
-                        if ('server' in last)  sendToServer   = sendToServer   && !!last.server;
-                        if ('console' in last) printToConsole = printToConsole && !!last.console;
-                        args.pop(); // Remove options object from args
-                    }
-                }
-
-                // Early return if nothing should be logged
-                if (!printToConsole && !sendToServer) {
-                    return;
-                }
-                
-                const timestamp = new Date().toISOString(); 
-                const prefix = `[${timestamp}] [${category}]`;
-                const fullMessage = args.length > 0 ? `${message} ${JSON.stringify(args)}` : message;
-
-                // Output to console if enabled
-                if (printToConsole) {
-                    if (args.length > 0) {
-                        console.log(`${prefix} ${message}`, ...args);
-                    } else {
-                        console.log(`${prefix} ${message}`);
-                    }
-                }
-
-                // Send to server if enabled
-                if (sendToServer) {
-                    sendLogToServer(category, fullMessage, timestamp);
-                }
-            };
+            );
+            window.log = log;
         </script>
-        
+
         <!-- Initialize i18n using common initialization -->
         <script>
             // Initialize i18n system with log function and Download namespace
             initializeI18n({
                 log: log,
                 getCurrentLanguageFunc: function() { null },
-                localesPath: '{{ STATIC_SERVER }}/static/locales',
+                localesPath: '{{ staticServer }}/static/locales',
                 ns: ['Download']  // Load Download namespace for this page
             });
         </script>
-                
+
         <!-- Include InApp Guard -->
-        <script src="{{ STATIC_SERVER }}/static/js/InAppGuard.js"></script>
-        <script>          
+        <script src="{{ staticServer }}/static/js/InAppGuard.js"></script>
+        <script>
            // Global variable to track if we should skip WebRTC
             let SKIP_WEBRTC_DUE_TO_RESTRICTION = false;
 
@@ -462,31 +412,31 @@ Licensed under Apache-2.0 license.
                 log: log,
                 skipVariableName: 'SKIP_WEBRTC_DUE_TO_RESTRICTION',
                 contentType: document.getElementById('fileContentType')?.textContent || ''
-            });            
+            });
         </script>
 
         <!-- BLAKE2b implementation (CDN) -->
         <script src="https://unpkg.com/hash-wasm@4.12.0/dist/blake2b.umd.min.js"></script>
-        <script src="{{ STATIC_SERVER }}/static/js/Checksum.js"></script>
+        <script src="{{ staticServer }}/static/js/Checksum.js"></script>
 
         <!-- DownloadManager integration -->
-        <script src="{{ STATIC_SERVER }}/static/js/DownloadManager.js"></script>
+        <script src="{{ staticServer }}/static/js/DownloadManager.js"></script>
 
         <!-- E2E Encryption Support -->
-        <script src="{{ STATIC_SERVER }}/static/js/E2EE.js"></script>
+        <script src="{{ staticServer }}/static/js/E2EE.js"></script>
 
         <!-- ZIP Preview Extractor (load before WebRTC to ensure availability) -->
-        <script src="{{ STATIC_SERVER }}/static/js/ZipPreviewExtractor.js"></script>
+        <script src="{{ staticServer }}/static/js/ZipPreviewExtractor.js"></script>
 
         <!-- ZIP Preview UI Integration (load before WebRTC to ensure availability) -->
-        <script src="{{ STATIC_SERVER }}/static/js/PreviewUI.js"></script>
+        <script src="{{ staticServer }}/static/js/PreviewUI.js"></script>
 
         <!-- WebRTC Utilities (Writers, Utilities, Debug Config, Download Managers) -->
         <script src="./static/js/WebRTC.js"></script>
 
         <!-- WebRTC and Download Script -->
         <script>
-            const DISABLE_WEBRTC = false;
+            const DISABLE_WEBRTC = {{ disableWebRTC | tojson }};
 
             // Flag to prevent multiple initializations
             let downloadInitialized = false;
@@ -494,18 +444,18 @@ Licensed under Apache-2.0 license.
             let startWebRTCTimer = null;
 
             // Auth state — rendered by Server.py at serve time
-            const PICKUP_REQUIRED = {{ PICKUP_REQUIRED }};
-            const PUBKEY_REQUIRED = {{ PUBKEY_REQUIRED }};
-            const PUBKEY_CHALLENGES = {{ PUBKEY_CHALLENGES }};
-            const EMAIL_REQUIRED = {{ EMAIL_REQUIRED }};
-            const RECIPIENT_EMAILS = {{ RECIPIENT_EMAILS }};
-            const RECEIPT_CONFIRM_MESSAGE = {{ RECEIPT_CONFIRM_MESSAGE }};
-            const OTP_REQUEST_URL = "/uid=****/email/request";
+            const PICKUP_REQUIRED = {{ pickupRequired | tojson }};
+            const PUBKEY_REQUIRED = {{ pubkeyRequired | tojson }};
+            const PUBKEY_CHALLENGES = {{ pubkeyChallenges | tojson }};
+            const EMAIL_REQUIRED = {{ emailRequired | tojson }};
+            const RECIPIENT_EMAILS = {{ recipientEmails | tojson }};
+            const RECEIPT_CONFIRM_MESSAGE = {{ receiptConfirmMessage | tojson }};
+            const OTP_REQUEST_URL = "/{{ uid }}/email/request";
 
             // Show the receipt confirm dialog after download completes.
             // Called by WebRTC.js and DownloadManager.js when POST /complete returns confirmRequired.
             const receiptConfirmationUI = RECEIPT_CONFIRM_MESSAGE !== null ? new ReceiptConfirmationUI({
-                endpoint: '/uid=****/receipt/confirm',
+                endpoint: '/{{ uid }}/receipt/confirm',
                 message: RECEIPT_CONFIRM_MESSAGE,
                 logFunction: log,
                 tFunction: t,
@@ -519,7 +469,7 @@ Licensed under Apache-2.0 license.
 
             const authGateRegistry = new AuthGateRegistry({
                 inputIds: ['pickup-code-input', 'email-address-input', 'email-otp-input'],
-                authEndpoint: '/uid=****/auth',
+                authEndpoint: '/{{ uid }}/auth',
                 authErrorMsgId: 'unlock-error-message',
                 onUnlockedCallback: () => {
                     startWebRTCDownload();
@@ -531,7 +481,7 @@ Licensed under Apache-2.0 license.
                 authGateRegistry.registerGate(new PickupCodeGate({
                     containerId: 'pickupGate',
                     t: window.t,
-                    verifyEndpoint: '/uid=****/auth',
+                    verifyEndpoint: '/{{ uid }}/auth',
                     onAccepted: (code) => {
                         pickupCode = code;
                     }
@@ -545,7 +495,7 @@ Licensed under Apache-2.0 license.
                     containerId: 'pubkeyGate',
                     t: window.t,
                     challenges: PUBKEY_CHALLENGES,
-                    verifyEndpoint: '/uid=****/auth',
+                    verifyEndpoint: '/{{ uid }}/auth',
                     onAccepted: (proof) => {
                         pubkeyProof = proof;
                     }
@@ -565,6 +515,22 @@ Licensed under Apache-2.0 license.
                     }
                 }));
             }
+            
+            const beforeWebRTCStartCallbacks = [];
+
+            window.registerBeforeWebRTCStart = function(callback) {
+                if (typeof callback !== 'function') {
+                    throw new Error('registerBeforeWebRTCStart requires a callback');
+                }
+
+                beforeWebRTCStartCallbacks.push(callback);
+                return () => {
+                    const callbackIndex = beforeWebRTCStartCallbacks.indexOf(callback);
+                    if (callbackIndex >= 0) {
+                        beforeWebRTCStartCallbacks.splice(callbackIndex, 1);
+                    }
+                };
+            };            
 
             // Wait for i18n to be ready before starting
             function startWebRTCDownload() {
@@ -599,8 +565,8 @@ Licensed under Apache-2.0 license.
 
                 // Create WebRTCManager instance
                 const webrtcManager = new WebRTCManager({
-                    // UID - Server.py replaces 'uid=****' with actual UID
-                    uid: 'uid=****',
+                    // UID
+                    uid: '{{ uid }}',
 
                     // Flags
                     disableWebRTC: DISABLE_WEBRTC,
@@ -632,8 +598,12 @@ Licensed under Apache-2.0 license.
                     downloadButton: document.getElementById('play-download-btn')
                 });
 
-                // Test/debug hook for browser automation and live inspection.
+                // Shared client-side integration point for WebRTC lifecycle wiring.
                 window.webrtcManager = webrtcManager;
+
+                beforeWebRTCStartCallbacks.forEach((callback) => {
+                    callback(webrtcManager);
+                });
 
                 // Start the download process
                 webrtcManager.start();
@@ -647,19 +617,19 @@ Licensed under Apache-2.0 license.
                 startWebRTCDownload();
             }, 2000);
         </script>
-        
+
         <script>
             // Status polling for server-side error notifications
             let statusPoller = null;
             let consecutiveStatusFailures = 0;
             const MAX_STATUS_FAILURES = 2;
-            const STATUS_POLLING_SECONDS = 2;
+            const STATUS_POLLING_SECONDS = {{ statusPollingSeconds }};
 
             function startStatusPolling() {
-                // Poll every 2 seconds
+                // Poll every STATUS_POLLING_SECONDS seconds
                 statusPoller = setInterval(async () => {
                     try {
-                        const response = await fetch('/status');
+                        const response = await fetch('/{{ uid }}/status');
                         if (!response.ok) {
                             consecutiveStatusFailures++;
                             log("Status", `Status request failed (${response.status}): ${consecutiveStatusFailures}/${MAX_STATUS_FAILURES}`);
@@ -769,6 +739,9 @@ Licensed under Apache-2.0 license.
             window.addEventListener('beforeunload', stopStatusPolling);
 
         </script>
+
+        <!-- Extract HTML/JS/CSS: injected by addons at serve time, empty by default -->
+        {{ extraBodyContent | safe }}
 
     </body>
 </html>
