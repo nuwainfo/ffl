@@ -394,12 +394,12 @@ class MbedTLSBackend(CryptoBackend):
             tag1, bitstring, _ = cls._readElement(value, offset)
             if tag1 != 0x03 or not bitstring:
                 raise ValueError("Invalid RSA public key bit string")
-            rsa_der = bitstring[1:]
-            tag2, rsa_seq, _ = cls._readElement(rsa_der, 0)
+            rsaDer = bitstring[1:]
+            tag2, rsaSeq, _ = cls._readElement(rsaDer, 0)
             if tag2 != 0x30:
                 raise ValueError("Invalid RSA public key sequence")
-            tag3, modulus, inner_offset = cls._readElement(rsa_seq, 0)
-            tag4, exponent, _ = cls._readElement(rsa_seq, inner_offset)
+            tag3, modulus, innerOffset = cls._readElement(rsaSeq, 0)
+            tag4, exponent, _ = cls._readElement(rsaSeq, innerOffset)
             if tag3 != 0x02 or tag4 != 0x02:
                 raise ValueError("Invalid RSA public key components")
             n = int.from_bytes(modulus, "big")

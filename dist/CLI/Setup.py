@@ -40,10 +40,10 @@ setup(
     version=PUBLIC_VERSION,
     packages=find_packages(),
     package_data={
-        "FileShare": ["static/**/*"],
+        "FileShare": ["static/**/*","addons/impl/assets/**/*"],
     },
     entry_points={
-        "console_scripts": ["ffl=FileShare.Core:main"],
+        "console_scripts": ["ffl=FileShare.FFL:main"],
     },
     include_package_data=True,
 )

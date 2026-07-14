@@ -35,18 +35,32 @@ const parseBooleanParam = (value, defaultValue = false) => {
 };
 
 /**
- * Helper function to check if an IP is a local/private IP
+ * Helper function to check if a value is an mDNS-obfuscated hostname
+ * (`<uuid>.local`), as opposed to a real IP address. Browsers substitute
+ * these for a host candidate's real IP by default - seeing one proves
+ * nothing about whether the underlying network is actually local, only that
+ * the browser is hiding its real address (see detectRTCConnectionType).
+ */
+const isMdnsHostName = (value) => {
+    return typeof value === 'string' && value.toLowerCase().trim().endsWith('.local');
+};
+
+/**
+ * Helper function to check if an IP is a local/private IP.
+ *
+ * Deliberately does NOT treat `.local` mDNS hostnames as local - that is a
+ * privacy mask over the real IP, not evidence of a local network. Use
+ * isMdnsHostName() separately if the mDNS-masked case needs to be tracked as
+ * its own (inconclusive) signal.
  */
 const isLocalIp = (ip) => {
-    if (typeof ip !== 'string')
+    if (typeof ip !== 'string' || isMdnsHostName(ip))
         return false;
 
     const s = ip.toLowerCase().trim();
     return (
         // IPv6 loopback
         s === '::1' ||
-        // mDNS / hostname
-        s.endsWith('.local') ||
         // IPv4 loopback
         s.startsWith('127.') ||
         // Private IPv4
@@ -57,8 +71,7 @@ const isLocalIp = (ip) => {
         s.startsWith('169.254.') ||
         // IPv6 link-local / ULA
         s.startsWith('fe80:') || // link-local
-        s.startsWith('fc')   ||  // fc00::/7
-        s.startsWith('fd')       // fd00::/8
+        /^f[cd][0-9a-f]*:/i.test(s) // fc00::/7, fd00::/8
     );
 };
 
@@ -83,13 +96,31 @@ const getBrowserInfo = () => {
 };
 
 /**
- * Detect RTC connection type (local vs remote)
+ * Detect RTC connection type (local vs remote) from this browser's own
+ * candidate gathering.
+ *
+ * IMPORTANT CAVEAT: this only inspects candidates gathered for a throwaway,
+ * unconnected RTCPeerConnection - it says something about this machine's own
+ * network interfaces, not about the actual peer-to-peer path that will be used
+ * for the transfer. Even a genuine private host IP here (e.g. 192.168.x.x)
+ * only proves this browser is behind a NAT/router - it says nothing about
+ * whether the peer on the other end of the transfer shares that LAN. A
+ * `.local` mDNS host candidate is even weaker: modern browsers obfuscate
+ * every host candidate's real IP behind a random `<uuid>.local` name by
+ * default (mDNS ICE candidate privacy), so it carries no address information
+ * at all. For both reasons, `isLocalConnection` from this function is always
+ * false - the heuristic signals (hasPrivateHostCandidate, hasMdnsHostCandidate)
+ * are exposed separately, diagnostic-only, and never asserted as a true
+ * "this is a local connection" result. The authoritative signal for that
+ * comes later, post-connection, from the REAL peer connection's
+ * `pc.getStats()` selected candidate pair (both ends' addresses) - see
+ * `WebRTCManager._reportActualConnectionType()`.
  */
 const detectRTCConnectionType = async () => {
     // Check if RTCPeerConnection is supported
     if (typeof RTCPeerConnection === 'undefined') {
         log("Connection", "RTCPeerConnection not supported, skipping connection type detection");
-        return { isLocalConnection: false, detectedIp: null };
+        return { isLocalConnection: false, detectedIp: null, hasMdnsHostCandidate: false, hasPrivateHostCandidate: false };
     }
 
     return new Promise((resolve, reject) => {
@@ -99,116 +130,109 @@ const detectRTCConnectionType = async () => {
 
         const timeout = setTimeout(() => {
             tempPc.close();
-            resolve({ isLocalConnection: false, detectedIp: null });
+            resolve({ isLocalConnection: false, detectedIp: null, hasMdnsHostCandidate: false, hasPrivateHostCandidate: false });
         }, 5000);
 
         let hostIps = new Set();
         let srflxIps = new Set();
-        let hasLocalCandidate = false;
+        let hasMdnsHostCandidate = false;
         let candidateCount = 0;
 
+        const finish = () => {
+            clearTimeout(timeout);
+            tempPc.close();
+
+            const hostIpArray = Array.from(hostIps);
+            const srflxIpArray = Array.from(srflxIps);
+
+            // Never assert a real isLocalConnection from this pre-connection
+            // heuristic - see the doc comment above for why. hasPrivateHostCandidate
+            // is exposed purely as a diagnostic signal, computed uniformly via
+            // isLocalIp() (which itself excludes mDNS-masked .local names).
+            const result = {
+                isLocalConnection: false,
+                detectedIp: `host:[${hostIpArray.join(',')}] srflx:[${srflxIpArray.join(',')}]`,
+                hasMdnsHostCandidate: hasMdnsHostCandidate,
+                hasPrivateHostCandidate: hostIpArray.some(isLocalIp)
+            };
+
+            log(
+                "Connection",
+                `Detection result (heuristic only, unconfirmed) - ` +
+                `hasPrivateHostCandidate: ${result.hasPrivateHostCandidate}, ` +
+                `mdnsHost: ${hasMdnsHostCandidate}, IPs: ${result.detectedIp}`
+            );
+            resolve(result);
+        };
+
         tempPc.onicecandidate = (event) => {
-            if (event.candidate) {
-                const candidate = event.candidate.candidate;
-                candidateCount++;
-                log("ICE-Detect", `Candidate ${candidateCount}: ${candidate.substring(0, 80)}...`);
+            if (!event.candidate) {
+                // End of candidates
+                finish();
+                return;
+            }
 
-                // Parse candidate string
-                const parts = candidate.split(' ');
-                let ip = null;
-                let candidateType = null;
+            const candidate = event.candidate.candidate;
+            candidateCount++;
+            log("ICE-Detect", `Candidate ${candidateCount}: ${candidate.substring(0, 80)}...`);
 
-                // Find type first
+            // Parse candidate string
+            const parts = candidate.split(' ');
+            let ip = null;
+            let candidateType = null;
+
+            // Find type first
+            for (let i = 0; i < parts.length; i++) {
+                if (parts[i] === 'typ' && i + 1 < parts.length) {
+                    candidateType = parts[i + 1];
+                    break;
+                }
+            }
+
+            // Find IP based on candidate type and format
+            if (candidateType === 'host') {
+                // For host candidates, IP could be at index 4 or could be .local format
                 for (let i = 0; i < parts.length; i++) {
-                    if (parts[i] === 'typ' && i + 1 < parts.length) {
-                        candidateType = parts[i + 1];
+                    const part = parts[i];
+                    // Check for IPv4 address
+                    if (/^\d+\.\d+\.\d+\.\d+$/.test(part)) {
+                        ip = part;
+                        break;
+                    }
+                    // Check for .local mDNS format - this masks the real host IP and
+                    // proves NOTHING about whether the network is actually local.
+                    else if (isMdnsHostName(part)) {
+                        ip = part;
+                        hasMdnsHostCandidate = true;
+                        break;
+                    }
+                    // Check for IPv6 address (link-local/ULA vs. globally routable is
+                    // classified uniformly by isLocalIp() below, same as IPv4)
+                    else if (part.includes(':')) {
+                        ip = part;
                         break;
                     }
                 }
+            } else if (candidateType === 'srflx') {
+                // For srflx candidates, IP is usually at index 4
+                if (parts[4] && /^\d+\.\d+\.\d+\.\d+$/.test(parts[4])) {
+                    ip = parts[4];
+                }
+            }
 
-                // Find IP based on candidate type and format
+            if (ip && candidateType) {
+                log("ICE-Detect", `Parsed - IP: ${ip}, Type: ${candidateType}`);
+
                 if (candidateType === 'host') {
-                    // For host candidates, IP could be at index 4 or could be .local format
-                    for (let i = 0; i < parts.length; i++) {
-                        const part = parts[i];
-                        // Check for IPv4 address
-                        if (/^\d+\.\d+\.\d+\.\d+$/.test(part)) {
-                            ip = part;
-                            break;
-                        }
-                        // Check for .local mDNS format (indicates local network)
-                        else if (part.endsWith('.local')) {
-                            ip = part;
-                            hasLocalCandidate = true;
-                            break;
-                        }
-                        // Check for IPv6 link-local or ULA
-                        else if (part.startsWith('fe80:') || part.startsWith('fc') || part.startsWith('fd')) {
-                            ip = part;
-                            hasLocalCandidate = true;
-                            break;
-                        }
-                    }
+                    hostIps.add(ip);
                 } else if (candidateType === 'srflx') {
-                    // For srflx candidates, IP is usually at index 4
-                    if (parts[4] && /^\d+\.\d+\.\d+\.\d+$/.test(parts[4])) {
-                        ip = parts[4];
-                    }
+                    srflxIps.add(ip);
                 }
 
-                if (ip && candidateType) {
-                    log("ICE-Detect", `Parsed - IP: ${ip}, Type: ${candidateType}`);
-
-                    if (candidateType === 'host') {
-                        hostIps.add(ip);
-
-                        // Check if this is a local IP
-                        if (isLocalIp(ip)) {
-                            hasLocalCandidate = true;
-                        }
-                    } else if (candidateType === 'srflx') {
-                        srflxIps.add(ip);
-                    }
-
-                    // Check if we have enough information
-                    if (candidateCount >= 2) {
-                        clearTimeout(timeout);
-                        tempPc.close();
-
-                        const hostIpArray = Array.from(hostIps);
-                        const srflxIpArray = Array.from(srflxIps);
-
-                        // Determine if this is a local connection
-                        // If we have .local candidates or private IPs, it's local
-                        const isLocalConnection = hasLocalCandidate || hostIpArray.some(isLocalIp);
-
-                        const result = {
-                            isLocalConnection: isLocalConnection,
-                            detectedIp: `host:[${hostIpArray.join(',')}] srflx:[${srflxIpArray.join(',')}]`
-                        };
-
-                        log("Connection", `Detection result - Local: ${result.isLocalConnection}, IPs: ${result.detectedIp}`);
-                        resolve(result);
-                        return;
-                    }
+                // Check if we have enough information
+                if (candidateCount >= 2) {
+                    finish();
                 }
-            } else {
-                // End of candidates
-                clearTimeout(timeout);
-                tempPc.close();
-
-                const hostIpArray = Array.from(hostIps);
-                const srflxIpArray = Array.from(srflxIps);
-
-                const isLocalConnection = hasLocalCandidate || hostIpArray.some(isLocalIp);
-
-                const result = {
-                    isLocalConnection: isLocalConnection,
-                    detectedIp: `host:[${hostIpArray.join(',')}] srflx:[${srflxIpArray.join(',')}]`
-                };
-
-                log("Connection", `Final detection - Local: ${result.isLocalConnection}, IPs: ${result.detectedIp}`);
-                resolve(result);
             }
         };
 
@@ -669,14 +693,14 @@ class DownloadUIManager {
             this.progressBar.value = current;
             const percent = Math.round(current * 100 / total);
             this.setStatus(
-                this.t('Download:client.status.downloadingPercent', 'Downloading via P2P: {{percent}}%', { percent })
+                this.t('Download:client.status.downloadingPercent', 'Downloading: {{percent}}%', { percent })
             );
         } else {
             // Indeterminate progress (unknown size) - remove value attribute
             // Native <progress> elements show animated indeterminate state when value is absent
             this.progressBar.removeAttribute('value');
             this.setStatus(
-                this.t('Download:client.status.downloading', 'Downloading via P2P...')
+                this.t('Download:client.status.downloading', 'Downloading...')
             );
         }
     }
@@ -698,7 +722,7 @@ class DownloadUIManager {
 
         this.countdownSeconds = seconds;
         this.setConnectionType(
-            this.t('Download:client.connection.waitingPeer', 'Waiting for peer ({{seconds}}s)', {
+            this.t('Download:client.connection.waitingPeer', 'Waiting for the other device ({{seconds}}s)', {
                 seconds: this.countdownSeconds
             })
         );
@@ -713,7 +737,7 @@ class DownloadUIManager {
 
             if (this.countdownSeconds >= 0) {
                 this.setConnectionType(
-                    this.t('Download:client.connection.waitingPeer', 'Waiting for peer ({{seconds}}s)', {
+                    this.t('Download:client.connection.waitingPeer', 'Waiting for the other device ({{seconds}}s)', {
                         seconds: this.countdownSeconds
                     })
                 );
@@ -733,7 +757,7 @@ class DownloadUIManager {
     // ============ Connection States ============
     showEstablishingP2P(timeoutSeconds, shouldStopCallback) {
         this.setStatus(
-            this.t('Download:client.status.establishingP2p', 'Establishing P2P connection...'),
+            this.t('Download:client.status.establishingP2p', "Connecting to the sender's device..."),
             true
         );
         this.startCountdown(timeoutSeconds, shouldStopCallback);
@@ -741,27 +765,27 @@ class DownloadUIManager {
 
     showP2PChecking() {
         this.setStatus(
-            this.t('Download:client.status.p2pChecking', 'P2P connection...[Checking]'),
+            this.t('Download:client.status.p2pChecking', 'Checking connection...'),
             true
         );
     }
 
     showP2PConnecting() {
         this.setStatus(
-            this.t('Download:client.status.p2pConnecting', 'P2P connection...[Connecting]'),
+            this.t('Download:client.status.p2pConnecting', 'Connecting...'),
             true
         );
     }
 
     showP2PSuccess() {
         this.setStatus(
-            this.t('Download:client.status.p2pSuccess', 'P2P connection successful! Downloading...')
+            this.t('Download:client.status.p2pSuccess', 'Connected! Downloading...')
         );
         this.setConnectionType(
-            this.t('Download:client.connection.directP2p', 'Direct P2P transfer')
+            this.t('Download:client.connection.directP2p', 'Direct transfer')
         );
         this.setDownloadMessage(
-            this.t('Download:client.download.deviceStarted', 'Device-to-Device download started.')
+            this.t('Download:client.download.deviceStarted', 'Download started.')
         );
         this.stopCountdown();
     }
@@ -782,11 +806,11 @@ class DownloadUIManager {
 
     showRetryingP2P() {
         this.setStatus(
-            this.t('Download:client.status.retryingP2p', 'Retrying P2P connection...'),
+            this.t('Download:client.status.retryingP2p', 'Trying to reconnect...'),
             true
         );
         this.setConnectionType(
-            this.t('Download:client.connection.retrying', 'Retrying P2P connection')
+            this.t('Download:client.connection.retrying', 'Reconnecting')
         );
     }
 
@@ -798,23 +822,23 @@ class DownloadUIManager {
 
     showSwitchingToRelay(reason) {
         this.setStatus(
-            this.t('Download:client.status.switchingRelay', `Switching to relay mode: ${reason}`, { reason })
+            this.t('Download:client.status.switchingRelay', 'Trying another way to connect: {{reason}}', { reason })
         );
         this.setConnectionType(
-            this.t('Download:client.connection.serverRelay', 'Using Server Relay Download')
+            this.t('Download:client.connection.serverRelay', 'Using a backup connection')
         );
         this.stopCountdown();
     }
 
     showRelayStarted() {
         this.setStatus(
-            this.t('Download:client.status.relayStarted', 'Relayed P2P Download Started.')
+            this.t('Download:client.status.relayStarted', 'Download started using a backup connection.')
         );
     }
 
     showBrowserNotSupported() {
         this.setStatus(
-            this.t('Download:client.fallback.browserNotSupported', 'Downloads not supported in this browser')
+            this.t('Download:client.fallback.browserNotSupported', "This browser can't download files directly")
         );
     }
 
@@ -1037,7 +1061,7 @@ class FallbackManager {
                     clearTimeout(this.fallbackTimer);
                 }
 
-                this.uiManager.setConnectionType(this.t('Download:client.connection.serverRelay', 'Using Server Relay Download'));
+                this.uiManager.setConnectionType(this.t('Download:client.connection.serverRelay', 'Using a backup connection'));
                 this.log("Fallback", "Successfully transitioned from P2P to HTTP download");
             }
         });
@@ -1245,8 +1269,8 @@ class PauseGate {
             );
             this.uiManager.setConnectionType(
                 kind === 'webrtc'
-                    ? this.t('Download:client.connection.p2pReady', 'P2P Connection Ready')
-                    : this.t('Download:client.connection.relayReady', 'Server Relay Ready')
+                    ? this.t('Download:client.connection.p2pReady', 'Connected directly')
+                    : this.t('Download:client.connection.relayReady', 'Backup connection ready')
             );
 
             // Show download button (managed by DownloadUIManager)
@@ -1261,9 +1285,11 @@ class PauseGate {
             return false; // delayed
         } else {
             // Not paused - update status to show connection is ready
-            this.uiManager.setStatus('Starting download...');
+            this.uiManager.setStatus(this.t('Download:client.status.startingDownload', 'Starting download...'));
             this.uiManager.setConnectionType(
-                kind === 'webrtc' ? 'P2P Connection Established' : 'Server Relay Connected'
+                kind === 'webrtc'
+                    ? this.t('Download:client.connection.p2pReady', 'Connected directly')
+                    : this.t('Download:client.connection.relayReady', 'Backup connection ready')
             );
             this.log("PauseGate", `Connection ready, starting immediately (${kind})`);
         }
@@ -1424,6 +1450,12 @@ class WebRTCManager {
         this.receiptConfirmationUI = config.receiptConfirmationUI || null;
         this.previewMode = false;
         this.transferStallWatchdogTimer = null;
+
+        // Authoritative local/remote determination from pc.getStats(), delivered
+        // to the server once the data channel is open (see
+        // _reportActualConnectionType / _deliverLocalConnectionCorrection).
+        // null = not yet computed.
+        this._pendingLocalCorrection = null;
     }
 
     /**
@@ -1529,12 +1561,12 @@ class WebRTCManager {
         this.uiManager.setStatus(
             this.t(
                 'Download:client.status.webrtcFailed',
-                'WebRTC transfer failed: {{reason}}',
+                "Couldn't complete the direct download: {{reason}}",
                 { reason }
             )
         );
         this.uiManager.setConnectionType(
-            this.t('Download:client.connection.p2pFailed', 'P2P transfer failed')
+            this.t('Download:client.connection.p2pFailed', 'Direct connection failed')
         );
         this.uiManager.setDownloadMessage(
             this.t(
@@ -1667,7 +1699,12 @@ class WebRTCManager {
         // Get connection info
         const connectionInfo = await getConnectionInfo();
         this.log("Client", `Browser: ${connectionInfo.browser}, Domain: ${connectionInfo.domain}`);
-        this.log("Client", `Local: ${connectionInfo.isLocalConnection}, InApp: ${connectionInfo.inAppBrowser}, DownloadRestricted: ${connectionInfo.downloadRestricted}`);
+        this.log(
+            "Client",
+            `Network heuristic (unconfirmed) - hasPrivateHostCandidate: ${connectionInfo.hasPrivateHostCandidate}, ` +
+            `hasMdnsHostCandidate: ${connectionInfo.hasMdnsHostCandidate}, InApp: ${connectionInfo.inAppBrowser}, ` +
+            `DownloadRestricted: ${connectionInfo.downloadRestricted}`
+        );
 
         // Get file metadata
         this.log("File", `Name: ${this.fileName}, Size: ${this.fileSize} bytes`);
@@ -1760,7 +1797,7 @@ class WebRTCManager {
         if (!WriterFactory.isSupported(this.fileSize)) {
             const reason = WriterFactory.getUnsupportedReason(this.fileSize);
             this.log("WriterFactory", `File download not supported: ${reason}`);
-            fallbackToHTTP(this.t('Download:client.fallback.fileTooBig', 'File too large for direct download - using server relay'));
+            fallbackToHTTP(this.t('Download:client.fallback.fileTooBig', "This file is large and needs a modern browser. Try switching browsers, or we'll use a backup connection."));
             return;
         }
 
@@ -1799,9 +1836,9 @@ class WebRTCManager {
         if (!webrtcSupported || this.disableWebRTC) {
             if (!webrtcSupported) {
                 this.log("WebRTC", "WebRTC not supported in this browser");
-                fallbackToHTTP(this.t('Download:client.fallback.webrtcNotSupported', 'WebRTC not supported - using server relay'));
+                fallbackToHTTP(this.t('Download:client.fallback.webrtcNotSupported', "This browser can't connect directly - using a backup connection"));
             } else {
-                fallbackToHTTP(this.t('Download:client.fallback.p2pDisabled', 'Device-to-Device P2P disabled. Use Relayed P2P.'));
+                fallbackToHTTP(this.t('Download:client.fallback.p2pDisabled', 'Direct transfer is turned off - using a backup connection instead.'));
             }
             return;
         }
@@ -1835,13 +1872,13 @@ class WebRTCManager {
             this.log("WebRTC", `Got response: ${offerResponse.status} ${offerResponse.statusText}`);
         } catch (err) {
             this.log("WebRTC", "Failed to fetch offer:", err);
-            fallbackToHTTP("Failed to get offer from server");
+            fallbackToHTTP(this.t('Download:client.fallback.offerFetchFailed', "Couldn't reach the sender's device"));
             return;
         }
 
         if (!offerResponse.ok) {
             this.log("WebRTC", `Server returned ${offerResponse.status}: ${offerResponse.statusText}`);
-            fallbackToHTTP(`Server returned ${offerResponse.status}`);
+            fallbackToHTTP(this.t('Download:client.fallback.serverError', 'The server had trouble preparing your download'));
             return;
         }
 
@@ -1856,7 +1893,7 @@ class WebRTCManager {
             this.log("WebRTC", `Got peerId: ${this.peerId}`);
         } catch (err) {
             this.log("WebRTC", "Failed to parse offer data:", err);
-            fallbackToHTTP("Invalid offer data from server");
+            fallbackToHTTP(this.t('Download:client.fallback.invalidOfferData', "Couldn't read the connection info from the server"));
             return;
         }
 
@@ -1886,7 +1923,7 @@ class WebRTCManager {
 
             // Create fallback timer
             this.fallbackManager.createFallbackTimer(fallbackMs, () => {
-                fallbackToHTTP("Connection timeout");
+                fallbackToHTTP(this.t('Download:client.fallback.connectionTimeout', 'Taking too long to connect'));
             });
 
             // Setup ICE connection state handler
@@ -1901,7 +1938,7 @@ class WebRTCManager {
                 // Only handle clear failures before transfer starts
                 if (this.pc.connectionState === 'failed' &&
                     this.shouldHandlePreTransferFailure()) {
-                    fallbackToHTTP("WebRTC connection failed");
+                    fallbackToHTTP(this.t('Download:client.fallback.connectionFailed', "Couldn't connect directly to the sender's device"));
                 }
             };
 
@@ -1926,7 +1963,7 @@ class WebRTCManager {
 
         } catch (error) {
             this.log("WebRTC", `Setup failed: ${error.message}`);
-            fallbackToHTTP("WebRTC setup failed");
+            fallbackToHTTP(this.t('Download:client.fallback.setupFailed', 'Something went wrong setting up the connection'));
         }
     }
 
@@ -1960,6 +1997,7 @@ class WebRTCManager {
 
                 this.stopCandidatePolling = true;
                 this.log("ICE", "Connection established successfully");
+                this._reportActualConnectionType();
                 break;
 
             case 'completed':
@@ -1971,6 +2009,9 @@ class WebRTCManager {
                 }
 
                 this.log("ICE", "All ICE candidates have been found");
+                // Some browsers move straight to 'completed' without a distinct
+                // 'connected' event - make sure the real candidate pair still gets read.
+                this._reportActualConnectionType();
                 break;
 
             case 'disconnected':
@@ -1987,7 +2028,7 @@ class WebRTCManager {
                             Date.now() - this.disconnectedTime > 15000 &&
                             this.shouldHandlePreTransferFailure()) {
 
-                            fallbackToHTTP("Connection lost before transfer started");
+                            fallbackToHTTP(this.t('Download:client.fallback.lostBeforeStart', 'Lost connection before the download could start'));
                         }
                     }, 16000);
 
@@ -2020,7 +2061,7 @@ class WebRTCManager {
 
                             this.log("ICE", "Still disconnected and stalled - switching to HTTP fallback");
                             // Use force = true to bypass "transfer in progress" protection
-                            fallbackToHTTP("ICE disconnected during active transfer (stalled)", true);
+                            fallbackToHTTP(this.t('Download:client.fallback.stalledDuringTransfer', 'The download stalled and the connection dropped'), true);
                         }, delay);
                     }
                 }
@@ -2039,11 +2080,11 @@ class WebRTCManager {
                             if ((this.pc.iceConnectionState === 'failed' || this.pc.iceConnectionState === 'disconnected') &&
                                 this.shouldHandlePreTransferFailure()) {
 
-                                fallbackToHTTP("Connection restart failed");
+                                fallbackToHTTP(this.t('Download:client.fallback.reconnectFailed', "Couldn't reconnect"));
                             }
                         }, 20000);
                     } else {
-                        fallbackToHTTP("Connection failed after restart");
+                        fallbackToHTTP(this.t('Download:client.fallback.reconnectFailedFinal', "Still couldn't reconnect"));
                     }
                 } else {
                     this.log("ICE", "ICE failed during transfer - but data channel still active");
@@ -2053,6 +2094,127 @@ class WebRTCManager {
             case 'closed':
                 this.log("ICE", "Connection closed");
                 break;
+        }
+    }
+
+    /**
+     * Determine the REAL connection type for the actual peer connection using
+     * pc.getStats() selected candidate pair, and correct the server's
+     * isLocalConnection flag if the pre-connection heuristic guessed wrong.
+     *
+     * Unlike detectRTCConnectionType() (which only guesses from a throwaway,
+     * unconnected RTCPeerConnection before the real transfer path exists),
+     * this inspects the actual nominated candidate pair used for this
+     * transfer - the only way to know if it is genuinely a direct LAN path
+     * (host-host) versus a NAT-traversed or relayed path across networks.
+     * @private
+     */
+    async _reportActualConnectionType() {
+        if (!this.pc || typeof this.pc.getStats !== 'function') {
+            return;
+        }
+
+        try {
+            const stats = await this.pc.getStats();
+            let selectedPair = null;
+
+            stats.forEach((report) => {
+                if (report.type === 'candidate-pair' && (report.selected || report.nominated) && report.state === 'succeeded') {
+                    selectedPair = report;
+                }
+            });
+
+            if (!selectedPair) {
+                this.log("ConnectionStats", "No selected candidate pair found yet");
+                return;
+            }
+
+            const localCandidate = stats.get(selectedPair.localCandidateId);
+            const remoteCandidate = stats.get(selectedPair.remoteCandidateId);
+
+            const localType = localCandidate ? localCandidate.candidateType : 'unknown';
+            const remoteType = remoteCandidate ? remoteCandidate.candidateType : 'unknown';
+            const localAddress = localCandidate ? (localCandidate.address || localCandidate.ip || '') : '';
+            const remoteAddress = remoteCandidate ? (remoteCandidate.address || remoteCandidate.ip || '') : '';
+
+            // Authoritative local determination: both ends used a direct host
+            // candidate (no STUN/TURN traversal needed), BOTH addresses are
+            // present (a missing address - e.g. withheld by browser privacy
+            // settings - fails closed rather than guessing from the one side
+            // that is available), NEITHER is an mDNS mask, and BOTH are
+            // genuine private/loopback/link-local IPs. Requiring both sides
+            // (AND, not OR) matters: a receiver on a private IP talking to a
+            // sender on a public IP is not a local connection just because
+            // one end happens to be private.
+            const hasCandidateAddresses = Boolean(localAddress) && Boolean(remoteAddress);
+            const actualIsLocal = (
+                localType === 'host' && remoteType === 'host' &&
+                hasCandidateAddresses &&
+                !isMdnsHostName(localAddress) && !isMdnsHostName(remoteAddress) &&
+                isLocalIp(localAddress) && isLocalIp(remoteAddress)
+            );
+
+            this.log(
+                "ConnectionStats",
+                `Selected pair: local=${localType}(${localAddress || 'n/a'}) remote=${remoteType}(${remoteAddress || 'n/a'}), ` +
+                `rtt=${selectedPair.currentRoundTripTime ?? 'n/a'}s, ` +
+                `availableOutgoingBitrate=${selectedPair.availableOutgoingBitrate ?? 'n/a'}, ` +
+                `bytesSent=${selectedPair.bytesSent ?? 0}, bytesReceived=${selectedPair.bytesReceived ?? 0}, ` +
+                `actualIsLocal=${actualIsLocal}`
+            );
+
+            this._deliverLocalConnectionCorrection(actualIsLocal);
+        } catch (err) {
+            this.log("ConnectionStats", `Failed to read getStats(): ${err.message || err}`);
+        }
+    }
+
+    /**
+     * Deliver the getStats()-derived local/remote correction to the server,
+     * sending immediately if the data channel is already open or otherwise
+     * queuing it for _flushPendingLocalConnectionCorrection() to send once it
+     * is (called right after the data channel opens in _startP2PTransfer).
+     *
+     * getStats() resolving and the data channel opening are two independent
+     * async events with no ordering guarantee between them, so this queues
+     * on a plain instance field rather than guessing with a timer/retry loop.
+     * @private
+     */
+    _deliverLocalConnectionCorrection(actualIsLocal) {
+        if (this.dc && this.dc.readyState === 'open') {
+            this._sendLocalConnectionCorrection(actualIsLocal);
+            return;
+        }
+
+        this._pendingLocalCorrection = actualIsLocal;
+    }
+
+    /**
+     * Send any local-connection correction that arrived before the data
+     * channel was open. Safe to call unconditionally once the channel opens.
+     * @private
+     */
+    _flushPendingLocalConnectionCorrection() {
+        if (this._pendingLocalCorrection === null) {
+            return;
+        }
+
+        this._sendLocalConnectionCorrection(this._pendingLocalCorrection);
+        this._pendingLocalCorrection = null;
+    }
+
+    /**
+     * Send the authoritative local/remote determination to the server over the
+     * data channel so server-side send pacing (Chrome/Edge local workaround)
+     * uses the real connection type instead of the pre-connection guess.
+     * @private
+     */
+    _sendLocalConnectionCorrection(actualIsLocal) {
+        try {
+            this.dc.send(`LOCAL:${actualIsLocal}`);
+            this.log("ConnectionStats", `Sent correction to server: LOCAL:${actualIsLocal}`);
+        } catch (err) {
+            this.log("ConnectionStats", `Failed to send correction: ${err.message || err}`);
         }
     }
 
@@ -2166,14 +2328,14 @@ class WebRTCManager {
             const transferIncomplete = hasKnownSize ? bytesWrittenSoFar < this.fileSize : !this.downloadCompleted;
             if (!this.shouldStopPeerOperations() && transferIncomplete) {
                 this.log("DataChannel", `Channel closed before completion (written: ${bytesWrittenSoFar}/${this.fileSize})`);
-                this._handleTransferFailure("Data channel closed unexpectedly", true);
+                this._handleTransferFailure(this.t('Download:client.fallback.channelClosedUnexpectedly', 'The connection closed unexpectedly'), true);
             }
         };
 
         dc.onerror = (err) => {
             this.log("DataChannel", "Error:", err);
             if (!this.shouldStopPeerOperations()) {
-                this._handleTransferFailure("Data channel error", true);
+                this._handleTransferFailure(this.t('Download:client.fallback.channelError', 'A connection error occurred'), true);
             }
         };
     }
@@ -2215,12 +2377,12 @@ class WebRTCManager {
                 );
 
                 // Trigger HTTP fallback with resume support
-                this._handleTransferFailure('Writer stuck finishing after EOF', true);
+                this._handleTransferFailure(this.t('Download:client.fallback.savingStuck', 'Saving the file is taking longer than expected'), true);
             }
         } else if (message === 'ERROR') {
             this.log("DataChannel", "Server reported error");
             if (!this.shouldStopPeerOperations()) {
-                this._handleTransferFailure("Server reported error", true);
+                this._handleTransferFailure(this.t('Download:client.fallback.senderReportedError', 'The sender reported a problem'), true);
             }
         } else {
             this.log("DataChannel", `Unknown string message: ${message}`);
@@ -2365,6 +2527,13 @@ class WebRTCManager {
             });
         }
 
+        // dc is now guaranteed open - flush any local-connection correction
+        // that _reportActualConnectionType() computed before it was ready,
+        // BEFORE sending START. The data channel delivers messages in order,
+        // so the server sees this correction before it unblocks sendFile()'s
+        // chunk-pacing decisions, rather than applying it mid-transfer.
+        this._flushPendingLocalConnectionCorrection();
+
         // Send START signal to server (requires server-side support)
         // NOTE: Server must wait for START before sending file data
         try {
@@ -2376,9 +2545,9 @@ class WebRTCManager {
         }
 
         // Don't show "P2P success" yet - wait for first binary chunk
-        this.uiManager.setStatus('Starting download...');
+        this.uiManager.setStatus(this.t('Download:client.status.startingDownload', 'Starting download...'));
         this.uiManager.setConnectionType(
-            this.t('Download:client.connection.p2pReady', 'P2P Connection Ready')
+            this.t('Download:client.connection.p2pReady', 'Connected directly')
         );
     }
 
@@ -2415,7 +2584,7 @@ class WebRTCManager {
                 .catch(err => {
                     this.log("DataChannel", `Message processing error: ${err}`);
                     if (!this.shouldStopPeerOperations()) {
-                        this._handleTransferFailure("Message processing error", true);
+                        this._handleTransferFailure(this.t('Download:client.fallback.messageProcessingError', 'Something went wrong while receiving data'), true);
                     }
                 });
         };
@@ -2450,7 +2619,7 @@ class WebRTCManager {
             this.log("DataChannel", "Auto-starting download");
             this._startP2PTransfer(dc).catch(err => {
                 this.log("DataChannel", `Failed to start P2P transfer: ${err}`);
-                fallbackToHTTP("Failed to start P2P transfer", true);
+                fallbackToHTTP(this.t('Download:client.fallback.startTransferFailed', "Couldn't start the direct download"), true);
             });
         } else {
             // Paused or preview-first mode: wait for user action (PauseGate handles heartbeat)
@@ -2469,7 +2638,7 @@ class WebRTCManager {
             this.log("WebRTC", "Remote description set successfully");
         } catch (err) {
             this.log("WebRTC", "Failed to set remote description:", err);
-            fallbackToHTTP("Failed to set remote description");
+            fallbackToHTTP(this.t('Download:client.fallback.setupFailed', 'Something went wrong setting up the connection'));
             throw err; // Re-throw to stop execution
         }
     }
@@ -2492,7 +2661,7 @@ class WebRTCManager {
             return answer;
         } catch (err) {
             this.log("WebRTC", "Failed to create/set answer:", err);
-            fallbackToHTTP("Failed to create answer");
+            fallbackToHTTP(this.t('Download:client.fallback.setupFailed', 'Something went wrong setting up the connection'));
             throw err; // Re-throw to stop execution
         }
     }
@@ -2518,7 +2687,7 @@ class WebRTCManager {
             this.log("WebRTC", `Answer sent, response: ${answerResponse.status} ${answerResponse.statusText}`);
         } catch (err) {
             this.log("WebRTC", "Failed to send answer:", err);
-            fallbackToHTTP("Failed to send answer to server");
+            fallbackToHTTP(this.t('Download:client.fallback.setupFailed', 'Something went wrong setting up the connection'));
             throw err; // Re-throw to stop execution
         }
     }
@@ -2572,7 +2741,7 @@ class WebRTCManager {
         if (this.fileSize && this.bytesReceived < this.fileSize) {
             this.log("Download", `Incomplete P2P transfer detected: expected ${this.fileSize}, got ${this.bytesReceived}`);
             if (!this.shouldStopPeerOperations()) {
-                this._handleTransferFailure("Incomplete P2P transfer detected", true);
+                this._handleTransferFailure(this.t('Download:client.fallback.incompleteTransfer', 'The download did not finish completely'), true);
             }
             return;
         }

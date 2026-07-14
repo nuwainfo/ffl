@@ -10,7 +10,7 @@ import unittest
 
 import psutil
 
-from ..CoreTestBase import FastFileLinkTestBase
+from ..CoreTestBase import FastFileLinkTestBase, LOCAL_TEST_SERVER_URL
 
 
 class DaemonTest(FastFileLinkTestBase):
@@ -19,9 +19,13 @@ class DaemonTest(FastFileLinkTestBase):
     def setUp(self):
         super().setUp()
         self._daemonPid = None
+        self._daemonEnvOverrides = {}
+        self._testServerProcesses = []
         self._startDaemon()
 
     def tearDown(self):
+        while self._testServerProcesses:
+            self._stopTestServer(self._testServerProcesses.pop())
         self._stopDaemon()
         super().tearDown()
 
@@ -36,25 +40,26 @@ class DaemonTest(FastFileLinkTestBase):
         return os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
     def _coreEnv(self):
-        env = os.environ.copy()
-        env['PYTHONUNBUFFERED'] = '1'
+        env = {'PYTHONUNBUFFERED': '1'}
+        env.update(self._daemonEnvOverrides)
         return env
+
+    def _runPatchedCoreCommand(self, args, timeout=30):
+        return self._runCoreCommand(
+            args,
+            commandPrefix=[sys.executable, self._coreScriptPath()],
+            extraEnvVars=self._coreEnv(),
+            cwd=self._projectRoot(),
+            timeout=timeout,
+        )
 
     def _startDaemon(self):
         """Run `ffl daemon` and wait until daemon.json appears in FFL_STORAGE_LOCATION."""
         daemonJsonPath = os.path.join(self._testConfigDir, 'daemon.json')
 
-        cmd = [sys.executable, self._coreScriptPath(), '--cli', 'daemon']
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env=self._coreEnv(),
-            cwd=self._projectRoot(),
-        )
-        self.assertEqual(result.returncode, 0, f"Daemon start failed:\n{result.stdout}\n{result.stderr}")
-        print(f"[Test] daemon start output: {result.stdout.strip()}")
+        output, returnCode = self._runPatchedCoreCommand(['--cli', 'daemon'], timeout=30)
+        self.assertEqual(returnCode, 0, f"Daemon start failed:\n{output}")
+        print(f"[Test] daemon start output: {output.strip()}")
 
         # Wait for daemon.json to appear
         deadline = time.time() + 15
@@ -75,15 +80,7 @@ class DaemonTest(FastFileLinkTestBase):
             return
 
         try:
-            cmd = [sys.executable, self._coreScriptPath(), '--cli', 'daemon', '--stop']
-            subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=15,
-                env=self._coreEnv(),
-                cwd=self._projectRoot(),
-            )
+            self._runPatchedCoreCommand(['--cli', 'daemon', '--stop'], timeout=15)
         except Exception as e:
             print(f"[Test] Error sending daemon --stop: {e}")
 
@@ -118,12 +115,9 @@ class DaemonTest(FastFileLinkTestBase):
         self.assertFalse(os.path.exists(daemonJsonPath), "daemon.json should not exist after daemon stops")
 
     def _getFirstManagedShareId(self):
-        cmd = [sys.executable, self._coreScriptPath(), '--cli', 'shares', 'list']
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=10, env=self._coreEnv(), cwd=self._projectRoot()
-        )
-        self.assertEqual(result.returncode, 0, f"shares list failed: {result.stderr}")
-        output = result.stdout.strip()
+        output, returnCode = self._runPatchedCoreCommand(['--cli', 'shares', 'list'], timeout=10)
+        self.assertEqual(returnCode, 0, f"shares list failed: {output}")
+        output = output.strip()
         print(f"[Test] shares list: {output}")
 
         lines = [line.strip() for line in output.split('\n') if line.strip() and line.strip() != 'Active shares:']
@@ -139,20 +133,14 @@ class DaemonTest(FastFileLinkTestBase):
         self._assertDaemonRunning()
 
         # Starting daemon again should be idempotent
-        cmd = [sys.executable, self._coreScriptPath(), '--cli', 'daemon']
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=15, env=self._coreEnv(), cwd=self._projectRoot()
-        )
-        self.assertEqual(result.returncode, 0, f"Second daemon start should succeed: {result.stdout} {result.stderr}")
-        self.assertIn('already running', result.stdout.lower(), "Should report already running")
+        output, returnCode = self._runPatchedCoreCommand(['--cli', 'daemon'], timeout=15)
+        self.assertEqual(returnCode, 0, f"Second daemon start should succeed: {output}")
+        self.assertIn('already running', output.lower(), "Should report already running")
 
         # Stop daemon
-        cmd = [sys.executable, self._coreScriptPath(), '--cli', 'daemon', '--stop']
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=15, env=self._coreEnv(), cwd=self._projectRoot()
-        )
-        self.assertEqual(result.returncode, 0, f"Daemon stop failed: {result.stdout} {result.stderr}")
-        print(f"[Test] daemon stop output: {result.stdout.strip()}")
+        output, returnCode = self._runPatchedCoreCommand(['--cli', 'daemon', '--stop'], timeout=15)
+        self.assertEqual(returnCode, 0, f"Daemon stop failed: {output}")
+        print(f"[Test] daemon stop output: {output.strip()}")
 
         # Wait for daemon.json to disappear
         daemonJsonPath = os.path.join(self._testConfigDir, 'daemon.json')
@@ -167,16 +155,13 @@ class DaemonTest(FastFileLinkTestBase):
 
     def testDaemonStatus(self):
         """Test `ffl daemon --status` reports running correctly."""
-        cmd = [sys.executable, self._coreScriptPath(), '--cli', 'daemon', '--status']
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=10, env=self._coreEnv(), cwd=self._projectRoot()
-        )
-        self.assertEqual(result.returncode, 0, f"daemon --status failed: {result.stdout} {result.stderr}")
-        output = result.stdout.lower()
+        output, returnCode = self._runPatchedCoreCommand(['--cli', 'daemon', '--status'], timeout=10)
+        self.assertEqual(returnCode, 0, f"daemon --status failed: {output}")
+        output = output.lower()
         self.assertIn('running', output, "Status output should say 'running'")
         self.assertIn('pid', output, "Status should show PID")
         self.assertIn('port', output, "Status should show port")
-        print(f"[Test] daemon --status output: {result.stdout.strip()}")
+        print(f"[Test] daemon --status output: {output.strip()}")
 
     def testDaemonShare(self):
         """Test sharing a file via --background routes to daemon and download works."""
@@ -187,17 +172,113 @@ class DaemonTest(FastFileLinkTestBase):
         self.downloadFileWithRequests(shareLink, downloadedFilePath)
         self._verifyDownloadedFile(downloadedFilePath)
 
+    def testDaemonUploadShare(self):
+        """Test daemon-managed background upload returns a hosted link and preserves upload metadata."""
+        self._stopDaemon()
+        self._provisionLocalTestServerCredential()
+        testServerProcess = self._startTestServer()
+        self._testServerProcesses.append(testServerProcess)
+        self._daemonEnvOverrides = {'FILESHARE_TEST': LOCAL_TEST_SERVER_URL}
+        self._startDaemon()
+
+        shareLink = self._startFastFileLink(p2p=False, extraArgs=['--background'])
+        print(f"[Test] Daemon upload link: {shareLink}")
+
+        with open(self.jsonOutputPath, 'r', encoding='utf-8') as fileHandle:
+            shareInfo = json.load(fileHandle)
+        self.assertEqual(shareInfo.get('upload_mode'), 'server', f"Expected server upload JSON output: {shareInfo}")
+
+        output, returnCode = self._runPatchedCoreCommand(['--cli', 'shares', 'list'], timeout=10)
+        self.assertEqual(returnCode, 0, f"shares list failed after daemon upload: {output}")
+        self.assertIn(shareLink, output, f"Expected daemon upload share to remain listed: {output}")
+        self.assertIn('completed', output.lower(), f"Expected daemon upload share to be listed as completed: {output}")
+
+        downloadedFilePath = self._getDownloadedFilePath('daemon_upload_share_test.bin')
+        self.downloadFileWithRequests(shareLink, downloadedFilePath)
+        self._verifyDownloadedFile(downloadedFilePath, shareLink=shareLink)
+
+    def testDaemonBackgroundUploadWithoutYesPromptsThenRoutesToDaemon(self):
+        """Test explicit --background upload prompts first, then submits to daemon."""
+        self._stopDaemon()
+        self._provisionLocalTestServerCredential()
+        testServerProcess = self._startTestServer()
+        self._testServerProcesses.append(testServerProcess)
+
+        output, returnCode = self._runCoreCommand(
+            [
+                '--cli', 'share', self.testFilePath,
+                '--json', self.jsonOutputPath,
+                '--upload', '3 hours',
+                '--background',
+            ],
+            commandPrefix=[sys.executable, self._coreScriptPath()],
+            extraEnvVars={
+                'PYTHONUNBUFFERED': '1',
+                'FILESHARE_TEST': LOCAL_TEST_SERVER_URL,
+            },
+            cwd=self._projectRoot(),
+            stdin=subprocess.PIPE,
+            inputData='yes\n',
+            timeout=120,
+        )
+
+        self.assertEqual(returnCode, 0, f"Expected background daemon upload to succeed after confirmation: {output}")
+        self.assertIn('Upload requires', output)
+        self.assertIn('Continue with upload?', output)
+        self.assertIn('Waiting for share link...', output)
+        self.assertNotIn('Cannot prompt for confirmation in non-interactive mode. Use --yes.', output)
+        self.assertNotIn('Upload cancelled before transfer started.', output)
+        self.assertTrue(os.path.exists(self.jsonOutputPath), "Expected upload to complete and write share_info.json")
+
+        with open(self.jsonOutputPath, 'r', encoding='utf-8') as fileHandle:
+            shareInfo = json.load(fileHandle)
+        self.assertEqual(shareInfo.get('upload_mode'), 'server', f"Expected server upload JSON output: {shareInfo}")
+
+    def testDaemonRunningUploadWithoutYesPromptsThenRoutesToDaemon(self):
+        """Test upload prompts in foreground, then routes to daemon after confirmation."""
+        self._stopDaemon()
+        self._provisionLocalTestServerCredential()
+        testServerProcess = self._startTestServer()
+        self._testServerProcesses.append(testServerProcess)
+        self._daemonEnvOverrides = {'FILESHARE_TEST': LOCAL_TEST_SERVER_URL}
+        self._startDaemon()
+
+        output, returnCode = self._runCoreCommand(
+            [
+                '--cli', 'share', self.testFilePath,
+                '--json', self.jsonOutputPath,
+                '--upload', '3 hours',
+            ],
+            commandPrefix=[sys.executable, self._coreScriptPath()],
+            extraEnvVars={
+                'PYTHONUNBUFFERED': '1',
+                'FILESHARE_TEST': LOCAL_TEST_SERVER_URL,
+            },
+            cwd=self._projectRoot(),
+            stdin=subprocess.PIPE,
+            inputData='yes\n',
+            timeout=120,
+        )
+
+        self.assertEqual(returnCode, 0, f"Expected daemon upload to succeed after confirmation: {output}")
+        self.assertIn('Upload requires', output)
+        self.assertIn('Continue with upload?', output)
+        self.assertIn('Waiting for share link...', output)
+        self.assertNotIn('Cannot prompt for confirmation in non-interactive mode. Use --yes.', output)
+        self.assertNotIn('Upload cancelled before transfer started.', output)
+        self.assertTrue(os.path.exists(self.jsonOutputPath), "Expected upload to complete and write share_info.json")
+
+        with open(self.jsonOutputPath, 'r', encoding='utf-8') as fileHandle:
+            shareInfo = json.load(fileHandle)
+        self.assertEqual(shareInfo.get('upload_mode'), 'server', f"Expected server upload JSON output: {shareInfo}")
+
     def testDaemonSharesList(self):
         """Test `ffl shares list` shows the active share after --background."""
         shareLink = self._startFastFileLink(p2p=True, extraArgs=['--background'])
         print(f"[Test] Share link: {shareLink}")
 
-        cmd = [sys.executable, self._coreScriptPath(), '--cli', 'shares', 'list']
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=10, env=self._coreEnv(), cwd=self._projectRoot()
-        )
-        self.assertEqual(result.returncode, 0, f"shares list failed: {result.stdout} {result.stderr}")
-        output = result.stdout
+        output, returnCode = self._runPatchedCoreCommand(['--cli', 'shares', 'list'], timeout=10)
+        self.assertEqual(returnCode, 0, f"shares list failed: {output}")
         print(f"[Test] shares list output: {output.strip()}")
         self.assertIn('online', output.lower(), "Share should be listed as online")
 
@@ -207,44 +288,48 @@ class DaemonTest(FastFileLinkTestBase):
         shareId = self._getFirstManagedShareId()
         print(f"[Test] Stopping share: {shareId}")
 
-        cmd = [sys.executable, self._coreScriptPath(), '--cli', 'shares', 'stop', shareId]
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=10, env=self._coreEnv(), cwd=self._projectRoot()
+        output, returnCode = self._runPatchedCoreCommand(['--cli', 'shares', 'stop', shareId], timeout=10)
+        self.assertEqual(returnCode, 0, f"shares stop failed: {output}")
+        self.assertIn(shareId, output, "Output should mention the stopped share ID")
+
+    def testDaemonSharePickupRecipientAuth(self):
+        """Test daemon-managed background share still enforces pickup recipient auth after merge."""
+        pickupCode = '482951'
+        shareLink = self._startFastFileLink(
+            p2p=True,
+            extraArgs=['--background', '--recipient-auth', 'pickup', '--pickup-code', pickupCode]
         )
-        self.assertEqual(result.returncode, 0, f"shares stop failed: {result.stdout} {result.stderr}")
-        self.assertIn(shareId, result.stdout, "Output should mention the stopped share ID")
+        print(f"[Test] Daemon pickup-auth share link: {shareLink}")
+
+        downloadedFilePath = self._getDownloadedFilePath('daemon_pickup_share_test.bin')
+        self.downloadFileWithRequests(
+            shareLink,
+            downloadedFilePath,
+            headers={'X-FFL-Pickup': pickupCode},
+        )
+        self._verifyDownloadedFile(downloadedFilePath)
 
     def testDaemonShareQr(self):
         """Test `ffl shares qr <id>` renders a QR code and includes the share link."""
         shareLink = self._startFastFileLink(p2p=True, extraArgs=['--background'])
         shareId = self._getFirstManagedShareId()
 
-        cmd = [sys.executable, self._coreScriptPath(), '--cli', 'shares', 'qr', shareId]
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, encoding='utf-8', timeout=10,
-            env=self._coreEnv(), cwd=self._projectRoot()
-        )
-        self.assertEqual(result.returncode, 0, f"shares qr failed: {result.stdout} {result.stderr}")
-        self.assertIn(shareLink, result.stdout, "QR output should include the share link")
+        output, returnCode = self._runPatchedCoreCommand(['--cli', 'shares', 'qr', shareId], timeout=10)
+        self.assertEqual(returnCode, 0, f"shares qr failed: {output}")
+        self.assertIn(shareLink, output, "QR output should include the share link")
 
     def testDaemonShareStopAll(self):
         """Test `ffl shares stop --all` stops all managed shares."""
         self._startFastFileLink(p2p=True, extraArgs=['--background'])
         self._startFastFileLink(p2p=True, extraArgs=['--background'])
 
-        cmd = [sys.executable, self._coreScriptPath(), '--cli', 'shares', 'stop', '--all']
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=15, env=self._coreEnv(), cwd=self._projectRoot()
-        )
-        self.assertEqual(result.returncode, 0, f"shares stop --all failed: {result.stdout} {result.stderr}")
-        self.assertIn('Stopped', result.stdout, "Output should report stopped shares")
+        output, returnCode = self._runPatchedCoreCommand(['--cli', 'shares', 'stop', '--all'], timeout=15)
+        self.assertEqual(returnCode, 0, f"shares stop --all failed: {output}")
+        self.assertIn('Stopped', output, "Output should report stopped shares")
 
-        cmd = [sys.executable, self._coreScriptPath(), '--cli', 'shares', 'list']
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=10, env=self._coreEnv(), cwd=self._projectRoot()
-        )
-        self.assertEqual(result.returncode, 0, f"shares list after stop --all failed: {result.stdout} {result.stderr}")
-        self.assertIn('No active shares', result.stdout, "All shares should be stopped")
+        output, returnCode = self._runPatchedCoreCommand(['--cli', 'shares', 'list'], timeout=10)
+        self.assertEqual(returnCode, 0, f"shares list after stop --all failed: {output}")
+        self.assertIn('No active shares', output, "All shares should be stopped")
 
     def testDaemonForegroundBypassesDaemon(self):
         """Test that --foreground runs normally in the foreground, ignoring the daemon."""
@@ -266,7 +351,6 @@ class DaemonTest(FastFileLinkTestBase):
         downloadedFilePath = self._getDownloadedFilePath('foreground_share_test.bin')
         self.downloadFileWithRequests(shareLink, downloadedFilePath)
         self._verifyDownloadedFile(downloadedFilePath)
-
 
 if __name__ == '__main__':
     unittest.main()

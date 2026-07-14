@@ -31,12 +31,16 @@ import zlib
 from pathlib import Path
 from typing import Optional, Tuple
 
+rootPath = os.path.dirname(os.path.dirname(__file__))
+sys.path.insert(0, rootPath)
+
 from bases.Kernel import PUBLIC_VERSION
 
 # Create logger for this module
 logger = logging.getLogger(__name__)
 
-excludedPackages = ['numpy.libs', "av", "av.lib", 'mbedtls']
+#excludedPackages = ['numpy.libs', "av", "av.lib", 'mbedtls']
+excludedPackages = ['numpy.libs', 'mbedtls']
 if sys.platform == 'win32':
     excludedPackages.append('lief')
 
@@ -49,19 +53,16 @@ if sys.platform == 'darwin':
     hiddenImports.extend(['Foundation', 'AppKit'])
 
 packageData = [
-    ('static/Logo.ico', 'static'),
-    ('static/Logo.png', 'static'),
-    ('static/assets/gooey/program_icon.png', 'static/assets/gooey'), # gooey program icon
-    ('static/assets/gooey/config_icon.png', 'static/assets/gooey'), # gooey config icon    
-    ('static/assets/gooey/running_icon.png', 'static/assets/gooey'), # gooey running icon
-    ('static/assets/thumbnails/Thumb.png', 'static/assets/thumbnails'),
-    ('static/assets/thumbnails/Video.png', 'static/assets/thumbnails'),
-    ('static/assets/mitm.html', 'static/assets'),
-    ('static/assets/sw.js', 'static/assets'),
-    ('static/index.html', 'static'),
-    ('static/js/WebRTC.js', 'static/js'),
-    ('locales', 'locales'), # i18n translation files
-    ('addons/impl/assets', 'addons/impl/assets'), # addons assets
+    ('../static/Logo.ico', 'static'),
+    ('../static/Logo.png', 'static'),
+    ('../static/assets/thumbnails/Thumb.png', 'static/assets/thumbnails'),
+    ('../static/assets/thumbnails/Video.png', 'static/assets/thumbnails'),
+    ('../static/assets/mitm.html', 'static/assets'),
+    ('../static/assets/sw.js', 'static/assets'),
+    ('../static/index.html', 'static'),
+    ('../static/js/WebRTC.js', 'static/js'),
+    ('../locales', 'locales'), # i18n translation files
+    ('../addons/impl/assets', 'addons/impl/assets'), # addons assets
 ]
 
 featuresSupported = True
@@ -324,7 +325,7 @@ def getVersionInfo(full=True, useSVNRevision=True):
     while len(versionParts) < 3:
         versionParts.append('0')
 
-    baseDir = os.path.dirname(__file__)
+    baseDir = os.path.dirname(os.path.dirname(__file__))
 
     if full:
         revision = 0

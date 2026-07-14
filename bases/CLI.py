@@ -24,15 +24,18 @@ import logging
 import logging.config
 import platform
 
+from dataclasses import MISSING, fields
+
 from bases.Kernel import (
     LOG_LEVEL_MAPPING, PUBLIC_VERSION, getLogger, FFLEvent, configureGlobalLogLevel, AddonsManager, StorageLocator
 )
 from bases.Settings import DEFAULT_AUTH_USER_NAME, DEFAULT_UPLOAD_DURATION, SettingsGetter
 from bases.Utils import flushPrint, checkVersionCompatibility, getEnv, parseProxyString, setupProxyEnvironment
-from bases.Hook import HookClient, HookFileWriter, forwardEventToHook
-from bases.Daemon import DaemonManager, DaemonClient
+from bases.Hook import HookEventForwarder
+from bases.Daemon import DaemonManager
 from bases.Upgrade import performUpgrade
 from bases.Auth import PICKUP_CODE_LENGTH, PUBKEY_PUBLIC_EXT, PUBKEY_PRIVATE_EXT, RecipientAuth
+from bases.Share import ShareRequest
 from bases.crypto import CryptoInterface
 from bases.I18n import _
 
@@ -222,50 +225,152 @@ def showVersion():
     flushPrint(_('Support: {supportURL}').format(supportURL=supportURL))
 
 
-def _addRecipientAuthArguments(parser):
-    """Add --recipient-auth and all related arguments to a parser (share and keygen subparsers)."""
-    parser.add_argument(
-        "--recipient-auth",
-        choices=['pickup', 'pubkey', 'pubkey+pickup', 'email'],
-        default=None,
-        help=_(
-            "Recipient verification mode. "
-            "'pickup': 6-digit code required to download; "
-            "'pubkey': RSA public-key challenge required; "
-            "'pubkey+pickup': both required; "
-            "'email': one-time code sent to recipient's email"
-        ),
-        dest="recipientAuth"
+class ShareCLIArgumentAdapter:
+    """Build and extract share CLI arguments from ShareRequest metadata."""
+
+    CLI_METADATA_KEY = 'cli'
+    
+    RECIPIENT_AUTH_FIELDS = (
+        'recipientAuth',
+        'pickupCode',
+        'recipientPublicKey',
+        'recipientEmail',
+        'recipientOTPAPIBase',
     )
-    parser.add_argument(
-        "--pickup-code",
-        help=_("Custom {n}-digit pickup code (use with --recipient-auth pickup or pubkey+pickup)").format(
-            n=PICKUP_CODE_LENGTH),
-        metavar="CODE",
-        dest="pickupCode"
-    )
-    parser.add_argument(
-        "--recipient-public-key",
-        help=_(
-            "Path to recipient RSA public key file ({ext}), or a comma-separated list of paths "
-            "(implies --recipient-auth pubkey; with --pickup-code, implies pubkey+pickup)"
-        ).format(ext=PUBKEY_PUBLIC_EXT),
-        metavar="FILE",
-        dest="recipientPublicKey"
-    )
-    parser.add_argument(
-        "--recipient-email",
-        help=_("Recipient email address, or a comma-separated list of email addresses, for OTP verification (implies --recipient-auth email)"),
-        metavar="EMAILS",
-        dest="recipientEmail"
-    )
-    parser.add_argument(
-        "--recipient-otp-api-base",
-        help=_("Base URL for OTP email API (e.g. https://myserver.com/api). Required for --recipient-auth email"),
-        metavar="URL",
-        default=None,
-        dest="recipientOTPAPIBase"
-    )
+
+    VALIDATOR_NAMES = {'int', 'port', 'timeout', 'maxDownloads'}
+
+    @classmethod
+    def _buildContext(cls, featureManager):
+        uploadChoices = list(featureManager.getUploadRetentionTimes().keys())
+        
+        return {
+            'uploadChoices': uploadChoices if uploadChoices else ['unavailable'],
+            'uploadConst': DEFAULT_UPLOAD_DURATION if uploadChoices else 'unavailable',
+        }
+
+    @classmethod
+    def _createPositiveValidator(cls, fieldName):
+        def validatePositive(valueStr):
+            try:
+                value = int(valueStr)
+                if value < 0:
+                    raise argparse.ArgumentTypeError(f"{fieldName} {value} cannot be negative")
+                    
+                return value
+            except ValueError:
+                raise argparse.ArgumentTypeError(f"Invalid {fieldName.lower()} value: {valueStr}")
+
+        return validatePositive
+
+    @classmethod
+    def _createPortValidator(cls):
+        def validatePort(portStr):
+            try:
+                port = int(portStr)
+                if not (1024 <= port <= 65535):
+                    raise argparse.ArgumentTypeError(f"Port {port} is out of valid range (1024-65535)")
+                    
+                return port
+            except ValueError:
+                raise argparse.ArgumentTypeError(f"Invalid port number: {portStr}")
+
+        return validatePort
+
+    @classmethod
+    def _getValidator(cls, validatorName):
+        validators = {
+            'int': int,
+            'port': cls._createPortValidator(),
+            'timeout': cls._createPositiveValidator("Timeout"),
+            'maxDownloads': cls._createPositiveValidator("Max downloads"),
+        }
+    
+        return validators[validatorName]
+
+    @classmethod
+    def _iterShareFields(cls, shareRequestClass, fieldNames=None):
+        for dataclassField in fields(shareRequestClass):
+            if fieldNames and dataclassField.name not in fieldNames:
+                continue
+
+            cliMetadata = dataclassField.metadata.get(cls.CLI_METADATA_KEY)
+            if cliMetadata:
+                yield dataclassField, cliMetadata
+
+    @classmethod
+    def _resolveOptionValue(cls, value, context):
+        if callable(value):
+            return value(context)
+
+        if isinstance(value, str) and value in cls.VALIDATOR_NAMES:
+            return cls._getValidator(value)
+
+        return value
+
+    @classmethod
+    def _buildArgumentOptions(cls, dataclassField, cliMetadata, context):
+        flags = cliMetadata['flags']
+        options = {
+            key: cls._resolveOptionValue(value, context)
+            for key, value in cliMetadata['options'].items()
+        }
+
+        if dataclassField.default is not MISSING:
+            options.setdefault('default', dataclassField.default)
+        elif dataclassField.default_factory is not MISSING:
+            options.setdefault('default', dataclassField.default_factory())
+        else:
+            pass
+
+        if flags and flags[0].startswith('-'):
+            options.setdefault('dest', dataclassField.name)
+
+        return flags, options
+
+    @classmethod
+    def addShareArguments(cls, parser, featureManager):
+        shareGroup = parser.add_argument_group('share')
+        context = cls._buildContext(featureManager)
+        shareRequestClass = featureManager.getShareRequestClass(ShareRequest)
+
+        for dataclassField, cliMetadata in cls._iterShareFields(shareRequestClass):
+            flags, options = cls._buildArgumentOptions(dataclassField, cliMetadata, context)
+            shareGroup.add_argument(*flags, **options)
+
+        FFLEvent.cliArgumentsShareOptionsRegister.trigger(parser=shareGroup)
+        return shareGroup
+
+    @classmethod
+    def addRecipientAuthArguments(cls, parser):
+        for dataclassField, cliMetadata in cls._iterShareFields(ShareRequest, fieldNames=cls.RECIPIENT_AUTH_FIELDS):
+            flags, options = cls._buildArgumentOptions(dataclassField, cliMetadata, context={})
+            parser.add_argument(*flags, **options)
+
+    @classmethod
+    def getShareActionGroup(cls, shareSubparser):
+        for group in shareSubparser._action_groups:
+            if group.title == 'share':
+                return group
+
+        raise RuntimeError('Share action group not found')
+
+    @classmethod
+    def createDaemonShareConfig(cls, args, shareSubparser):
+        shareGroup = cls.getShareActionGroup(shareSubparser)
+        shareDests = {
+            action.dest
+            for action in shareGroup._group_actions
+            if action.dest and action.dest != argparse.SUPPRESS
+        }
+    
+        argsDict = vars(args)
+        config = {dest: argsDict[dest] for dest in shareDests if dest in argsDict}
+        
+        if 'uploadConfirmed' in argsDict:
+            config['uploadConfirmed'] = argsDict['uploadConfirmed']
+            
+        return config
 
 
 def configureCLIParser():
@@ -277,207 +382,6 @@ def configureCLIParser():
     # Get settings for configuration - import here to avoid circular dependency
     settingsGetter = SettingsGetter.getInstance()
     featureManager = settingsGetter.getFeatureManager()
-
-    def _configureShareParser(parser):
-        """Configure parser for file sharing (share command)"""
-
-        # Argument validators.
-        def validatePositive(valueStr, fieldName):
-            """Validate positive integer values for argparse"""
-            try:
-                value = int(valueStr)
-                if value < 0:
-                    raise argparse.ArgumentTypeError(f"{fieldName} {value} cannot be negative")
-                return value
-            except ValueError:
-                raise argparse.ArgumentTypeError(f"Invalid {fieldName.lower()} value: {valueStr}")
-
-        def validatePort(portStr):
-            """Validate port number for argparse"""
-            try:
-                port = int(portStr)
-                if not (1024 <= port <= 65535):
-                    raise argparse.ArgumentTypeError(f"Port {port} is out of valid range (1024-65535)")
-                return port
-            except ValueError:
-                raise argparse.ArgumentTypeError(f"Invalid port number: {portStr}")
-
-        def validateTimeout(timeoutStr):
-            """Validate timeout value for argparse"""
-            return validatePositive(timeoutStr, "Timeout")
-
-        def validateMaxDownloads(maxDownloadsStr):
-            """Validate max downloads value for argparse"""
-            return validatePositive(maxDownloadsStr, "Max downloads")
-
-        parser.add_argument(
-            "file",
-            metavar="FILE_OR_FOLDER",
-            help=_(
-                "File(s) or folder to share. Use '-' for stdin, '@filelist.txt' to read paths "
-                "from a file. Multiple files can be specified: file1 file2 file3"
-            ),
-            nargs='*'
-        )
-        parser.add_argument(
-            "--name", "-n",
-            metavar="FILENAME",
-            help=_("Specify custom download filename (default: original filename for files, "
-                   "folder.zip for folders, stdin-YYYYMMDD-HHMMSS.bin for stdin)"),
-            dest="fileName"
-        )
-        parser.add_argument(
-            "--exclude",
-            metavar="PATTERNS",
-            help=_(
-                "Comma-separated patterns to exclude files/folders by name (e.g. '*.log,.svn,__pycache__'). "
-                "Prefix with 're:' for regex (e.g. 're:\\.tmp$'). Applies at any depth."
-            ),
-            default=None
-        )
-
-        # Upload mode - optional parameter (always available, but requires Upload addon)
-        # Use FeatureManager to filter retention times or fallback to default
-        times = list(featureManager.getUploadRetentionTimes().keys())
-        parser.add_argument("--json", metavar="JSON_FILE", help=_("Output link and settings to a JSON file"))
-        parser.add_argument(
-            "--upload",
-            help=_("Upload file to FastFileLink server to share it "
-                   "(Share duration after upload). Default: {default}").format(
-                       default=DEFAULT_UPLOAD_DURATION
-                   ),
-            choices=times if times else ['unavailable'],
-            nargs='?',
-            const=DEFAULT_UPLOAD_DURATION if times else 'unavailable',
-            default=None,
-        )
-        parser.add_argument(
-            "--resume",
-            action="store_true",
-            default=False,
-            help=_("Resume a previously interrupted upload (requires previous upload session to exist)")
-        )
-        parser.add_argument(
-            "--pause",
-            type=int,
-            metavar="PERCENTAGE",
-            help=_("Pause upload at specified percentage (1-99, requires --upload)")
-        )
-        parser.add_argument(
-            "--yes",
-            action="store_true",
-            default=False,
-            help=_("Automatically answer yes to upload confirmation prompts"),
-            dest="yes"
-        )
-        parser.add_argument(
-            "--legacy-link",
-            metavar="URL",
-            help=_("Legacy P2P share link to recover after this server upload completes"),
-            dest="legacyLink",
-        )
-        parser.add_argument(
-            "--max-downloads",
-            type=validateMaxDownloads,
-            default=0,
-            help=_(
-                "Maximum number of downloads before the server automatically shuts down (P2P mode only)."
-                " 0 means unlimited."
-            ),
-            dest="maxDownloads"
-        )
-        parser.add_argument(
-            "--timeout",
-            type=validateTimeout,
-            default=0,
-            help=_("Timeout in seconds before the server automatically shuts down (P2P mode only). 0 means no timeout.")
-        )
-        parser.add_argument(
-            "--port",
-            type=validatePort,
-            help=_("Port number for local server (1024-65535, default: auto-detect available port)"),
-            metavar="PORT"
-        )
-        parser.add_argument(
-            "--auth-user",
-            help=_("Username for HTTP Basic Authentication (default: '{default}')").format(
-                default=DEFAULT_AUTH_USER_NAME),
-            metavar="USERNAME",
-            default=DEFAULT_AUTH_USER_NAME,
-            dest="authUser"
-        )
-        parser.add_argument(
-            "--auth-password",
-            help=_("Password for HTTP Basic Authentication (enables auth protection)"),
-            metavar="PASSWORD",
-            dest="authPassword"
-        )
-    
-        _addRecipientAuthArguments(parser)
-        parser.add_argument(
-            "--force-relay",
-            action="store_true",
-            default=False,
-            help=_(
-                "Force relayed P2P mode, disable direct WebRTC connections "
-                "(can be overridden by ?webrtc=on URL parameter)"
-            ),
-            dest="forceRelay"
-        )
-        parser.add_argument(
-            "--e2ee",
-            action="store_true",
-            default=False,
-            help=_("Enable end-to-end encryption for file sharing (both HTTP and WebRTC)"),
-            dest="e2ee"
-        )
-        parser.add_argument(
-            "--invite",
-            action="store_true",
-            default=False,
-            help=_("Open invite page in browser with the sharing link"),
-            dest="invite"
-        )
-        parser.add_argument(
-            "--qr",
-            nargs='?',
-            const=True,
-            default=False,
-            metavar="FILE",
-            help=_("Display QR code in terminal (default) or save to FILE (e.g., qr.png)"),
-            dest="qr"
-        )
-        parser.add_argument(
-            "--vfs",
-            action="store_true",
-            default=False,
-            help=_("Start VFS server and provide vfs:// URI instead of HTTPS link (P2P mode only, works with --port)"),
-            dest="vfs"
-        )
-        parser.add_argument(
-            "--stdin-cache",
-            choices=["on", "off"],
-            default="on",
-            help=_("Enable or disable stdin caching ('off' means a second read raises an error)"),
-            dest="stdinCache"
-        )
-        parser.add_argument(
-            "--background",
-            action="store_true",
-            default=False,
-            help=_("Submit share to background daemon (auto-starts daemon if needed)"),
-            dest="background"
-        )
-        parser.add_argument(
-            "--foreground",
-            action="store_true",
-            default=False,
-            help=_("Run share in foreground even if a daemon is running"),
-            dest="foreground"
-        )
-
-        # Allow addons to register additional arguments for share command
-        FFLEvent.cliArgumentsShareOptionsRegister.trigger(parser=parser)
 
     # Validator for log level
     def validateLogLevel(logLevel):
@@ -556,7 +460,7 @@ def configureCLIParser():
         parents=[globalsParent],
         exit_on_error=False
     )
-    _configureShareParser(shareSubparser)
+    ShareCLIArgumentAdapter.addShareArguments(shareSubparser, featureManager)
 
     # Download command for receiving files
     downloadSubparser = subparsers.add_parser(
@@ -673,7 +577,7 @@ def configureCLIParser():
         help=_("Output link and settings to a JSON file (use with --share)"),
     )
 
-    _addRecipientAuthArguments(keygenSubparser)
+    ShareCLIArgumentAdapter.addRecipientAuthArguments(keygenSubparser)
 
     # Daemon management command
     daemonSubparser = subparsers.add_parser(
@@ -756,24 +660,8 @@ def handleHookArgument(hook, result=None):
     if not hook:
         return result
 
-    jsonl = False
-    sender = None
-
-    if hook.startswith('http://') or hook.startswith('https://'):
-        sender = HookClient(hook)
-    else:
-        sender = HookFileWriter(hook)
-        jsonl = True
-
-    logger.info(f"Hook client initialized: {hook}")
-    FFLEvent.all.subscribe(lambda eventName, **eventData: forwardEventToHook(sender, eventName, **eventData))
-
-    if jsonl:
-        # HookFileWriter requires close on shutdown or interrupt (Ctrl+C)
-        closeHandler = lambda *args, **kwargs: sender.close()
-        FFLEvent.applicationShutdown.subscribe(closeHandler)
-        FFLEvent.applicationInterrupted.subscribe(closeHandler)
-
+    hookEventForwarder = HookEventForwarder.getInstance()
+    hookEventForwarder.configure(hook)
     return result
 
 
@@ -836,7 +724,7 @@ def processGlobalArguments(globalArgs):
 
 def _handleKeygenCommand(args, shareSubparser):
     """Generate RSA-2048 keypair files for --recipient-auth pubkey."""
-    name = getattr(args, 'keypairName', None) or 'recipient'
+    name = args.keypairName
     privPath = f"{name}{PUBKEY_PRIVATE_EXT}"
     pubPath = f"{name}{PUBKEY_PUBLIC_EXT}"
 
@@ -854,7 +742,7 @@ def _handleKeygenCommand(args, shareSubparser):
     flushPrint(_('  Private key : {path}').format(path=privPath))
     flushPrint(_('  Public key  : {path}  ← share with sender').format(path=pubPath))
 
-    if not getattr(args, 'keypairShare', False):
+    if not args.keypairShare:
         flushPrint(_('Share the public key file with the sender who will use:'))
         flushPrint(_('  ffl share file.bin --recipient-auth pubkey --recipient-public-key {pub}').format(pub=pubPath))
         return 0
@@ -864,10 +752,10 @@ def _handleKeygenCommand(args, shareSubparser):
     # automatically get their correct defaults without manual maintenance here.
     keypairJson = args.json
     keypairRecipientAuth = args.recipientAuth
-    keypairPickupCode = getattr(args, 'pickupCode', None)
-    keypairRecipientPublicKey = getattr(args, 'recipientPublicKey', None)
-    keypairRecipientEmail = getattr(args, 'recipientEmail', None)
-    keypairRecipientOTPAPIBase = getattr(args, 'recipientOTPAPIBase', None)
+    keypairPickupCode = args.pickupCode
+    keypairRecipientPublicKey = args.recipientPublicKey
+    keypairRecipientEmail = args.recipientEmail
+    keypairRecipientOTPAPIBase = args.recipientOTPAPIBase
 
     shareArgs = shareSubparser.parse_args([privPath])
     args.__dict__.update(vars(shareArgs))
@@ -897,14 +785,14 @@ def _handleKeygenCommand(args, shareSubparser):
     FFLEvent.webrtcTransferCompleted.subscribe(deletePrivKeyAfterDownload)
 
     flushPrint(_('Sharing private key (download once, then auto-deleted).'))
-    if not getattr(args, 'recipientAuth', None):
+    if not args.recipientAuth:
         flushPrint(_('Tip: use --recipient-auth pickup or --recipient-auth pubkey to restrict who can download.\n'))
     else:
         flushPrint('')
     return None  # hand off to processSharing
 
 
-def processArgumentsAndCommands(args, shareSubparser=None):
+def processArgumentsAndCommands(args, shareSubparser=None, proxyConfig=None):
     """
     Process parsed arguments and handle command execution through addons.
     This handles all commands except 'share' (which is handled by processFileSharing).
@@ -921,8 +809,8 @@ def processArgumentsAndCommands(args, shareSubparser=None):
 
     if command == 'upgrade':
         # Parse arguments: support both "upgrade <version>" and "upgrade <binary_path> <version>"
-        target = getattr(args, 'target', None)
-        version = getattr(args, 'version', None)
+        target = args.target
+        version = args.version
 
         # Determine if target is a binary path or a version
         targetBinary = None
@@ -953,10 +841,6 @@ def processArgumentsAndCommands(args, shareSubparser=None):
 
     if command == 'shares':
         return DaemonManager.handleSharesCLICommand(args)
-
-    if command == 'share':
-        if not args.foreground and (args.background or DaemonClient.isRunning()):
-            return DaemonManager.handleBackgroundShare(args)
 
     # Validate share arguments for:
     # - CLI mode: when command is 'share'
@@ -1129,6 +1013,14 @@ def validateShareArguments(args):
     # Get settings for validation
     settingsGetter = SettingsGetter.getInstance()
 
+    # --disable-clipboard defaults to None (not explicitly set) so the actual
+    # default can depend on mode: CLI usage copies the link automatically
+    # (convenient for pasting elsewhere); GUI mode already has an explicit
+    # "Copy Link" button, so auto-copy there would just clobber whatever the
+    # user has on their clipboard -- default it off instead.
+    if args.disableClipboard is None:
+        args.disableClipboard = not settingsGetter.isCLIMode()
+
     # Normalize file argument: list (from nargs='*') → None / str / list[str]
     #   0 items  → None
     #   1 item, starts with '@' → expand filelist → list[str]
@@ -1221,7 +1113,7 @@ def validateShareArguments(args):
         if args.recipientAuth is None:
             args.recipientAuth = 'pickup'
 
-    recipientPublicKey = getattr(args, 'recipientPublicKey', None)
+    recipientPublicKey = args.recipientPublicKey
 
     # Auto-infer --recipient-auth pubkey/pubkey+pickup when --recipient-public-key is provided
     if recipientPublicKey and originalRecipientAuth is None:

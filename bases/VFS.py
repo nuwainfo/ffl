@@ -27,22 +27,21 @@ Provides HTTP-based access to local filesystems with:
 """
 
 import os
-import json
 import time
 import threading
 
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict
 from urllib.parse import urlparse, parse_qs, urlencode
 
-from bases.Kernel import getLogger
-from bases.Server import AuthMixin, HTTPAuth
+from bases.I18n import _
+from bases.HTTP import HTTPRequestHandlerHelper, PathResolverMixin
+from bases.Kernel import FFLEvent, getLogger
+from bases.Auth import AuthMixin, HTTPAuth
+from bases.Settings import SettingsGetter
+from bases.Utils import copy2Clipboard
 
 logger = getLogger(__name__)
-
-# Transfer chunk sizes
-CHUNK_SIZE = 256 * 1024 # General streaming chunk size
-HTTP_READ_CHUNK = 1024 * 1024 # HTTP Range read chunk size
 
 # Server configuration
 DEFAULT_VFS_HOST = "127.0.0.1"
@@ -214,10 +213,18 @@ class VFSServer(ThreadingHTTPServer):
         """Create HTTP request handler class"""
         server = self
 
-        class VfsHandler(AuthMixin, BaseHTTPRequestHandler):
+        class VFSHandler(PathResolverMixin, HTTPRequestHandlerHelper, AuthMixin, BaseHTTPRequestHandler):
             """HTTP request handler for VFS protocol"""
 
             REALM = 'VFS Protected Resource'
+
+            def __init__(self, *args, **kwargs):
+                self.mapGETRoute("/meta", self._handleMeta)
+                self.mapGETRoute("/list", self._handleList)
+                self.mapGETRoute("/stat", self._handleStat)
+                self.mapGETRoute("/open", self._handleOpen)
+                self.mapGETRoute("/file", self._handleFile)
+                super().__init__(*args, **kwargs)
 
             def log_message(self, format, *args):
                 """Override to use our logger"""
@@ -253,20 +260,12 @@ class VFSServer(ThreadingHTTPServer):
 
                 try:
                     parsed = urlparse(self.path)
-                    path = parsed.path
                     query = parse_qs(parsed.query)
                     keepAlive = self._shouldKeepAlive()
 
-                    if path == "/meta":
-                        self._handleMeta(keepAlive)
-                    elif path == "/list":
-                        self._handleList(query, keepAlive)
-                    elif path == "/stat":
-                        self._handleStat(query, keepAlive)
-                    elif path == "/open":
-                        self._handleOpen(query, keepAlive)
-                    elif path == "/file":
-                        self._handleFile(query, keepAlive)
+                    handler = self._resolveGETHandler(parsed.path)
+                    if handler:
+                        handler(query, keepAlive)
                     else:
                         self._sendError(404, "Not Found", "Unknown endpoint", keepAlive)
 
@@ -274,7 +273,7 @@ class VFSServer(ThreadingHTTPServer):
                     logger.exception(f"Error handling request: {e}")
                     self._sendError(500, "Internal Server Error", str(e), self._shouldKeepAlive())
 
-            def _handleMeta(self, keepAlive: bool):
+            def _handleMeta(self, query: Dict, keepAlive: bool):
                 """Handle /meta endpoint"""
                 obj = {
                     "ok": True,
@@ -282,27 +281,27 @@ class VFSServer(ThreadingHTTPServer):
                     "rootId": server._rootId,
                     "rootIsDir": not server.isFile
                 }
-                self._sendJson(200, obj, keepAlive)
+                self._sendJSON(200, obj, keepAlive)
 
             def _handleList(self, query: Dict, keepAlive: bool):
                 """Handle /list endpoint"""
                 dirId = query.get("id", [None])[0]
                 if not dirId:
-                    self._sendJson(400, {"ok": False, "error": "missing id"}, keepAlive)
+                    self._sendJSON(400, {"ok": False, "error": "missing id"}, keepAlive)
                     return
 
                 # Handle single-file mode: files have no children
                 if server.isFile and dirId == server._rootId:
-                    self._sendJson(200, {"ok": True, "entries": []}, keepAlive)
+                    self._sendJSON(200, {"ok": True, "entries": []}, keepAlive)
                     return
 
                 dirPath = server._getPathForId(dirId)
                 if not dirPath or not os.path.exists(dirPath):
-                    self._sendJson(404, {"ok": False, "error": "directory not found"}, keepAlive)
+                    self._sendJSON(404, {"ok": False, "error": "directory not found"}, keepAlive)
                     return
 
                 if not os.path.isdir(dirPath):
-                    self._sendJson(400, {"ok": False, "error": "not a directory"}, keepAlive)
+                    self._sendJSON(400, {"ok": False, "error": "not a directory"}, keepAlive)
                     return
 
                 entries = []
@@ -330,21 +329,21 @@ class VFSServer(ThreadingHTTPServer):
                     entries.sort(key=lambda e: (e["name"], e["id"]))
 
                 except OSError as e:
-                    self._sendJson(500, {"ok": False, "error": f"list failed: {e}"}, keepAlive)
+                    self._sendJSON(500, {"ok": False, "error": f"list failed: {e}"}, keepAlive)
                     return
 
-                self._sendJson(200, {"ok": True, "entries": entries}, keepAlive)
+                self._sendJSON(200, {"ok": True, "entries": entries}, keepAlive)
 
             def _handleStat(self, query: Dict, keepAlive: bool):
                 """Handle /stat endpoint"""
                 docId = query.get("id", [None])[0]
                 if not docId:
-                    self._sendJson(400, {"ok": False, "error": "missing id"}, keepAlive)
+                    self._sendJSON(400, {"ok": False, "error": "missing id"}, keepAlive)
                     return
 
                 path = server._getPathForId(docId)
                 if not path or not os.path.exists(path):
-                    self._sendJson(404, {"ok": False, "error": "not found"}, keepAlive)
+                    self._sendJSON(404, {"ok": False, "error": "not found"}, keepAlive)
                     return
 
                 try:
@@ -354,34 +353,34 @@ class VFSServer(ThreadingHTTPServer):
                     mtime = st.st_mtime
 
                     obj = {"ok": True, "id": docId, "isDir": isDir, "size": size, "mtime": mtime}
-                    self._sendJson(200, obj, keepAlive)
+                    self._sendJSON(200, obj, keepAlive)
 
                 except OSError as e:
-                    self._sendJson(500, {"ok": False, "error": f"stat failed: {e}"}, keepAlive)
+                    self._sendJSON(500, {"ok": False, "error": f"stat failed: {e}"}, keepAlive)
 
             def _handleOpen(self, query: Dict, keepAlive: bool):
                 """Handle /open endpoint - returns file size for opening"""
                 docId = query.get("id", [None])[0]
                 if not docId:
-                    self._sendJson(400, {"ok": False, "error": "missing id"}, keepAlive)
+                    self._sendJSON(400, {"ok": False, "error": "missing id"}, keepAlive)
                     return
 
                 path = server._getPathForId(docId)
                 if not path or not os.path.exists(path):
-                    self._sendJson(404, {"ok": False, "error": f"not a file: {docId}"}, keepAlive)
+                    self._sendJSON(404, {"ok": False, "error": f"not a file: {docId}"}, keepAlive)
                     return
 
                 if not os.path.isfile(path):
-                    self._sendJson(404, {"ok": False, "error": f"not a file: {docId}"}, keepAlive)
+                    self._sendJSON(404, {"ok": False, "error": f"not a file: {docId}"}, keepAlive)
                     return
 
                 try:
                     st = os.stat(path)
                     obj = {"ok": True, "size": st.st_size}
-                    self._sendJson(200, obj, keepAlive)
+                    self._sendJSON(200, obj, keepAlive)
 
                 except OSError as e:
-                    self._sendJson(500, {"ok": False, "error": f"stat failed: {e}"}, keepAlive)
+                    self._sendJSON(500, {"ok": False, "error": f"stat failed: {e}"}, keepAlive)
 
             def _handleFile(self, query: Dict, keepAlive: bool):
                 """Handle /file endpoint with Range support"""
@@ -405,121 +404,80 @@ class VFSServer(ThreadingHTTPServer):
                     self._sendText(500, "Internal Server Error", f"stat failed: {e}", keepAlive)
                     return
 
-                # Parse Range header
-                rangeHeader = self.headers.get("Range")
-                if not rangeHeader:
-                    self._streamFile(path, 0, fileSize - 1, fileSize, partial=False, keepAlive=keepAlive)
-                    return
-
-                # Parse "bytes=start-end"
-                rangeMatch = self._parseRange(rangeHeader, fileSize)
-                if not rangeMatch:
-                    self.send_response(416, "Range Not Satisfiable")
-                    self.send_header("Accept-Ranges", "bytes")
-                    self.send_header("Content-Range", f"bytes */{fileSize}")
-                    self.send_header("Connection", "keep-alive" if keepAlive else "close")
-                    self.end_headers()
-                    return
-
-                start, end = rangeMatch
-                self._streamFile(path, start, end, fileSize, partial=True, keepAlive=keepAlive)
-
-            def _parseRange(self, rangeHeader: str, fileSize: int) -> Optional[Tuple[int, int]]:
-                """Parse HTTP Range header"""
-                if not rangeHeader.startswith("bytes="):
-                    return None
-
-                spec = rangeHeader[6:].strip()
-                dashIdx = spec.find("-")
-                if dashIdx < 0:
-                    return None
-
-                startStr = spec[:dashIdx].strip()
-                endStr = spec[dashIdx + 1:].strip()
-
-                if not startStr:
-                    return None # Suffix range not supported
-
-                try:
-                    start = int(startStr)
-                except ValueError as e:
-                    logger.debug(f"Invalid Range start value '{startStr}': {e}")
-                    return None
-
-                if start < 0 or start >= fileSize:
-                    return None
-
-                if endStr:
-                    try:
-                        end = int(endStr)
-                    except ValueError as e:
-                        logger.debug(f"Invalid Range end value '{endStr}': {e}")
-                        return None
-                else:
-                    end = fileSize - 1
-
-                end = min(end, fileSize - 1)
-                if end < start:
-                    return None
-
-                return (start, end)
-
-            def _streamFile(self, path: str, start: int, end: int, fileSize: int, partial: bool, keepAlive: bool):
-                """Stream file with Range support"""
-                try:
-                    with open(path, "rb") as f:
-                        # Seek to start
-                        if start > 0:
-                            f.seek(start)
-
-                        length = end - start + 1
-                        status = 206 if partial else 200
-                        reason = "Partial Content" if partial else "OK"
-
-                        self.send_response(status, reason)
-                        self.send_header("Content-Type", "application/octet-stream")
-                        self.send_header("Accept-Ranges", "bytes")
-                        self.send_header("Content-Length", str(length))
-                        if partial:
-                            self.send_header("Content-Range", f"bytes {start}-{end}/{fileSize}")
-                        self.send_header("Connection", "keep-alive" if keepAlive else "close")
-                        self.end_headers()
-
-                        # Stream file data
-                        remaining = length
-                        while remaining > 0:
-                            chunkSize = min(CHUNK_SIZE, remaining)
-                            chunk = f.read(chunkSize)
-                            if not chunk:
-                                break
-                            self.wfile.write(chunk)
-                            remaining -= len(chunk)
-
-                except OSError as e:
-                    logger.error(f"Error streaming file {path}: {e}")
-
-            def _sendJson(self, code: int, obj: dict, keepAlive: bool):
-                """Send JSON response"""
-                data = json.dumps(obj).encode("utf-8")
-                self.send_response(code)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(data)))
-                self.send_header("Connection", "keep-alive" if keepAlive else "close")
-                self.end_headers()
-                self.wfile.write(data)
-
-            def _sendText(self, code: int, reason: str, msg: str, keepAlive: bool):
-                """Send text response"""
-                data = msg.encode("utf-8")
-                self.send_response(code, reason)
-                self.send_header("Content-Type", "text/plain; charset=utf-8")
-                self.send_header("Content-Length", str(len(data)))
-                self.send_header("Connection", "keep-alive" if keepAlive else "close")
-                self.end_headers()
-                self.wfile.write(data)
+                self._streamFile(path, fileSize, rangeHeader=self.headers.get("Range"), keepAlive=keepAlive)
 
             def _sendError(self, code: int, reason: str, msg: str, keepAlive: bool):
                 """Send error response"""
                 self._sendText(code, reason, msg, keepAlive)
 
-        return VfsHandler
+        return VFSHandler
+
+
+def processVFS(args, reporter):
+    output = reporter.output
+
+    # VFS mode requires file or folder (already validated in CLI.py)
+    if not os.path.isfile(args.file) and not os.path.isdir(args.file):
+        output(_('Error: VFS mode requires a file or folder path'))
+        return 1
+
+    # Get port (VFS server uses specified port or random)
+    vfsPort = args.port if args.port else 0
+    
+    authPassword = args.authPassword or os.getenv('FFL_AUTH_PASSWORD')
+    authUser = args.authUser if authPassword else None
+
+     # Start VFS server (supports both files and folders)
+    vfsServer = VFSServer(args.file, host="127.0.0.1", port=vfsPort, authUser=authUser, authPassword=authPassword)
+    vfsServer.start()
+
+    vfsUri = vfsServer.clientUri
+    
+    reporter.vfsServerCreated(vfsServer, link=vfsUri, uid=args.uid)
+    output(_("VFS server started successfully!\n"))
+
+    shareType = 'file' if os.path.isfile(args.file) else 'folder'
+    output(_("Please share the URI below to access the {type} remotely:\n").format(type=shareType))
+
+    # Show auth info if enabled (password enables auth)
+    if authPassword:
+        output(_('Authentication enabled - Username: {authUser}\n').format(authUser=authUser))
+    
+    # Never include password in URI (security issue)
+    output(f"{vfsUri}\n")
+    if not args.disableClipboard:
+        copy2Clipboard(vfsUri)
+
+    output(_('VFS server is running on loopback (127.0.0.1) - only accessible from this machine.'))
+    output(_('Please keep the application running for remote access.'))
+    if SettingsGetter.getInstance().isCLIMode():
+        output(_('Press Ctrl+C to stop the server.\n'))
+    else:
+        output('')
+
+    shareLinkData = {
+        'uid': args.uid,
+        'link': vfsUri,
+        'filePath': args.file,
+        'contentName': os.path.basename(args.file),
+        'fileSize': None, # VFS TAR size unknown
+        'tunnelType': "vfs",
+        'e2ee': False, # VFS doesn't support E2EE yet
+        'reader': None,
+    }
+    FFLEvent.shareLinkCreate.trigger(**shareLinkData)
+    
+    reporter.shareLinkCreated(**shareLinkData)
+
+    try:
+        # Keep server running until interrupted
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        output(_('\nShutting down VFS server...'))
+        FFLEvent.applicationInterrupted.trigger(reason='user-interrupt')
+    finally:
+        vfsServer.stop()
+        output(_('VFS server stopped.'))
+
+    return 0

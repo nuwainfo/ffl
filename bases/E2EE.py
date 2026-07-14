@@ -23,10 +23,11 @@ import hashlib
 import os
 import struct
 import re
+import threading
 import zlib
 import json
 
-from typing import Optional, Callable
+from typing import Optional, Callable, Tuple
 
 import requests
 
@@ -35,6 +36,10 @@ from bases.Kernel import getLogger
 from bases.I18n import _
 
 logger = getLogger(__name__)
+
+# E2EE wire-protocol version, advertised to clients via /e2ee/manifest so they
+# can negotiate capabilities against older servers.
+E2EE_PROTOCOL_VERSION = 2
 
 # ============================================================================
 # Shared cryptographic utilities
@@ -50,12 +55,53 @@ class CryptoHelper:
     UNKNOWN_FILE_SIZE = -1
 
     @staticmethod
-    def normalizeFileSize(filesize: Optional[int]) -> int:
+    def normalizeFileSize(fileSize: Optional[int]) -> int:
         """Convert optional file sizes into a stable integer for crypto metadata."""
-        if filesize is None:
+        if fileSize is None:
             return CryptoHelper.UNKNOWN_FILE_SIZE
 
-        return int(filesize)
+        return int(fileSize)
+
+    @staticmethod
+    def alignChunkStart(start: int, chunkSize: int) -> Tuple[int, int]:
+        """Align a byte offset down to its containing chunk boundary.
+
+        AES-GCM nonces are derived from a chunk index (buildNonce), so a given
+        index must always correspond to the same fixed, chunkSize-aligned
+        plaintext window -- otherwise two Range requests that floor-divide to
+        the same chunk index would encrypt different plaintext under an
+        identical (key, nonce) pair, which breaks AES-GCM's security entirely
+        (plaintext-XOR recovery and tag forgery, the "two-time pad" failure).
+        Aligning every read down to the chunk boundary guarantees a given
+        chunk index always corresponds to the same canonical byte range,
+        regardless of what start a client happens to request.
+
+        Returns:
+            (alignedStart, discardLeading): alignedStart is the chunk-aligned
+            byte offset to actually read/encrypt from; discardLeading is how
+            many leading plaintext bytes of the first produced chunk must be
+            skipped to recover the originally-requested start.
+        """
+        alignedStart = (start // chunkSize) * chunkSize
+        return alignedStart, start - alignedStart
+
+    @staticmethod
+    def alignChunkEnd(end: int, chunkSize: int) -> int:
+        """Align an inclusive byte end up to the end of its containing chunk.
+
+        Mirrors alignChunkStart, and for the same reason: a finite Range's
+        actual read must extend through the end of the chunk containing `end`,
+        not stop partway through it. Without this, two finite-range requests
+        landing in the same chunk index but with different ends (e.g.
+        bytes=1000-2000 vs bytes=1000-500000, both chunk index 0) would
+        encrypt different-length plaintext under the identical (key, nonce)
+        pair -- the same nonce-reuse break alignChunkStart alone doesn't
+        prevent once the end is also allowed to vary.
+
+        Callers must clamp the result to the resource size themselves -- this
+        function has no way to know it.
+        """
+        return ((end // chunkSize) + 1) * chunkSize - 1
 
     @staticmethod
     def buildNonce(nonceBase: bytes, chunkIndex: int) -> bytes:
@@ -73,16 +119,16 @@ class CryptoHelper:
         return nonceBase[:8] + struct.pack("!I", chunkIndex)
 
     @staticmethod
-    def buildAAD(filename: str, filesize: int, chunkIndex: int, useStructFormat: bool = True) -> bytes:
+    def buildAAD(fileName: str, fileSize: int, chunkIndex: int, useStructFormat: bool = True) -> bytes:
         """Build Additional Authenticated Data for AES-GCM
 
         Two formats supported:
-        1. Struct format (HTTP): filename(utf-8) || filesize(8 BE) || chunkIndex(4 BE)
-        2. String format (WebRTC): filename(utf-8) | filesize(ascii) | chunkIndex(ascii)
+        1. Struct format (HTTP): fileName(utf-8) || fileSize(8 BE) || chunkIndex(4 BE)
+        2. String format (WebRTC): fileName(utf-8) | fileSize(ascii) | chunkIndex(ascii)
 
         Args:
-            filename: Original filename
-            filesize: Original file size in bytes
+            fileName: Original filename
+            fileSize: Original file size in bytes
             chunkIndex: Chunk index (0-based)
             useStructFormat: True for struct format (HTTP), False for string format (WebRTC)
 
@@ -91,17 +137,17 @@ class CryptoHelper:
         """
         if useStructFormat:
             # HTTP format: binary packed
-            return (filename.encode('utf-8') + struct.pack("!q", filesize) + struct.pack("!I", chunkIndex))
+            return (fileName.encode('utf-8') + struct.pack("!q", fileSize) + struct.pack("!I", chunkIndex))
         else:
             # WebRTC format: text separated with '|'
             return (
-                filename.encode('utf-8') + b'|' + str(filesize).encode('ascii') + b'|' +
+                fileName.encode('utf-8') + b'|' + str(fileSize).encode('ascii') + b'|' +
                 str(chunkIndex).encode('ascii')
             )
 
     @staticmethod
     def buildCommitment(
-        contentKey: bytes, chunkSize: int, filesize: int, filename: str, crypto: CryptoInterface
+        contentKey: bytes, chunkSize: int, fileSize: int, fileName: str, crypto: CryptoInterface
     ) -> bytes:
         """Build key commitment tag (HMAC-SHA256)
 
@@ -110,16 +156,16 @@ class CryptoHelper:
         Args:
             contentKey: AES-256 content key (32 bytes)
             chunkSize: Chunk size for encryption
-            filesize: Original file size
-            filename: Original filename
+            fileSize: Original file size
+            fileName: Original filename
             crypto: CryptoInterface instance
 
         Returns:
             32-byte commitment HMAC
         """
         commitHeader = (
-            b"commit" + b"AES-256-GCM" + struct.pack("!Q", chunkSize) + struct.pack("!q", filesize) +
-            filename.encode('utf-8')
+            b"commit" + b"AES-256-GCM" + struct.pack("!Q", chunkSize) + struct.pack("!q", fileSize) +
+            fileName.encode('utf-8')
         )
 
         # Derive HMAC key from content key using HKDF
@@ -130,7 +176,7 @@ class CryptoHelper:
 
     @staticmethod
     def verifyCommitment(
-        contentKey: bytes, commitment: bytes, chunkSize: int, filesize: int, filename: str, crypto: CryptoInterface
+        contentKey: bytes, commitment: bytes, chunkSize: int, fileSize: int, fileName: str, crypto: CryptoInterface
     ) -> bool:
         """Verify key commitment tag
 
@@ -138,14 +184,14 @@ class CryptoHelper:
             contentKey: AES-256 content key (32 bytes)
             commitment: Received commitment tag
             chunkSize: Chunk size from server
-            filesize: File size from server
-            filename: Filename from server
+            fileSize: File size from server
+            fileName: Filename from server
             crypto: CryptoInterface instance
 
         Returns:
             True if commitment is valid, False otherwise
         """
-        expectedCommitment = CryptoHelper.buildCommitment(contentKey, chunkSize, filesize, filename, crypto)
+        expectedCommitment = CryptoHelper.buildCommitment(contentKey, chunkSize, fileSize, fileName, crypto)
         return hmac.compare_digest(commitment, expectedCommitment)
 
 
@@ -159,28 +205,37 @@ class EncryptionMetaStorage:
 
     def __init__(self):
         self._storage = {} # streamId -> dict of {chunkIndex: tag}
+        # HTTP requests run on separate threads (ThreadingHTTPServer), and a
+        # concurrent /download (save) and /e2ee/tags (load) for the same stream
+        # can otherwise race: sorted(tagDict.items()) can raise "dictionary
+        # changed size during iteration" if save() mutates the same dict mid-sort.
+        self._lock = threading.Lock()
 
     def save(self, streamId, chunkIndex, tag):
         """Save/overwrite a tag for a specific chunk index"""
-        if streamId not in self._storage:
-            self._storage[streamId] = {}
+        with self._lock:
+            if streamId not in self._storage:
+                self._storage[streamId] = {}
 
-        # Store by index (overwrites if exists - safe for Range/concurrent requests)
-        self._storage[streamId][chunkIndex] = base64.b64encode(tag).decode()
+            # Store by index (overwrites if exists - safe for Range/concurrent requests)
+            self._storage[streamId][chunkIndex] = base64.b64encode(tag).decode()
 
     def load(self, streamId):
         """Load all tags for a stream, sorted by chunk_index"""
-        if streamId not in self._storage:
-            return []
+        with self._lock:
+            if streamId not in self._storage:
+                return []
 
-        # Convert dict to sorted list of {chunk_index, tag}
-        tagDict = self._storage[streamId]
-        sortedTags = [{'chunkIndex': idx, 'tag': tag} for idx, tag in sorted(tagDict.items())]
-        return sortedTags
+            # Snapshot while holding the lock; sort outside it so the lock is
+            # held only long enough to copy, not to sort.
+            tagDict = dict(self._storage[streamId])
+
+        return [{'chunkIndex': idx, 'tag': tag} for idx, tag in sorted(tagDict.items())]
 
     def exists(self, streamId):
         """Check if stream exists"""
-        return streamId in self._storage
+        with self._lock:
+            return streamId in self._storage
 
 
 # ============================================================================
@@ -190,10 +245,54 @@ class EncryptionMetaStorage:
 
 class E2EEFramerBase:
     """Base constants for E2EE TLV frame protocol"""
+    
     MAGIC = b'\xFF\x4C' # Magic bytes for TLV frames
     VERSION = 1 # Protocol version
     TAG_LENGTH = 16 # GCM authentication tag length (bytes)
     HEADER_SIZE = 2 + 1 + 8 + 4 + 16 # Magic(2) + Ver(1) + ChunkIdx(8) + CipherLen(4) + Tag(16) = 31 bytes
+    
+    # Generous upper bound on one frame's ciphertext -- actual chunks are bounded
+    # by the sender's own chunkSize (typically 256 KiB), so this is headroom, not
+    # a real payload size. Rejects a corrupted/malicious CipherLen field before it
+    # can grow a decoder's buffer without bound (see WebRTCStreamDecryptor.processChunk).
+    MAX_CIPHERTEXT_SIZE = 16 * 1024 * 1024
+
+    @staticmethod
+    def parseHeader(buffer: bytes) -> Tuple[int, int, bytes]:
+        """Validate and parse a TLV frame header from the front of buffer.
+
+        Validates magic bytes, protocol version, and an upper bound on the
+        ciphertext length before any caller trusts cipherLen to size a read or
+        buffer -- an untrusted peer could otherwise supply a bogus, huge
+        cipherLen that grows a decoder's buffer without bound while waiting
+        for a frame that will never complete.
+
+        Args:
+            buffer: At least HEADER_SIZE bytes, with the header at the front.
+
+        Returns:
+            (chunkIndex, cipherLen, tag)
+
+        Raises:
+            ValueError: If magic, version, or the cipherLen bound is violated.
+        """
+        magic = buffer[0:2]
+        if magic != E2EEFramerBase.MAGIC:
+            raise ValueError(f"Invalid magic bytes: {magic.hex()}")
+
+        version = buffer[2]
+        if version != E2EEFramerBase.VERSION:
+            raise ValueError(f"Invalid version: {version}")
+
+        cipherLen = struct.unpack("!I", buffer[11:15])[0]
+        if cipherLen > E2EEFramerBase.MAX_CIPHERTEXT_SIZE:
+            raise ValueError(
+                f"CipherLen {cipherLen} exceeds maximum allowed frame size {E2EEFramerBase.MAX_CIPHERTEXT_SIZE}"
+            )
+
+        chunkIndex = struct.unpack("!Q", buffer[3:11])[0]
+        tag = buffer[15:31]
+        return chunkIndex, cipherLen, tag
 
 
 class E2EEFramer(E2EEFramerBase):
@@ -204,21 +303,21 @@ class E2EEFramer(E2EEFramerBase):
     Do NOT mix WebRTC and HTTP decryption paths.
     """
 
-    def __init__(self, contentKey: bytes, nonceBase: bytes, chunkSize: int, filename: str, filesize: int):
+    def __init__(self, contentKey: bytes, nonceBase: bytes, chunkSize: int, fileName: str, fileSize: int):
         """Initialize E2EE framer
 
         Args:
             contentKey: AES-256 content key (32 bytes)
             nonceBase: Nonce base for GCM (12 bytes, uses first 8 bytes for nonce construction)
             chunkSize: Size of plaintext chunks
-            filename: Original filename
-            filesize: Original file size
+            fileName: Original filename
+            fileSize: Original file size
         """
         self.contentKey = contentKey
         self.nonceBase = nonceBase
         self.chunkSize = chunkSize
-        self.filename = filename
-        self.filesize = filesize
+        self.fileName = fileName
+        self.fileSize = fileSize
 
         self.crypto = CryptoInterface()
         self.aesgcm = self.crypto.createAESGCM(contentKey)
@@ -239,7 +338,7 @@ class E2EEFramer(E2EEFramerBase):
             Encrypted TLV frame bytes
         """
         nonce = CryptoHelper.buildNonce(self.nonceBase, chunkIndex)
-        aad = CryptoHelper.buildAAD(self.filename, self.filesize, chunkIndex, useStructFormat=False)
+        aad = CryptoHelper.buildAAD(self.fileName, self.fileSize, chunkIndex, useStructFormat=False)
 
         # Encrypt with AES-GCM
         _, ciphertextWithTag = self.crypto.encryptAESGCM(self.aesgcm, plaintext, nonce, aad)
@@ -264,19 +363,19 @@ class E2EEUnframer(E2EEFramerBase):
     are NOT compatible with HTTP mode tags (which use struct-format AAD).
     """
 
-    def __init__(self, contentKey: bytes, nonceBase: bytes, filename: str, filesize: int):
+    def __init__(self, contentKey: bytes, nonceBase: bytes, fileName: str, fileSize: int):
         """Initialize E2EE unframer
 
         Args:
             contentKey: AES-256 content key (32 bytes)
             nonceBase: Nonce base for GCM (12 bytes, uses first 8 bytes for nonce construction)
-            filename: Original filename
-            filesize: Original file size
+            fileName: Original filename
+            fileSize: Original file size
         """
         self.contentKey = contentKey
         self.nonceBase = nonceBase
-        self.filename = filename
-        self.filesize = filesize
+        self.fileName = fileName
+        self.fileSize = fileSize
 
         self.crypto = CryptoInterface()
         self.aesgcm = self.crypto.createAESGCM(contentKey)
@@ -296,18 +395,7 @@ class E2EEUnframer(E2EEFramerBase):
         if len(frame) < self.HEADER_SIZE:
             raise ValueError(f"Frame too short: {len(frame)} < {self.HEADER_SIZE}")
 
-        # Parse header
-        magic = frame[0:2]
-        version = frame[2]
-        chunkIndex = struct.unpack("!Q", frame[3:11])[0]
-        cipherLen = struct.unpack("!I", frame[11:15])[0]
-        tag = frame[15:31]
-
-        # Verify magic and version
-        if magic != self.MAGIC:
-            raise ValueError(f"Invalid magic bytes: {magic.hex()}")
-        if version != self.VERSION:
-            raise ValueError(f"Invalid version: {version}")
+        chunkIndex, cipherLen, tag = self.parseHeader(frame)
 
         # Extract ciphertext
         if len(frame) < self.HEADER_SIZE + cipherLen:
@@ -317,7 +405,7 @@ class E2EEUnframer(E2EEFramerBase):
 
         # Decrypt with AES-GCM
         nonce = CryptoHelper.buildNonce(self.nonceBase, chunkIndex)
-        aad = CryptoHelper.buildAAD(self.filename, self.filesize, chunkIndex, useStructFormat=False)
+        aad = CryptoHelper.buildAAD(self.fileName, self.fileSize, chunkIndex, useStructFormat=False)
         ciphertextWithTag = ciphertext + tag
 
         plaintext = self.crypto.decryptAESGCM(self.aesgcm, nonce, ciphertextWithTag, aad)
@@ -344,8 +432,8 @@ class StreamEncryptor:
         self,
         contentKey: bytes,
         nonceBase: bytes,
-        filename: str,
-        filesize: int,
+        fileName: str,
+        fileSize: int,
         tagStorage,
         startChunkIndex=0,
         saveTags=True,
@@ -356,8 +444,8 @@ class StreamEncryptor:
         Args:
             contentKey: AES-256 content key (32 bytes)
             nonceBase: Nonce base for GCM (12 bytes)
-            filename: Original filename
-            filesize: Original file size
+            fileName: Original filename
+            fileSize: Original file size
             tagStorage: Tag storage object with save() method
             startChunkIndex: Starting chunk index (for Range support)
             saveTags: Whether to save tags (False for unaligned Range requests)
@@ -365,8 +453,8 @@ class StreamEncryptor:
         """
         self.contentKey = contentKey
         self.nonceBase = nonceBase
-        self.filename = filename
-        self.filesize = filesize
+        self.fileName = fileName
+        self.fileSize = fileSize
         self.tagStorage = tagStorage
         self.chunkIndex = startChunkIndex
         self.saveTags = saveTags
@@ -385,7 +473,7 @@ class StreamEncryptor:
             Ciphertext only (tag stored separately)
         """
         nonce = CryptoHelper.buildNonce(self.nonceBase, self.chunkIndex)
-        aad = CryptoHelper.buildAAD(self.filename, self.filesize, self.chunkIndex, useStructFormat=True)
+        aad = CryptoHelper.buildAAD(self.fileName, self.fileSize, self.chunkIndex, useStructFormat=True)
 
         # Encrypt with AES-GCM
         _, ciphertextWithTag = self.crypto.encryptAESGCM(self.aesgcm, plaintext, nonce, aad)
@@ -413,19 +501,19 @@ class StreamDecryptor:
     tags from HTTP mode (StreamEncryptor). Do NOT use with WebRTC mode tags.
     """
 
-    def __init__(self, contentKey: bytes, nonceBase: bytes, filename: str, filesize: int):
+    def __init__(self, contentKey: bytes, nonceBase: bytes, fileName: str, fileSize: int):
         """Initialize stream decryptor
 
         Args:
             contentKey: AES-256 content key (32 bytes)
             nonceBase: Nonce base for GCM (12 bytes)
-            filename: Original filename
-            filesize: Original file size
+            fileName: Original filename
+            fileSize: Original file size
         """
         self.contentKey = contentKey
         self.nonceBase = nonceBase
-        self.filename = filename
-        self.filesize = filesize
+        self.fileName = fileName
+        self.fileSize = fileSize
 
         self.crypto = CryptoInterface()
 
@@ -441,13 +529,13 @@ class StreamDecryptor:
             Plaintext bytes
         """
         nonce = CryptoHelper.buildNonce(self.nonceBase, chunkIndex)
-        aad = CryptoHelper.buildAAD(self.filename, self.filesize, chunkIndex, useStructFormat=True)
+        aad = CryptoHelper.buildAAD(self.fileName, self.fileSize, chunkIndex, useStructFormat=True)
         ciphertextWithTag = ciphertext + tag
 
         # Debug logging
         logger.debug(
-            f"[E2EE] decryptChunk: chunkIndex={chunkIndex}, filename={self.filename!r}, "
-            f"filesize={self.filesize}, nonceBase={self.nonceBase.hex()[:16]}..., tag={tag.hex()[:16]}..., "
+            f"[E2EE] decryptChunk: chunkIndex={chunkIndex}, fileName={self.fileName!r}, "
+            f"fileSize={self.fileSize}, nonceBase={self.nonceBase.hex()[:16]}..., tag={tag.hex()[:16]}..., "
             f"ciphertext_len={len(ciphertext)}"
         )
         logger.debug(f"[E2EE] decryptChunk: nonce={nonce.hex()}, aad_len={len(aad)}, aad={aad.hex()[:32]}...")
@@ -487,7 +575,7 @@ class E2EEManager:
             f"[E2EE] Generated keys - contentKey={len(self.contentKey)} bytes, nonceBase={len(self.nonceBase)} bytes"
         )
 
-    def handleInit(self, clientPublicKeyPEM, filename, filesize):
+    def handleInit(self, clientPublicKeyPEM, fileName, fileSize):
         """Handle E2EE initialization request from client
 
         Wraps the existing content key with the client's public key.
@@ -495,14 +583,14 @@ class E2EEManager:
 
         Args:
             clientPublicKeyPEM: Client's RSA public key in PEM format string
-            filename: Original filename
-            filesize: Original file size
+            fileName: Original filename
+            fileSize: Original file size
 
         Returns:
             dict: Response with encrypted content key, nonce base, and commitment tag
         """
-        logger.debug(f"[E2EE] handleInit called for file={filename}, size={filesize}")
-        normalizedFileSize = CryptoHelper.normalizeFileSize(filesize)
+        logger.debug(f"[E2EE] handleInit called for file={fileName}, size={fileSize}")
+        normalizedFileSize = CryptoHelper.normalizeFileSize(fileSize)
 
         # Load client's public key
         clientPublicKey = self.crypto.loadRSAPublicKeyFromPEM(clientPublicKeyPEM)
@@ -515,24 +603,24 @@ class E2EEManager:
 
         # Generate commitment tag using shared helper
         commitment = CryptoHelper.buildCommitment(
-            self.contentKey, self.chunkSize, normalizedFileSize, filename, self.crypto
+            self.contentKey, self.chunkSize, normalizedFileSize, fileName, self.crypto
         )
 
         return {
             'wrappedContentKey': base64.b64encode(encryptedContentKey).decode(),
             'nonceBase': base64.b64encode(encryptedNonceBase).decode(),
-            'filename': filename,
-            'filesize': normalizedFileSize,
+            'fileName': fileName,
+            'fileSize': normalizedFileSize,
             'chunkSize': self.chunkSize,
-            'commitment': base64.b64encode(commitment).decode()
+            'commitment': base64.b64encode(commitment).decode(),
         }
 
-    def createEncryptor(self, filename, filesize, startChunkIndex=0, saveTags=True, streamId="global"):
+    def createEncryptor(self, fileName, fileSize, startChunkIndex=0, saveTags=True, streamId="global"):
         """Create a stream encryptor for HTTP downloads
 
         Args:
-            filename: Original filename
-            filesize: Original file size
+            fileName: Original filename
+            fileSize: Original file size
             startChunkIndex: Starting chunk index (for Range support)
             saveTags: Whether to save tags (False for unaligned Range requests)
             streamId: Stream identifier for tag storage (default: "global")
@@ -543,9 +631,9 @@ class E2EEManager:
         if not self.contentKey or not self.nonceBase:
             raise RuntimeError("E2EE not initialized - call handleInit() first")
 
-        normalizedFileSize = CryptoHelper.normalizeFileSize(filesize)
+        normalizedFileSize = CryptoHelper.normalizeFileSize(fileSize)
         return StreamEncryptor(
-            self.contentKey, self.nonceBase, filename, normalizedFileSize, self.encryptionMetaStorage, startChunkIndex,
+            self.contentKey, self.nonceBase, fileName, normalizedFileSize, self.encryptionMetaStorage, startChunkIndex,
             saveTags, streamId
         )
 
@@ -560,35 +648,36 @@ class E2EEManager:
         """
         return self.encryptionMetaStorage.load(streamId)
 
-    def getContext(self, filename, filesize):
+    def getContext(self, fileName, fileSize):
         """Get E2EE context for encryption operations
 
         Args:
-            filename: Original filename
-            filesize: Original file size
+            fileName: Original filename
+            fileSize: Original file size
 
         Returns:
-            dict: E2EE context with contentKey, nonceBase, filename, filesize, chunkSize
+            dict: E2EE context with contentKey, nonceBase, fileName, fileSize, chunkSize
             None: If E2EE not initialized
         """
         if not self.contentKey or not self.nonceBase:
             return None
 
-        normalizedFileSize = CryptoHelper.normalizeFileSize(filesize)
+        normalizedFileSize = CryptoHelper.normalizeFileSize(fileSize)
         return {
             'contentKey': self.contentKey,
             'nonceBase': self.nonceBase,
-            'filename': filename,
-            'filesize': normalizedFileSize,
+            'fileName': fileName,
+            'fileSize': normalizedFileSize,
             'chunkSize': self.chunkSize
         }
 
-    def createWebRTCEncryptor(self, filename, filesize):
+    def createWebRTCEncryptor(self, fileName, fileSize, startChunkIndex=0):
         """Create WebRTC stream encryptor for sending encrypted data
 
         Args:
-            filename: Original filename
-            filesize: Original file size
+            fileName: Original filename
+            fileSize: Original file size
+            startChunkIndex: Starting chunk index (for resume support)
 
         Returns:
             WebRTCStreamEncryptor instance
@@ -605,13 +694,14 @@ class E2EEManager:
                          f"contentKey={hasKey}, nonceBase={hasNonce}")
             raise RuntimeError("E2EE not initialized - call handleInit() first")
 
-        normalizedFileSize = CryptoHelper.normalizeFileSize(filesize)
+        normalizedFileSize = CryptoHelper.normalizeFileSize(fileSize)
         return WebRTCStreamEncryptor(
             contentKey=self.contentKey,
             nonceBase=self.nonceBase,
-            filename=filename,
-            filesize=normalizedFileSize,
-            chunkSize=self.chunkSize
+            fileName=fileName,
+            fileSize=normalizedFileSize,
+            chunkSize=self.chunkSize,
+            startChunkIndex=startChunkIndex
         )
 
 
@@ -754,7 +844,7 @@ class E2EEClient:
             manifest: E2EE manifest from server
 
         Returns:
-            E2EE context dict with contentKey, nonceBase, filename, filesize, chunkSize
+            E2EE context dict with contentKey, nonceBase, fileName, fileSize, chunkSize
 
         Raises:
             RuntimeError: If key exchange fails or commitment verification fails
@@ -793,18 +883,18 @@ class E2EEClient:
         nonceBase = self.crypto.decryptRSAOAEP(privateKey, wrappedNonceBase)
 
         # Verify commitment tag using shared helper
-        filename = manifest['filename']
-        filesize = CryptoHelper.normalizeFileSize(manifest['filesize'])
+        fileName = manifest['fileName']
+        fileSize = CryptoHelper.normalizeFileSize(manifest['fileSize'])
         chunkSize = manifest['chunkSize']
 
-        if not CryptoHelper.verifyCommitment(contentKey, commitment, chunkSize, filesize, filename, self.crypto):
+        if not CryptoHelper.verifyCommitment(contentKey, commitment, chunkSize, fileSize, fileName, self.crypto):
             raise RuntimeError("E2EE commitment verification failed - possible MITM attack")
 
         return {
             'contentKey': contentKey,
             'nonceBase': nonceBase,
-            'filename': filename,
-            'filesize': filesize,
+            'fileName': fileName,
+            'fileSize': fileSize,
             'chunkSize': chunkSize,
             'baseURL': baseURL # Include baseURL for tag fetching
         }
@@ -819,9 +909,13 @@ class E2EEClient:
         Returns:
             HTTPStreamDecryptor instance
         """
-        # Calculate starting chunk index from resume position
+        # The server always encrypts/sends the full chunkSize-aligned chunk
+        # containing resumePosition (see CryptoHelper.alignChunkStart), so the
+        # decryptor must start at that same aligned chunk index and discard the
+        # leading bytes the resume didn't actually ask for.
         chunkSize = context['chunkSize']
-        startChunkIndex = resumePosition // chunkSize if resumePosition > 0 else 0
+        alignedStart, discardLeading = CryptoHelper.alignChunkStart(resumePosition, chunkSize)
+        startChunkIndex = alignedStart // chunkSize
 
         # Check if we have embedded tags from upload mode
         if self._embeddedTags:
@@ -831,11 +925,12 @@ class E2EEClient:
             decryptor = HTTPStreamDecryptor(
                 contentKey=context['contentKey'],
                 nonceBase=context['nonceBase'],
-                filename=context['filename'],
-                filesize=context['filesize'],
+                fileName=context['fileName'],
+                fileSize=context['fileSize'],
                 chunkSize=context['chunkSize'],
                 tagFetcher=None, # No fetching needed
-                startChunkIndex=startChunkIndex
+                startChunkIndex=startChunkIndex,
+                discardLeading=discardLeading
             )
 
             # Pre-populate tag map from embedded data
@@ -855,11 +950,12 @@ class E2EEClient:
         return HTTPStreamDecryptor(
             contentKey=context['contentKey'],
             nonceBase=context['nonceBase'],
-            filename=context['filename'],
-            filesize=context['filesize'],
+            fileName=context['fileName'],
+            fileSize=context['fileSize'],
             chunkSize=context['chunkSize'],
             tagFetcher=tagFetcher,
-            startChunkIndex=startChunkIndex
+            startChunkIndex=startChunkIndex,
+            discardLeading=discardLeading
         )
 
     def createWebRTCDecryptor(self, context: dict) -> 'WebRTCStreamDecryptor':
@@ -874,8 +970,8 @@ class E2EEClient:
         return WebRTCStreamDecryptor(
             contentKey=context['contentKey'],
             nonceBase=context['nonceBase'],
-            filename=context['filename'],
-            filesize=context['filesize']
+            fileName=context['fileName'],
+            fileSize=context['fileSize']
         )
 
     def buildE2EEContext(self, baseURL: str, isUploadMode: bool, contentKey: bytes = None) -> Optional[dict]:
@@ -918,7 +1014,7 @@ class E2EEClient:
             baseURL: Base URL for the share
 
         Returns:
-            E2EE context dict with contentKey, nonceBase, filename, filesize, chunkSize, baseURL
+            E2EE context dict with contentKey, nonceBase, fileName, fileSize, chunkSize, baseURL
 
         Raises:
             RuntimeError: If embedded data is invalid or key verification fails
@@ -930,32 +1026,37 @@ class E2EEClient:
         # Decode nonce base
         nonceBase = base64.b64decode(self._embeddedNonceBase)
 
-        # Get filename from manifest (required for AAD verification)
-        filename = manifest.get('filename')
-        if not filename:
-            raise RuntimeError("E2EE manifest missing filename (required for AAD verification)")
+        # Get fileName from manifest (required for AAD verification)
+        fileName = manifest.get('fileName')
+        if not fileName:
+            raise RuntimeError("E2EE manifest missing fileName (required for AAD verification)")
 
         # Build context
         context = {
             'contentKey': contentKey,
             'nonceBase': nonceBase,
-            'filename': filename,
-            'filesize': manifest['filesize'],
+            'fileName': fileName,
+            'fileSize': manifest['fileSize'],
             'chunkSize': manifest['chunkSize'],
             'baseURL': baseURL
         }
 
-        # Verify commitment if available
-        if self._embeddedCommitment:
-            if not self.verifyUploadModeKey(
-                contentKey, self._embeddedCommitment, context['chunkSize'], context['filesize'], context['filename']
-            ):
-                raise RuntimeError("Encryption key verification failed - incorrect key provided")
+        # Commitment verification is mandatory, not opportunistic: it's the only
+        # thing that stops a tampered page (with a substituted contentKey/manifest)
+        # from silently succeeding. A missing commitment must fail closed, not be
+        # treated as "nothing to verify".
+        if not self._embeddedCommitment:
+            raise RuntimeError("E2EE embedded data missing commitment - cannot verify encryption key")
+
+        if not self.verifyUploadModeKey(
+            contentKey, self._embeddedCommitment, context['chunkSize'], context['fileSize'], context['fileName']
+        ):
+            raise RuntimeError("Encryption key verification failed - incorrect key provided")
 
         return context
 
     def verifyUploadModeKey(
-        self, contentKey: bytes, commitment: bytes, chunkSize: int, filesize: int, filename: str
+        self, contentKey: bytes, commitment: bytes, chunkSize: int, fileSize: int, fileName: str
     ) -> bool:
         """Verify encryption key against commitment for upload mode
 
@@ -963,8 +1064,8 @@ class E2EEClient:
             contentKey: Content key provided by user (32 bytes)
             commitment: Commitment tag from server (base64-encoded string or bytes)
             chunkSize: Chunk size from manifest
-            filesize: File size from manifest
-            filename: Filename from manifest
+            fileSize: File size from manifest
+            fileName: Filename from manifest
 
         Returns:
             True if key is valid, False otherwise
@@ -975,7 +1076,7 @@ class E2EEClient:
         else:
             commitmentBytes = commitment
 
-        return CryptoHelper.verifyCommitment(contentKey, commitmentBytes, chunkSize, filesize, filename, self.crypto)
+        return CryptoHelper.verifyCommitment(contentKey, commitmentBytes, chunkSize, fileSize, fileName, self.crypto)
 
     def fetchTags(self, baseURL: str, startChunk: int, count: int) -> list:
         """Fetch encryption tags from server
@@ -1038,18 +1139,26 @@ class WebRTCStreamHandler:
 class WebRTCStreamEncryptor(WebRTCStreamHandler):
     """WebRTC stream encryptor - encrypts and frames chunks for transmission"""
 
-    def __init__(self, contentKey: bytes, nonceBase: bytes, filename: str, filesize: int, chunkSize: int):
+    def __init__(
+        self, contentKey: bytes, nonceBase: bytes, fileName: str, fileSize: int, chunkSize: int, startChunkIndex=0
+    ):
         """Initialize WebRTC stream encryptor
 
         Args:
             contentKey: AES-256 content key (32 bytes)
             nonceBase: Nonce base for GCM (12 bytes)
-            filename: Original filename
-            filesize: Original file size
+            fileName: Original filename
+            fileSize: Original file size
             chunkSize: Chunk size for encryption
+            startChunkIndex: Starting chunk index (for resume support) -- must
+                match the chunk index the resumed byte offset actually falls
+                on, or the same (key, nonceBase, chunkIndex) triple ends up
+                encrypting two different plaintext windows across attempts
+                (see CryptoHelper.alignChunkStart for the HTTP-side version of
+                this same nonce-reuse hazard).
         """
-        self.framer = E2EEFramer(contentKey, nonceBase, chunkSize, filename, filesize)
-        self.chunkIndex = 0
+        self.framer = E2EEFramer(contentKey, nonceBase, chunkSize, fileName, fileSize)
+        self.chunkIndex = startChunkIndex
 
     def processChunk(self, data: bytes) -> bytes:
         """Encrypt and frame a chunk
@@ -1068,16 +1177,16 @@ class WebRTCStreamEncryptor(WebRTCStreamHandler):
 class WebRTCStreamDecryptor(WebRTCStreamHandler):
     """WebRTC stream decryptor - unframes and decrypts chunks from transmission"""
 
-    def __init__(self, contentKey: bytes, nonceBase: bytes, filename: str, filesize: int):
+    def __init__(self, contentKey: bytes, nonceBase: bytes, fileName: str, fileSize: int):
         """Initialize WebRTC stream decryptor
 
         Args:
             contentKey: AES-256 content key (32 bytes)
             nonceBase: Nonce base for GCM (12 bytes)
-            filename: Original filename
-            filesize: Original file size
+            fileName: Original filename
+            fileSize: Original file size
         """
-        self.unframer = E2EEUnframer(contentKey, nonceBase, filename, filesize)
+        self.unframer = E2EEUnframer(contentKey, nonceBase, fileName, fileSize)
         self.frameBuffer = b''
 
     def processChunk(self, data: bytes) -> bytes:
@@ -1099,8 +1208,11 @@ class WebRTCStreamDecryptor(WebRTCStreamHandler):
 
         # Try to unpack complete frames from buffer
         while len(self.frameBuffer) >= E2EEFramerBase.HEADER_SIZE:
-            # Parse header to get frame size
-            cipherLen = struct.unpack("!I", self.frameBuffer[11:15])[0]
+            # Validate magic/version/cipherLen bound before trusting cipherLen to
+            # decide how much more data to wait for -- an untrusted peer's bogus,
+            # huge cipherLen would otherwise grow frameBuffer without bound while
+            # waiting for a frame that will never complete.
+            _, cipherLen, _ = E2EEFramerBase.parseHeader(self.frameBuffer)
             frameSize = E2EEFramerBase.HEADER_SIZE + cipherLen
             bufferLen = len(self.frameBuffer)
             logger.debug(
@@ -1158,7 +1270,7 @@ class WebRTCStreamDecryptor(WebRTCStreamHandler):
 
             # Parse header to check expected frame size
             try:
-                cipherLen = struct.unpack("!I", self.frameBuffer[11:15])[0]
+                _, cipherLen, _ = E2EEFramerBase.parseHeader(self.frameBuffer)
                 expectedFrameSize = E2EEFramerBase.HEADER_SIZE + cipherLen
                 logger.debug(
                     f"[E2EE] flush: parsed header - cipherLen={cipherLen}, expectedFrameSize={expectedFrameSize}"
@@ -1188,8 +1300,8 @@ class WebRTCStreamDecryptor(WebRTCStreamHandler):
                 )
                 return result
 
-            except struct.error as e:
-                logger.error(f"[E2EE] flush: MALFORMED HEADER - struct.error: {e}")
+            except (struct.error, ValueError) as e:
+                logger.error(f"[E2EE] flush: MALFORMED HEADER: {e}")
                 raise RuntimeError(
                     f"Malformed frame header at end-of-stream: {bufferLen} bytes remaining, "
                     f"failed to parse header: {e}"
@@ -1206,32 +1318,53 @@ class HTTPStreamDecryptor(WebRTCStreamHandler):
         self,
         contentKey: bytes,
         nonceBase: bytes,
-        filename: str,
-        filesize: int,
+        fileName: str,
+        fileSize: int,
         chunkSize: int,
         tagFetcher,
-        startChunkIndex: int = 0
+        startChunkIndex: int = 0,
+        discardLeading: int = 0
     ):
         """Initialize HTTP stream decryptor
 
         Args:
             contentKey: AES-256 content key (32 bytes)
             nonceBase: Nonce base for GCM (12 bytes)
-            filename: Original filename
-            filesize: Original file size
+            fileName: Original filename
+            fileSize: Original file size
             chunkSize: Encryption chunk size
             tagFetcher: Callable(startChunk, count) -> list of tag dicts
             startChunkIndex: Starting chunk index for resume (default: 0)
+            discardLeading: Leading plaintext bytes of the first decrypted chunk
+                to discard -- the server always encrypts/sends the full
+                chunkSize-aligned chunk containing a resumed Range's start (a
+                partial GCM block can't be tag-verified), so an unaligned
+                resume gets a few extra bytes at the front that must be
+                dropped after decryption, before the caller sees "new" data.
         """
-        self.decryptor = StreamDecryptor(contentKey, nonceBase, filename, filesize)
+        self.decryptor = StreamDecryptor(contentKey, nonceBase, fileName, fileSize)
         self.chunkSize = chunkSize
         self.chunkBuffer = b''
         self.currentChunkIndex = startChunkIndex
         self.tagFetcher = tagFetcher
+        self._discardLeading = discardLeading
 
         # Tag cache for fetched tags
         self.tagMap = {}
         self.tagBatchSize = 100 # Fetch 100 tags at a time
+
+    def _applyDiscard(self, plaintext: bytes) -> bytes:
+        """Trim any still-pending Range-alignment discard off newly decrypted plaintext."""
+        if self._discardLeading <= 0:
+            return plaintext
+
+        if len(plaintext) <= self._discardLeading:
+            self._discardLeading -= len(plaintext)
+            return b''
+
+        trimmed = plaintext[self._discardLeading:]
+        self._discardLeading = 0
+        return trimmed
 
     def _fetchTagsIfNeeded(self, chunkIndex: int):
         """Fetch tags from server if not in cache"""
@@ -1276,7 +1409,7 @@ class HTTPStreamDecryptor(WebRTCStreamHandler):
             plaintext += decryptedChunk
             self.currentChunkIndex += 1
 
-        return plaintext
+        return self._applyDiscard(plaintext)
 
     def flush(self) -> bytes:
         """Process final partial chunk in buffer
@@ -1297,7 +1430,7 @@ class HTTPStreamDecryptor(WebRTCStreamHandler):
             plaintext = self.decryptor.decryptChunk(self.currentChunkIndex, self.chunkBuffer, tag)
             self.chunkBuffer = b''
             self.currentChunkIndex += 1
-            return plaintext
+            return self._applyDiscard(plaintext)
 
         return b''
 
@@ -1314,20 +1447,20 @@ class UploadStreamEncryptor:
     Server never receives the content key - user shares it out-of-band with recipients.
     """
 
-    def __init__(self, contentKey: bytes, nonceBase: bytes, filename: str, filesize: int, chunkSize: int):
+    def __init__(self, contentKey: bytes, nonceBase: bytes, fileName: str, fileSize: int, chunkSize: int):
         """Initialize upload stream encryptor
 
         Args:
             contentKey: AES-256 content key (32 bytes) - NEVER sent to server
             nonceBase: Nonce base for GCM (12 bytes) - sent to server in plaintext
-            filename: Original filename
-            filesize: Original file size
+            fileName: Original filename
+            fileSize: Original file size
             chunkSize: Chunk size for encryption
         """
         self.contentKey = contentKey
         self.nonceBase = nonceBase
-        self.filename = filename
-        self.filesize = filesize
+        self.fileName = fileName
+        self.fileSize = fileSize
         self.chunkSize = chunkSize
         self.chunkIndex = 0
         self._tags = [] # Private: Collect tags in memory for upload
@@ -1358,19 +1491,19 @@ class UploadStreamEncryptor:
             logger.debug(f"E2EE upload: chunk {currentChunkIndex} already encrypted (using cached tag from resume)")
             # Re-encrypt to get the ciphertext (we don't store ciphertext, only tags)
             nonce = CryptoHelper.buildNonce(self.nonceBase, currentChunkIndex)
-            aad = CryptoHelper.buildAAD(self.filename, self.filesize, currentChunkIndex, useStructFormat=True)
+            aad = CryptoHelper.buildAAD(self.fileName, self.fileSize, currentChunkIndex, useStructFormat=True)
             _, ciphertextWithTag = self.crypto.encryptAESGCM(self.aesgcm, plaintext, nonce, aad)
             ciphertext = ciphertextWithTag[:-16]
             return ciphertext
 
         nonce = CryptoHelper.buildNonce(self.nonceBase, currentChunkIndex)
-        aad = CryptoHelper.buildAAD(self.filename, self.filesize, currentChunkIndex, useStructFormat=True)
+        aad = CryptoHelper.buildAAD(self.fileName, self.fileSize, currentChunkIndex, useStructFormat=True)
 
         # Debug logging
         nonceHex = self.nonceBase.hex()[:16]
         logger.debug(
-            f"[E2EE] encryptChunk: chunkIndex={currentChunkIndex}, filename={self.filename!r}, "
-            f"filesize={self.filesize}, nonceBase={nonceHex}..., plaintext_len={len(plaintext)}"
+            f"[E2EE] encryptChunk: chunkIndex={currentChunkIndex}, fileName={self.fileName!r}, "
+            f"fileSize={self.fileSize}, nonceBase={nonceHex}..., plaintext_len={len(plaintext)}"
         )
         logger.debug(f"[E2EE] encryptChunk: nonce={nonce.hex()}, aad_len={len(aad)}, aad={aad.hex()[:32]}...")
 
@@ -1458,7 +1591,7 @@ class UploadStreamEncryptor:
             Base64-encoded commitment tag
         """
         commitment = CryptoHelper.buildCommitment(
-            self.contentKey, self.chunkSize, self.filesize, self.filename, self.crypto
+            self.contentKey, self.chunkSize, self.fileSize, self.fileName, self.crypto
         )
         return base64.b64encode(commitment).decode()
 

@@ -22,6 +22,8 @@ import json
 import locale
 import os
 
+from enum import IntEnum
+
 from bases.Kernel import PUBLIC_VERSION, Singleton, StorageLocator, getLogger
 
 try:
@@ -33,8 +35,38 @@ except ImportError:
 logger = getLogger(__name__, version=PUBLIC_VERSION)
 
 
+class LanguageCodeStyle(IntEnum):
+    """Which format getLanguage()/getSupportedLanguages() should return codes
+    in -- this module's own gettext/babel-style codes (zh_Hant), or the
+    hyphenated lowercase form web/JS i18n libraries like i18next expect
+    (zh-hant). GETTEXT is the default so callers already using this module
+    (translation lookup, config persistence) are unaffected."""
+    GETTEXT = 1
+    WEB = 2
+
+
 class I18nLanguageMixin:
     """Shared language normalization and environment override handling."""
+
+    @staticmethod
+    def _toWebLanguageCode(code):
+        """Convert a gettext-style code (e.g. zh_Hant) to the hyphenated
+        lowercase form web/JS i18n libraries expect (e.g. zh-hant)."""
+        return code.replace('_', '-').lower()
+
+    def getLanguage(self, style: LanguageCodeStyle = LanguageCodeStyle.GETTEXT):
+        """Get the current language code, in gettext (default) or web/JS style."""
+        if style == LanguageCodeStyle.WEB:
+            return self._toWebLanguageCode(self.currentLanguage)
+            
+        return self.currentLanguage
+
+    def getSupportedLanguages(self, style: LanguageCodeStyle = LanguageCodeStyle.GETTEXT):
+        """Get the list of supported language codes, in gettext (default) or web/JS style."""
+        if style == LanguageCodeStyle.WEB:
+            return [self._toWebLanguageCode(code) for code in self.SUPPORTED_LANGUAGES]
+            
+        return self.SUPPORTED_LANGUAGES.copy()
 
     def _mapBabelLocaleToLanguageCode(self, babelLocale):
         """
@@ -57,7 +89,7 @@ class I18nLanguageMixin:
 
         return babelLocale.language
 
-    def _normalizeLanguageCode(self, code):
+    def normalizeLanguageCode(self, code):
         """
         Normalize language code to standard format using babel when available.
 
@@ -95,7 +127,7 @@ class I18nLanguageMixin:
         if not environmentLanguage:
             return None
 
-        return self._normalizeLanguageCode(environmentLanguage)
+        return self.normalizeLanguageCode(environmentLanguage)
 
 
 class BabelI18nManager(I18nLanguageMixin, Singleton):
@@ -313,7 +345,7 @@ class BabelI18nManager(I18nLanguageMixin, Singleton):
             langCode: Language code ('en', 'zh_Hant', etc.)
         """
         # Normalize language code
-        normalizedLang = self._normalizeLanguageCode(langCode)
+        normalizedLang = self.normalizeLanguageCode(langCode)
 
         if normalizedLang not in self.SUPPORTED_LANGUAGES:
             logger.warning(f"Unsupported language: {langCode}, ignoring")
@@ -327,15 +359,6 @@ class BabelI18nManager(I18nLanguageMixin, Singleton):
         self._saveConfig(config)
 
         logger.info(f"Language changed to: {normalizedLang}")
-
-    def getLanguage(self):
-        """Get current language code"""
-        return self.currentLanguage
-
-    def getSupportedLanguages(self):
-        """Get list of supported language codes"""
-        return self.SUPPORTED_LANGUAGES.copy()
-
 
 class DummyI18nManager(I18nLanguageMixin, Singleton):
     """
@@ -363,14 +386,6 @@ class DummyI18nManager(I18nLanguageMixin, Singleton):
         """No effect - always uses English"""
         if langCode != self.DEFAULT_LANGUAGE:
             logger.warning(f"Cannot set language to '{langCode}' - babel not available, using English only")
-
-    def getLanguage(self):
-        """Always returns 'en'"""
-        return self.currentLanguage
-
-    def getSupportedLanguages(self):
-        """Returns only English"""
-        return self.SUPPORTED_LANGUAGES.copy()
 
 
 # Select I18nManager based on babel availability

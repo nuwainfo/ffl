@@ -63,8 +63,8 @@ import requests
 
 from http import HTTPStatus
 
-from bases.Kernel import getLogger, FFLEvent, Event
-from bases.Server import AuthMixin, HTTPAuth
+from bases.Kernel import getLogger, FFLEvent, Event, Singleton
+from bases.Auth import AuthMixin, HTTPAuth
 
 logger = getLogger(__name__)
 
@@ -96,8 +96,8 @@ class HookRequestHandler(AuthMixin, BaseHTTPRequestHandler):
         """Return HTTPAuth from server for AuthMixin."""
         return HTTPAuth(user=self.server.username, password=self.server.password)
 
-    def _sendJsonResponse(self, statusCode: int, payload: dict):
-        responseBody = json.dumps(HookEventSerializer.makeJsonSafe(payload)).encode('utf-8')
+    def _sendJSONResponse(self, statusCode: int, payload: dict):
+        responseBody = json.dumps(HookEventSerializer.makeJSONSafe(payload)).encode('utf-8')
 
         try:
             self.send_response(statusCode)
@@ -127,14 +127,14 @@ class HookRequestHandler(AuthMixin, BaseHTTPRequestHandler):
         # Read request body
         contentLength = int(self.headers.get('Content-Length', 0))
         if contentLength == 0:
-            self._sendJsonResponse(400, {'error': "Empty request body"})
+            self._sendJSONResponse(400, {'error': "Empty request body"})
             return
 
         try:
             requestBody = self.rfile.read(contentLength)
             data = json.loads(requestBody.decode('utf-8'))
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            self._sendJsonResponse(400, {'error': f'Invalid JSON: {e}'})
+            self._sendJSONResponse(400, {'error': f'Invalid JSON: {e}'})
             logger.warning(f"Invalid JSON from {self.client_address[0]}: {e}")
             return
 
@@ -143,7 +143,7 @@ class HookRequestHandler(AuthMixin, BaseHTTPRequestHandler):
         eventData = data.get('data', {})
 
         if not eventName:
-            self._sendJsonResponse(400, {'error': "Missing event field"})
+            self._sendJSONResponse(400, {'error': "Missing event field"})
             logger.warning(f"Missing event field from {self.client_address[0]}")
             return
 
@@ -155,14 +155,14 @@ class HookRequestHandler(AuthMixin, BaseHTTPRequestHandler):
                 responsePayload = self.server.onEvent(eventName, eventData)
             except Exception as e:
                 logger.error(f"Error in event handler for {eventName}: {e}")
-                self._sendJsonResponse(500, {'error': f'Handler error: {e}'})
+                self._sendJSONResponse(500, {'error': f'Handler error: {e}'})
                 return
 
         # Send success response
         if responsePayload is None:
             responsePayload = {'status': 'ok'}
 
-        self._sendJsonResponse(200, responsePayload)
+        self._sendJSONResponse(200, responsePayload)
 
 
 class HookServer(ThreadingHTTPServer):
@@ -267,7 +267,7 @@ class HookEventSerializer:
     Handles:
     - Extracting/filtering non-serializable objects via EXTRACTORS (exact) and
       EXTRACTOR_PREFIXES (prefix-based, for event families)
-    - Converting values to JSON-safe format via makeJsonSafe
+    - Converting values to JSON-safe format via makeJSONSafe
     """
 
     @staticmethod
@@ -337,10 +337,14 @@ class HookEventSerializer:
             lambda e: {k: v for k, v in e.items() if k not in ('exception', 'handler')},
         FFLEvent.webrtcConnected:
             lambda e: {k: v for k, v in e.items() if k not in ('peerConnection', 'dataChannel')},
+        FFLEvent.webrtcTransferStarted:
+            lambda e: {k: v for k, v in e.items() if k not in ('dataChannel',)},
         FFLEvent.webrtcTransferProgress:
             lambda e: {k: v for k, v in e.items() if k not in ('progressObj', 'dataChannel')},
         FFLEvent.webrtcTransferCompleted:
             lambda e: {k: v for k, v in e.items() if k not in ('peerConnection', 'dataChannel')},
+        FFLEvent.webrtcFailed:
+            lambda e: {k: v for k, v in e.items() if k not in ('exception', 'peerConnection', 'dataChannel')},
         FFLEvent.errorOccurred:
             lambda e: {k: v for k, v in e.items() if k not in ('exception', 'stack')},
     }
@@ -378,7 +382,7 @@ class HookEventSerializer:
         cls.EXTRACTOR_PREFIXES[prefix] = extractor
 
     @staticmethod
-    def makeJsonSafe(value, keyPath: str = ''):
+    def makeJSONSafe(value, keyPath: str = ''):
         """Convert value into JSON serializable data.
 
         Containers (dict/list/tuple/set) are handled structurally so that only
@@ -392,21 +396,21 @@ class HookEventSerializer:
         # Handle known container types structurally — no json.dumps probe needed.
         if isinstance(value, dict):
             return {
-                str(k): HookEventSerializer.makeJsonSafe(v, f'{keyPath}.{k}' if keyPath else str(k))
+                str(k): HookEventSerializer.makeJSONSafe(v, f'{keyPath}.{k}' if keyPath else str(k))
                 for k, v in value.items()
             }
 
         if isinstance(value, (list, tuple, set)):
             return [
-                HookEventSerializer.makeJsonSafe(v, f'{keyPath}[{i}]')
+                HookEventSerializer.makeJSONSafe(v, f'{keyPath}[{i}]')
                 for i, v in enumerate(value)
             ]
 
         if is_dataclass(value):
-            return HookEventSerializer.makeJsonSafe(asdict(value), keyPath)
+            return HookEventSerializer.makeJSONSafe(asdict(value), keyPath)
 
         if isinstance(value, Enum):
-            return HookEventSerializer.makeJsonSafe(value.value, keyPath)
+            return HookEventSerializer.makeJSONSafe(value.value, keyPath)
 
         if isinstance(value, (datetime, date)):
             return value.isoformat()
@@ -457,7 +461,7 @@ class HookEventSerializer:
             extracted = extractor(eventData)
             eventData = extracted if extracted is not None else {}
 
-        safeData = HookEventSerializer.makeJsonSafe(eventData, keyPath=f'[{eventName}]')
+        safeData = HookEventSerializer.makeJSONSafe(eventData, keyPath=f'[{eventName}]')
 
         logger.debug("Sent event: %s", eventName)
 
@@ -670,6 +674,71 @@ class HookClient:
         return self.sendEvent(HookClient.EVENT_ENDPOINT_REQUEST, requestData, timeout=timeout, expectResponse=True)
 
 
+class HookEventForwarder(Singleton):
+
+    def initialize(self):
+        self._lock = threading.Lock()
+        self._sender = None
+        self._subscribed = False
+        self._shutdownSubscribed = False
+
+    def configure(self, hookURL: str):
+        if not hookURL:
+            self.clear()
+            return None
+
+        sender = HookClient(hookURL) if hookURL.startswith(('http://', 'https://')) else HookFileWriter(hookURL)
+        self._ensureSubscribed()
+
+        with self._lock:
+            previousSender = self._sender
+            self._sender = sender
+
+        self._closeSender(previousSender)
+        logger.info(f"Hook client initialized: {hookURL}")
+        return sender
+
+    def clear(self):
+        with self._lock:
+            previousSender = self._sender
+            self._sender = None
+
+        self._closeSender(previousSender)
+
+    def _ensureSubscribed(self):
+        if not self._subscribed:
+            FFLEvent.all.subscribe(self._forwardEvent)
+            self._subscribed = True
+
+        if self._shutdownSubscribed:
+            return
+
+        FFLEvent.applicationShutdown.subscribe(self._handleApplicationClosed)
+        FFLEvent.applicationInterrupted.subscribe(self._handleApplicationClosed)
+        self._shutdownSubscribed = True
+
+    def _handleApplicationClosed(self, **eventData):
+        self.clear()
+
+    def _forwardEvent(self, eventName, **eventData):
+        with self._lock:
+            sender = self._sender
+
+        if sender is None:
+            return
+
+        forwardEventToHook(sender, eventName, **eventData)
+
+    @staticmethod
+    def _closeSender(sender):
+        if sender is None:
+            return
+
+        close = getattr(sender, 'close', None)
+        if callable(close):
+            close()
+
+
 class HookEndpointRouter:
 
     ALLOWED_METHODS = {'GET', 'POST', 'HEAD'}
@@ -741,9 +810,13 @@ class HookEndpointRouter:
 
     @classmethod
     def _getRoutesForSession(cls, server, session, hookClient: HookClient) -> list:
-        # DownloadHandler is constructed per request by Python's HTTP server.
-        # Without this cache, each new handler would call _fetchRoutes() again
-        # and re-register the same hook endpoints for the same share session.
+        # DownloadHandler instances are constructed per TCP connection, and an HTTP/1.1
+        # keep-alive connection can serve many requests through the same instance, so
+        # this cannot rely on handler-instance identity to dedupe. The cache below is
+        # keyed by the (server, session.uid) pair instead, which is stable for the
+        # session's whole lifetime — without it, every handler that ever calls this
+        # (across any number of connections) would call _fetchRoutes() again and
+        # re-register the same hook endpoints for the same share session.
         with cls._routesLock:
             routesBySession = cls._routesByServer.get(server)
             if routesBySession is None:
@@ -789,8 +862,8 @@ class HookEndpointRouter:
         originalSize = len(data)
         e2eeManager = handler.session.e2eeManager
         encryptor = e2eeManager.createEncryptor(
-            filename=streamId,
-            filesize=originalSize,
+            fileName=streamId,
+            fileSize=originalSize,
             startChunkIndex=0,
             saveTags=True,
             streamId=streamId,
@@ -903,7 +976,7 @@ class HookEndpointRouter:
             }
 
             if method == 'POST':
-                requestArgs['json'] = HookEventSerializer.makeJsonSafe(body if body is not None else {})
+                requestArgs['json'] = HookEventSerializer.makeJSONSafe(body if body is not None else {})
 
             response = requests.request(method, **requestArgs)
 

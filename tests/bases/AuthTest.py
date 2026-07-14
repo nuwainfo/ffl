@@ -52,7 +52,7 @@ def _decryptRsaChallenge(encryptedChallengeB64, privKeyPath):
 
 
 def _resolveProofFromChecksumData(checksumData, privKeyPath):
-    encryptedChallenges = checksumData.get('encrypted_challenges') or []
+    encryptedChallenges = checksumData.get('encryptedChallenges') or checksumData.get('encrypted_challenges') or []
 
     seenChallenges = set()
     for challengeValue in encryptedChallenges:
@@ -65,7 +65,7 @@ def _resolveProofFromChecksumData(checksumData, privKeyPath):
         except Exception:
             pass
 
-    raise AssertionError("encrypted_challenges not found or private key does not match any published challenge")
+    raise AssertionError("encryptedChallenges not found or private key does not match any published challenge")
 
 
 class AuthTest(FastFileLinkTestBase):
@@ -124,7 +124,7 @@ class AuthTest(FastFileLinkTestBase):
         return self._updateCapturedOutput(outputCapture)
 
     def _resolveProofForDownload(self, shareLink, privKeyPath):
-        """Fetch /checksum JSON, decrypt encrypted_challenges with privKeyPath, return base64 proof."""
+        """Fetch /checksum JSON, decrypt encryptedChallenges with privKeyPath, return base64 proof."""
         checksumUrl = shareLink.rstrip('/') + '/checksum'
         response = requests.get(checksumUrl, timeout=15)
         response.raise_for_status()
@@ -132,15 +132,15 @@ class AuthTest(FastFileLinkTestBase):
         return _resolveProofFromChecksumData(data, privKeyPath)
 
     def testPickupCodeCSPRNGGenerated(self):
-        """No --pickup-code → JSON has a 6-digit numeric code in pickup_code."""
+        """No --pickup-code → JSON has a 6-digit numeric code in pickupCode."""
         extraArgs = ["--recipient-auth", "pickup", "--timeout", "10"]
         shareLink, shareInfo = self._startAndGetShareInfo(extraArgs)
 
         pickupCode = shareInfo.get("pickup_code")
         self.assertIsNotNone(pickupCode, "JSON should contain 'pickup_code'")
-        self.assertIsInstance(pickupCode, str, "pickup_code should be a string")
-        self.assertEqual(len(pickupCode), 6, f"pickup_code should be 6 digits, got: {pickupCode!r}")
-        self.assertTrue(pickupCode.isdigit(), f"pickup_code should be all digits, got: {pickupCode!r}")
+        self.assertIsInstance(pickupCode, str, "pickupCode should be a string")
+        self.assertEqual(len(pickupCode), 6, f"pickupCode should be 6 digits, got: {pickupCode!r}")
+        self.assertTrue(pickupCode.isdigit(), f"pickupCode should be all digits, got: {pickupCode!r}")
         print(f"[Test] PASS: CSPRNG-generated pickup code is valid 6-digit string: {pickupCode}")
 
     def testPickupCodeImpliesRecipientAuth(self):
@@ -150,7 +150,7 @@ class AuthTest(FastFileLinkTestBase):
         shareLink, shareInfo = self._startAndGetShareInfo(extraArgs)
 
         pickupCode = shareInfo.get("pickup_code")
-        self.assertEqual(pickupCode, customCode, f"Expected pickup_code '{customCode}', got: {pickupCode!r}")
+        self.assertEqual(pickupCode, customCode, f"Expected pickupCode '{customCode}', got: {pickupCode!r}")
         print(f"[Test] PASS: --pickup-code alone implicitly enables pickup auth: {pickupCode}")
 
     def testRecipientPublicKeyImpliesRecipientAuth(self):
@@ -557,47 +557,13 @@ class KeypairShareTest(FastFileLinkTestBase):
     def testKeypairSharePickupDownloadsAndDeletes(self):
         """keypair --share --recipient-auth pickup: correct code downloads private key; file deleted after."""
         pickupCode = "357159"
-        basePath = os.path.join(self.tempDir, 'kp_share')
-        privKeyPath = f"{basePath}.fflkey"
-        pubKeyPath = f"{basePath}.fflpub"
-
-        projectRoot = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        env = os.environ.copy()
-        env['PYTHONIOENCODING'] = 'utf-8'
-
-        self._procLogFile = open(self.procLogPath, 'w', encoding='utf-8', errors='replace')
-        self.coreProcess = subprocess.Popen(
-            [
-                sys.executable, 'Core.py', '--cli', 'keygen',
-                '--name', basePath, '--share',
-                '--recipient-auth', 'pickup', '--pickup-code', pickupCode,
-                '--json', self.jsonOutputPath,
-            ],
-            cwd=projectRoot,
-            stdout=self._procLogFile,
-            stderr=subprocess.STDOUT,
-            env=env,
-            text=True,
+        privKeyPath, pubKeyPath, shareLink = self._generateKeypair(
+            'kp_share',
+            share=True,
+            extraArgs=['--recipient-auth', 'pickup', '--pickup-code', pickupCode]
         )
-
-        # Wait for JSON (server is up and link is ready)
-        startTime = time.time()
-        while time.time() - startTime < 60:
-            if os.path.exists(self.jsonOutputPath):
-                break
-            if self.coreProcess.poll() is not None:
-                self._procLogFile.flush()
-                with open(self.procLogPath, 'r', encoding='utf-8', errors='replace') as f:
-                    output = f.read()
-                raise AssertionError(
-                    f"keypair --share exited early (code {self.coreProcess.returncode}):\n{output}"
-                )
-            time.sleep(0.5)
-
-        with open(self.jsonOutputPath, 'r') as f:
+        with open(self.jsonOutputPath, 'r', encoding='utf-8') as f:
             shareInfo = json.load(f)
-
-        shareLink = shareInfo['link']
         downloadUrl = shareLink.rstrip('/') + '/download'
 
         self.assertTrue(os.path.exists(privKeyPath), "Private key must exist before download")
@@ -605,14 +571,11 @@ class KeypairShareTest(FastFileLinkTestBase):
 
         # Download with correct pickup code
         downloadedPath = self._getDownloadedFilePath('privkey.fflkey')
-        with requests.get(
-            downloadUrl, headers={'X-FFL-Pickup': pickupCode}, stream=True, timeout=30
-        ) as response:
-            self.assertEqual(response.status_code, 200,
-                             f"Expected 200 with correct pickup code, got {response.status_code}")
-            with open(downloadedPath, 'wb') as f:
-                for chunk in response.iter_content(65536):
-                    f.write(chunk)
+        self.downloadFileWithRequests(
+            downloadUrl,
+            downloadedPath,
+            headers={'X-FFL-Pickup': pickupCode},
+        )
 
         # Verify downloaded content is a PKCS#8 private key
         with open(downloadedPath, 'r', encoding='utf-8') as f:
@@ -679,7 +642,7 @@ class AuthUploadTest(_UploadAuthMixin, FastFileLinkTestBase):
         super().__init__(methodName, fileSizeBytes=512 * 1024)
 
     def _resolveProofForUpload(self, shareLink, privKeyPath):
-        """Poll /checksum until encrypted_challenges is available, decrypt, return base64 proof."""
+        """Poll /checksum until encryptedChallenges is available, decrypt, return base64 proof."""
         checksumUrl = shareLink.split('?')[0].rstrip('/') + '/checksum'
         startTime = time.time()
         while time.time() - startTime < 90:
@@ -687,12 +650,12 @@ class AuthUploadTest(_UploadAuthMixin, FastFileLinkTestBase):
                 response = requests.get(checksumUrl, timeout=5)
                 if response.status_code == 200:
                     data = response.json()
-                    if data.get('encrypted_challenges'):
+                    if data.get('encryptedChallenges') or data.get('encrypted_challenges'):
                         return _resolveProofFromChecksumData(data, privKeyPath)
             except Exception:
                 pass
             time.sleep(1)
-        raise AssertionError(f"encrypted_challenges not available at {checksumUrl} within 90s")
+        raise AssertionError(f"encryptedChallenges not available at {checksumUrl} within 90s")
 
     def _startUploadWithPubkeyAndWait(self, keypairName):
         """Generate keypair, upload with pubkey auth, wait for Caddy to enforce it.
@@ -715,8 +678,8 @@ class AuthUploadTest(_UploadAuthMixin, FastFileLinkTestBase):
         )
         pickupCode = shareInfo.get("pickup_code")
         self.assertIsNotNone(pickupCode, "JSON should contain 'pickup_code'")
-        self.assertEqual(len(pickupCode), 6, f"pickup_code should be 6 digits, got: {pickupCode!r}")
-        self.assertTrue(pickupCode.isdigit(), f"pickup_code should be all digits, got: {pickupCode!r}")
+        self.assertEqual(len(pickupCode), 6, f"pickupCode should be 6 digits, got: {pickupCode!r}")
+        self.assertTrue(pickupCode.isdigit(), f"pickupCode should be all digits, got: {pickupCode!r}")
         print(f"[Test] PASS: Upload CSPRNG pickup code is valid 6-digit string: {pickupCode}")
 
     def testUploadPickupCodeBlocksNoCode(self):
@@ -832,7 +795,7 @@ class AuthUploadTest(_UploadAuthMixin, FastFileLinkTestBase):
     def testUploadEmailGateRenderedInHTML(self):
         """--upload with --recipient-auth email → FileDownloading.html contains EMAIL_REQUIRED=true.
 
-        This test verifies the full data chain: Core.py → Upload header → Django API →
+        This test verifies the full data chain: FFL.py → Upload header → Django API →
         CaddyPublisher → FileDownloading.html template rendering.
         Without the fix in PushUpload.execute() (passing recipientEmail to end()),
         the header is never sent to EndUploadFile, EMAIL_REQUIRED renders as false,

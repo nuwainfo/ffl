@@ -415,7 +415,7 @@ def executeInstallScript(scriptPath: Path, targetVersion: str, osType: str, targ
                 flushPrint(_("  macOS: darwin"))
                 flushPrint("")
                 flushPrint(_("Example: FFL_UPGRADE_VARIANT=ffl.com "
-                             "python Core.py --cli upgrade {path}").format(path=targetBinary))
+                             "python FFL.py --cli upgrade {path}").format(path=targetBinary))
                 return False
 
             flushPrint(_("Using FFL_UPGRADE_VARIANT: {variant}").format(variant=upgradeVariant))

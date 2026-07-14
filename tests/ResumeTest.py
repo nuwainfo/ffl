@@ -18,10 +18,8 @@
 # limitations under the License.
 
 import subprocess
-import sys
 import time
 import unittest
-import os
 import re
 
 from .ResumeTestBase import ResumeTestBase, ResumeBrowserTestBase
@@ -257,10 +255,7 @@ class UploadResumeTest(ResumeTestBase):
             print(f"[Test] Phase 2: Attempting resume with different fileName '{differentFileName}' (should fail)")
 
             # Run the resume command that should fail - it will exit with error message but not create JSON
-            import subprocess
-            resumeCmd = [
-                sys.executable,
-                "Core.py",
+            resumeArgs = [
                 "--cli", "share",
                 self.testFilePath,
                 "--upload", "3 hours",
@@ -268,23 +263,19 @@ class UploadResumeTest(ResumeTestBase):
                 "--resume"
             ]
 
-            result = subprocess.run(
-                resumeCmd,
-                cwd=os.path.dirname(__file__) + "/..",
-                capture_output=True,
-                text=True,
+            combinedOutput, returnCode = self._runCoreCommand(
+                resumeArgs,
                 timeout=30,
-                env={**os.environ, "FFL_STORAGE_LOCATION": self.testConfigDir}
+                extraEnvVars={"FFL_STORAGE_LOCATION": self.testConfigDir},
             )
 
-            # Check that the error message contains fileName mismatch
-            combinedOutput = result.stdout + result.stderr
-
-            # Core.py translates parameter name, but English should contain "mismatch"
+            # FFL.py translates parameter name, but English should contain "mismatch"
             if "mismatch" not in combinedOutput.lower():
                 raise AssertionError(
                     f"Expected parameter mismatch error message, but got:\n{combinedOutput}"
                 )
+
+            self.assertNotEqual(returnCode, 0, "Resume with mismatched fileName should fail")
 
             # Check for both original and requested values in error message
             if originalFileName not in combinedOutput or differentFileName not in combinedOutput:
@@ -299,18 +290,10 @@ class UploadResumeTest(ResumeTestBase):
             # Phase 3: Resume with correct fileName (should succeed)
             print(f"[Test] Phase 3: Resuming with correct fileName '{originalFileName}' (should succeed)")
             capture = {}
-            self._resumeUpload(
+            shareLink, _resumeLog = self._resumeUpload(
                 outputCapture=capture,
                 extraArgs=['--name', originalFileName]
             )
-
-            # Get share link from output
-            resumeLog = self._updateCapturedOutput(capture)
-
-            linkMatch = re.search(r'https?://[^\s]+', resumeLog)
-            if not linkMatch:
-                raise AssertionError(f"Could not find share link in resume output: {resumeLog}")
-            shareLink = linkMatch.group(0)
             print(f"[Test] Resume completed, share link: {shareLink}")
 
             # Phase 4: Verify the completed upload

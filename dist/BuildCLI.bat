@@ -3,15 +3,16 @@
 call conda activate %1
 set PYTHONIOENCODING=utf-8
 
-set currentDir=%CD%
-set parentDir=%CD%\..
+set currentDir=%CD%\..
+set parentDir=%CD%\..\..
+
 
 echo "Download, unzip and rename pyapp folder"
 
 powershell -Command ^
 "Invoke-WebRequest https://github.com/ofek/pyapp/releases/latest/download/source.zip -OutFile pyapp-source.zip; ^
 7z x pyapp-source.zip; ^
-mv pyapp-v* pyapp;"
+mv pyapp-v* ..\pyapp;"
 
 echo "Delete pyapp.zip"
 del pyapp-source.zip
@@ -36,7 +37,7 @@ if exist "%serverStaticDir%" (
 echo "Copy Setup.py"
 copy "%currentDir%\dist\CLI\Setup.py" "%parentDir%" /Y
 
-cd ..
+cd ..\..
 
 echo "Build wheel"
 python -m pip install --upgrade --force-reinstall wheel setuptools
@@ -74,7 +75,7 @@ del Setup.py
 cd FileShare
 
 echo "Clean python environment"
-python DistUtils.py pyapp clean
+python .\dist\DistUtils.py pyapp clean
 
 set copyEnv=%1_copy
 
@@ -98,7 +99,7 @@ cd ..
 call conda activate %1
 
 echo "Compress python environment"
-python DistUtils.py pyapp compress %copyEnv%
+python .\dist\DistUtils.py pyapp compress %copyEnv%
 
 
 echo "Copy python.zip to pyapp"
@@ -112,7 +113,7 @@ cd pyapp
 echo "Wrap exe"
 
 powershell -Command ^
-"$env:PYAPP_EXEC_SPEC = 'FileShare.Core:main'; ^
+"$env:PYAPP_EXEC_SPEC = 'FileShare.FFL:main'; ^
 $env:PYAPP_DISTRIBUTION_PATH = '.\ffl_python.zip'; ^
 $env:PYAPP_PROJECT_NAME = 'ffl'; ^
 $env:PYAPP_FULL_ISOLATION = '1'; ^
@@ -143,4 +144,4 @@ if exist "%currentDir%\dist\CLI\windows\ffl.exe" del /f /q "%currentDir%\dist\CL
 ren "%currentDir%\dist\CLI\windows\ffl_tmp.exe" "ffl.exe"
 
 echo "Delete pyapp folder"
-rd /s /q "%currentDir%\pyapp"
+

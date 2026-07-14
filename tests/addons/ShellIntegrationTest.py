@@ -42,10 +42,8 @@ Run all:
 import hashlib
 import os
 import queue
-import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import unittest
@@ -55,16 +53,6 @@ import requests
 
 from addons.ShellIntegration import _WINDOWS_REG_PATH
 from ..CoreTestBase import FastFileLinkTestBase
-
-# ---------------------------------------------------------------------------
-# Module-level constants
-# ---------------------------------------------------------------------------
-
-_CORE_PATH = os.path.normcase(os.path.abspath(
-    os.path.join(os.path.dirname(__file__), '..', '..', 'Core.py')
-))
-_PYTHON_EXE = os.path.normcase(os.path.abspath(sys.executable))
-_DEV_COMMAND_ARGS = [_PYTHON_EXE, _CORE_PATH, '--cli']
 
 _FIXTURES_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'fixtures'))
 _CONTEXT_MENU_IMAGE = os.path.join(_FIXTURES_DIR, 'ContextMenu.png')
@@ -103,17 +91,6 @@ def _captureFlushPrint(func, *args, **kwargs):
     return '\n'.join(str(s) for s in captured)
 
 
-def _runShellCLI(subArgs, timeout=30):
-    """Run `python Core.py --cli shell [subArgs...]` and return (returnCode, output)."""
-    cmd = [sys.executable, _CORE_PATH, '--cli', 'shell'] + list(subArgs)
-    env = {**os.environ, 'DISABLE_ADDONS': 'GUI', 'FFL_YES': 'True'}
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
-        return result.returncode, result.stdout + result.stderr
-    except subprocess.TimeoutExpired:
-        return 1, 'Process timed out'
-
-
 def _sha256(path):
     h = hashlib.sha256()
     with open(path, 'rb') as f:
@@ -132,7 +109,7 @@ def _killFFLProcesses():
         for proc in psutil.process_iter(['pid', 'cmdline']):
             try:
                 cmdline = proc.info.get('cmdline') or []
-                if any('Core.py' in arg or 'CorePatched.py' in arg for arg in cmdline):
+                if any('FFL.py' in arg or 'CorePatched.py' in arg for arg in cmdline):
                     proc.terminate()
                     try:
                         proc.wait(timeout=3)
@@ -152,7 +129,7 @@ def _killFFLProcesses():
 class ShellIntegrationCLITest(FastFileLinkTestBase):
     """
     Functional CLI tests for `ffl shell --install / --uninstall`.
-    Runs Core.py as a subprocess with DISABLE_ADDONS=GUI, via the shared
+    Runs FFL.py as a subprocess with DISABLE_ADDONS=GUI, via the shared
     FastFileLinkTestBase._runCoreCommand() runner (isolated tempDir/test-config
     setup comes from the base class too).
     setUp/tearDown always clean up the context menu entry.
@@ -169,7 +146,7 @@ class ShellIntegrationCLITest(FastFileLinkTestBase):
             super().tearDown()
 
     def _runShellCLI(self, subArgs, timeout=30):
-        """Run `python Core.py --cli shell [subArgs...]` and return (returnCode, output)."""
+        """Run `python FFL.py --cli shell [subArgs...]` and return (returnCode, output)."""
         output, returnCode = self._runCoreCommand(['--cli', 'shell'] + list(subArgs), timeout=timeout)
         return returnCode, output
 
@@ -227,19 +204,18 @@ class ShellIntegrationCLITest(FastFileLinkTestBase):
 # ---------------------------------------------------------------------------
 
 @unittest.skipUnless(_IS_WINDOWS, 'Windows-only tests')
-class _ShellIntegrationOSBase(unittest.TestCase):
+class _ShellIntegrationOSBase(FastFileLinkTestBase):
     """
     Base for Windows end-to-end tests.
     Installs the context menu, creates a temp test file, and cleans up after.
     """
 
     def setUp(self):
+        super().setUp()
         # Whether --install actually succeeded is ShellIntegrationCLITest's concern
         # (testShellCommandInstall); here it's just setup for the end-to-end test below,
         # which will fail on its own (e.g. registry key not found) if install didn't work.
-        _runShellCLI(['--install'])
-
-        self.tempDir = tempfile.mkdtemp(prefix='ffl_cm_test_')
+        self._runShellCLI(['--install'])
         self.testFilePath = os.path.join(self.tempDir, 'share_test.bin')
         with open(self.testFilePath, 'wb') as f:
             f.write(os.urandom(512 * 1024))
@@ -253,9 +229,15 @@ class _ShellIntegrationOSBase(unittest.TestCase):
                 self.fflProc.wait(timeout=5)
             except Exception:
                 pass
-        _killFFLProcesses()
-        _runShellCLI(['--uninstall'])
-        shutil.rmtree(self.tempDir, ignore_errors=True)
+        try:
+            _killFFLProcesses()
+            self._runShellCLI(['--uninstall'])
+        finally:
+            super().tearDown()
+
+    def _runShellCLI(self, subArgs, timeout=30):
+        output, returnCode = self._runCoreCommand(['--cli', 'shell'] + list(subArgs), timeout=timeout)
+        return returnCode, output
 
     def _downloadAndVerify(self, shareLink):
         downloadPath = os.path.join(self.tempDir, 'downloaded.bin')
@@ -294,12 +276,13 @@ class ShellIntegrationDirectTest(_ShellIntegrationOSBase):
             pyperclip.copy('')
 
         creationFlags = subprocess.CREATE_NEW_PROCESS_GROUP if _IS_WINDOWS else 0
-        self.fflProc = subprocess.Popen(
+        self.fflProc = self._startSubprocess(
             cmdLine,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            creationflags=creationFlags,
+            creationFlags=creationFlags,
+            disableGuiAddon=False,
         )
 
         shareLink = self._findShareLink(timeout=90)
@@ -446,7 +429,7 @@ class ShellIntegrationExplorerTest(_ShellIntegrationOSBase):
         return None
 
     def testContextMenuShareByExplorer(self):
-        self.explorerProc = subprocess.Popen(['explorer', self.tempDir])
+        self.explorerProc = self._startSubprocess(['explorer', self.tempDir], disableGuiAddon=False)
         time.sleep(2)
 
         win = self._waitForExplorerWindow(self.tempDir, timeout=15)

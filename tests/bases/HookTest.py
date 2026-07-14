@@ -655,8 +655,8 @@ class HookEventSerializerTest(unittest.TestCase):
         self.assertNotIn('overridden', result['data'])
         self.assertIn('filePath', result['data'])
 
-    def testUnregisteredPrefixFallsBackToMakeJsonSafe(self):
-        """Events with no matching extractor still serialize via makeJsonSafe."""
+    def testUnregisteredPrefixFallsBackToMakeJSONSafe(self):
+        """Events with no matching extractor still serialize via makeJSONSafe."""
         result = HookEventSerializer.serialize('/unknown/event', {'value': 42})
         self.assertEqual(result['data']['value'], 42)
 

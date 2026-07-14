@@ -22,16 +22,16 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 downloadPyapp() {
 
-    currentDir="$(pwd)"
+    currentDir="$(dirname "$(pwd)")"
     parentDir="$(dirname "$currentDir")"
 
     echo "Download, unzip and rename pyapp folder"
 
     curl -L https://github.com/ofek/pyapp/releases/latest/download/source.tar.gz -o pyapp-source.tar.gz
 
-    rm -rf pyapp_$OS
-    mkdir -p pyapp_$OS
-    tar -xzf pyapp-source.tar.gz --strip-components=1 -C pyapp_$OS
+    rm -rf ../pyapp_$OS
+    mkdir -p ../pyapp_$OS
+    tar -xzf pyapp-source.tar.gz --strip-components=1 -C ../pyapp_$OS
 
     echo "Delete pyapp-source.tar.gz"
     rm -f pyapp-source.tar.gz
@@ -107,29 +107,29 @@ createPythonTarGz() {
     export PYTHONIOENCODING=utf-8
 
     if [ "$OS" = "linux" ]; then
-        cp REQUIREMENTS.txt REQUIREMENTS.txt.bak
-        grep -vi -e "Gooey==1.0.8.1" -e "pyinstaller" REQUIREMENTS.txt > REQUIREMENTS.txt.tmp 
-        mv REQUIREMENTS.txt.tmp REQUIREMENTS.txt
+        cp ../REQUIREMENTS.txt ../REQUIREMENTS.txt.bak
+        grep -vi -e "pyinstaller" ../REQUIREMENTS.txt > ../REQUIREMENTS.txt.tmp 
+        mv ../REQUIREMENTS.txt.tmp ../REQUIREMENTS.txt
     fi
 
-    python3 -m pip install -r REQUIREMENTS.txt 
+    python3 -m pip install -r ../REQUIREMENTS.txt 
     # Used only for DistUtil.py not bundled in final executable.
     python3 -m pip install pefile conda-pack setuptools wheel pip
 
     if [ "$OS" = "linux" ]; then
-        mv REQUIREMENTS.txt.bak REQUIREMENTS.txt
+        mv ../REQUIREMENTS.txt.bak ../REQUIREMENTS.txt
     fi
 
     createWheel
 
     rm -f "$envName.tar.gz"
-    conda pack -n "$envName" -o "$envName.tar.gz"
+    conda pack -n "$envName" -o "$envName.tar.gz" --ignore-missing-files
 
     mkdir -p "$envName"
     tar -xzf "$envName.tar.gz" -C "$envName"
 
     echo "Clean python environment"
-    python DistUtils.py pyapp clean --target-dir "$envName"
+    python ./dist/DistUtils.py pyapp clean --target-dir "$envName"
 
     cd $envName
 
@@ -198,7 +198,7 @@ createApp() {
     export PYAPP_DISTRIBUTION_EMBED='1'
     export PYAPP_FULL_ISOLATION='1'
     export PYAPP_PROJECT_NAME='ffl'
-    export PYAPP_EXEC_SPEC='FileShare.Core:main'
+    export PYAPP_EXEC_SPEC='FileShare.FFL:main'
     export PYAPP_PASS_LOCATION='1'
 
     if [ "$OS" = "darwin" ] && [ "$platform" = "x86_64" ]; then
@@ -264,7 +264,7 @@ if [ "$OS" = "darwin" ]; then
     createApp "x86_64"
 
     step "Cleanup"
-    cleanEnvironment
+    #cleanEnvironment
 
 elif [ "$OS" = "linux" ]; then
 
@@ -278,7 +278,7 @@ elif [ "$OS" = "linux" ]; then
     createApp "x86_64"
 
     step "Cleanup"
-    cleanEnvironment
+    #cleanEnvironment
 
 else
     echo "❌ Unknown OS: $OS"

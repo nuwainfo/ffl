@@ -55,9 +55,26 @@ class AddonAssetsLoader:
     def __init__(self, addonName: str, env: Environment):
         self._addonName = addonName
         self._env = env
+        self._assetPrefix = addonName.lower()
+
+    @property
+    def assetPrefix(self) -> str:
+        return self._assetPrefix
+
+    @property
+    def assetsRoot(self) -> str:
+        return self._env.loader.searchpath[0]
+
+    @property
+    def addonAssetsRoot(self) -> str:
+        return os.path.join(self.assetsRoot, self.assetPrefix)
+
+    def templatePath(self, templateName: str) -> str:
+        normalizedTemplateName = str(templateName or '').replace('\\', '/').lstrip('/')
+        return f'{self.assetPrefix}/{normalizedTemplateName}'
 
     def get(self, templateName: str):
-        return self._env.get_template(f'{self._addonName.lower()}/{templateName}')
+        return self._env.get_template(self.templatePath(templateName))
 
 
 class AddonAssetsLoaderFactory(Singleton):
@@ -95,11 +112,14 @@ class AddonAssetsLoaderFactory(Singleton):
         )
 
     def get(self, moduleName: str) -> AddonAssetsLoader:
-        addonName = moduleName.rsplit('.', 1)[-1]
+        addonName = str(moduleName or '').rsplit('.', 1)[-1].strip().lower()
+        if not addonName:
+            raise ValueError('moduleName is required')
+
         if addonName not in self._loaders:
             if self._env is None:
                 self._env = self._buildEnv()
-                
+
             self._loaders[addonName] = AddonAssetsLoader(addonName, self._env)
 
         return self._loaders[addonName]

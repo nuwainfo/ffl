@@ -457,7 +457,8 @@ class TestTunnelIntegration(_TunnelIntegrationMixin, BrowserTestBase):
         shareLink = self._startFastFileLink(
             p2p=True,
             extraEnvVars={'FFL_STORAGE_LOCATION': self.tempDir},
-            extraArgs=['--e2ee', '--preferred-tunnel', 'cloudflare']
+            extraArgs=['--e2ee', '--preferred-tunnel', 'cloudflare'],
+            preferredTunnel=None
         )
 
         # Verify tunnel is used (cloudflare domain)
@@ -495,8 +496,8 @@ class TestTunnelIntegration(_TunnelIntegrationMixin, BrowserTestBase):
         finally:
             driver.quit()
 
-        # Test 2: Download with Core.py (HTTP + E2EE decryption, WebRTC disabled)
-        print("[Test] Test 2: Core.py E2EE download (HTTP fallback with DISABLE_WEBRTC)...")
+        # Test 2: Download with FFL.py (HTTP + E2EE decryption, WebRTC disabled)
+        print("[Test] Test 2: FFL.py E2EE download (HTTP fallback with DISABLE_WEBRTC)...")
         coreDownloadPath = os.path.join(self.tempDir, "core_downloaded_" + expectedFilename)
 
         coreDownloadedPath = self._downloadWithCore(
@@ -505,11 +506,11 @@ class TestTunnelIntegration(_TunnelIntegrationMixin, BrowserTestBase):
             extraEnvVars={'DISABLE_WEBRTC': 'True'}
         )
 
-        # Verify Core.py downloaded file matches original
+        # Verify FFL.py downloaded file matches original
         self._verifyDownloadedFile(coreDownloadedPath)
 
-        print("[OK] Test 2 passed - Core.py HTTP + E2EE download verified")
-        print("[OK] E2EE tunnel test passed - both browser and Core.py downloads verified")
+        print("[OK] Test 2 passed - FFL.py HTTP + E2EE download verified")
+        print("[OK] E2EE tunnel test passed - both browser and FFL.py downloads verified")
 
     @unittest.skipUnless(shutil.which('cloudflared'), "cloudflared binary not found in PATH")
     @unittest.skipIf(os.getenv('SKIP_INTEGRATION_TESTS'), "Integration tests disabled")
@@ -546,7 +547,8 @@ class TestTunnelIntegration(_TunnelIntegrationMixin, BrowserTestBase):
             shareLink = self._startFastFileLink(
                 p2p=True,
                 extraEnvVars=baseEnvVars,
-                extraArgs=[]  # No cloudflare, use default tunnel
+                extraArgs=[],  # No cloudflare, use default tunnel
+                preferredTunnel=None
             )
             # If we get here, the process unexpectedly succeeded
             self.fail(f"Default tunnel should have failed, but got share link: {shareLink}")
@@ -595,7 +597,8 @@ class TestTunnelIntegration(_TunnelIntegrationMixin, BrowserTestBase):
         shareLink = self._startFastFileLink(
             p2p=True,
             extraEnvVars=baseEnvVars,
-            extraArgs=['--preferred-tunnel', 'cloudflare']
+            extraArgs=['--preferred-tunnel', 'cloudflare'],
+            preferredTunnel=None
         )
 
         # Verify tunnel is used (cloudflare domain)
@@ -608,7 +611,7 @@ class TestTunnelIntegration(_TunnelIntegrationMixin, BrowserTestBase):
         print("[Part 2.2] Waiting for Cloudflare tunnel to become available...")
         self._waitForTunnelAvailable(shareLink)
 
-        # Test actual P2P download with Core.py (WebRTC disabled to force HTTP through tunnel)
+        # Test actual P2P download with FFL.py (WebRTC disabled to force HTTP through tunnel)
         print("[Part 2.3] Testing actual file download through Cloudflare tunnel...")
         expectedFilename = os.path.basename(self.testFilePath)
         downloadPath = os.path.join(self.tempDir, "downloaded_" + expectedFilename)

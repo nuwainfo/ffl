@@ -576,7 +576,16 @@ class E2EEDownloadTest(ResumeTestBase):
         # Download first part (0 to resumeOffset-1)
         part1, status1, headers1 = self._downloadRange(downloadUrl, start=0, end=resumeOffset - 1)
         self.assertEqual(status1, 206, "First part should return 206 Partial Content")
-        self.assertEqual(len(part1), resumeOffset, f"First part should be {resumeOffset} bytes")
+
+        # The server aligns the read end UP to the containing chunk's boundary
+        # too (not just the start down) -- see CryptoHelper.alignChunkEnd -- so
+        # a non-chunk-aligned finite end like resumeOffset-1 gets padded out to
+        # the end of its chunk. Without this, two finite-range requests landing
+        # in the same chunk index but with different ends would encrypt
+        # different-length plaintext under an identical (key, nonce) pair, the
+        # same nonce-reuse break alignChunkStart alone doesn't prevent.
+        alignedLength = ((resumeOffset - 1) // chunkSize + 1) * chunkSize
+        self.assertEqual(len(part1), alignedLength, f"First part should be {alignedLength} bytes (chunk-aligned end)")
 
         # Resume from unaligned offset - server should accept it
         # Note: Combined parts won't match full download because each resume
@@ -592,6 +601,53 @@ class E2EEDownloadTest(ResumeTestBase):
         print(f"[Test]   Part 1: {len(part1)} bytes (0-{resumeOffset-1})")
         print(f"[Test]   Part 2: {len(part2)} bytes ({resumeOffset}-end)")
         print(f"[Test]   Resume offset: {resumeOffset} (unaligned, mid-chunk)")
+
+    def testE2EEUnalignedRangesNoNonceReuse(self):
+        """Regression test for a critical AES-GCM nonce-reuse vulnerability: two
+        finite Range requests with different unaligned starts AND different ends
+        that both floor/ceil to the same chunk index must not encrypt
+        different-length plaintext windows under an identical (key, nonce) pair
+        -- besides the classic GCM "two-time pad" break, encrypting different
+        lengths at the same nonce also lets an attacker collect multiple
+        (ciphertext, tag) pairs under one nonce, enabling GHASH key (H)
+        recovery (the "forbidden attack"), and corrupts the stored per-chunk
+        tag (whichever request's encryptChunk() ran last silently overwrites
+        it, breaking decryption for the other). The server aligns the read
+        start DOWN and the read end UP to the full containing chunk
+        (CryptoHelper.alignChunkStart/alignChunkEnd), so both requests must
+        return byte-for-byte identical ciphertext for the whole aligned chunk,
+        not just their nominally-requested, differently-sized windows.
+        """
+        print("\n[TEST] E2E unaligned ranges - no nonce reuse")
+
+        shareLink = self._startFastFileLink(p2p=True, extraArgs=["--e2ee"])
+        print(f"[Test] Share link with E2E: {shareLink}")
+
+        downloadUrl = shareLink.rstrip('/') + '/download'
+
+        # Both starts floor-divide, and both ends ceil-divide, to chunk index 0
+        # (chunkSize = 256 * 1024 = 262144) -- deliberately different starts AND
+        # different ends so the requests aren't trivially identical.
+        dataA, statusA, headersA = self._downloadRange(downloadUrl, start=1000, end=2000)
+        dataB, statusB, headersB = self._downloadRange(downloadUrl, start=200000, end=201000)
+
+        self.assertEqual(statusA, 206)
+        self.assertEqual(statusB, 206)
+
+        # Both must be aligned to the exact same chunk-0 boundary on both ends,
+        # regardless of the different originally-requested start/end.
+        print(f"[Test] Content-Range A: {headersA.get('Content-Range')}")
+        print(f"[Test] Content-Range B: {headersB.get('Content-Range')}")
+        self.assertEqual(headersA.get('Content-Range'), headersB.get('Content-Range'))
+        self.assertEqual(headersA.get('Content-Range'), 'bytes 0-262143/1048576')
+
+        # If the same (key, nonce) pair were used to encrypt different-length
+        # plaintext windows (the bug), these ciphertexts would differ. After the
+        # fix, both requests read/encrypt the identical canonical chunk 0, so
+        # they must be byte-for-byte identical in full, not just an overlapping
+        # prefix.
+        self.assertEqual(dataA, dataB, "Ciphertext for the same (start- and end-aligned) chunk index must be identical")
+        print(f"[Test] [OK] Unaligned finite ranges landing in the same chunk return identical ciphertext")
 
     def testE2EEMultipleClientsKcKi(self):
         """Test that multiple clients get same encrypted content (Kc) but different wrapped keys (Ki)"""
@@ -660,8 +716,8 @@ class E2EEDownloadTest(ResumeTestBase):
         print(f"[Test] [OK] Each client received different wrapped key (Ki)")
 
         # Verify other metadata is the same
-        self.assertEqual(init1Data['filename'], init2Data['filename'], "Both clients should receive same filename")
-        self.assertEqual(init1Data['filesize'], init2Data['filesize'], "Both clients should receive same filesize")
+        self.assertEqual(init1Data['fileName'], init2Data['fileName'], "Both clients should receive same filename")
+        self.assertEqual(init1Data['fileSize'], init2Data['fileSize'], "Both clients should receive same filesize")
         self.assertEqual(init1Data['chunkSize'], init2Data['chunkSize'], "Both clients should receive same chunkSize")
 
         print(f"[Test] [OK] E2E Kc/Ki verification successful")
@@ -683,7 +739,7 @@ class E2EEBrowserTest(ResumeBrowserTestBase):
 
         Args:
             browserName: 'chrome' or 'firefox'
-            extraEnvVars: Optional dict of environment variables to pass to Core.py
+            extraEnvVars: Optional dict of environment variables to pass to FFL.py
         """
         try:
             # Use JSON output to verify E2E status
@@ -862,12 +918,12 @@ class E2EEUploadResumeBrowserTest(E2EEUploadTestBase, ResumeBrowserTestBase):
 
 
 class E2EEUploadDownloadTest(E2EEUploadTestBase, ResumeTestBase):
-    """Test E2EE upload to test server and download with Core.py
+    """Test E2EE upload to test server and download with FFL.py
 
     This test validates the complete E2EE upload workflow:
     1. Upload an encrypted file to the test server
     2. Extract the encryption key from the upload output
-    3. Download the file using Core.py with the encryption key
+    3. Download the file using FFL.py with the encryption key
     4. Verify the downloaded file matches the original
 
     Note: This test uses the local TestServer.py to avoid dependencies on external services.
@@ -879,15 +935,15 @@ class E2EEUploadDownloadTest(E2EEUploadTestBase, ResumeTestBase):
         super().__init__(methodName, fileSizeBytes=1 * 1024 * 1024)
 
     def testE2EEUploadAndDownloadWithCore(self):
-        """Test E2EE upload to test server and download using Core.py CLI
+        """Test E2EE upload to test server and download using FFL.py CLI
 
         This test verifies that:
         - Files can be uploaded with E2EE encryption
         - Encryption keys are properly generated and displayed
-        - Files can be downloaded and decrypted using Core.py with the encryption key
+        - Files can be downloaded and decrypted using FFL.py with the encryption key
         - Decrypted files match the original plaintext
         """
-        print("\n[TEST] E2E upload to test server and download with Core.py")
+        print("\n[TEST] E2E upload to test server and download with FFL.py")
 
         uploadOutput = {}
         testServerProcess = None
@@ -905,7 +961,7 @@ class E2EEUploadDownloadTest(E2EEUploadTestBase, ResumeTestBase):
             linkWithKey = f"{shareLink}#{encryptionKey}"
             print(f"[Test] Download URL with key: {linkWithKey}")
 
-            # Download using Core.py with encryption key
+            # Download using FFL.py with encryption key
             downloadedPath = os.path.join(self.tempDir, "downloaded_upload_e2e.bin")
             self._downloadWithCore(
                 linkWithKey,

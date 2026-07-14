@@ -126,7 +126,7 @@ class ChecksumTest(ChecksumAssertionsMixin, FastFileLinkTestBase):
         self.assertEqual(checksumData.get('checksum'), expectedChecksum)
 
     def testChecksumVerifiedByFFLDownloader(self):
-        """Functional test: Core.py downloader should verify checksum after transfer."""
+        """Functional test: FFL.py downloader should verify checksum after transfer."""
         shareLink = self._startFastFileLink(p2p=True)
 
         outputCapture = {}

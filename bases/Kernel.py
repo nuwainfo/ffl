@@ -45,7 +45,7 @@ from signalslot import Signal
 from sentry_sdk.integrations.logging import SentryHandler, LoggingIntegration
 from sentry_sdk.integrations import atexit as sentryAtexit
 
-PUBLIC_VERSION = '3.9.12'
+PUBLIC_VERSION = '4.0.0'
 
 # Map string levels to logging constants for standard level names
 LOG_LEVEL_MAPPING = {'DEBUG': logging.DEBUG, 'INFO': logging.INFO, 'WARNING': logging.WARNING, 'ERROR': logging.ERROR}
@@ -113,7 +113,7 @@ def getLogger(name, version=PUBLIC_VERSION, reinitialize=False):
             sentryDsn = secretGetter.get('SENTRY_DSN')
             
             # Skip Sentry when running from source: sys.executable sits inside the active
-            # conda environment, meaning we are running 'python Core.py' directly.
+            # conda environment, meaning we are running 'python FFL.py' directly.
             # Built executables (PyInstaller / PyApp) live outside CONDA_PREFIX even
             # when the user has a conda env activated in their shell.
             condaPrefix = os.getenv('CONDA_PREFIX')
@@ -987,9 +987,8 @@ class StorageLocator(Singleton):
                 return path
 
         # If no file found, return the environment path if available, otherwise home directory path
-        envStorageLocation = self._getEnvStorageLocation()
         if envStorageLocation:
-            return os.path.join(envStorageLocation, filename)
+            return envPath
 
         return os.path.join(self._homeDir, filename)
 
@@ -1218,7 +1217,7 @@ class FFLEvent:
     tunnelFallback = Event('/tunnel/fallback')
 
     # Server lifecycle events
-    serverStarting = Event('/server/create')  # fires in createServer() (Core.py mode); hook compat
+    serverStarting = Event('/server/create')  # fires in createServer() (FFL.py mode); hook compat
     serverEndpointsRegister = Event('/server/endpoints/create')
     serverShutdown = Event('/server/shutdown')
 

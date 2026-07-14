@@ -374,10 +374,27 @@ function parseContentRange(header) {
     };
 }
 
-function buildResumeAwareRequest(request, resumeConfig, authHeaders) {
-    const needsRange = resumeConfig &&
+// A resumeConfig needs an outbound Range header when it either starts past
+// byte 0 (an ordinary resume) or carries a finite end (a bounded video/PDF
+// seek). A pure open-ended bytes=0- adds nothing, so skip it.
+function resumeNeedsRange(resumeConfig) {
+    return !!(resumeConfig &&
         typeof resumeConfig.rangeStart === 'number' &&
-        resumeConfig.rangeStart > 0;
+        (resumeConfig.rangeStart > 0 || Number.isFinite(resumeConfig.rangeEnd)));
+}
+
+// Set the Range (and matching Cache-Control) header for a resume/seek request.
+// A finite end is preserved verbatim; only an open-ended range emits
+// "bytes=start-". Emitting "bytes=start-" for a bounded request would silently
+// widen a video/PDF seek all the way to EOF.
+function applyResumeRangeHeaders(headers, resumeConfig) {
+    const endPart = Number.isFinite(resumeConfig.rangeEnd) ? String(resumeConfig.rangeEnd) : '';
+    headers.set('Range', `bytes=${resumeConfig.rangeStart}-${endPart}`);
+    headers.set('Cache-Control', 'no-cache');
+}
+
+function buildResumeAwareRequest(request, resumeConfig, authHeaders) {
+    const needsRange = resumeNeedsRange(resumeConfig);
     const needsAuthHeaders = authHeaders && Object.keys(authHeaders).length > 0;
 
     if (!needsRange && !needsAuthHeaders) {
@@ -386,8 +403,7 @@ function buildResumeAwareRequest(request, resumeConfig, authHeaders) {
 
     const headers = new Headers(request.headers);
     if (needsRange) {
-        headers.set('Range', `bytes=${resumeConfig.rangeStart}-`);
-        headers.set('Cache-Control', 'no-cache');
+        applyResumeRangeHeaders(headers, resumeConfig);
     }
     if (needsAuthHeaders) {
         for (const [key, value] of Object.entries(authHeaders)) {
@@ -461,11 +477,25 @@ self.addEventListener('fetch', (event) => {
         log('[ProgressSW] Resume parameters extracted from URL:', resumeConfig);
     }
 
-    const hasResume = !!resumeConfig;
+    let hasResume = !!resumeConfig;
+    
+    // Set true only when we synthesize a resumeConfig below from a
+    // browser-native Range header; gates the passthrough decision in branch B.
+    let synthesizedE2EERangeResume = false;
+
+    // Computed up front (not just inside branch B below) so branch A's
+    // full-file-passthrough check can also see it -- otherwise a Range
+    // request with e2ee=1 but no dl param would hit branch A first and
+    // return before the E2EE Range protection in branch B ever runs,
+    // silently letting raw ciphertext through.
+    const hasRangeHeader = !!event.request.headers.get('Range');
+    const e2eeEnabledForRequest = url.searchParams.get('e2ee') === '1';
+    const needsE2EERangeProtection = hasRangeHeader && e2eeEnabledForRequest && !hasResume;
 
     // ---- A. Full file passthrough: no interception at all ----
-    // Conditions: No resume AND (no dl OR ff_pass=1)
-    if (!hasResume && (!hasDlId || ffPass)) {
+    // Conditions: No resume AND (no dl OR ff_pass=1), unless this is an E2EE
+    // Range request that still needs decryption (branch B handles that case).
+    if (!hasResume && (!hasDlId || ffPass) && !needsE2EERangeProtection) {
         if (!hasDlId) {
             log('[ProgressSW] Full file passthrough: direct /download without dl');
         } else {
@@ -475,17 +505,61 @@ self.addEventListener('fetch', (event) => {
     }
 
     // ---- Range header but SW has no resume config → also passthrough ----
-    const hasRangeHeader = !!event.request.headers.get('Range');
+    // EXCEPT when E2EE is enabled: raw ciphertext must never reach the browser
+    // undecrypted (e.g. a native <video> Range-seek, or any Range request that
+    // didn't go through this SW's own resume_* URL params). Synthesize a
+    // resumeConfig from the Range header itself so decryption and the server's
+    // chunk-alignment discard (CryptoHelper.alignChunkStart in bases/E2EE.py)
+    // still get applied, instead of silently passing through ciphertext that
+    // looks like an ordinary partial response.
     if (hasRangeHeader && !hasResume) {
-        log('[ProgressSW] Range request without SW resume config, passing through');
-        return;
+        if (!e2eeEnabledForRequest) {
+            log('[ProgressSW] Range request without SW resume config, passing through');
+            return;
+        }
+
+        // Capture both start and end -- a finite range (e.g. bytes=50000-60000
+        // from a <video>/PDF seek) must stay finite, not silently widen to
+        // "start to EOF" once it round-trips through buildResumeAwareRequest.
+        // Only a single bytes=start- or bytes=start-end range is supported; a
+        // suffix range (bytes=-500) or a multi-range (bytes=0-99,200-299)
+        // won't match and must be rejected outright -- silently defaulting
+        // rangeStart to 0 would serve the wrong bytes as if they were what was
+        // actually requested.
+        const rangeHeader = event.request.headers.get('Range') || '';
+        const rangeMatch = rangeHeader.match(/^bytes=(\d+)-(\d*)$/);
+        if (!rangeMatch) {
+            log('[ProgressSW] E2EE Range request with unsupported syntax, rejecting:', rangeHeader);
+            event.respondWith(new Response('E2EE: unsupported Range syntax', {
+                status: 416,
+                headers: { 'Content-Range': 'bytes */*' }
+            }));
+            return;
+        }
+
+        const rangeStart = parseInt(rangeMatch[1], 10);
+        const rangeEnd = rangeMatch[2] ? parseInt(rangeMatch[2], 10) : null;
+        resumeConfig = { rangeStart, rangeEnd, baseBytes: rangeStart, skipBytes: 0, expectedSize: 0 };
+        hasResume = true;
+        synthesizedE2EERangeResume = true;
+        log(
+            '[ProgressSW] E2EE Range request without resume config -- synthesizing resumeConfig for decryption:',
+            resumeConfig
+        );
     }
 
     log('[ProgressSW] ✅ INTERCEPTING download request:', url.pathname,
         'ff_pass=', ffPass, 'hasResume=', hasResume);
 
     // ---- B. Resume + passthrough (ff_pass=1) → use handlePassthroughForResume ----
-    if (ffPass && hasResume) {
+    // Passthrough streams upstream bytes straight to the browser with no
+    // decryption or chunk-alignment crop. That is correct for DownloadManager's
+    // own writer resume -- even under E2EE, because fetchToWriter() decrypts on
+    // the page side itself; routing it through the TransformStream here would
+    // decrypt a second time and corrupt the data. The ONE E2EE resume that must
+    // NOT passthrough is the Range we synthesized above from a browser-native
+    // seek, which has no page-side decryptor and relies on the SW to decrypt.
+    if (ffPass && hasResume && !synthesizedE2EERangeResume) {
         log('[ProgressSW] ff_pass=1 with resume - using passthrough resume handler');
         event.respondWith(handlePassthroughForResume(event, url, downloadId, resumeConfig));
         return;
@@ -593,15 +667,16 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig,
         const corsHeaders = new Headers({
             'Accept': '*/*',
         });
+        
         if (authHeaders) {
             for (const [k, v] of Object.entries(authHeaders)) {
                 corsHeaders.set(k, v);
             }
         }
-        if (resumeConfig && typeof resumeConfig.rangeStart === 'number' && resumeConfig.rangeStart > 0) {
-            corsHeaders.set('Range', `bytes=${resumeConfig.rangeStart}-`);
-            corsHeaders.set('Cache-Control', 'no-cache');
-        }
+        
+        if (resumeNeedsRange(resumeConfig)) {
+            applyResumeRangeHeaders(corsHeaders, resumeConfig);
+        }                
         log('[ProgressSW] Fetching with cors mode, clean headers');
         
         upstream = await fetch(new Request(request.url, {
@@ -660,6 +735,25 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig,
 
         const baseBytes = resumeConfig ? resumeConfig.baseBytes : 0;
         let skipRemaining = resumeConfig ? resumeConfig.skipBytes || 0 : 0;
+        
+        // A finite Range request (e.g. a browser <video>/PDF seek) asks for a
+        // bounded slice bytes=start-end, as opposed to an open-ended resume
+        // (bytes=start-) which runs to EOF. This distinction drives both the
+        // tail crop below and the completion handling in flush(), so derive it
+        // once here.
+        const isFiniteRange = !!(resumeConfig && Number.isFinite(resumeConfig.rangeEnd));
+        
+        // For a finite Range, the server pads the actual encrypted read out to
+        // the end of the containing chunk (CryptoHelper.alignChunkEnd in
+        // bases/E2EE.py), so the decrypted stream can run past what was actually
+        // requested. emitRemaining caps how many (post-skip) bytes still get
+        // enqueued to the browser; null means no cap -- the normal case for an
+        // open-ended range, which is all DownloadManager.js's own resume flow
+        // ever sends.
+        let emitRemaining = isFiniteRange
+            ? Math.max(0, resumeConfig.rangeEnd - resumeConfig.rangeStart + 1)
+            : null;
+            
         let delivered = baseBytes;
         let lastReport = baseBytes;
         let lastReportTime = 0;
@@ -691,6 +785,16 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig,
         const e2eeContext = e2eeEnabled ? (specificContext || preRegisteredContext) : null;
         if (e2eeEnabled && !e2eeContext) {
             log('[ProgressSW] WARNING: E2EE enabled but no context found for download:', downloadId);
+            
+            // Fail closed: without a context there's no way to decrypt, and
+            // letting the stream continue would silently hand the browser raw
+            // ciphertext that looks like an ordinary (if now chunk-aligned)
+            // partial response instead of a visible, diagnosable error.
+            if (upstream.body) {
+                upstream.body.cancel().catch(() => {});
+            }
+            
+            return new Response('Missing E2EE context', { status: 409 });
         } else if (e2eeContext) {
             const contextSource = e2eeContexts.has(downloadId) ? 'specific ID' : 'pre-registered';
             log('[ProgressSW] ✓ E2EE decryption will be applied using', contextSource, 'context');
@@ -715,13 +819,47 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig,
         // E2EE decryptor (if enabled)
         let httpDecryptor = null;
         if (e2eeContext) {
+            // E2EE Range/resume requires the chunk-aligned server protocol
+            // (v2+, from /e2ee/manifest "version", stamped into the context by
+            // E2EEManager.setupHTTPDecryptor). A legacy server encrypts Range
+            // reads from the raw requested offset, so the chunk-index/nonce
+            // model this decryptor assumes doesn't hold -- decrypting would
+            // emit garbage at best and re-expose the old nonce-reuse behavior
+            // at worst. Fail closed. (Full downloads from byte 0 are
+            // unaffected: resumeNeedsRange is false for them.)
+            const contextVersion = Number.isInteger(e2eeContext.version) ? e2eeContext.version : 1;
+            if (resumeNeedsRange(resumeConfig) && contextVersion < 2) {
+                log('[ProgressSW] E2EE Range/resume rejected: server protocol', contextVersion, '< 2');
+                if (upstream.body) {
+                    upstream.body.cancel().catch(() => {});
+                }
+                return new Response('E2EE Range/resume requires server protocol v2', {
+                    status: 416,
+                    headers: { 'Content-Range': 'bytes */*' }
+                });
+            }
+
             // Use factory method to create HTTPDecryptor from context
             httpDecryptor = HTTPDecryptor.fromContext(e2eeContext, log);
 
             // Set resume position if needed
             if (resumeConfig && typeof resumeConfig.rangeStart === 'number') {
                 httpDecryptor.setResumeState(resumeConfig.rangeStart);
-                log('[ProgressSW] HTTPDecryptor resume position set to:', resumeConfig.rangeStart);
+
+                // AES-GCM nonces are derived from a chunk index, so the server
+                // always aligns the actual read down to the encryption chunk
+                // boundary when E2EE is enabled (a partial GCM block can't be
+                // tag-verified) -- see CryptoHelper.alignChunkStart in
+                // bases/E2EE.py. An unaligned resume therefore gets a few extra
+                // plaintext bytes at the front of the first decrypted chunk,
+                // which the existing skipRemaining discard below must absorb.
+                const e2eeAlignmentDiscard = resumeConfig.rangeStart % httpDecryptor.chunkSize;
+                skipRemaining += e2eeAlignmentDiscard;
+
+                log(
+                    '[ProgressSW] HTTPDecryptor resume position set to:', resumeConfig.rangeStart,
+                    e2eeAlignmentDiscard > 0 ? `, alignment discard: ${e2eeAlignmentDiscard}` : ''
+                );
             }
 
             log('[ProgressSW] ✓ HTTPDecryptor created for download:', downloadId);
@@ -906,10 +1044,21 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig,
                     skipRemaining = 0;
                 }
 
+                // Tail crop for a finite Range (see emitRemaining above),
+                // symmetric with the leading-edge skipRemaining crop.
+                if (emitRemaining !== null) {
+                    if (chunkView.length >= emitRemaining) {
+                        chunkView = chunkView.slice(0, emitRemaining);
+                        emitRemaining = 0;
+                    } else {
+                        emitRemaining -= chunkView.length;
+                    }
+                }
+
                 if (chunkView.length === 0) {  // Maybe decrypt buffering
                     return;
                 }
-                
+
                 // Pass the processed chunk through to the browser
                 controller.enqueue(chunkView);
                 log('[ProgressSW] Enqueued chunk, size:', chunkView.length);
@@ -998,6 +1147,17 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig,
                                 }
                             }
 
+                            // Same trailing crop as the main transform loop, for the
+                            // final (possibly chunk-padded) piece of a finite Range.
+                            if (emitRemaining !== null && finalView.length > 0) {
+                                if (finalView.length >= emitRemaining) {
+                                    finalView = finalView.slice(0, emitRemaining);
+                                    emitRemaining = 0;
+                                } else {
+                                    emitRemaining -= finalView.length;
+                                }
+                            }
+
                             if (finalView.length > 0) {
                                 controller.enqueue(finalView);
                                 delivered += finalView.length;
@@ -1015,12 +1175,18 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig,
                     : `delivered: ${delivered} (size unknown)`;
                 log('[ProgressSW] Transform stream completed,', completionDesc);
 
-                const prematureEOFDetected = isValidSize(resolvedTotal) && delivered < resolvedTotal;
+                // A finite Range delivers only bytes[rangeStart..rangeEnd]; since
+                // delivered counts up from baseBytes (== rangeStart), a fully
+                // served slice ends at rangeEnd + 1. Judging it against the
+                // whole-file total would always look like a premature EOF.
+                const expectedDeliveredEnd = isFiniteRange ? resumeConfig.rangeEnd + 1 : resolvedTotal;
+
+                const prematureEOFDetected = isValidSize(expectedDeliveredEnd) && delivered < expectedDeliveredEnd;
                 if (prematureEOFDetected) {
-                    const missingBytes = resolvedTotal - delivered;
+                    const missingBytes = expectedDeliveredEnd - delivered;
                     log(
                         '[ProgressSW] Premature EOF detected in TransformStream path:',
-                        `delivered=${delivered}, expected=${resolvedTotal}, missing=${missingBytes}`
+                        `delivered=${delivered}, expected=${expectedDeliveredEnd}, missing=${missingBytes}`
                     );
 
                     try {
@@ -1028,7 +1194,7 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig,
                             type: 'download-premature-eof',
                             id: downloadId,
                             sent: delivered,
-                            total: resolvedTotal,
+                            total: expectedDeliveredEnd,
                             missingBytes,
                             serverId: serverDownloadId
                         }, { postToClients: true, clientId: targetClientId });
@@ -1038,6 +1204,18 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig,
 
                     resolveDone();
 
+                    if (e2eeEnabled) {
+                        e2eeContexts.delete(downloadId);
+                    }
+                    return;
+                }
+
+                // A finite Range is a partial seek (video/PDF), not a whole-file
+                // download: don't POST /complete or run whole-file checksum
+                // verification -- both would misreport a seek as a finished
+                // download. Just finish the stream cleanly.
+                if (isFiniteRange) {
+                    resolveDone();
                     if (e2eeEnabled) {
                         e2eeContexts.delete(downloadId);
                     }
@@ -1112,7 +1290,31 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig,
         
         if (resumeConfig) {
             headers.delete('Content-Length'); // Also Chromium
-            headers.set('Accept-Ranges', 'bytes');        
+            headers.set('Accept-Ranges', 'bytes');
+
+            // The body we're about to send the browser has already gone through
+            // progressTransform's decrypt + skipRemaining/emitRemaining crop
+            // (which absorbs both the pre-existing baseBytes/skipBytes gap AND,
+            // when E2EE is enabled, the server's chunk-alignment padding on both
+            // ends -- see CryptoHelper.alignChunkStart/alignChunkEnd in
+            // bases/E2EE.py), so it actually spans resumeConfig.rangeStart to
+            // resumeConfig.rangeEnd (or, for an open-ended range, to whatever end
+            // upstream reports), not whatever range upstream's own Content-Range
+            // reports (the server may have padded that out on both ends for
+            // AES-GCM nonce safety). Copying upstream's Content-Range verbatim
+            // would tell the browser the body covers a range it doesn't,
+            // corrupting its own resume/write logic.
+            if (rangeFromServer) {
+                if (rangeFromServer.total !== null) {
+                    const actualEnd = Number.isFinite(resumeConfig.rangeEnd) ? resumeConfig.rangeEnd : rangeFromServer.end;
+                    headers.set('Content-Range', `bytes ${resumeConfig.rangeStart}-${actualEnd}/${rangeFromServer.total}`);
+                } else {
+                    // Unknown total -- a rewritten range header would be just as
+                    // unverifiable as the original, so drop it rather than risk
+                    // asserting something we can't back up.
+                    headers.delete('Content-Range');
+                }
+            }
         }
 
         log('[ProgressSW] About to pipe through transform stream');

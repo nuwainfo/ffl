@@ -16,8 +16,6 @@
 # $Revision: 17246 $
 
 import os
-import sys
-import subprocess
 import unittest
 import json
 
@@ -63,30 +61,6 @@ class I18nTest(FastFileLinkTestBase):
         if self._savedStorageLocator is not None:
             StorageLocator._instances[StorageLocator] = self._savedStorageLocator
         super().tearDown()
-
-    def _decodeOutput(self, rawBytes):
-        """
-        Decode subprocess output with proper encoding handling for Windows
-
-        Args:
-            rawBytes: Raw bytes from subprocess output
-
-        Returns:
-            str: Decoded string
-        """
-        encodingsToTry = ['utf-8', 'cp950', 'gbk', 'cp936', 'big5']
-
-        for encoding in encodingsToTry:
-            try:
-                decoded = rawBytes.decode(encoding)
-                print(f"[Test] Successfully decoded with encoding: {encoding}")
-                return decoded
-            except (UnicodeDecodeError, AttributeError):
-                continue
-
-        # Fallback to utf-8 with error handling
-        print(f"[Test] Using UTF-8 with error replacement")
-        return rawBytes.decode('utf-8', errors='replace')
 
     def _assertChineseStrings(self, output, expectedStrings, context="output", strict=True):
         """
@@ -136,24 +110,15 @@ class I18nTest(FastFileLinkTestBase):
         """Test that --help output is translated to Chinese"""
         print("\n[Test] Testing --help translation...")
 
-        # Run Core.py --cli --help with zh_Hant language
-        command = [sys.executable, "Core.py", "--cli", "--help"]
-
-        env = os.environ.copy()
-        env['FFL_STORAGE_LOCATION'] = self.testConfigDir
-
-        result = subprocess.run(
-            command,
-            cwd=os.path.dirname(os.path.abspath(__file__ + "/../..")),
-            env=env,
-            capture_output=True
+        helpOutput, returnCode = self._runCoreCommand(
+            ["--cli", "--help"],
+            extraEnvVars={"FFL_STORAGE_LOCATION": self.testConfigDir},
+            disableGuiAddon=True,
+            timeout=10,
         )
 
-        # Decode output with proper encoding handling
-        helpOutput = self._decodeOutput(result.stdout)
-
         # Debug: Print encoding and raw output info
-        print(f"[Test] Return code: {result.returncode}")
+        print(f"[Test] Return code: {returnCode}")
         print(f"[Test] Output type: {type(helpOutput)}")
         print(f"[Test] Output length: {len(helpOutput)} characters")
 

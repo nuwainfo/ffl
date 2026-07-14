@@ -96,6 +96,7 @@ async function initializeI18n(config = {}) {
   };
   const debug = config.debug !== undefined ? config.debug : true;
   const version = config.version || "1.0.0";
+  const includeCommonNamespaces = config.includeCommonNamespaces !== false;
   const log =
     config.log ||
     (typeof window !== "undefined" && typeof window.log === "function"
@@ -103,7 +104,9 @@ async function initializeI18n(config = {}) {
       : function () {});
 
   // Common and user-defined namespaces
-  const commonNamespaces = ["Nav", "Footer", "Modal", "Common"];
+  const commonNamespaces = includeCommonNamespaces
+    ? ["Nav", "Footer", "Modal", "Common"]
+    : [];
   const userNamespaces = Array.isArray(config.ns)
     ? config.ns
     : config.ns
@@ -298,7 +301,9 @@ function updatePageTranslations(log) {
   );
 
   // Use jquery-i18next to automatically translate all elements with data-i18n
-  $("body").localize();
+  if (typeof $("body").localize === "function") {
+    $("body").localize();
+  }
 }
 
 // Function to change language

@@ -138,10 +138,10 @@ class _BaseIntegration(ShellIntegration):
     """
     Base for platform-specific integrations.
 
-    execPath  — the path used for identity / change-detection (Core.py in dev mode,
+    execPath  — the path used for identity / change-detection (FFL.py in dev mode,
                 ffl binary in packaged mode).
     commandArgs — the command prefix written to the OS, without the file argument
-                  (e.g. [python, Core.py, --cli]  or  [ffl.exe]).
+                  (e.g. [python, FFL.py, --cli]  or  [ffl.exe]).
     """
 
     def __init__(self, mode, execPath, commandArgs):
@@ -191,12 +191,12 @@ class _BaseIntegration(ShellIntegration):
     def _resolveCommandArgs(settingsGetter):
         """Return (execPath, commandArgs) for OS registration.
 
-        Dev mode  → execPath = Core.py,   commandArgs = [python, Core.py, --cli]
+        Dev mode  → execPath = FFL.py,    commandArgs = [python, FFL.py, --cli]
         Packaged  → execPath = ffl binary, commandArgs = [ffl binary]
         """
         if settingsGetter.isRunOnDevelopment():
             corePath = os.path.normcase(os.path.abspath(
-                os.path.join(settingsGetter.baseDir, 'Core.py')
+                os.path.join(settingsGetter.baseDir, 'FFL.py')
             ))
             pythonExe = os.path.normcase(os.path.abspath(sys.executable))
             return corePath, [pythonExe, corePath, '--cli']
@@ -388,7 +388,7 @@ class MacIntegration(_BaseIntegration):
         # Dev mode: direct Python invocation, no .app bundle needed
         execPath, commandArgs = cls._resolveCommandArgs(settingsGetter)
         if not execPath:
-            return UnsupportedIntegration(_("Unable to locate Core.py for shell integration."))
+            return UnsupportedIntegration(_("Unable to locate FFL.py for shell integration."))
         return cls(execPath=execPath, commandArgs=commandArgs, isAppBundle=False)
 
     @staticmethod

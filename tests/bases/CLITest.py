@@ -30,9 +30,63 @@ import requests
 
 from urllib.parse import urlparse
 
-from bases.CLI import DEFAULT_AUTH_USER_NAME
-
+from bases.CLI import DEFAULT_AUTH_USER_NAME, ShareCLIArgumentAdapter, configureCLIParser
+from bases.Settings import DEFAULT_UPLOAD_DURATION
 from ..CoreTestBase import FastFileLinkTestBase, LOCAL_TEST_SERVER_URL
+
+
+class ShareCLIArgumentAdapterTest(unittest.TestCase):
+    """Unit tests for ShareRequest-backed share CLI argument registration."""
+
+    def testShareArgsParseIntoExpectedFields(self):
+        parser, _globalsParent, _commandNames, _shareSubparser = configureCLIParser()
+
+        args = parser.parse_args([
+            'share',
+            'demo.txt',
+            '--name', 'renamed.txt',
+            '--upload',
+            '--alias', 'demo-alias',
+            '--receipt-confirm',
+            '--recipient-auth', 'pickup',
+            '--pickup-code', '123456',
+            '--qr', 'qr.png',
+            '--disable-clipboard',
+        ])
+
+        self.assertEqual(args.file, ['demo.txt'])
+        self.assertEqual(args.fileName, 'renamed.txt')
+        self.assertEqual(args.upload, DEFAULT_UPLOAD_DURATION)
+        self.assertEqual(args.alias, 'demo-alias')
+        self.assertEqual(args.receiptConfirm, '')
+        self.assertEqual(args.recipientAuth, 'pickup')
+        self.assertEqual(args.pickupCode, '123456')
+        self.assertEqual(args.qr, 'qr.png')
+        self.assertTrue(args.disableClipboard)
+
+    def testCreateDaemonShareConfigIncludesOnlyShareOptions(self):
+        parser, _globalsParent, _commandNames, shareSubparser = configureCLIParser()
+
+        args = parser.parse_args([
+            '--cli',
+            '--log-level', 'INFO',
+            'share',
+            'demo.txt',
+            '--name', 'renamed.txt',
+            '--alias', 'daemon-alias',
+            '--recipient-auth', 'pickup',
+            '--pickup-code', '123456',
+        ])
+        shareConfig = ShareCLIArgumentAdapter.createDaemonShareConfig(args, shareSubparser)
+
+        self.assertEqual(shareConfig['file'], ['demo.txt'])
+        self.assertEqual(shareConfig['fileName'], 'renamed.txt')
+        self.assertEqual(shareConfig['alias'], 'daemon-alias')
+        self.assertEqual(shareConfig['recipientAuth'], 'pickup')
+        self.assertEqual(shareConfig['pickupCode'], '123456')
+        self.assertNotIn('cli', shareConfig)
+        self.assertNotIn('command', shareConfig)
+        self.assertNotIn('logLevel', shareConfig)
 
 
 class CLITest(FastFileLinkTestBase):
@@ -294,35 +348,26 @@ class CLITest(FastFileLinkTestBase):
         testServerProcess = self._startTestServer()
         coreScriptPath = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "CorePatched.py"))
 
-        command = [
-            sys.executable, coreScriptPath, "--cli", "share", self.testFilePath, "--json", self.jsonOutputPath,
+        args = [
+            "--cli", "share", self.testFilePath, "--json", self.jsonOutputPath,
             "--upload", "3 hours"
         ]
         if extraArgs:
-            command.extend(extraArgs)
-
-        env = os.environ.copy()
-        env['PYTHONUNBUFFERED'] = '1'
-        env['FILESHARE_TEST'] = LOCAL_TEST_SERVER_URL
-        if extraEnvVars:
-            for key, value in extraEnvVars.items():
-                env[key] = str(value)
-
-        print(f"[Test] Running upload prompt command: {' '.join(command)}")
+            args.extend(extraArgs)
 
         try:
-            with subprocess.Popen(
-                command,
+            return self._runCoreCommand(
+                args,
+                commandPrefix=[sys.executable, coreScriptPath],
+                extraEnvVars={
+                    'PYTHONUNBUFFERED': '1',
+                    'FILESHARE_TEST': LOCAL_TEST_SERVER_URL,
+                    **(extraEnvVars or {}),
+                },
                 stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                env=env
-            ) as proc:
-                output, _ = proc.communicate(input=userInput, timeout=timeout)
-                proc.stdin = None
-                proc.stdout = None
-                return output, proc.returncode
+                inputData=userInput,
+                timeout=timeout,
+            )
         finally:
             self._stopTestServer(testServerProcess)
 
@@ -456,7 +501,7 @@ class CLITest(FastFileLinkTestBase):
 
     def testForceRelayFreeUserDisablesWebRTC(self):
         """Test --force-relay for free users disables WebRTC via JavaScript (soft disable)."""
-        extraArgs = ["--force-relay", "--preferred-tunnel", "default", "--timeout", "10"]
+        extraArgs = ["--force-relay", "--timeout", "10"]
 
         # Set Free user level for this test
         originalFreeLevel = self._setTestEnvVar("FREE_USER_LEVEL", "Free")
@@ -495,7 +540,7 @@ class CLITest(FastFileLinkTestBase):
 
     def testForceRelayStandardUserBlocksOfferEndpoint(self):
         """Test --force-relay for Standard/Plus users blocks /offer endpoint with 403 (hard enforce)."""
-        extraArgs = ["--force-relay", "--preferred-tunnel", "default", "--timeout", "10"]
+        extraArgs = ["--force-relay", "--timeout", "10"]
 
         # Set Standard user level - should enforce at server level
         originalFreeLevel = self._setTestEnvVar("FREE_USER_LEVEL", "Standard")
@@ -900,7 +945,7 @@ class CLITest(FastFileLinkTestBase):
 
     def testCLIUploadConfirmPromptAcceptsYes(self):
         """Test upload confirmation prompt appears and accepts interactive yes."""
-        output, returnCode = self._runUploadPromptCommand(userInput="yes\n", extraEnvVars={"FFL_YES": "False"})
+        output, returnCode = self._runUploadPromptCommand(userInput="yes\n")
 
         print(f"[Test] Upload confirm output: {output}")
         self.assertEqual(returnCode, 0, f"Expected exit code 0, got {returnCode}")
@@ -915,9 +960,7 @@ class CLITest(FastFileLinkTestBase):
 
     def testCLIUploadConfirmWithYesSkipsPrompt(self):
         """Test --yes skips the upload confirmation prompt."""
-        output, returnCode = self._runUploadPromptCommand(
-            userInput=None, extraArgs=["--yes"], extraEnvVars={"FFL_YES": "False"}
-        )
+        output, returnCode = self._runUploadPromptCommand(userInput=None, extraArgs=["--yes"])
 
         print(f"[Test] --yes output: {output}")
         self.assertEqual(returnCode, 0, f"Expected exit code 0, got {returnCode}")
@@ -926,27 +969,15 @@ class CLITest(FastFileLinkTestBase):
         print("[Test] PASS: --yes skipped upload confirmation prompt")
 
 
-class CLIArgumentParsingTest(unittest.TestCase):
+class CLIArgumentParsingTest(FastFileLinkTestBase):
     """Lightweight test class for CLI argument parsing behavior - help, version, and error cases"""
 
     def _runCoreWithArgs(self, args):
-        """Helper to run Core.py with specific arguments and capture output"""
-        command = [sys.executable, os.path.join(os.path.dirname(__file__), "..", "..", "Core.py")]
-        command.extend(args)
-
-        # Set up environment to disable GUI addon for CLI testing
-        env = os.environ.copy()
-        env['DISABLE_ADDONS'] = 'GUI'
-        env['FFL_YES'] = 'True'
-
+        """Helper to run FFL.py with specific arguments and capture output."""
         try:
-            result = subprocess.run(
-                command, capture_output=True, text=True, encoding='utf-8', errors='replace',
-                timeout=10, env=env
-            )
-            return (result.stdout or '') + (result.stderr or ''), result.returncode
-        except subprocess.TimeoutExpired:
-            return "Process timed out", 1
+            return self._runCoreCommand(args, timeout=10)
+        except Exception as e:
+            return str(e), 1
 
     def testCLIArgumentsHelpBehavior(self):
         """Test various CLI argument combinations that should show help"""
@@ -1018,7 +1049,6 @@ class CLIArgumentParsingTest(unittest.TestCase):
                 output, returnCode = self._runCoreWithArgs(args)
 
                 if expectedBehavior == "version":
-                    # Should show version information
                     versionIndicators = [
                         "fastfilelink v", # Version string
                         "enabled addons:", # Addons list
@@ -1067,32 +1097,26 @@ class CLIArgumentParsingTest(unittest.TestCase):
 
             for args, expectedBehavior, description in validCases:
                 with self.subTest(args=args, description=description):
-                    # For valid cases, we expect the process to start but we'll terminate it quickly
-                    command = [sys.executable, os.path.join(os.path.dirname(__file__), "..", "..", "Core.py")]
-                    command.extend(args)
-
-                    # Set up environment to disable GUI addon for CLI testing
-                    env = os.environ.copy()
-                    env['DISABLE_ADDONS'] = 'GUI'
-                    env['FFL_YES'] = 'True'
-
                     try:
-                        # Start the process
-                        proc = subprocess.Popen(
-                            command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env
+                        creationFlags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
+                        self.coreProcess = self._runCoreCommand(
+                            args,
+                            wait=False,
+                            creationFlags=creationFlags,
                         )
 
                         # Give it a moment to start
                         time.sleep(2)
 
                         # Terminate it before it does anything significant
-                        proc.terminate()
-
+                        process = self.coreProcess
+                        process.terminate()
                         try:
-                            output, _ = proc.communicate(timeout=5)
+                            output, _ = process.communicate(timeout=5)
                         except subprocess.TimeoutExpired:
-                            proc.kill()
-                            output, _ = proc.communicate()
+                            process.kill()
+                            output, _ = process.communicate()
+                        self.coreProcess = None
 
                         # Should NOT show help output for valid commands
                         helpIndicators = [
@@ -1117,7 +1141,7 @@ class CLIArgumentParsingTest(unittest.TestCase):
             # Clean up temp file
             try:
                 os.unlink(tempFileName)
-            except:
+            except Exception:
                 pass
 
     def testCLIArgumentsInvalidCombinations(self):

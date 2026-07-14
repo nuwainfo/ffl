@@ -17,8 +17,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-CorePatched.py - A wrapper around Core.py that optionally injects network instability simulation
-for FastFileLink upload operations. When no instability parameters are provided, it behaves exactly like Core.py.
+CorePatched.py - A wrapper around FFL.py that optionally injects network instability simulation
+for FastFileLink upload operations. When no instability parameters are provided, it behaves exactly like FFL.py.
 """
 
 import os
@@ -36,7 +36,7 @@ import requests_mock
 
 # Import original Core module
 CORE_BASE_PATH = os.path.join(os.path.dirname(__file__), '..')
-CORE_PATH = os.path.join(CORE_BASE_PATH, 'Core.py')
+CORE_PATH = os.path.join(CORE_BASE_PATH, 'FFL.py')
 spec = importlib.util.spec_from_file_location("Core", CORE_PATH)
 Core = importlib.util.module_from_spec(spec)
 
@@ -293,7 +293,7 @@ class FastFileLinkApiSimulator:
 
 def parseInstabilityArgs():
     """Parse network instability arguments from command line"""
-    parser = argparse.ArgumentParser(add_help=False) # Don't interfere with Core.py's help
+    parser = argparse.ArgumentParser(add_help=False) # Don't interfere with FFL.py's help
     parser.add_argument(
         '--network-failure-rate',
         type=float,
@@ -311,7 +311,7 @@ def parseInstabilityArgs():
         help='Log level for network simulation output (default: INFO)'
     )
 
-    # Parse only known args, leave the rest for Core.py
+    # Parse only known args, leave the rest for FFL.py
     knownArgs, remainingArgs = parser.parse_known_args()
 
     # Update sys.argv to remove our custom arguments

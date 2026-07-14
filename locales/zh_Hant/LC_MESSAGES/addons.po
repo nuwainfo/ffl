@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-06-16 14:22+0800\n"
+"POT-Creation-Date: 2026-07-12 21:09+0800\n"
 "PO-Revision-Date: 2025-12-21 14:22+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -17,6 +17,11 @@ msgstr ""
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.17.0\n"
+
+msgid ""
+"The sender has requested a download receipt. Do you want to send a "
+"receipt?"
+msgstr "傳送者已要求下載收據。您是否要傳送收據？"
 
 msgid "This --upload option is not available in the Free Version"
 msgstr "此 --upload 選項在免費版本中不可用"
@@ -170,791 +175,9 @@ msgid "Error: --receipt without email requires a registered (non-free) account"
 msgstr "錯誤：不帶電子郵件的 --receipt 需要已註冊（非免費）帳號"
 
 msgid ""
-"The sender has requested a download receipt. Do you want to send a "
-"receipt?"
-msgstr "傳送者已要求下載收據。您是否要傳送收據？"
-
-msgid ""
 "Error: --receipt-confirm without --receipt email requires a registered "
 "(non-free) account"
 msgstr "錯誤：不帶 --receipt 電子郵件的 --receipt-confirm 需要已註冊（非免費）帳號"
-
-msgid "GUI.py requires Upload addon (addons/Upload.py) to function properly"
-msgstr "GUI.py 需要 Upload 附加元件（addons/Upload.py）才能正常運作"
-
-#, python-brace-format
-msgid "Loading advanced arguments from: {argsFile}"
-msgstr "正在從以下位置載入進階參數：{argsFile}"
-
-#, python-brace-format
-msgid " (+{count} more)"
-msgstr "（+{count} 更多）"
-
-#, python-brace-format
-msgid "One-time pickup code: {pickupCode}"
-msgstr "一次性取件碼：{pickupCode}"
-
-msgid "One-time pickup code (auto)"
-msgstr "一次性取件碼（自動）"
-
-msgid "One-time pickup code"
-msgstr "一次性取件碼"
-
-msgid "Email OTP"
-msgstr "Email 信箱一次性驗證碼"
-
-msgid "Recipient key file"
-msgstr "收件人金鑰檔案"
-
-msgid "Recipient key file + pickup code"
-msgstr "收件人金鑰檔案 + 取件碼"
-
-msgid "auto"
-msgstr "自動"
-
-msgid "Receipt email"
-msgstr "回條 Email"
-
-msgid "Receipt email: account email"
-msgstr "回條 Email：帳號 Email"
-
-msgid "Receipt confirmation: custom message"
-msgstr "回條確認：自訂訊息"
-
-msgid "Receipt confirmation"
-msgstr "回條確認"
-
-msgid "Verify Recipient"
-msgstr "驗證收件人"
-
-msgid ""
-"Choose how the recipient must verify before downloading.\n"
-"This applies only to the current share and is not saved in Preferences."
-msgstr ""
-"選擇收件人下載前的驗證方式。\n"
-"此設定僅適用於本次分享，不會儲存於偏好設定中。"
-
-msgid "Verification Method"
-msgstr "驗證方式"
-
-msgid "Email verification (OTP)"
-msgstr "Email 信箱驗證（OTP）"
-
-msgid "Leave pickup code blank to let FastFileLink generate one."
-msgstr "留空取件碼欄位，讓 快檔連結 自動產生。"
-
-msgid "Pickup code:"
-msgstr "取件碼："
-
-msgid "Recipient email(s):"
-msgstr "收件人 Email 信箱："
-
-msgid "Email address"
-msgstr "Email 信箱地址"
-
-msgid "Add"
-msgstr "新增"
-
-msgid "Edit"
-msgstr "編輯"
-
-msgid "Remove"
-msgstr "移除"
-
-msgid "Clear"
-msgstr "清除"
-
-#, python-brace-format
-msgid "Recipient key file(s) ({ext}):"
-msgstr "收件人金鑰檔案（{ext}）："
-
-msgid "Public key file"
-msgstr "公鑰檔案"
-
-msgid "Add Files"
-msgstr "新增檔案"
-
-msgid "Sender Notifications"
-msgstr "寄件人通知"
-
-msgid "Request receipt email notification"
-msgstr "請求回條 Email 通知"
-
-msgid "Registered users only."
-msgstr "僅限已登錄使用者。"
-
-msgid "Receipt email(s), separated by commas:"
-msgstr "回條 Email 信箱（可多筆，以逗號分隔）："
-
-msgid "Ask receiver to confirm receipt"
-msgstr "要求接收者確認收件"
-
-msgid "Leave the message blank to use the default confirmation message."
-msgstr "留空訊息欄位以使用預設確認訊息。"
-
-msgid "Message to receiver:"
-msgstr "給接收者的訊息："
-
-msgid "OK"
-msgstr "確定"
-
-msgid "Cancel"
-msgstr "取消"
-
-msgid "Choose recipient key file"
-msgstr "選擇收件人金鑰檔案"
-
-#, python-brace-format
-msgid "FastFileLink public key (*{ext})|*{ext}|All files (*.*)|*.*"
-msgstr "快檔連結 公鑰 (*{ext})|*{ext}|所有檔案 (*.*)|*.*"
-
-#, python-brace-format
-msgid "Pickup code must be exactly {n} digits."
-msgstr "取件碼必須恰好為 {n} 位數字。"
-
-msgid "Validation Error"
-msgstr "驗證錯誤"
-
-msgid "Recipient email cannot be empty."
-msgstr "收件人 Email 信箱不能為空。"
-
-msgid "Please enter valid email address(es)."
-msgstr "請輸入有效的 Email 信箱地址。"
-
-msgid "Please enter valid receipt email address(es)."
-msgstr "請輸入有效的回條 Email 信箱地址。"
-
-msgid "Recipient key file cannot be empty."
-msgstr "收件人金鑰檔案不能為空。"
-
-msgid "One or more recipient key files were not found."
-msgstr "找不到一個或多個收件人金鑰檔案。"
-
-#, python-brace-format
-msgid "Edit: {summary}"
-msgstr "編輯：{summary}"
-
-msgid "Click to change recipient verification settings."
-msgstr "點選以變更收件人驗證設定。"
-
-msgid "Verify recipient for this share"
-msgstr "驗證本次分享的收件人"
-
-msgid "📁Select Folder"
-msgstr "📁選擇資料夾"
-
-msgid "Choose This Folder"
-msgstr "選擇此資料夾"
-
-msgid "Choose File"
-msgstr "選擇檔案"
-
-msgid ""
-"Tip: Click 'Choose This Folder' to select current folder; 'Choose File' "
-"to select a file"
-msgstr "提示：點選「選擇此資料夾」以選取目前資料夾；「選擇檔案」以選取檔案"
-
-msgid "No folder selected."
-msgstr "未選擇資料夾。"
-
-msgid "Tip"
-msgstr "提示"
-
-msgid "Please select a file first."
-msgstr "請先選擇檔案。"
-
-msgid "Choose a file or folder"
-msgstr "選擇檔案或資料夾"
-
-msgid "This field is required"
-msgstr "此欄位為必填"
-
-msgid "📤 Share Link"
-msgstr "📤 分享連結"
-
-msgid "🔑 Copy Password"
-msgstr "🔑 複製密碼"
-
-msgid "Password copied to clipboard."
-msgstr "密碼已複製到剪貼簿。"
-
-msgid "Copied"
-msgstr "已複製"
-
-msgid ""
-"Password is unavailable.\n"
-"\n"
-"Please share the download link without password protection,\n"
-"or restart and try again."
-msgstr ""
-"密碼無法取得。\n"
-"\n"
-"請在不使用密碼保護的情況下分享下載連結，\n"
-"或重新啟動後再試一次。"
-
-msgid "Error"
-msgstr "錯誤"
-
-msgid ""
-"End-to-end encryption protects your files with strong encryption.\n"
-"\n"
-"Recipients can download using:\n"
-"  • Any web browser (recommended)\n"
-"  • FastFileLink CLI\n"
-"\n"
-"Note: Basic tools like curl/wget won't work with encrypted files."
-msgstr ""
-"端對端加密使用強加密保護您的檔案。\n"
-"\n"
-"接收者可使用以下方式下載：\n"
-"  • 任何網頁瀏覽器（推薦）\n"
-"  • 快檔連結 CLI\n"
-"\n"
-"注意：curl/wget 等基本工具無法處理加密檔案。"
-
-msgid "End-to-End Encryption"
-msgstr "端對端加密"
-
-msgid ""
-"Error reporting helps improve FastFileLink by sending crash reports and "
-"errors.\n"
-"\n"
-"What is sent:\n"
-"  • Error messages and stack traces\n"
-"  • Application version\n"
-"\n"
-"What is NOT sent:\n"
-"  • Your files or file contents\n"
-"  • Personal information\n"
-"\n"
-"You can disable this anytime in Preferences."
-msgstr ""
-"錯誤回報透過傳送當機報告和錯誤來協助改善快檔連結。\n"
-"\n"
-"會傳送的內容：\n"
-"  • 錯誤訊息和堆疊追蹤\n"
-"  • 應用程式版本\n"
-"\n"
-"不會傳送的內容：\n"
-"  • 您的檔案或檔案內容\n"
-"  • 個人資訊\n"
-"\n"
-"您可以隨時在偏好設定中停用此功能。"
-
-msgid "Error Reporting"
-msgstr "錯誤回報"
-
-msgid ""
-"Error reporting has been disabled.\n"
-"\n"
-"This change will take effect after you restart FastFileLink."
-msgstr ""
-"錯誤回報已停用。\n"
-"\n"
-"此變更將在您重新啟動快檔連結後生效。"
-
-msgid "Error Reporting Disabled"
-msgstr "錯誤回報已停用"
-
-msgid "🔍 Detecting Tor connection, please wait..."
-msgstr "🔍 正在偵測 Tor 連線，請稍候..."
-
-msgid ""
-"⚠️ Tor not detected!\n"
-"\n"
-"To use Tor privacy mode, you need to:\n"
-"  1. Install and start Tor Browser (https://www.torproject.org/)\n"
-"     OR install Tor service\n"
-"  2. Keep Tor running in the background\n"
-"\n"
-"Tor Browser typically runs on port 9150\n"
-"Tor service typically runs on port 9050\n"
-"\n"
-"After starting Tor, try enabling this option again."
-msgstr ""
-"⚠️ 未偵測到 Tor！\n"
-"\n"
-"要使用 Tor 隱私模式，您需要：\n"
-"  1. 安裝並啟動 Tor Browser (https://www.torproject.org/)\n"
-"     或安裝 Tor 服務\n"
-"  2. 保持 Tor 在背景執行\n"
-"\n"
-"Tor Browser 通常執行在連接埠 9150\n"
-"Tor 服務通常執行在連接埠 9050\n"
-"\n"
-"啟動 Tor 後，請重新啟用此選項。"
-
-msgid "Tor Not Detected"
-msgstr "未偵測到 Tor"
-
-#, python-brace-format
-msgid ""
-"🧅 Tor Privacy Mode Enabled\n"
-"\n"
-"This mode enhances your privacy by:\n"
-"  • Routing all connections through Tor network\n"
-"  • Completely disabling WebRTC (server-side enforcement)\n"
-"  • Hiding your IP address from recipients\n"
-"  • Forcing all transfers to use HTTP-over-Tor\n"
-"  • End-to-end encryption (E2EE) enabled automatically\n"
-"  • Error reporting disabled for better privacy\n"
-"\n"
-"⚠️ Important Notes:\n"
-"  • Tor must remain running while sharing files\n"
-"  • File transfers may be slower through Tor\n"
-"  • E2EE is enabled: curl/wget and tools without decryption cannot "
-"download\n"
-"    (You can disable E2EE in Preferences if needed)\n"
-"\n"
-"💡 Recommendation:\n"
-"  Consider enabling password protection in Preferences\n"
-"  for additional access control.\n"
-"\n"
-"Detected proxy: {proxy}"
-msgstr ""
-"🧅 已啟用 Tor 隱私模式\n"
-"\n"
-"此模式透過以下方式增強您的隱私：\n"
-"  • 透過 Tor 網路路由所有連線\n"
-"  • 完全停用 WebRTC（伺服器端強制執行）\n"
-"  • 向接收者隱藏您的 IP 位址\n"
-"  • 強制所有傳輸使用 HTTP-over-Tor\n"
-"  • 自動啟用端對端加密 (E2EE)\n"
-"  • 停用錯誤回報以獲得更好的隱私\n"
-"\n"
-"⚠️ 重要注意事項：\n"
-"  • 分享檔案時 Tor 必須保持執行\n"
-"  • 透過 Tor 的檔案傳輸可能較慢\n"
-"  • E2EE 已啟用：curl/wget 和無解密工具的程式無法下載\n"
-"    （如需要，您可以在偏好設定中停用 E2EE）\n"
-"\n"
-"💡 建議：\n"
-"  考慮在偏好設定中啟用密碼保護\n"
-"  以增加額外的存取控制。\n"
-"\n"
-"偵測到的代理：{proxy}"
-
-msgid "Tor Privacy Mode"
-msgstr "Tor 隱私模式"
-
-msgid ""
-"Tor Privacy Mode has been disabled.\n"
-"\n"
-"Your connections will no longer be routed through Tor.\n"
-"Direct P2P connections (WebRTC) will be allowed again."
-msgstr ""
-"Tor 隱私模式已停用。\n"
-"\n"
-"您的連線將不再透過 Tor 路由。\n"
-"直接 P2P 連線 (WebRTC) 將再次被允許。"
-
-msgid "Tor Privacy Mode Disabled"
-msgstr "Tor 隱私模式已停用"
-
-msgid "🔒 Enable Password Protection"
-msgstr "🔒 啟用密碼保護"
-
-msgid ""
-"Require recipients to enter a username and password before downloading.\n"
-"This adds an additional layer of access control to your shared files."
-msgstr ""
-"要求接收者在下載前輸入使用者名稱和密碼。\n"
-"這為您的共享檔案增加了額外的存取控制層級。"
-
-msgid "Username:"
-msgstr "使用者名稱："
-
-msgid "Password Mode"
-msgstr "密碼模式"
-
-msgid "🎲 Generate Random Password (Recommended)"
-msgstr "🎲 產生隨機密碼（推薦）"
-
-msgid "    A secure random password will be generated automatically."
-msgstr "    將自動產生一個安全的隨機密碼。"
-
-msgid "🔑 Use Fixed Password"
-msgstr "🔑 使用固定密碼"
-
-msgid "    Enter a custom password that you can remember and share."
-msgstr "    輸入您能記住並分享的自訂密碼。"
-
-msgid "    Password:"
-msgstr "    密碼："
-
-msgid "Username cannot be empty."
-msgstr "使用者名稱不能為空白。"
-
-msgid "Password cannot be empty."
-msgstr "密碼不能為空白。"
-
-msgid "Failed to secure your password settings. Please try again."
-msgstr "無法儲存您的密碼設定。請重試。"
-
-#, python-brace-format
-msgid ""
-"Language has been changed to {language}.\n"
-"\n"
-"Please restart FastFileLink for the change to take effect."
-msgstr ""
-"語言已變更為 {language}。\n"
-"\n"
-"請重新啟動快檔連結以使變更生效。"
-
-msgid "Language Changed"
-msgstr "語言已變更"
-
-msgid "Complete Activation in Browser"
-msgstr "在瀏覽器中完成啟用"
-
-msgid ""
-"🌐 Your browser has been opened to complete login and activate this "
-"device. 🌐\n"
-"If you'd like to cancel, click below."
-msgstr ""
-"🌐 您的瀏覽器已開啟以完成登入並啟用此裝置。🌐\n"
-"如要取消，請點選下方按鈕。"
-
-msgid "Device activation successful!"
-msgstr "裝置啟用成功！"
-
-msgid "Success"
-msgstr "成功"
-
-msgid "Device activation failed."
-msgstr "裝置啟用失敗。"
-
-msgid "Login Error"
-msgstr "登入錯誤"
-
-msgid "Device activation canceled."
-msgstr "裝置啟用已取消。"
-
-msgid "Canceled"
-msgstr "已取消"
-
-msgid ""
-"Claim your free account — it's completely free!\n"
-"You'll receive 5 bonus points after checkout.\n"
-"\n"
-"After claiming, activate your device right away:\n"
-"Go to Account → Activate This Device in the menu."
-msgstr ""
-"免費領取帳戶，結帳後即獲贈 5 點紅利！\n"
-"\n"
-"領取後請立即啟用裝置：\n"
-"前往選單「帳戶 → 啟用此裝置」即可完成。"
-
-msgid "Next Steps"
-msgstr "後續步驟"
-
-msgid "👤 Account – Free"
-msgstr "👤 帳戶 – 免費版"
-
-#, python-brace-format
-msgid "👤 Account – Plus ({userName})"
-msgstr "👤 帳戶 – Plus 版（{userName}）"
-
-#, python-brace-format
-msgid "👤 Account – Standard ({userName})"
-msgstr "👤 帳戶 – 標準版（{userName}）"
-
-#, python-brace-format
-msgid "👤 Account – Basic ({userName})"
-msgstr "👤 帳戶 – 基礎版（{userName}）"
-
-msgid "👤 Account – Free (⁉️)"
-msgstr "👤 帳戶 – 免費版（⁉️）"
-
-msgid "🔐 Enable End-to-End Encryption"
-msgstr "🔐 啟用端對端加密"
-
-msgid "🧅 Use Tor to Enhance Privacy"
-msgstr "🧅 使用 Tor 增強隱私"
-
-msgid "📊 Enable Error Reporting"
-msgstr "📊 啟用錯誤回報"
-
-msgid "🖱️ Show in OS Context Menu"
-msgstr "🖱️ 在系統右鍵選單中顯示"
-
-msgid "🖱️ Show in OS Context Menu (Unavailable)"
-msgstr "🖱️ 在系統右鍵選單中顯示（不可用）"
-
-msgid "This feature is unavailable on this build."
-msgstr "此功能在此版本中不可用。"
-
-msgid "OS Context Menu"
-msgstr "系統右鍵選單"
-
-#, python-brace-format
-msgid ""
-"Failed to update OS context menu integration.\n"
-"\n"
-"{error}"
-msgstr ""
-"更新系統右鍵選單整合失敗。\n"
-"\n"
-"{error}"
-
-msgid "🔐 User Settings"
-msgstr "🔐 使用者設定"
-
-msgid "📲 Activate This Device"
-msgstr "📲 啟用此裝置"
-
-msgid "🎁 Claim Free Account (5 Points Bonus)"
-msgstr "🎁 免費領取帳戶（贈送 5 點紅利）"
-
-msgid "🛒 Top Up Points"
-msgstr "🛒 購買點數"
-
-msgid "🔧 Preferences"
-msgstr "🔧 偏好設定"
-
-msgid "🌐 Language"
-msgstr "🌐 語言"
-
-#, python-brace-format
-msgid "Help (v{version})"
-msgstr "說明（v{version}）"
-
-msgid "🏠 Home Page"
-msgstr "🏠 首頁"
-
-msgid "🎓 Tutorial"
-msgstr "🎓 教學"
-
-msgid "💬 Support"
-msgstr "💬 支援"
-
-msgid "🕵️‍♂️ Privacy Policy"
-msgstr "🕵️‍♂️ 隱私權政策"
-
-msgid "📜 Terms of Usage"
-msgstr "📜 使用條款"
-
-msgid "✨ Update available!"
-msgstr "✨ 有可用更新！"
-
-msgid "⚠️ VERSION INCOMPATIBLE!"
-msgstr "⚠️ 版本不相容！"
-
-msgid "⬇️ Download latest version"
-msgstr "⬇️ 下載最新版本"
-
-#, python-brace-format
-msgid "Points shown after upload starts. Current points: {points}."
-msgstr "上傳開始後將顯示點數。當前點數：{points}。"
-
-#, python-brace-format
-msgid "Require {cost} points, your current points are {points} Points."
-msgstr "需要 {cost} 點數，您目前的點數為 {points} 點。"
-
-msgid "Unable to get user points balance."
-msgstr "無法取得使用者點數餘額。"
-
-msgid ""
-"Upload to server is not available in the Free Version.\n"
-"\n"
-"Please activate your account to use upload features.\n"
-"Don't have an account? Get a free account with bonus points!"
-msgstr ""
-"上傳到雲端功能在免費版本中無法使用。\n"
-"\n"
-"請啟用您的帳戶以使用上傳功能。\n"
-"還沒有帳戶？立即取得免費帳戶並獲得紅利點數！"
-
-msgid "How it works?"
-msgstr "如何計算？"
-
-msgid "Buy More"
-msgstr "購買更多"
-
-#, python-brace-format
-msgid ""
-"\n"
-"    Activate a free account to get bonus points and try upload features!\n"
-"\n"
-"    Or use promo code {bonusCode} for {bonusDescription} off at checkout "
-"to save on your next purchase.\n"
-"    "
-msgstr ""
-"\n"
-"    啟用免費帳戶以獲得紅利點數並試用上傳功能！\n"
-"\n"
-"    或者在結帳時使用優惠碼 {bonusCode} 享有 {bonusDescription} 折扣，讓您在下次購買時省錢。\n"
-"    "
-
-msgid "Special Offer"
-msgstr "特別優惠"
-
-msgid "File or Folder"
-msgstr "檔案或資料夾"
-
-msgid "Choose a file or folder you want to share"
-msgstr "選擇您要分享的檔案或資料夾"
-
-msgid "Upload mode"
-msgstr "上傳模式"
-
-msgid "Directly share file (P2P, need to keep running for the others download)"
-msgstr "直接分享檔案（P2P，需持續執行以供他人下載）"
-
-msgid "Upload file to FastFileLink server to share it"
-msgstr "上傳檔案至快檔連結雲端進行分享"
-
-msgid "Share duration after upload"
-msgstr "上傳後的分享期限"
-
-msgid "Resume Upload"
-msgstr "繼續上傳"
-
-msgid "Resume Upload Found"
-msgstr "發現可繼續的上傳"
-
-#, python-brace-format
-msgid "File: {file}"
-msgstr "檔案：{file}"
-
-#, python-brace-format
-msgid "Progress: {percent:.1f}% completed"
-msgstr "進度：{percent:.1f}% 已完成"
-
-#, python-brace-format
-msgid "{completed} of {total} chunks uploaded"
-msgstr "已上傳 {completed}/{total} 個區塊"
-
-msgid "Would you like to continue from where you left off?"
-msgstr "您想要從上次中斷的地方繼續嗎？"
-
-msgid "▶️ Resume Upload"
-msgstr "▶️ 繼續上傳"
-
-msgid "🔄 Start Over"
-msgstr "🔄 重新開始"
-
-msgid ""
-"Claim your free account — it's completely free!\n"
-"You'll receive 5 bonus points after checkout.\n"
-"\n"
-"After claiming:\n"
-"1. Restart FastFileLink\n"
-"2. Activate your device with your registered email\n"
-"3. Share your file again using Upload mode"
-msgstr ""
-"免費領取帳戶，結帳後即獲贈 5 點紅利！\n"
-"\n"
-"領取後請：\n"
-"1. 重新啟動 FastFileLink\n"
-"2. 使用您的註冊信箱啟用裝置\n"
-"3. 再次使用上傳模式分享您的檔案"
-
-msgid "Upload to Cloud"
-msgstr "上傳至雲端"
-
-msgid "Keep Your File Available?"
-msgstr "讓您的檔案保持可用？"
-
-msgid ""
-"Looks like your recipient hasn't connected yet.\n"
-"Upload to our cloud so they can download it whenever they're ready.\n"
-"\n"
-"If the upload succeeds, your current share link will keep working until the "
-"selected upload duration expires."
-msgstr ""
-"您的接收者似乎尚未連線。\n"
-"上傳至我們的雲端，讓他們隨時可以下載。\n"
-"\n"
-"如果上傳成功，您目前的分享連結會持續有效，直到所選的上傳保存期限到期。"
-
-#, python-brace-format
-msgid "Uses 1 point  ·  Your balance: {current}"
-msgstr "消耗 1 點數  ·  目前餘額：{current}"
-
-#, python-brace-format
-msgid "Not enough points  ·  You need 1, you have {current}"
-msgstr "點數不足  ·  需要 1 點，您目前有 {current} 點"
-
-msgid "Claim a free account to receive 5 bonus points."
-msgstr "領取免費帳戶即可獲得 5 點紅利。"
-
-msgid "🎁 Claim Free Account"
-msgstr "🎁 免費領取帳戶"
-
-msgid "🛒 Buy Points"
-msgstr "🛒 購買點數"
-
-msgid "↻ Refresh"
-msgstr "↻ 重新整理"
-
-msgid "↻ Refreshing…"
-msgstr "↻ 重新整理中…"
-
-msgid "☁ Upload Now"
-msgstr "☁ 立即上傳"
-
-msgid "Not Now"
-msgstr "稍後再說"
-
-msgid "Confirm Upload Points"
-msgstr "確認上傳點數"
-
-msgid "Upload Will Consume Points"
-msgstr "上傳將消耗點數"
-
-msgid "Review the calculated cost before continuing."
-msgstr "繼續前請查看計算費用。"
-
-#, python-brace-format
-msgid "This upload requires {cost} points."
-msgstr "此次上傳需要 {cost} 點數。"
-
-msgid "Please confirm that you want to use these points for this upload."
-msgstr "請確認您要為此次上傳使用這些點數。"
-
-msgid "File"
-msgstr "檔案"
-
-msgid "Size"
-msgstr "大小"
-
-msgid "Retention"
-msgstr "保留期"
-
-msgid "Current points"
-msgstr "當前點數"
-
-msgid "Remaining after upload"
-msgstr "上傳後剩餘"
-
-msgid "Do you want to continue with the upload?"
-msgstr "是否繼續上傳？"
-
-msgid "✖ Cancel"
-msgstr "✖ 取消"
-
-msgid "✔ Confirm"
-msgstr "✔ 確認"
-
-msgid ""
-"Password protection enabled but password is unavailable; continuing "
-"without it."
-msgstr "已啟用密碼保護但密碼不可用；將繼續而不使用密碼。"
-
-msgid ""
-"⚠️ Warning: Tor privacy mode enabled but Tor not running. Please start "
-"Tor Browser or Tor service."
-msgstr "⚠️ 警告：已啟用 Tor 隱私模式但 Tor 未執行。請啟動 Tor Browser 或 Tor 服務。"
-
-msgid "Continuing in normal mode..."
-msgstr "繼續以正常模式執行..."
-
-msgid "FastFileLink"
-msgstr "快檔連結"
-
-msgid "FastFileLink makes file sharing fast, simple, and secure."
-msgstr "快檔連結讓檔案分享變得快速、簡單又安全。"
 
 msgid "Share with FastFileLink"
 msgstr "使用快檔連結分享"
@@ -1007,8 +230,8 @@ msgstr "沙盒化的 macOS 版本不支援系統右鍵選單整合。"
 msgid "OS context menu integration on macOS requires the packaged .app bundle."
 msgstr "macOS 系統右鍵選單整合需要打包的 .app 套件。"
 
-msgid "Unable to locate Core.py for shell integration."
-msgstr "找不到 Shell 整合所需的 Core.py。"
+msgid "Unable to locate FFL.py for shell integration."
+msgstr ""
 
 msgid "FastFileLink could not read the macOS Services registration."
 msgstr "快檔連結無法讀取 macOS 服務的登錄。"
@@ -1444,3 +667,771 @@ msgstr "   請再試一次..."
 
 #~ msgid "Show in OS Context Menu (Unavailable)"
 #~ msgstr "在系統右鍵選單中顯示（不可用）"
+
+#~ msgid "GUI.py requires Upload addon (addons/Upload.py) to function properly"
+#~ msgstr "GUI.py 需要 Upload 附加元件（addons/Upload.py）才能正常運作"
+
+#~ msgid "Loading advanced arguments from: {argsFile}"
+#~ msgstr "正在從以下位置載入進階參數：{argsFile}"
+
+#~ msgid " (+{count} more)"
+#~ msgstr "（+{count} 更多）"
+
+#~ msgid "One-time pickup code: {pickupCode}"
+#~ msgstr "一次性取件碼：{pickupCode}"
+
+#~ msgid "One-time pickup code (auto)"
+#~ msgstr "一次性取件碼（自動）"
+
+#~ msgid "One-time pickup code"
+#~ msgstr "一次性取件碼"
+
+#~ msgid "Email OTP"
+#~ msgstr "Email 信箱一次性驗證碼"
+
+#~ msgid "Recipient key file"
+#~ msgstr "收件人金鑰檔案"
+
+#~ msgid "Recipient key file + pickup code"
+#~ msgstr "收件人金鑰檔案 + 取件碼"
+
+#~ msgid "auto"
+#~ msgstr "自動"
+
+#~ msgid "Receipt email"
+#~ msgstr "回條 Email"
+
+#~ msgid "Receipt email: account email"
+#~ msgstr "回條 Email：帳號 Email"
+
+#~ msgid "Receipt confirmation: custom message"
+#~ msgstr "回條確認：自訂訊息"
+
+#~ msgid "Receipt confirmation"
+#~ msgstr "回條確認"
+
+#~ msgid "Verify Recipient"
+#~ msgstr "驗證收件人"
+
+#~ msgid ""
+#~ "Choose how the recipient must verify before downloading.\n"
+#~ "This applies only to the current share and is not saved in Preferences."
+#~ msgstr ""
+#~ "選擇收件人下載前的驗證方式。\n"
+#~ "此設定僅適用於本次分享，不會儲存於偏好設定中。"
+
+#~ msgid "Verification Method"
+#~ msgstr "驗證方式"
+
+#~ msgid "Email verification (OTP)"
+#~ msgstr "Email 信箱驗證（OTP）"
+
+#~ msgid "Leave pickup code blank to let FastFileLink generate one."
+#~ msgstr "留空取件碼欄位，讓 快檔連結 自動產生。"
+
+#~ msgid "Pickup code:"
+#~ msgstr "取件碼："
+
+#~ msgid "Recipient email(s):"
+#~ msgstr "收件人 Email 信箱："
+
+#~ msgid "Email address"
+#~ msgstr "Email 信箱地址"
+
+#~ msgid "Add"
+#~ msgstr "新增"
+
+#~ msgid "Edit"
+#~ msgstr "編輯"
+
+#~ msgid "Remove"
+#~ msgstr "移除"
+
+#~ msgid "Clear"
+#~ msgstr "清除"
+
+#~ msgid "Recipient key file(s) ({ext}):"
+#~ msgstr "收件人金鑰檔案（{ext}）："
+
+#~ msgid "Public key file"
+#~ msgstr "公鑰檔案"
+
+#~ msgid "Add Files"
+#~ msgstr "新增檔案"
+
+#~ msgid "Sender Notifications"
+#~ msgstr "寄件人通知"
+
+#~ msgid "Request receipt email notification"
+#~ msgstr "請求回條 Email 通知"
+
+#~ msgid "Registered users only."
+#~ msgstr "僅限已登錄使用者。"
+
+#~ msgid "Receipt email(s), separated by commas:"
+#~ msgstr "回條 Email 信箱（可多筆，以逗號分隔）："
+
+#~ msgid "Ask receiver to confirm receipt"
+#~ msgstr "要求接收者確認收件"
+
+#~ msgid "Leave the message blank to use the default confirmation message."
+#~ msgstr "留空訊息欄位以使用預設確認訊息。"
+
+#~ msgid "Message to receiver:"
+#~ msgstr "給接收者的訊息："
+
+#~ msgid "OK"
+#~ msgstr "確定"
+
+#~ msgid "Cancel"
+#~ msgstr "取消"
+
+#~ msgid "Choose recipient key file"
+#~ msgstr "選擇收件人金鑰檔案"
+
+#~ msgid "FastFileLink public key (*{ext})|*{ext}|All files (*.*)|*.*"
+#~ msgstr "快檔連結 公鑰 (*{ext})|*{ext}|所有檔案 (*.*)|*.*"
+
+#~ msgid "Pickup code must be exactly {n} digits."
+#~ msgstr "取件碼必須恰好為 {n} 位數字。"
+
+#~ msgid "Validation Error"
+#~ msgstr "驗證錯誤"
+
+#~ msgid "Recipient email cannot be empty."
+#~ msgstr "收件人 Email 信箱不能為空。"
+
+#~ msgid "Please enter valid email address(es)."
+#~ msgstr "請輸入有效的 Email 信箱地址。"
+
+#~ msgid "Please enter valid receipt email address(es)."
+#~ msgstr "請輸入有效的回條 Email 信箱地址。"
+
+#~ msgid "Recipient key file cannot be empty."
+#~ msgstr "收件人金鑰檔案不能為空。"
+
+#~ msgid "One or more recipient key files were not found."
+#~ msgstr "找不到一個或多個收件人金鑰檔案。"
+
+#~ msgid "Edit: {summary}"
+#~ msgstr "編輯：{summary}"
+
+#~ msgid "Click to change recipient verification settings."
+#~ msgstr "點選以變更收件人驗證設定。"
+
+#~ msgid "Verify recipient for this share"
+#~ msgstr "驗證本次分享的收件人"
+
+#~ msgid "📁Select Folder"
+#~ msgstr "📁選擇資料夾"
+
+#~ msgid "Choose This Folder"
+#~ msgstr "選擇此資料夾"
+
+#~ msgid "Choose File"
+#~ msgstr "選擇檔案"
+
+#~ msgid ""
+#~ "Tip: Click 'Choose This Folder' to "
+#~ "select current folder; 'Choose File' to"
+#~ " select a file"
+#~ msgstr "提示：點選「選擇此資料夾」以選取目前資料夾；「選擇檔案」以選取檔案"
+
+#~ msgid "No folder selected."
+#~ msgstr "未選擇資料夾。"
+
+#~ msgid "Tip"
+#~ msgstr "提示"
+
+#~ msgid "Please select a file first."
+#~ msgstr "請先選擇檔案。"
+
+#~ msgid "Choose a file or folder"
+#~ msgstr "選擇檔案或資料夾"
+
+#~ msgid "This field is required"
+#~ msgstr "此欄位為必填"
+
+#~ msgid "📤 Share Link"
+#~ msgstr "📤 分享連結"
+
+#~ msgid "🔑 Copy Password"
+#~ msgstr "🔑 複製密碼"
+
+#~ msgid "Password copied to clipboard."
+#~ msgstr "密碼已複製到剪貼簿。"
+
+#~ msgid "Copied"
+#~ msgstr "已複製"
+
+#~ msgid ""
+#~ "Password is unavailable.\n"
+#~ "\n"
+#~ "Please share the download link without password protection,\n"
+#~ "or restart and try again."
+#~ msgstr ""
+#~ "密碼無法取得。\n"
+#~ "\n"
+#~ "請在不使用密碼保護的情況下分享下載連結，\n"
+#~ "或重新啟動後再試一次。"
+
+#~ msgid "Error"
+#~ msgstr "錯誤"
+
+#~ msgid ""
+#~ "End-to-end encryption protects your files with strong encryption.\n"
+#~ "\n"
+#~ "Recipients can download using:\n"
+#~ "  • Any web browser (recommended)\n"
+#~ "  • FastFileLink CLI\n"
+#~ "\n"
+#~ "Note: Basic tools like curl/wget won't work with encrypted files."
+#~ msgstr ""
+#~ "端對端加密使用強加密保護您的檔案。\n"
+#~ "\n"
+#~ "接收者可使用以下方式下載：\n"
+#~ "  • 任何網頁瀏覽器（推薦）\n"
+#~ "  • 快檔連結 CLI\n"
+#~ "\n"
+#~ "注意：curl/wget 等基本工具無法處理加密檔案。"
+
+#~ msgid "End-to-End Encryption"
+#~ msgstr "端對端加密"
+
+#~ msgid ""
+#~ "Error reporting helps improve FastFileLink "
+#~ "by sending crash reports and errors."
+#~ "\n"
+#~ "\n"
+#~ "What is sent:\n"
+#~ "  • Error messages and stack traces\n"
+#~ "  • Application version\n"
+#~ "\n"
+#~ "What is NOT sent:\n"
+#~ "  • Your files or file contents\n"
+#~ "  • Personal information\n"
+#~ "\n"
+#~ "You can disable this anytime in Preferences."
+#~ msgstr ""
+#~ "錯誤回報透過傳送當機報告和錯誤來協助改善快檔連結。\n"
+#~ "\n"
+#~ "會傳送的內容：\n"
+#~ "  • 錯誤訊息和堆疊追蹤\n"
+#~ "  • 應用程式版本\n"
+#~ "\n"
+#~ "不會傳送的內容：\n"
+#~ "  • 您的檔案或檔案內容\n"
+#~ "  • 個人資訊\n"
+#~ "\n"
+#~ "您可以隨時在偏好設定中停用此功能。"
+
+#~ msgid "Error Reporting"
+#~ msgstr "錯誤回報"
+
+#~ msgid ""
+#~ "Error reporting has been disabled.\n"
+#~ "\n"
+#~ "This change will take effect after you restart FastFileLink."
+#~ msgstr ""
+#~ "錯誤回報已停用。\n"
+#~ "\n"
+#~ "此變更將在您重新啟動快檔連結後生效。"
+
+#~ msgid "Error Reporting Disabled"
+#~ msgstr "錯誤回報已停用"
+
+#~ msgid "🔍 Detecting Tor connection, please wait..."
+#~ msgstr "🔍 正在偵測 Tor 連線，請稍候..."
+
+#~ msgid ""
+#~ "⚠️ Tor not detected!\n"
+#~ "\n"
+#~ "To use Tor privacy mode, you need to:\n"
+#~ "  1. Install and start Tor Browser (https://www.torproject.org/)\n"
+#~ "     OR install Tor service\n"
+#~ "  2. Keep Tor running in the background\n"
+#~ "\n"
+#~ "Tor Browser typically runs on port 9150\n"
+#~ "Tor service typically runs on port 9050\n"
+#~ "\n"
+#~ "After starting Tor, try enabling this option again."
+#~ msgstr ""
+#~ "⚠️ 未偵測到 Tor！\n"
+#~ "\n"
+#~ "要使用 Tor 隱私模式，您需要：\n"
+#~ "  1. 安裝並啟動 Tor Browser (https://www.torproject.org/)\n"
+#~ "     或安裝 Tor 服務\n"
+#~ "  2. 保持 Tor 在背景執行\n"
+#~ "\n"
+#~ "Tor Browser 通常執行在連接埠 9150\n"
+#~ "Tor 服務通常執行在連接埠 9050\n"
+#~ "\n"
+#~ "啟動 Tor 後，請重新啟用此選項。"
+
+#~ msgid "Tor Not Detected"
+#~ msgstr "未偵測到 Tor"
+
+#~ msgid ""
+#~ "🧅 Tor Privacy Mode Enabled\n"
+#~ "\n"
+#~ "This mode enhances your privacy by:\n"
+#~ "  • Routing all connections through Tor network\n"
+#~ "  • Completely disabling WebRTC (server-side enforcement)\n"
+#~ "  • Hiding your IP address from recipients\n"
+#~ "  • Forcing all transfers to use HTTP-over-Tor\n"
+#~ "  • End-to-end encryption (E2EE) enabled automatically\n"
+#~ "  • Error reporting disabled for better privacy\n"
+#~ "\n"
+#~ "⚠️ Important Notes:\n"
+#~ "  • Tor must remain running while sharing files\n"
+#~ "  • File transfers may be slower through Tor\n"
+#~ "  • E2EE is enabled: curl/wget and"
+#~ " tools without decryption cannot download"
+#~ "\n"
+#~ "    (You can disable E2EE in Preferences if needed)\n"
+#~ "\n"
+#~ "💡 Recommendation:\n"
+#~ "  Consider enabling password protection in Preferences\n"
+#~ "  for additional access control.\n"
+#~ "\n"
+#~ "Detected proxy: {proxy}"
+#~ msgstr ""
+#~ "🧅 已啟用 Tor 隱私模式\n"
+#~ "\n"
+#~ "此模式透過以下方式增強您的隱私：\n"
+#~ "  • 透過 Tor 網路路由所有連線\n"
+#~ "  • 完全停用 WebRTC（伺服器端強制執行）\n"
+#~ "  • 向接收者隱藏您的 IP 位址\n"
+#~ "  • 強制所有傳輸使用 HTTP-over-Tor\n"
+#~ "  • 自動啟用端對端加密 (E2EE)\n"
+#~ "  • 停用錯誤回報以獲得更好的隱私\n"
+#~ "\n"
+#~ "⚠️ 重要注意事項：\n"
+#~ "  • 分享檔案時 Tor 必須保持執行\n"
+#~ "  • 透過 Tor 的檔案傳輸可能較慢\n"
+#~ "  • E2EE 已啟用：curl/wget 和無解密工具的程式無法下載\n"
+#~ "    （如需要，您可以在偏好設定中停用 E2EE）\n"
+#~ "\n"
+#~ "💡 建議：\n"
+#~ "  考慮在偏好設定中啟用密碼保護\n"
+#~ "  以增加額外的存取控制。\n"
+#~ "\n"
+#~ "偵測到的代理：{proxy}"
+
+#~ msgid "Tor Privacy Mode"
+#~ msgstr "Tor 隱私模式"
+
+#~ msgid ""
+#~ "Tor Privacy Mode has been disabled.\n"
+#~ "\n"
+#~ "Your connections will no longer be routed through Tor.\n"
+#~ "Direct P2P connections (WebRTC) will be allowed again."
+#~ msgstr ""
+#~ "Tor 隱私模式已停用。\n"
+#~ "\n"
+#~ "您的連線將不再透過 Tor 路由。\n"
+#~ "直接 P2P 連線 (WebRTC) 將再次被允許。"
+
+#~ msgid "Tor Privacy Mode Disabled"
+#~ msgstr "Tor 隱私模式已停用"
+
+#~ msgid "🔒 Enable Password Protection"
+#~ msgstr "🔒 啟用密碼保護"
+
+#~ msgid ""
+#~ "Require recipients to enter a username"
+#~ " and password before downloading.\n"
+#~ "This adds an additional layer of access control to your shared files."
+#~ msgstr ""
+#~ "要求接收者在下載前輸入使用者名稱和密碼。\n"
+#~ "這為您的共享檔案增加了額外的存取控制層級。"
+
+#~ msgid "Username:"
+#~ msgstr "使用者名稱："
+
+#~ msgid "Password Mode"
+#~ msgstr "密碼模式"
+
+#~ msgid "🎲 Generate Random Password (Recommended)"
+#~ msgstr "🎲 產生隨機密碼（推薦）"
+
+#~ msgid "    A secure random password will be generated automatically."
+#~ msgstr "    將自動產生一個安全的隨機密碼。"
+
+#~ msgid "🔑 Use Fixed Password"
+#~ msgstr "🔑 使用固定密碼"
+
+#~ msgid "    Enter a custom password that you can remember and share."
+#~ msgstr "    輸入您能記住並分享的自訂密碼。"
+
+#~ msgid "    Password:"
+#~ msgstr "    密碼："
+
+#~ msgid "Username cannot be empty."
+#~ msgstr "使用者名稱不能為空白。"
+
+#~ msgid "Password cannot be empty."
+#~ msgstr "密碼不能為空白。"
+
+#~ msgid "Failed to secure your password settings. Please try again."
+#~ msgstr "無法儲存您的密碼設定。請重試。"
+
+#~ msgid ""
+#~ "Language has been changed to {language}.\n"
+#~ "\n"
+#~ "Please restart FastFileLink for the change to take effect."
+#~ msgstr ""
+#~ "語言已變更為 {language}。\n"
+#~ "\n"
+#~ "請重新啟動快檔連結以使變更生效。"
+
+#~ msgid "Language Changed"
+#~ msgstr "語言已變更"
+
+#~ msgid "Complete Activation in Browser"
+#~ msgstr "在瀏覽器中完成啟用"
+
+#~ msgid ""
+#~ "🌐 Your browser has been opened to"
+#~ " complete login and activate this "
+#~ "device. 🌐\n"
+#~ "If you'd like to cancel, click below."
+#~ msgstr ""
+#~ "🌐 您的瀏覽器已開啟以完成登入並啟用此裝置。🌐\n"
+#~ "如要取消，請點選下方按鈕。"
+
+#~ msgid "Device activation successful!"
+#~ msgstr "裝置啟用成功！"
+
+#~ msgid "Success"
+#~ msgstr "成功"
+
+#~ msgid "Device activation failed."
+#~ msgstr "裝置啟用失敗。"
+
+#~ msgid "Login Error"
+#~ msgstr "登入錯誤"
+
+#~ msgid "Device activation canceled."
+#~ msgstr "裝置啟用已取消。"
+
+#~ msgid "Canceled"
+#~ msgstr "已取消"
+
+#~ msgid ""
+#~ "Claim your free account — it's completely free!\n"
+#~ "You'll receive 5 bonus points after checkout.\n"
+#~ "\n"
+#~ "After claiming, activate your device right away:\n"
+#~ "Go to Account → Activate This Device in the menu."
+#~ msgstr ""
+#~ "免費領取帳戶，結帳後即獲贈 5 點紅利！\n"
+#~ "\n"
+#~ "領取後請立即啟用裝置：\n"
+#~ "前往選單「帳戶 → 啟用此裝置」即可完成。"
+
+#~ msgid "Next Steps"
+#~ msgstr "後續步驟"
+
+#~ msgid "👤 Account – Free"
+#~ msgstr "👤 帳戶 – 免費版"
+
+#~ msgid "👤 Account – Plus ({userName})"
+#~ msgstr "👤 帳戶 – Plus 版（{userName}）"
+
+#~ msgid "👤 Account – Standard ({userName})"
+#~ msgstr "👤 帳戶 – 標準版（{userName}）"
+
+#~ msgid "👤 Account – Basic ({userName})"
+#~ msgstr "👤 帳戶 – 基礎版（{userName}）"
+
+#~ msgid "👤 Account – Free (⁉️)"
+#~ msgstr "👤 帳戶 – 免費版（⁉️）"
+
+#~ msgid "🔐 Enable End-to-End Encryption"
+#~ msgstr "🔐 啟用端對端加密"
+
+#~ msgid "🧅 Use Tor to Enhance Privacy"
+#~ msgstr "🧅 使用 Tor 增強隱私"
+
+#~ msgid "📊 Enable Error Reporting"
+#~ msgstr "📊 啟用錯誤回報"
+
+#~ msgid "🖱️ Show in OS Context Menu"
+#~ msgstr "🖱️ 在系統右鍵選單中顯示"
+
+#~ msgid "🖱️ Show in OS Context Menu (Unavailable)"
+#~ msgstr "🖱️ 在系統右鍵選單中顯示（不可用）"
+
+#~ msgid "This feature is unavailable on this build."
+#~ msgstr "此功能在此版本中不可用。"
+
+#~ msgid "OS Context Menu"
+#~ msgstr "系統右鍵選單"
+
+#~ msgid ""
+#~ "Failed to update OS context menu integration.\n"
+#~ "\n"
+#~ "{error}"
+#~ msgstr ""
+#~ "更新系統右鍵選單整合失敗。\n"
+#~ "\n"
+#~ "{error}"
+
+#~ msgid "🔐 User Settings"
+#~ msgstr "🔐 使用者設定"
+
+#~ msgid "📲 Activate This Device"
+#~ msgstr "📲 啟用此裝置"
+
+#~ msgid "🎁 Claim Free Account (5 Points Bonus)"
+#~ msgstr "🎁 免費領取帳戶（贈送 5 點紅利）"
+
+#~ msgid "🛒 Top Up Points"
+#~ msgstr "🛒 購買點數"
+
+#~ msgid "🔧 Preferences"
+#~ msgstr "🔧 偏好設定"
+
+#~ msgid "🌐 Language"
+#~ msgstr "🌐 語言"
+
+#~ msgid "Help (v{version})"
+#~ msgstr "說明（v{version}）"
+
+#~ msgid "🏠 Home Page"
+#~ msgstr "🏠 首頁"
+
+#~ msgid "🎓 Tutorial"
+#~ msgstr "🎓 教學"
+
+#~ msgid "💬 Support"
+#~ msgstr "💬 支援"
+
+#~ msgid "🕵️‍♂️ Privacy Policy"
+#~ msgstr "🕵️‍♂️ 隱私權政策"
+
+#~ msgid "📜 Terms of Usage"
+#~ msgstr "📜 使用條款"
+
+#~ msgid "✨ Update available!"
+#~ msgstr "✨ 有可用更新！"
+
+#~ msgid "⚠️ VERSION INCOMPATIBLE!"
+#~ msgstr "⚠️ 版本不相容！"
+
+#~ msgid "⬇️ Download latest version"
+#~ msgstr "⬇️ 下載最新版本"
+
+#~ msgid "Points shown after upload starts. Current points: {points}."
+#~ msgstr "上傳開始後將顯示點數。當前點數：{points}。"
+
+#~ msgid "Require {cost} points, your current points are {points} Points."
+#~ msgstr "需要 {cost} 點數，您目前的點數為 {points} 點。"
+
+#~ msgid "Unable to get user points balance."
+#~ msgstr "無法取得使用者點數餘額。"
+
+#~ msgid ""
+#~ "Upload to server is not available in the Free Version.\n"
+#~ "\n"
+#~ "Please activate your account to use upload features.\n"
+#~ "Don't have an account? Get a free account with bonus points!"
+#~ msgstr ""
+#~ "上傳到雲端功能在免費版本中無法使用。\n"
+#~ "\n"
+#~ "請啟用您的帳戶以使用上傳功能。\n"
+#~ "還沒有帳戶？立即取得免費帳戶並獲得紅利點數！"
+
+#~ msgid "How it works?"
+#~ msgstr "如何計算？"
+
+#~ msgid "Buy More"
+#~ msgstr "購買更多"
+
+#~ msgid ""
+#~ "\n"
+#~ "    Activate a free account to get"
+#~ " bonus points and try upload "
+#~ "features!\n"
+#~ "\n"
+#~ "    Or use promo code {bonusCode} "
+#~ "for {bonusDescription} off at checkout "
+#~ "to save on your next purchase.\n"
+#~ "    "
+#~ msgstr ""
+#~ "\n"
+#~ "    啟用免費帳戶以獲得紅利點數並試用上傳功能！\n"
+#~ "\n"
+#~ "    或者在結帳時使用優惠碼 {bonusCode} 享有 {bonusDescription} 折扣，讓您在下次購買時省錢。\n"
+#~ "    "
+
+#~ msgid "Special Offer"
+#~ msgstr "特別優惠"
+
+#~ msgid "File or Folder"
+#~ msgstr "檔案或資料夾"
+
+#~ msgid "Choose a file or folder you want to share"
+#~ msgstr "選擇您要分享的檔案或資料夾"
+
+#~ msgid "Upload mode"
+#~ msgstr "上傳模式"
+
+#~ msgid "Directly share file (P2P, need to keep running for the others download)"
+#~ msgstr "直接分享檔案（P2P，需持續執行以供他人下載）"
+
+#~ msgid "Upload file to FastFileLink server to share it"
+#~ msgstr "上傳檔案至快檔連結雲端進行分享"
+
+#~ msgid "Share duration after upload"
+#~ msgstr "上傳後的分享期限"
+
+#~ msgid "Resume Upload"
+#~ msgstr "繼續上傳"
+
+#~ msgid "Resume Upload Found"
+#~ msgstr "發現可繼續的上傳"
+
+#~ msgid "File: {file}"
+#~ msgstr "檔案：{file}"
+
+#~ msgid "Progress: {percent:.1f}% completed"
+#~ msgstr "進度：{percent:.1f}% 已完成"
+
+#~ msgid "{completed} of {total} chunks uploaded"
+#~ msgstr "已上傳 {completed}/{total} 個區塊"
+
+#~ msgid "Would you like to continue from where you left off?"
+#~ msgstr "您想要從上次中斷的地方繼續嗎？"
+
+#~ msgid "▶️ Resume Upload"
+#~ msgstr "▶️ 繼續上傳"
+
+#~ msgid "🔄 Start Over"
+#~ msgstr "🔄 重新開始"
+
+#~ msgid ""
+#~ "Claim your free account — it's completely free!\n"
+#~ "You'll receive 5 bonus points after checkout.\n"
+#~ "\n"
+#~ "After claiming:\n"
+#~ "1. Restart FastFileLink\n"
+#~ "2. Activate your device with your registered email\n"
+#~ "3. Share your file again using Upload mode"
+#~ msgstr ""
+#~ "免費領取帳戶，結帳後即獲贈 5 點紅利！\n"
+#~ "\n"
+#~ "領取後請：\n"
+#~ "1. 重新啟動 FastFileLink\n"
+#~ "2. 使用您的註冊信箱啟用裝置\n"
+#~ "3. 再次使用上傳模式分享您的檔案"
+
+#~ msgid "Upload to Cloud"
+#~ msgstr "上傳至雲端"
+
+#~ msgid "Keep Your File Available?"
+#~ msgstr "讓您的檔案保持可用？"
+
+#~ msgid ""
+#~ "Looks like your recipient hasn't connected yet.\n"
+#~ "Upload to our cloud so they can download it whenever they're ready.\n"
+#~ "\n"
+#~ "If the upload succeeds, your current "
+#~ "share link will keep working until "
+#~ "the selected upload duration expires."
+#~ msgstr ""
+#~ "您的接收者似乎尚未連線。\n"
+#~ "上傳至我們的雲端，讓他們隨時可以下載。\n"
+#~ "\n"
+#~ "如果上傳成功，您目前的分享連結會持續有效，直到所選的上傳保存期限到期。"
+
+#~ msgid "Uses 1 point  ·  Your balance: {current}"
+#~ msgstr "消耗 1 點數  ·  目前餘額：{current}"
+
+#~ msgid "Not enough points  ·  You need 1, you have {current}"
+#~ msgstr "點數不足  ·  需要 1 點，您目前有 {current} 點"
+
+#~ msgid "Claim a free account to receive 5 bonus points."
+#~ msgstr "領取免費帳戶即可獲得 5 點紅利。"
+
+#~ msgid "🎁 Claim Free Account"
+#~ msgstr "🎁 免費領取帳戶"
+
+#~ msgid "🛒 Buy Points"
+#~ msgstr "🛒 購買點數"
+
+#~ msgid "↻ Refresh"
+#~ msgstr "↻ 重新整理"
+
+#~ msgid "↻ Refreshing…"
+#~ msgstr "↻ 重新整理中…"
+
+#~ msgid "☁ Upload Now"
+#~ msgstr "☁ 立即上傳"
+
+#~ msgid "Not Now"
+#~ msgstr "稍後再說"
+
+#~ msgid "Confirm Upload Points"
+#~ msgstr "確認上傳點數"
+
+#~ msgid "Upload Will Consume Points"
+#~ msgstr "上傳將消耗點數"
+
+#~ msgid "Review the calculated cost before continuing."
+#~ msgstr "繼續前請查看計算費用。"
+
+#~ msgid "This upload requires {cost} points."
+#~ msgstr "此次上傳需要 {cost} 點數。"
+
+#~ msgid "Please confirm that you want to use these points for this upload."
+#~ msgstr "請確認您要為此次上傳使用這些點數。"
+
+#~ msgid "File"
+#~ msgstr "檔案"
+
+#~ msgid "Size"
+#~ msgstr "大小"
+
+#~ msgid "Retention"
+#~ msgstr "保留期"
+
+#~ msgid "Current points"
+#~ msgstr "當前點數"
+
+#~ msgid "Remaining after upload"
+#~ msgstr "上傳後剩餘"
+
+#~ msgid "Do you want to continue with the upload?"
+#~ msgstr "是否繼續上傳？"
+
+#~ msgid "✖ Cancel"
+#~ msgstr "✖ 取消"
+
+#~ msgid "✔ Confirm"
+#~ msgstr "✔ 確認"
+
+#~ msgid ""
+#~ "Password protection enabled but password "
+#~ "is unavailable; continuing without it."
+#~ msgstr "已啟用密碼保護但密碼不可用；將繼續而不使用密碼。"
+
+#~ msgid ""
+#~ "⚠️ Warning: Tor privacy mode enabled "
+#~ "but Tor not running. Please start "
+#~ "Tor Browser or Tor service."
+#~ msgstr "⚠️ 警告：已啟用 Tor 隱私模式但 Tor 未執行。請啟動 Tor Browser 或 Tor 服務。"
+
+#~ msgid "Continuing in normal mode..."
+#~ msgstr "繼續以正常模式執行..."
+
+#~ msgid "FastFileLink"
+#~ msgstr "快檔連結"
+
+#~ msgid "FastFileLink makes file sharing fast, simple, and secure."
+#~ msgstr "快檔連結讓檔案分享變得快速、簡單又安全。"
+
+#~ msgid "Unable to locate Core.py for shell integration."
+#~ msgstr "找不到 Shell 整合所需的 Core.py。"
+

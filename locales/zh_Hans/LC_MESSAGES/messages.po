@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-06-16 14:22+0800\n"
+"POT-Creation-Date: 2026-07-12 21:09+0800\n"
 "PO-Revision-Date: 2025-12-21 08:43+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -418,6 +418,9 @@ msgstr "在指定百分比时暂停上传（1-99，需要 --upload）"
 msgid "Automatically answer yes to upload confirmation prompts"
 msgstr "自动对上传确认提示回答是"
 
+msgid "Legacy P2P share link to recover after this server upload completes"
+msgstr ""
+
 msgid ""
 "Maximum number of downloads before the server automatically shuts down "
 "(P2P mode only). 0 means unlimited."
@@ -455,6 +458,11 @@ msgid "Display QR code in terminal (default) or save to FILE (e.g., qr.png)"
 msgstr "在终端中显示二维码（默认）或保存到文件（例如 qr.png）"
 
 msgid ""
+"Disable automatically copying the share link to the clipboard (default: "
+"enabled in CLI mode, disabled in GUI mode)"
+msgstr ""
+
+msgid ""
 "Start VFS server and provide vfs:// URI instead of HTTPS link (P2P mode "
 "only, works with --port)"
 msgstr "启动 VFS 伺服器并提供 vfs:// URI 而不是 HTTPS 连结（仅限 P2P 模式，与 --port 一起使用）"
@@ -462,6 +470,12 @@ msgstr "启动 VFS 伺服器并提供 vfs:// URI 而不是 HTTPS 连结（仅限
 msgid ""
 "Enable or disable stdin caching ('off' means a second read raises an "
 "error)"
+msgstr ""
+
+msgid "Submit share to background daemon (auto-starts daemon if needed)"
+msgstr ""
+
+msgid "Run share in foreground even if a daemon is running"
 msgstr ""
 
 #, python-brace-format
@@ -572,6 +586,45 @@ msgstr ""
 msgid "Output link and settings to a JSON file (use with --share)"
 msgstr "将链接和设置输出到 JSON 文件（与 --share 搭配使用）"
 
+msgid "Manage background daemon for multi-session sharing"
+msgstr ""
+
+msgid "Stop the daemon and all managed shares"
+msgstr ""
+
+msgid "Show daemon status"
+msgstr ""
+
+msgid "Force stop the daemon (use with --stop)"
+msgstr ""
+
+msgid "Manage daemon-managed shares"
+msgstr ""
+
+msgid "List active managed shares"
+msgstr ""
+
+msgid "Stop a specific share"
+msgstr ""
+
+msgid "Share ID to stop"
+msgstr ""
+
+msgid "Stop all managed shares"
+msgstr ""
+
+msgid "Open a share link in the browser"
+msgstr ""
+
+msgid "Share ID to open"
+msgstr ""
+
+msgid "Show the share QR code in the terminal"
+msgstr ""
+
+msgid "Share ID to render as QR"
+msgstr ""
+
 #, python-brace-format
 msgid "Error: Invalid proxy format: {proxy}"
 msgstr "错误：无效的代理格式：{proxy}"
@@ -638,6 +691,12 @@ msgstr "错误：--pause 百分比必须介于 1 到 99 之间"
 msgid "Error: --resume flag can only be used with --upload"
 msgstr "错误：--resume 标记只能与 --upload 一起使用"
 
+msgid "Error: --legacy-link requires --upload"
+msgstr ""
+
+msgid "Use: --upload <duration> --legacy-link <old-share-url>"
+msgstr ""
+
 msgid "Error: --pause and --resume cannot be used together"
 msgstr "错误：--pause 和 --resume 不能同时使用"
 
@@ -703,6 +762,185 @@ msgstr "错误：--vfs 不支持标准输入"
 
 msgid "Please specify a file or folder path instead of \"-\""
 msgstr "请指定文件或文件夹路径，而不是 \"-\""
+
+#, python-brace-format
+msgid "Daemon started (PID: {pid}, port: {port})"
+msgstr ""
+
+msgid "Daemon is not running"
+msgstr ""
+
+msgid "Error: Daemon is not running. Start it with: ffl daemon"
+msgstr ""
+
+msgid "No active shares"
+msgstr ""
+
+msgid "Active shares:"
+msgstr ""
+
+msgid "(no link yet)"
+msgstr ""
+
+#, python-brace-format
+msgid "Stopped {count} share(s)"
+msgstr ""
+
+msgid "Error: Share ID required"
+msgstr ""
+
+#, python-brace-format
+msgid "Share {id} stopped"
+msgstr ""
+
+#, python-brace-format
+msgid "Error: Share {id} not found"
+msgstr ""
+
+#, python-brace-format
+msgid "Error: Share {id} has no link yet"
+msgstr ""
+
+#, python-brace-format
+msgid "Opened share {id}"
+msgstr ""
+
+msgid "QR code could not be rendered in this terminal encoding."
+msgstr ""
+
+#, python-brace-format
+msgid "Unknown shares action: {action}"
+msgstr ""
+
+msgid "Waiting for share link..."
+msgstr ""
+
+msgid "Error: Failed to get share link from daemon"
+msgstr ""
+
+#, python-brace-format
+msgid "Share ID: {id} (managed by daemon)"
+msgstr ""
+
+#, python-brace-format
+msgid "Warning: Failed to write JSON output: {error}"
+msgstr ""
+
+#, python-brace-format
+msgid "Daemon already running (PID: {pid}, port: {port})"
+msgstr ""
+
+#, python-brace-format
+msgid "Error: Failed to build daemon start command: {error}"
+msgstr ""
+
+#, python-brace-format
+msgid "Error: Daemon failed to start within {timeout} seconds"
+msgstr ""
+
+msgid "Unable to locate FFL.py for daemon startup."
+msgstr ""
+
+#, python-brace-format
+msgid "Executable not found for daemon startup: {path}"
+msgstr ""
+
+msgid "Error: Failed to send stop command to daemon"
+msgstr ""
+
+msgid "Daemon stopped"
+msgstr ""
+
+msgid "Warning: Daemon may not have stopped cleanly"
+msgstr ""
+
+msgid "Daemon forcefully stopped"
+msgstr ""
+
+msgid "Daemon is running"
+msgstr ""
+
+#, python-brace-format
+msgid "  PID:     {pid}"
+msgstr ""
+
+#, python-brace-format
+msgid "  Port:    {port}"
+msgstr ""
+
+#, python-brace-format
+msgid "  Started: {started}"
+msgstr ""
+
+#, python-brace-format
+msgid "  Active shares: {count}"
+msgstr ""
+
+msgid "Connecting to server"
+msgstr "正在连线到云端"
+
+msgid "Requesting connection"
+msgstr "正在请求连线"
+
+msgid "Downloading"
+msgstr "正在下载"
+
+msgid "HTTP download"
+msgstr "HTTP 下载"
+
+msgid "HTTP fallback"
+msgstr "HTTP 备援"
+
+msgid "File already downloaded"
+msgstr "档案已下载"
+
+msgid "Getting file metadata"
+msgstr "正在取得档案中继资料"
+
+msgid "Checksum verified"
+msgstr "校验码已验证"
+
+msgid ""
+"\n"
+"⚠️  This file is encrypted. Please enter the encryption key:"
+msgstr ""
+"\n"
+"⚠️  此档案已加密。请输入加密金钥："
+
+msgid "(The key should be provided by the person who shared this file)\n"
+msgstr "（金钥应由分享此档案的人提供）\n"
+
+msgid "Encryption key: "
+msgstr "加密金钥： "
+
+msgid "Encryption key is required to download this file"
+msgstr "下载此档案需要加密金钥"
+
+#, python-brace-format
+msgid "Invalid key length: {keyLength} bytes (expected 32 bytes for AES-256)"
+msgstr "无效的金钥长度：{keyLength} 位元组（AES-256 需要 32 位元组）"
+
+msgid "Download cancelled by user"
+msgstr "使用者取消下载"
+
+#, python-brace-format
+msgid "Invalid encryption key: {error}"
+msgstr "无效的加密金钥：{error}"
+
+msgid "🔒 End-to-end encryption detected"
+msgstr "🔒 侦测到端对端加密"
+
+msgid "✓ Encryption key verified successfully"
+msgstr "✓ 加密金钥验证成功"
+
+#, python-brace-format
+msgid "Resuming download from {resumePos} / {totalSize}"
+msgstr "从 {resumePos} / {totalSize} 继续下载"
+
+msgid ""
+"⚠️  This is not a FastFileLink URL, downloading directly via HTTP (like "
+"wget)..."
+msgstr "⚠️  这不是 快档连结 网址，正在直接透过 HTTP 下载（类似 wget）..."
 
 msgid "⚠️  IMPORTANT: ENCRYPTION KEY"
 msgstr "⚠️  重要：加密金钥"
@@ -831,15 +1069,22 @@ msgid "30 days"
 msgstr "30天"
 
 #, python-brace-format
-msgid "Downloading install script from: {url}"
-msgstr "正在从以下位置下载安装脚本：{url}"
-
-msgid "Install script downloaded successfully"
-msgstr "安装脚本下载成功"
+msgid "Downloading {description} from: {url}"
+msgstr ""
 
 #, python-brace-format
-msgid "Failed to download install script: {error}"
-msgstr "下载安装脚本失败：{error}"
+msgid "{description} downloaded successfully"
+msgstr ""
+
+#, python-brace-format
+msgid "Failed to download {description}: {error}"
+msgstr ""
+
+msgid "install script"
+msgstr ""
+
+msgid "Windows updater"
+msgstr ""
 
 #, python-brace-format
 msgid "Target executable: {path}"
@@ -864,8 +1109,8 @@ msgid "  macOS: darwin"
 msgstr "  macOS：darwin"
 
 #, python-brace-format
-msgid "Example: FFL_UPGRADE_VARIANT=ffl.com python Core.py --cli upgrade {path}"
-msgstr "范例：FFL_UPGRADE_VARIANT=ffl.com python Core.py --cli upgrade {path}"
+msgid "Example: FFL_UPGRADE_VARIANT=ffl.com python FFL.py --cli upgrade {path}"
+msgstr ""
 
 #, python-brace-format
 msgid "Using FFL_UPGRADE_VARIANT: {variant}"
@@ -926,12 +1171,28 @@ msgid "Install script failed with exit code {code}"
 msgstr "安装脚本执行失败，结束代码 {code}"
 
 #, python-brace-format
+msgid "Install script completed, but upgraded binary was not created: {path}"
+msgstr ""
+
+msgid ""
+"Windows updater started. The upgrade will be applied after this process "
+"exits."
+msgstr ""
+
+#, python-brace-format
 msgid "Failed to execute install script: {error}"
 msgstr "执行安装脚本失败：{error}"
 
 #, python-brace-format
 msgid "Unexpected error during installation: {error}"
 msgstr "安装时发生意外错误：{error}"
+
+#, python-brace-format
+msgid "Failed to replace binary with upgraded version: {error}"
+msgstr ""
+
+msgid "To install manually, run:"
+msgstr ""
 
 #, python-brace-format
 msgid "Current version: v{version}"
@@ -982,6 +1243,10 @@ msgid "Platform: {os}"
 msgstr "平台：{os}"
 
 #, python-brace-format
+msgid "✓ Upgrade prepared for {version}. It will finish after this process exits."
+msgstr ""
+
+#, python-brace-format
 msgid "✓ Successfully upgraded to {version}!"
 msgstr "✓ 成功升级到 {version}！"
 
@@ -1014,12 +1279,6 @@ msgid ""
 "recipient to finish downloading before you close the application..\n"
 msgstr "完成给 [#{peerId}] 的 {sizeDisplay} 传输，请等待接收者完成下载后再关闭应用程式。\n"
 
-msgid "Connecting to server"
-msgstr "正在连线到云端"
-
-msgid "Requesting connection"
-msgstr "正在请求连线"
-
 msgid "Setting up WebRTC"
 msgstr "正在设定 WebRTC"
 
@@ -1032,51 +1291,6 @@ msgstr "正在协商连线"
 msgid "Waiting for data channel"
 msgstr "正在等待资料通道"
 
-msgid "Downloading"
-msgstr "正在下载"
-
-msgid "HTTP download"
-msgstr "HTTP 下载"
-
-msgid "HTTP fallback"
-msgstr "HTTP 备援"
-
-msgid "File already downloaded"
-msgstr "档案已下载"
-
-msgid "Getting file metadata"
-msgstr "正在取得档案中继资料"
-
-msgid "Checksum verified"
-msgstr "校验码已验证"
-
-msgid ""
-"\n"
-"⚠️  This file is encrypted. Please enter the encryption key:"
-msgstr ""
-"\n"
-"⚠️  此档案已加密。请输入加密金钥："
-
-msgid "(The key should be provided by the person who shared this file)\n"
-msgstr "（金钥应由分享此档案的人提供）\n"
-
-msgid "Encryption key: "
-msgstr "加密金钥： "
-
-msgid "Encryption key is required to download this file"
-msgstr "下载此档案需要加密金钥"
-
-#, python-brace-format
-msgid "Invalid key length: {keyLength} bytes (expected 32 bytes for AES-256)"
-msgstr "无效的金钥长度：{keyLength} 位元组（AES-256 需要 32 位元组）"
-
-msgid "Download cancelled by user"
-msgstr "使用者取消下载"
-
-#, python-brace-format
-msgid "Invalid encryption key: {error}"
-msgstr "无效的加密金钥：{error}"
-
 #, python-brace-format
 msgid "Downloading {filename} ({fileSize})"
 msgstr "正在下载 {filename}（{fileSize}）"
@@ -1084,21 +1298,6 @@ msgstr "正在下载 {filename}（{fileSize}）"
 #, python-brace-format
 msgid "Resuming WebRTC download from {resumePos} / {totalSize}"
 msgstr "从 {resumePos} / {totalSize} 继续 WebRTC 下载"
-
-#, python-brace-format
-msgid "Resuming download from {resumePos} / {totalSize}"
-msgstr "从 {resumePos} / {totalSize} 继续下载"
-
-msgid ""
-"⚠️  This is not a FastFileLink URL, downloading directly via HTTP (like "
-"wget)..."
-msgstr "⚠️  这不是 快档连结 网址，正在直接透过 HTTP 下载（类似 wget）..."
-
-msgid "🔒 End-to-end encryption detected"
-msgstr "🔒 侦测到端对端加密"
-
-msgid "✓ Encryption key verified successfully"
-msgstr "✓ 加密金钥验证成功"
 
 msgid "WebRTC not supported, using HTTP download..."
 msgstr "不支援 WebRTC，使用 HTTP 下载..."
@@ -1138,4 +1337,18 @@ msgstr "正在尝试 WebRTC 下载..."
 
 #~ msgid "{file} does not exist!"
 #~ msgstr "{file} 不存在！"
+
+#~ msgid "Downloading install script from: {url}"
+#~ msgstr "正在从以下位置下载安装脚本：{url}"
+
+#~ msgid "Install script downloaded successfully"
+#~ msgstr "安装脚本下载成功"
+
+#~ msgid "Failed to download install script: {error}"
+#~ msgstr "下载安装脚本失败：{error}"
+
+#~ msgid ""
+#~ "Example: FFL_UPGRADE_VARIANT=ffl.com python Core.py"
+#~ " --cli upgrade {path}"
+#~ msgstr "范例：FFL_UPGRADE_VARIANT=ffl.com python Core.py --cli upgrade {path}"
 

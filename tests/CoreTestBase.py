@@ -33,6 +33,8 @@ import requests
 import socket
 import shutil
 
+from urllib.parse import urlsplit, urlunsplit
+
 import psutil
 
 
@@ -224,13 +226,13 @@ class FastFileLinkTestBase(unittest.TestCase):
         """Terminate a process and its descendants, with a hard kill fallback."""
         try:
             rootProcess = psutil.Process(pid)
+            processTree = rootProcess.children(recursive=True)        
         except psutil.NoSuchProcess:
             return
         except Exception as e:
             print(f"[Test] Failed to inspect process tree for PID {pid}: {e}")
             return
 
-        processTree = rootProcess.children(recursive=True)
         processTree.append(rootProcess)
         liveProcesses = []
 
@@ -281,7 +283,9 @@ class FastFileLinkTestBase(unittest.TestCase):
                 print(f"[Test] taskkill fallback failed for PID {pid}: {e}")
 
     def _getChecksumUrl(self, shareLink):
-        return shareLink.rstrip('/') + '/checksum'
+        parsedLink = urlsplit(shareLink)
+        checksumPath = parsedLink.path.rstrip('/') + '/checksum'
+        return urlunsplit((parsedLink.scheme, parsedLink.netloc, checksumPath, '', ''))
 
     def _getB2sumCommand(self):
         if sys.platform == 'win32':
@@ -409,28 +413,70 @@ class FastFileLinkTestBase(unittest.TestCase):
             raise AssertionError(f"Checksum should be ready, got {lastResponseData}")
         return lastResponseData if lastResponseData is not None else {'ready': False}
 
-    def _generateKeypair(self, name='recipient'):
+    def _generateKeypair(self, name='recipient', share=False, extraArgs=None, preferredTunnel=None):
         """Generate a keypair via the CLI keypair subcommand.
 
         Returns (privKeyPath, pubKeyPath) as absolute paths in tempDir.
+        When share=True, returns (privKeyPath, pubKeyPath, shareLink).
         """
         basePath = os.path.join(self.tempDir, name)
         privKeyPath = f"{basePath}.fflkey"
         pubKeyPath = f"{basePath}.fflpub"
-        projectRoot = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        result = subprocess.run(
-            [sys.executable, "Core.py", "--cli", "keygen", "--name", basePath],
-            cwd=projectRoot,
-            capture_output=True,
-            text=True,
-            timeout=30
+        keygenArgs = ["--cli", "keygen", "--name", basePath]
+        if extraArgs:
+            keygenArgs.extend(extraArgs)
+
+        if not share:
+            output, returnCode = self._runCoreCommand(
+                keygenArgs,
+                disableGuiAddon=False,
+                timeout=30,
+            )
+            self.assertEqual(returnCode, 0, f"keypair command failed:\n{output}")
+            self.assertTrue(os.path.exists(privKeyPath), f"Private key file not created: {privKeyPath}")
+            self.assertTrue(os.path.exists(pubKeyPath), f"Public key file not created: {pubKeyPath}")
+            return privKeyPath, pubKeyPath
+
+        if extraArgs and '--preferred-tunnel' in extraArgs and preferredTunnel is not None:
+            raise AssertionError("Use preferredTunnel=... instead of passing --preferred-tunnel in extraArgs")
+
+        if preferredTunnel is not None:
+            keygenArgs.extend(["--preferred-tunnel", preferredTunnel])
+
+        keygenArgs.extend(["--share", "--json", self.jsonOutputPath])
+        self._procLogFile = open(self.procLogPath, "w", encoding="utf-8", errors="replace")
+        creationFlags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
+        self.coreProcess = self._runCoreCommand(
+            keygenArgs,
+            extraEnvVars={"PYTHONIOENCODING": "utf-8"},
+            disableGuiAddon=False,
+            outputTarget=self._procLogFile,
+            wait=False,
+            creationFlags=creationFlags,
         )
-        self.assertEqual(result.returncode, 0, f"keypair command failed:\n{result.stderr}\n{result.stdout}")
+
+        startTime = time.time()
+        while time.time() - startTime < 60:
+            if os.path.exists(self.jsonOutputPath):
+                break
+
+            if self.coreProcess.poll() is not None:
+                self._procLogFile.flush()
+                with open(self.procLogPath, 'r', encoding='utf-8', errors='replace') as f:
+                    output = f.read()
+                raise AssertionError(
+                    f"keypair --share exited early (code {self.coreProcess.returncode}):\n{output}"
+                )
+            time.sleep(0.5)
+
+        self.assertTrue(os.path.exists(self.jsonOutputPath), "keypair --share did not create JSON output")
         self.assertTrue(os.path.exists(privKeyPath), f"Private key file not created: {privKeyPath}")
         self.assertTrue(os.path.exists(pubKeyPath), f"Public key file not created: {pubKeyPath}")
-        return privKeyPath, pubKeyPath
+        with open(self.jsonOutputPath, 'r', encoding='utf-8') as f:
+            shareInfo = json.load(f)
+        return privKeyPath, pubKeyPath, shareInfo['link']
 
-    def downloadFileWithRequests(self, shareLink, outputPath, expectedFileName=None, headers=None, expectedStatus=200):
+    def downloadFileWithRequests(self, shareLink, outputPath, expectedFileName=None, headers=None, expectedStatus=200, auth=None):
         """
         Download file using requests library with retry logic
 
@@ -440,17 +486,21 @@ class FastFileLinkTestBase(unittest.TestCase):
             expectedFileName: If provided, verify Content-Disposition header matches this filename
             headers: Optional request headers (e.g., Range)
             expectedStatus: Expected HTTP status code
+            auth: Optional requests auth tuple, e.g. ('user', 'password')
 
         Returns:
             str: Incremental blake2b checksum of received bytes
         """
         print("[Test] Attempting to download file through share link...")
 
-        # Try multiple times in case it takes a while for the link to be active
-        for attempt in range(3):
+        maxAttempts = self._getDownloadRetryCount(shareLink)
+        retryDelaySeconds = self._getDownloadRetryDelaySeconds(shareLink)
+
+        # Try multiple times in case it takes a while for the link or DNS to become active
+        for attempt in range(maxAttempts):
             try:
                 print(f"[Test] Download attempt {attempt + 1}")
-                with requests.get(shareLink, headers=headers or {}, stream=True, timeout=30) as response:
+                with requests.get(shareLink, headers=headers or {}, auth=auth, stream=True, timeout=30) as response:
                     if response.status_code == expectedStatus:
                         # Verify Content-Disposition header if expectedFileName provided
                         if expectedFileName:
@@ -499,13 +549,35 @@ class FastFileLinkTestBase(unittest.TestCase):
                         print(f"[Test] Received status code: {response.status_code}")
             except Exception as e:
                 print(f"[Test] Download attempt failed: {e}")
-            time.sleep(2)
+            time.sleep(retryDelaySeconds)
 
         raise AssertionError("Failed to download file through share link")
 
-    def _downloadWithCore(self, shareLink, outputPath=None, extraArgs=None, extraEnvVars=None, captureOutputIn=None):
+    def _getDownloadRetryCount(self, shareLink):
+        hostname = (urlsplit(shareLink).hostname or '').lower()
+        if hostname.endswith('.trycloudflare.com'):
+            return 15
+            
+        return 3
+
+    def _getDownloadRetryDelaySeconds(self, shareLink):
+        hostname = (urlsplit(shareLink).hostname or '').lower()
+        if hostname.endswith('.trycloudflare.com'):
+            return 4
+            
+        return 2
+
+    def _downloadWithCore(
+        self,
+        shareLink,
+        outputPath=None,
+        extraArgs=None,
+        extraEnvVars=None,
+        captureOutputIn=None,
+        stdoutMode=False
+    ):
         """
-        Download file using Core.py directly
+        Download file using FFL.py directly
 
         Args:
             shareLink (str): The share link to download from
@@ -513,11 +585,16 @@ class FastFileLinkTestBase(unittest.TestCase):
             extraArgs (list, optional): Additional command line arguments
             extraEnvVars (dict, optional): Additional environment variables
             captureOutputIn (dict, optional): Dictionary to capture process output
+            stdoutMode (bool): If True, pass `--stdout` and return file bytes plus
+                stderr text instead of saving to a file.
 
         Returns:
-            str: Path to the downloaded file
+            str: Path to the downloaded file when stdoutMode=False
+            tuple[bytes, str]: Raw stdout bytes and decoded stderr text when stdoutMode=True
         """
-        print(f"[Test] Downloading file using Core.py from: {shareLink}")
+        print(f"[Test] Downloading file using FFL.py from: {shareLink}")
+        if stdoutMode and outputPath:
+            raise AssertionError("outputPath cannot be used with stdoutMode=True")
 
         # Build download args: --cli [globalArgs] <shareLink> [downloadSpecificArgs] [-o outputPath]
         downloadArgs = ["--cli"]
@@ -548,109 +625,210 @@ class FastFileLinkTestBase(unittest.TestCase):
         # Add output path if specified
         if outputPath:
             downloadArgs.extend(["-o", outputPath])
+        elif stdoutMode:
+            downloadArgs.append("--stdout")
 
-        # Prepare output capture (log file, so callers can re-read it via _updateCapturedOutput)
         logPath = None
-        logFile = None
         if captureOutputIn is not None:
             logPath = os.path.join(self.tempDir, "download_log.txt")
-            logFile = open(logPath, "w", encoding="utf-8", errors="replace")
             captureOutputIn["logPath"] = logPath
-            captureOutputIn["logFile"] = logFile
+            captureOutputIn["logFile"] = None
 
-        try:
-            # disableGuiAddon=False: `--cli` already forces CLI mode, matching prior behavior
-            output, returnCode = self._runCoreCommand(
-                downloadArgs,
-                extraEnvVars=extraEnvVars,
-                disableGuiAddon=False,
-                timeout=120,
-                outputTarget=logFile,
-            )
+        maxAttempts = self._getDownloadRetryCount(shareLink)
+        retryDelaySeconds = self._getDownloadRetryDelaySeconds(shareLink)
+        lastErrorMessage = None
 
-            if returnCode != 0:
-                errorMessage = f"Download process failed with exit code {returnCode}"
+        for attempt in range(maxAttempts):
+            logFile = None
+            output = ''
+            returnCode = 0
 
-                # Read from log file if output was captured to file
-                if logFile:
-                    logFile.close()
+            if logPath and not stdoutMode:
+                logFile = open(logPath, "w", encoding="utf-8", errors="replace")
+                captureOutputIn["logFile"] = logFile
+
+            try:
+                if stdoutMode:
+                    command = self._buildCoreCommand(downloadArgs)
+                    downloadEnv = self._buildCoreEnv(extraEnvVars=extraEnvVars)
+                    downloadProcess = subprocess.Popen(
+                        command,
+                        cwd=self._projectRootDir(),
+                        env=downloadEnv,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE
+                    )
                     try:
-                        with open(logPath, 'r', encoding='utf-8', errors='replace') as f:
-                            fileOutput = f.read()
-                            if fileOutput:
-                                errorMessage += f"\n--- Full Client Output ---\n{fileOutput}\n--- End Output ---"
-                    except Exception as e:
-                        errorMessage += f"\n(Failed to read log file: {e})"
-                elif output:
-                    errorMessage += f"\nOutput: {output}"
+                        rawBytes, stderrOutput = downloadProcess.communicate(timeout=120)
+                    except subprocess.TimeoutExpired:
+                        downloadProcess.kill()
+                        raise AssertionError("Stdout download process timed out")
 
-                raise AssertionError(errorMessage)
-
-            print("[Test] Download completed successfully")
-
-            # Determine the downloaded file path
-            # Always parse output to get actual path (handles directory case)
-            if logFile:
-                logFile.close()
-                with open(logPath, 'r', encoding='utf-8', errors='replace') as f:
-                    output = f.read()
-
-            # Look for "Downloaded: <path>" pattern
-            downloadedPath = None
-            for line in output.split('\n'):
-                if "Downloaded:" in line:
-                    downloadedPath = line.split(":", 1)[1].strip()
-                    break
-
-            # Fallback to outputPath if provided and not a directory
-            if not downloadedPath:
-                if outputPath and not os.path.isdir(outputPath):
-                    downloadedPath = outputPath
+                    output = stderrOutput.decode(errors='replace')
+                    returnCode = downloadProcess.returncode
                 else:
-                    # Last resort fallback
-                    downloadedPath = os.path.join(os.getcwd(), "downloaded_file")
+                    output, returnCode = self._runCoreCommand(
+                        downloadArgs,
+                        extraEnvVars=extraEnvVars,
+                        timeout=120,
+                        outputTarget=logFile,
+                    )
+            finally:
+                if logFile and not logFile.closed:
+                    logFile.close()
+                    
+                if captureOutputIn is not None:
+                    captureOutputIn["logFile"] = None
 
-            if not os.path.exists(downloadedPath):
-                raise AssertionError(f"Downloaded file not found at expected path: {downloadedPath}")
+            if logPath and stdoutMode:
+                with open(logPath, "w", encoding="utf-8", errors="replace") as f:
+                    f.write(output)
 
-            print(f"[Test] Downloaded file saved to: {downloadedPath}")
+            if returnCode == 0:
+                print("[Test] Download completed successfully")
+                if stdoutMode:
+                    print(f"[Test] Stderr output:\n{self._getConsoleSafeText(stderrOutput)}")
+                    return rawBytes, output
+
+                if logPath:
+                    with open(logPath, 'r', encoding='utf-8', errors='replace') as f:
+                        output = f.read()
+                        
+                downloadedPath = self._extractDownloadedPath(output, outputPath)
+                if not os.path.exists(downloadedPath):
+                    raise AssertionError(f"Downloaded file not found at expected path: {downloadedPath}")
+                    
+                print(f"[Test] Downloaded file saved to: {downloadedPath}")
+                return downloadedPath
+
+            errorMessage = f"Download process failed with exit code {returnCode}"
+            
+            if logPath:
+                try:
+                    with open(logPath, 'r', encoding='utf-8', errors='replace') as f:
+                        fileOutput = f.read()
+                        if fileOutput:
+                            errorMessage += f"\n--- Full Client Output ---\n{fileOutput}\n--- End Output ---"
+                except Exception as e:
+                    errorMessage += f"\n(Failed to read log file: {e})"
+            elif output:
+                errorMessage += f"\nOutput: {output}"
+
+            lastErrorMessage = errorMessage
+            if attempt + 1 < maxAttempts and self._isRetryableTryCloudflareFailure(shareLink, errorMessage):
+                print(f"[Test] Core download attempt {attempt + 1} failed during tunnel DNS warmup, retrying...")
+                time.sleep(retryDelaySeconds)
+                continue
+
+            raise AssertionError(errorMessage)
+
+        raise AssertionError(lastErrorMessage or "Download process failed")
+
+    def _extractDownloadedPath(self, output, outputPath):
+        downloadedPath = None
+        for line in output.split('\n'):
+            if "Downloaded:" in line:
+                downloadedPath = line.split(":", 1)[1].strip()
+                break
+                
+        if downloadedPath:
             return downloadedPath
+            
+        if outputPath and not os.path.isdir(outputPath):
+            return outputPath
+            
+        return os.path.join(os.getcwd(), "downloaded_file")
 
-        finally:
-            if logFile and not logFile.closed:
-                logFile.close()
+    def _isRetryableTryCloudflareFailure(self, shareLink, errorMessage):
+        hostname = (urlsplit(shareLink).hostname or '').lower()
+        if not hostname.endswith('.trycloudflare.com'):
+            return False
+            
+        loweredMessage = str(errorMessage or '').lower()
+        return 'failed to resolve' in loweredMessage or 'getaddrinfo failed' in loweredMessage
 
     # -----------------------------------------------------------------
     # Shared FFL CLI process runner
     # -----------------------------------------------------------------
     # _runCoreCommand() is the one place that knows how to build the command
-    # line / environment and launch Core.py (or an external FFL binary).
+    # line / environment and launch FFL.py (or an external FFL binary).
     # _downloadWithCore() (the `download` subcommand) and _startFastFileLink()
     # (the `share` subcommand) both delegate to it, adding only their own
     # command-specific argument placement and result parsing on top.
 
+    def _buildTestCommandArgs(self, args):
+        commandArgs = list(args)
+        isShareCommand = (
+            (len(commandArgs) >= 1 and commandArgs[0] == 'share')
+            or (len(commandArgs) >= 2 and commandArgs[0] == '--cli' and commandArgs[1] == 'share')
+        )
+
+        if isShareCommand and '--disable-clipboard' not in commandArgs:
+            commandArgs.append('--disable-clipboard')
+
+        return commandArgs
+
     def _buildCoreCommand(self, args, commandPrefix=None):
-        """Build the full command line: a prefix (default: `python Core.py`) plus args."""
-        prefix = list(commandPrefix) if commandPrefix else [sys.executable, "Core.py"]
-        return prefix + list(args)
+        """Build the full command line: a prefix (default: `python FFL.py`) plus args."""
+        prefix = list(commandPrefix) if commandPrefix else [sys.executable, "FFL.py"]
+        return prefix + self._buildTestCommandArgs(args)
 
     def _buildCoreEnv(self, extraEnvVars=None, disableGuiAddon=True):
         """Build the environment dict for launching an FFL CLI subprocess."""
-        env = os.environ.copy()
-        
+        return self._augmentSubprocessEnv(os.environ.copy(), extraEnvVars, disableGuiAddon)
+
+    def _augmentSubprocessEnv(self, env, extraEnvVars=None, disableGuiAddon=False):
+        """Apply shared subprocess environment settings for test child processes."""
+        env = dict(env)
+        env['PYTHONIOENCODING'] = 'utf-8'
+        if sys.platform.startswith('win'):
+            env['PYTHONUTF8'] = '1'
+
         if disableGuiAddon:
             env['DISABLE_ADDONS'] = 'GUI'
-            env['FFL_YES'] = 'True'
-            
+
         if extraEnvVars:
             for key, value in extraEnvVars.items():
                 env[key] = str(value)
-                
+
         return env
 
     def _projectRootDir(self):
-        """Absolute path to the project root (where Core.py lives)."""
+        """Absolute path to the project root (where FFL.py lives)."""
         return os.path.dirname(os.path.abspath(__file__ + "/.."))
+
+    def _startSubprocess(
+        self,
+        command,
+        extraEnvVars=None,
+        env=None,
+        cwd=_UNSET,
+        stdin=None,
+        stdout=None,
+        stderr=None,
+        text=True,
+        bufsize=1,
+        creationFlags=0,
+        shell=False,
+        disableGuiAddon=False,
+        **kwargs,
+    ):
+        """Start a non-core subprocess using the shared test environment defaults."""
+        runCwd = self._projectRootDir() if cwd is _UNSET else cwd
+        childEnv = self._augmentSubprocessEnv(env or os.environ.copy(), extraEnvVars, disableGuiAddon)
+        return subprocess.Popen(
+            command,
+            stdin=stdin,
+            stdout=stdout,
+            stderr=stderr,
+            text=text,
+            bufsize=bufsize,
+            creationflags=creationFlags,
+            shell=shell,
+            env=childEnv,
+            cwd=runCwd,
+            **kwargs,
+        )
 
     def _runCoreCommand(
         self,
@@ -661,6 +839,7 @@ class FastFileLinkTestBase(unittest.TestCase):
         cwd=_UNSET,
         timeout=30,
         stdin=None,
+        inputData=None,
         outputTarget=None,
         passthrough=False,
         wait=True,
@@ -681,17 +860,18 @@ class FastFileLinkTestBase(unittest.TestCase):
 
         Args:
             args (list): CLI arguments appended after the command prefix
-            commandPrefix (list, optional): Override for [sys.executable, "Core.py"]
+            commandPrefix (list, optional): Override for [sys.executable, "FFL.py"]
                 (e.g. an external binary like ["./ffl.com"])
             extraEnvVars (dict, optional): Additional/overriding environment variables
-            disableGuiAddon (bool): Set DISABLE_ADDONS=GUI / FFL_YES=True. Most
-                one-shot subcommands want this; `download`/`share` don't need it
-                since `--cli` already forces CLI mode and FFL_YES is already
-                inherited from the test's own setUp().
+            disableGuiAddon (bool): Set DISABLE_ADDONS=GUI. Most one-shot
+                subcommands want this; `download`/`share` don't need it since
+                `--cli` already forces CLI mode.
             cwd (str, optional): Working directory; defaults to the project root.
                 Pass explicit None to inherit the caller's own working directory.
             timeout (int): Seconds to wait when wait=True
             stdin: Optional file handle to pipe into stdin
+            inputData (str, optional): Text passed to process.communicate() when
+                wait=True, for interactive one-shot commands.
             outputTarget: Optional open file object to redirect combined
                 stdout+stderr into, instead of capturing via pipe (avoids
                 pipe-buffer deadlocks for long-running/large-output processes)
@@ -732,12 +912,19 @@ class FastFileLinkTestBase(unittest.TestCase):
             return process
 
         try:
-            stdout, _ = process.communicate(timeout=timeout)
+            stdout, _ = process.communicate(input=inputData, timeout=timeout)
             return stdout or "", process.returncode
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
             return "Process timed out", 1
+        finally:
+            if process.stdin:
+                process.stdin.close()
+            if process.stdout:
+                process.stdout.close()
+            if process.stderr:
+                process.stderr.close()
 
     def _updateCapturedOutput(self, captureDict):
         """
@@ -897,6 +1084,14 @@ class FastFileLinkTestBase(unittest.TestCase):
 
         except Exception as e:
             print(f"[Test] Error stopping test server: {e}")
+        finally:
+            if testServerProcess:
+                if testServerProcess.stdin:
+                    testServerProcess.stdin.close()
+                if testServerProcess.stdout:
+                    testServerProcess.stdout.close()
+                if testServerProcess.stderr:
+                    testServerProcess.stderr.close()
 
     def _normalizeCommandSpec(self, commandSpec):
         """Normalize command spec into argv list."""
@@ -945,6 +1140,7 @@ class FastFileLinkTestBase(unittest.TestCase):
         binaryCommand=None,
         stdinInputPath=None,
         stdinFileName=None,
+        preferredTunnel='default',
         workingDirectory=None,
         serverTimeout=None
     ):
@@ -962,9 +1158,11 @@ class FastFileLinkTestBase(unittest.TestCase):
             extraEnvVars (dict): Additional environment variables to set
             extraArgs (list): Additional command line arguments to pass to the process
             captureOutputIn (dict): Optional dict to capture process output in ['output'] key
-            binaryCommand (str|list): Optional external command prefix, e.g. "./ffl.com" or "python Core.py --cli"
+            binaryCommand (str|list): Optional external command prefix, e.g. "./ffl.com" or "python FFL.py --cli"
             stdinInputPath (str): Optional path to pipe into stdin instead of sharing self.testFilePath directly
             stdinFileName (str): Optional filename to advertise when stdinInputPath is used
+            preferredTunnel (str|None): Preferred tunnel passed via `--preferred-tunnel`.
+                Defaults to `default`; pass None to omit the flag entirely.
             workingDirectory (str): Optional working directory for the launched sharing process
             serverTimeout (int): Optional `share --timeout` guard. When omitted, tests
                 get a finite timeout so abandoned share processes cannot live forever.
@@ -1043,7 +1241,13 @@ class FastFileLinkTestBase(unittest.TestCase):
 
             # Add mode-specific parameters
             if not p2p:
-                coreArgs.extend(["--upload", "3 hours"])
+                coreArgs.extend(["--upload", "3 hours", "--yes"])
+
+            if extraArgs and '--preferred-tunnel' in extraArgs and preferredTunnel is not None:
+                raise AssertionError("Use preferredTunnel=... instead of passing --preferred-tunnel in extraArgs")
+
+            if preferredTunnel is not None:
+                coreArgs.extend(["--preferred-tunnel", preferredTunnel])
 
             # Add extra arguments if provided
             if extraArgs:
@@ -1086,8 +1290,8 @@ class FastFileLinkTestBase(unittest.TestCase):
                 self._procLogFile = open(self.procLogPath, "w+", encoding="utf-8", buffering=1)
 
             # Launch in a separate process with conditional output capture.
-            # disableGuiAddon=False: `--cli` already forces CLI mode and FFL_YES is already
-            # inherited from the test's own setUp(), matching prior behavior.
+            # Keep GUI addon disabled explicitly for CLI test subprocesses to avoid
+            # GUI/WebView side effects leaking into unattended test runs.
             # wait=False: this is a long-running server process, polled below for the JSON
             # marker file rather than waited on for completion.
             creationFlags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
@@ -1097,7 +1301,7 @@ class FastFileLinkTestBase(unittest.TestCase):
                     coreArgs,
                     commandPrefix=commandPrefix,
                     extraEnvVars=mergedEnvVars,
-                    disableGuiAddon=False,
+                    disableGuiAddon=True,
                     cwd=workingDirectory,
                     stdin=stdinHandle,
                     outputTarget=None if showOutput else self._procLogFile,
@@ -1232,12 +1436,12 @@ class FastFileLinkTestBase(unittest.TestCase):
 
                         # Try to read FastFileLink application debug log
                         try:
-                            # Look for debug file in the working directory where Core.py runs
+                            # Look for debug file in the working directory where FFL.py runs
                             appDebugFile = "fastfilelink_test_debug.log"
                             appDebugPaths = [
                                 appDebugFile, # Current working directory
                                 os.path.join(os.getcwd(), appDebugFile), # Explicit current dir
-                                os.path.join(os.path.dirname(__file__), "..", appDebugFile), # Core.py directory
+                                os.path.join(os.path.dirname(__file__), "..", appDebugFile), # FFL.py directory
                             ]
 
                             debugFound = False
@@ -1322,121 +1526,6 @@ class FastFileLinkTestBase(unittest.TestCase):
             if testServerProcess:
                 self._stopTestServer(testServerProcess)
             raise
-
-    def _startStdinStreaming(self, inputFilePath, customName=None, extraArgs=None, extraEnvVars=None):
-        """
-        Start Core.py with stdin input (cat file | python Core.py --cli -)
-
-        Args:
-            inputFilePath: Path to file to pipe as stdin
-            customName: Custom filename to use with --name argument
-            extraArgs: Additional command line arguments
-            extraEnvVars: Additional environment variables
-
-        Returns:
-            str: Share link
-        """
-        # Prepare command: cat file | python Core.py --cli - --json output.json
-        coreArgs = [sys.executable, "Core.py", "--cli", "-", "--json", self.jsonOutputPath]
-
-        if customName:
-            coreArgs.extend(["--name", customName])
-
-        if extraArgs:
-            coreArgs.extend(extraArgs)
-
-        # Prepare environment
-        env = os.environ.copy()
-        if extraEnvVars:
-            env.update(extraEnvVars)
-
-        print(f"[Test] Input file: {inputFilePath}")
-        print(f"[Test] Input file exists: {os.path.exists(inputFilePath)}")
-        print(f"[Test] JSON output path: {self.jsonOutputPath}")
-        
-        # Working directory should be the project root (where Core.py is)
-        # __file__ is tests/CoreTestBase.py, so two dirname calls get us to the project root
-        workingDir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        coreScriptPath = os.path.join(workingDir, "Core.py")
-        
-        print(f"[Test] Working directory: {workingDir}")
-        print(f"[Test] Core.py exists: {os.path.exists(coreScriptPath)}")
-        print(f"[Test] Command: {' '.join(coreArgs)}")
-
-        # Open input file for piping
-        with open(inputFilePath, 'rb') as inputFile:
-            print(f"[Test] Starting stdin streaming...")
-
-            # Start Core.py with stdin from file
-            # CREATE_NEW_PROCESS_GROUP is required on Windows so that
-            # _terminateProcess's CTRL_BREAK_EVENT only affects this child's
-            # process group and does not propagate to the test runner or the
-            # Claude Code session.
-            creationFlags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
-            self.coreProcess = subprocess.Popen(
-                coreArgs,
-                cwd=workingDir,
-                stdin=inputFile,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                env=env,
-                creationflags=creationFlags,
-            )
-
-            print(f"[Test] Process started with PID: {self.coreProcess.pid}")
-
-        # Wait for JSON output file
-        maxWaitTime = 30
-        startTime = time.time()
-        checkCount = 0
-        while not os.path.exists(self.jsonOutputPath):
-            checkCount += 1
-            elapsed = time.time() - startTime
-
-            # Check if process is still running
-            processStatus = self.coreProcess.poll()
-            if processStatus is not None:
-                # Process has terminated
-                stdout, stderr = self.coreProcess.communicate()
-                print(f"[Test] Process terminated with exit code: {processStatus}")
-                print(f"[Test] Process stdout/stderr output:")
-                print("=" * 80)
-                print(stdout if stdout else "(no output)")
-                print("=" * 80)
-                raise RuntimeError(
-                    f"Core.py process terminated unexpectedly with exit code {processStatus}\n"
-                    f"Output: {stdout[:500] if stdout else '(no output)'}"
-                )
-
-            if elapsed > maxWaitTime:
-                # Capture output before raising error
-                self.coreProcess.terminate()
-                stdout, stderr = self.coreProcess.communicate(timeout=5)
-                print(f"[Test] Timeout! Process output:")
-                print("=" * 80)
-                print(stdout if stdout else "(no output)")
-                print("=" * 80)
-                raise TimeoutError(
-                    f"JSON output file not created after {maxWaitTime}s\n"
-                    f"Output: {stdout[:500] if stdout else '(no output)'}"
-                )
-
-            if checkCount % 10 == 0:
-                print(f"[Test] Still waiting for JSON file... ({elapsed:.1f}s elapsed)")
-
-            time.sleep(0.5)
-
-        print(f"[Test] JSON file created after {time.time() - startTime:.1f}s")
-
-        # Read share info
-        with open(self.jsonOutputPath, 'r') as f:
-            shareInfo = json.load(f)
-
-        shareLink = shareInfo["link"]
-        print(f"[Test] Share link: {shareLink}")
-
-        return shareLink
 
     def _verifyDownloadedFile(self, downloadedFilePath, shareLink=None, transferChecksum=None, verifyOriginalContent=True):
         """
@@ -1602,11 +1691,6 @@ class FastFileLinkTestBase(unittest.TestCase):
         originalVars['FFL_STORAGE_LOCATION'] = os.environ.get('FFL_STORAGE_LOCATION')
         os.environ['FFL_STORAGE_LOCATION'] = tempConfigDir
         print(f"[Test] Set FFL_STORAGE_LOCATION={tempConfigDir}")
-
-        # Default tests to non-interactive upload confirmation.
-        originalVars['FFL_YES'] = os.environ.get('FFL_YES')
-        os.environ['FFL_YES'] = 'True'
-        print("[Test] Set FFL_YES=True")
 
         # Set additional environment variables if provided
         if extraVars:

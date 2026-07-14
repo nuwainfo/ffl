@@ -17,6 +17,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import locale
 import os
 import re
@@ -26,8 +27,8 @@ import ssl
 import sys
 import webbrowser
 
+from dataclasses import asdict, fields
 from pathlib import Path
-
 from typing import Optional, TypedDict
 
 import bitmath
@@ -50,6 +51,55 @@ ONE_GB = bitmath.GiB(1).bytes
 ONE_TB = bitmath.TiB(1).bytes
 
 logger = getLogger(__name__)
+
+
+class DataclassDictMixin:
+
+    @classmethod
+    def fromDict(cls, data, extraField=None, **overrides):
+        fieldNames = {fieldInfo.name for fieldInfo in fields(cls)}
+        stateData = {name: data[name] for name in fieldNames if name in data}
+
+        if extraField and extraField in fieldNames:
+            extraData = dict(data.get(extraField) or {})
+            extraData.update({
+                name: value
+                for name, value in data.items()
+                if name not in fieldNames
+            })
+            stateData[extraField] = extraData
+
+        stateData.update(overrides)
+        return cls(**stateData)
+
+    @classmethod
+    def fromObject(cls, source, extraField=None, **overrides):
+        if isinstance(source, dict):
+            data = source
+        else:
+            data = vars(source)
+
+        return cls.fromDict(data, extraField=extraField, **overrides)
+
+    def toDict(self):
+        return asdict(self)
+
+    def updateFromDict(self, data=None, **overrides):
+        nextState = type(self).fromDict(data or {}, **overrides)
+        self.__dict__.update(nextState.__dict__)
+
+    def reset(self, preserveFields=()):
+        preserveFields = set(preserveFields)
+        preservedState = {
+            name: value
+            for name, value in self.__dict__.items()
+            if name in preserveFields
+        }
+        self.__dict__.update(type(self)().__dict__)
+        self.__dict__.update(preservedState)
+
+    def clear(self):
+        self.reset()
 
 
 def utf8(s, encodings=None, throw=True):
@@ -782,7 +832,7 @@ class StallResilientAdapter(HTTPAdapter):
         if sys.version_info >= (3, 12) and ENABLE_PY312_WORKAROUND:
             # Python 3.12+ workaround: Enable limited urllib3 retries for SSL/connection issues
             # This helps with SSLEOFError and read/write timeout issues specific to Python 3.12 + OpenSSL 3.x
-            retry_config = Retry(
+            retryConfig = Retry(
                 total=2, # Limited retries to avoid confusion with application layer
                 connect=1, # Retry connection failures once
                 read=1, # Retry read failures once
@@ -798,9 +848,9 @@ class StallResilientAdapter(HTTPAdapter):
         else:
             # Python < 3.12 or workaround disabled: Disable urllib3 internal retry completely
             # All retries handled at application layer for better observability
-            retry_config = Retry(total=0)
+            retryConfig = Retry(total=0)
 
-        kwargs['max_retries'] = retry_config
+        kwargs['max_retries'] = retryConfig
 
         super().__init__(*args, **kwargs)
 
@@ -830,10 +880,10 @@ class StallResilientAdapter(HTTPAdapter):
         if sys.version_info >= (3, 12) and ENABLE_PY312_WORKAROUND:
             logger.debug("Python 3.12+ workaround enabled: forcing TLS 1.2 to avoid SSLEOFError issues")
             # Create SSL context that forces TLS 1.2 (avoids TLS 1.3 EOF issues)
-            ssl_context = ssl.create_default_context()
-            ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
-            ssl_context.maximum_version = ssl.TLSVersion.TLSv1_2
-            kwargs["ssl_context"] = ssl_context
+            sslContext = ssl.create_default_context()
+            sslContext.minimum_version = ssl.TLSVersion.TLSv1_2
+            sslContext.maximum_version = ssl.TLSVersion.TLSv1_2
+            kwargs["ssl_context"] = sslContext
 
         self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, **kwargs)
 
@@ -876,5 +926,28 @@ except ImportError:
         def kill(pid: int) -> None:
             os.kill(pid, getattr(signal, 'SIGKILL', signal.SIGTERM))
 
-
 ProcessHelper = _ProcessHelper
+
+def writeShareJsonOutput(jsonPath, *, filePath, contentName, fileSize, uploadMode,
+                         tunnelType, link, e2ee, pickupCode, pubkeyEnabled,
+                         userName, email, level, points, serialNumber):
+    outputData = {
+        "file": filePath,
+        "content_name": contentName,
+        "file_size": fileSize if fileSize is not None else -1,
+        "upload_mode": uploadMode,
+        "tunnel_type": tunnelType or "default",
+        "link": link,
+        "e2ee": e2ee,
+        "pickup_code": pickupCode,
+        "pubkey_enabled": pubkeyEnabled,
+        "user": {
+            "user": userName,
+            "email": email,
+            "level": level,
+            "points": points,
+            "serial_number": serialNumber,
+        },
+    }
+    with open(jsonPath, 'w', encoding='utf-8') as f:
+        json.dump(outputData, f, indent=2)

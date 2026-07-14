@@ -108,8 +108,8 @@ class ZipPreviewExtractor {
                 contentKey: keyData.contentKey,
                 nonceBase: keyData.nonceBase,
                 chunkSize: this.e2eeManager.manifest.chunkSize,
-                filename: keyData.filename,
-                filesize: keyData.filesize
+                fileName: keyData.fileName,
+                fileSize: keyData.fileSize
             };
 
             this.log('ZipPreviewExtractor', '✓ E2EE initialized from existing manager - files will be decrypted');
@@ -159,8 +159,8 @@ class ZipPreviewExtractor {
             this.e2eeContext &&
             Array.isArray(this.e2eeContext.embeddedTags) &&
             this.e2eeContext.embeddedTags.length > 0 &&
-            this.e2eeContext.filename &&
-            Number.isFinite(this.e2eeContext.filesize)
+            this.e2eeContext.fileName &&
+            Number.isFinite(this.e2eeContext.fileSize)
         );
     }
 
@@ -203,8 +203,8 @@ class ZipPreviewExtractor {
         const decryptor = new HTTPDecryptor(
             this.e2eeContext.contentKey,
             this.e2eeContext.nonceBase,
-            this.e2eeContext.filename,
-            this.e2eeContext.filesize,
+            this.e2eeContext.fileName,
+            this.e2eeContext.fileSize,
             this.e2eeContext.chunkSize,
             this.e2eeContext.embeddedTags || null,
             this.log,

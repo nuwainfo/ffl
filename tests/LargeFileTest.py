@@ -2441,7 +2441,6 @@ class LargeFileTest(ResumeBrowserTestBase):
                     timeout=timeout or (self.SHARE_READY_TIMEOUT if p2p else self.UPLOAD_READY_TIMEOUT),
                     captureOutputIn=outputCapture,
                     extraEnvVars=shareEnv,
-                    extraArgs=["--preferred-tunnel", "default"],
                     binaryCommand=binaryCommand,
                 )
                 self._currentOutputCapture = outputCapture
@@ -2964,7 +2963,7 @@ def buildArgumentParser():
         action="store_true",
         help="Run the curated full matrix with distinct scenario/browser/route coverage.",
     )
-    parser.add_argument("--binary", help="External share command prefix, e.g. ./ffl.com or 'python Core.py --cli'")
+    parser.add_argument("--binary", help="External share command prefix, e.g. ./ffl.com or 'python FFL.py --cli'")
     parser.add_argument("--size", help="Override FFL_LARGE_FILE_SIZE, e.g. 20M, 100G")
     parser.add_argument(
         "--browser",
@@ -3090,7 +3089,7 @@ def printDirectRunExamples():
             [
                 "$env:FILESHARE_TEST='True'",
                 "$env:STATIC_SERVER='http://localhost:8000'",
-                "python tests/LargeFileTest.py --scenario upload --size 20M --tunnel 33.fastfilelink.com --binary \"C:\\Users\\Naga\\miniconda3\\envs\\fileshare\\python.exe Core.py --cli\"",
+                "python tests/LargeFileTest.py --scenario upload --size 20M --tunnel 33.fastfilelink.com --binary \"C:\\Users\\Naga\\miniconda3\\envs\\fileshare\\python.exe FFL.py --cli\"",
             ],
         ),
     ]

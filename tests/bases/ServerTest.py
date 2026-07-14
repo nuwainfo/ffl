@@ -28,12 +28,14 @@ from unittest import mock
 
 import requests
 
-from bases.Server import (
-    DownloadHandler,
+from bases.Server import DownloadHandler
+from bases.Session import (
     DownloadProgressStore,
     HTTPDownloadCompletionStore,
     LogicalDownloadRequestStore,
 )
+from bases.HTTP import ByteRange
+from bases.views.DownloadComplete import DownloadCompleteController, DownloadCompleteView
 
 from ..BrowserTestBase import BrowserTestBase
 from ..CoreTestBase import FastFileLinkTestBase
@@ -91,6 +93,39 @@ class LogicalDownloadRequestStoreTest(unittest.TestCase):
         store.unregister('same-dl', 'req-1')
 
         self.assertFalse(store.isSuperseded('same-dl', 'req-1'))
+
+
+class IsLogicalCompletionRequestTest(unittest.TestCase):
+    """Unit tests for DownloadHandler._isLogicalCompletionRequest.
+
+    A bounded Range request (bytes=N-M) is one parallel chunk segment of a
+    larger transfer and must not be mistaken for a whole logical download --
+    only a request with no Range header, or an open-ended tail Range
+    (bytes=N-, e.g. the HTTP-resume tail after a WebRTC stall), represents the
+    full transfer and should drive the session-level completion lifecycle.
+    """
+
+    def _handlerWithRange(self, byteRange):
+        handler = DownloadHandler.__new__(DownloadHandler)
+        handler.byteRange = byteRange
+        return handler
+
+    def testNoRangeHeaderIsLogicalCompletion(self):
+        self.assertTrue(self._handlerWithRange(None)._isLogicalCompletionRequest())
+
+    def testOpenEndedTailRangeIsLogicalCompletion(self):
+        handler = self._handlerWithRange(ByteRange(start=19800000, end=None))
+        self.assertTrue(handler._isLogicalCompletionRequest())
+
+    def testBoundedRangeIsNotLogicalCompletion(self):
+        handler = self._handlerWithRange(ByteRange(start=33554432, end=67108863))
+        self.assertFalse(handler._isLogicalCompletionRequest())
+
+    def testBoundedRangeStartingAtZeroIsStillNotLogicalCompletion(self):
+        # Starting at byte 0 does not make it a full download -- only an
+        # explicit open (unbounded) end means "through the end of file".
+        handler = self._handlerWithRange(ByteRange(start=0, end=1023))
+        self.assertFalse(handler._isLogicalCompletionRequest())
 
 
 class HTTPDownloadCompletionStoreTest(unittest.TestCase):
@@ -160,17 +195,20 @@ class DownloadCompleteHandlerTest(unittest.TestCase):
         handler.session = type('SessionStub', (), {})()
         handler.session.httpDownloadCompletionStore = HTTPDownloadCompletionStore()
         handler.session.webRTC = mock.Mock()
-        handler._sendBytes = mock.Mock()
+        handler._buildDownloadCompleteResponse = lambda data: (b"OK", "text/plain; charset=utf-8")
         return handler
 
     def testDuplicateHttpCompleteAckTriggersReceiptOnlyOnce(self):
         handler = self._createHandler()
+        view = DownloadCompleteView(handler=handler)
+        controller = DownloadCompleteController(handler.session)
         downloadId = 'download-3'
         handler.session.httpDownloadCompletionStore.register(downloadId)
 
-        with mock.patch('bases.Server.FFLEvent.receiptCreated.trigger') as triggerMock:
-            handler._handleDownloadComplete({'downloadId': downloadId, 'receivedBytes': 123})
-            handler._handleDownloadComplete({'downloadId': downloadId, 'receivedBytes': 123})
+        with mock.patch('bases.views.DownloadComplete.FFLEvent.receiptCreated.trigger') as triggerMock, \
+             mock.patch.object(handler, 'sendHTTPResult') as sendMock:
+            view.handleComplete({'downloadId': downloadId, 'receivedBytes': 123}, controller=controller)
+            view.handleComplete({'downloadId': downloadId, 'receivedBytes': 123}, controller=controller)
 
         triggerMock.assert_called_once_with(
             downloadId=downloadId,
@@ -180,7 +218,7 @@ class DownloadCompleteHandlerTest(unittest.TestCase):
                 'domain': 'example.fastfilelink.com',
             }
         )
-        self.assertEqual(handler._sendBytes.call_count, 2)
+        self.assertEqual(sendMock.call_count, 2)
 
 
 class DiagnosisEndpointTest(FastFileLinkTestBase):
@@ -542,6 +580,160 @@ class DiagnosisEndpointTest(FastFileLinkTestBase):
         self.assertEqual(
             deliveredValues, {256, 512},
             f'Expected delivered bytes {{256, 512}}, got {deliveredValues}',
+        )
+
+
+class LogicalDownloadCompletionTest(FastFileLinkTestBase):
+    """Functional regression coverage: a bounded Range request (one parallel
+    chunk segment of a larger transfer) must not drive the session-level
+    download-completion lifecycle -- it must not count toward --max-downloads,
+    wait on the /complete ACK, or fire downloadCompleted. Only a full download
+    (no Range) or an open-ended tail Range (bytes=N-, e.g. the HTTP-resume
+    tail after a WebRTC stall) represents the whole logical download and
+    should trigger that lifecycle.
+
+    Before the fix, every /download request -- including bounded parallel
+    chunk segments -- was treated as a complete logical download, so a single
+    bounded Range chunk could prematurely reach --max-downloads and shut the
+    server down while sibling segments were still expected.
+
+    Like OverlappingDownloadReproTest above, requests are sent directly to a
+    known local port (via --port) rather than through the public tunnel URL,
+    to avoid DNS/tunnel warm-up flakiness unrelated to what this test verifies.
+    """
+
+    def __init__(self, methodName='runTest', fileSizeBytes=1024 * 1024):
+        super().__init__(methodName, fileSizeBytes)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('127.0.0.1', 0))
+            self._localPort = s.getsockname()[1]
+
+    def _startFastFileLink(self, **kwargs):
+        kwargs.setdefault('extraArgs', [])
+        kwargs['extraArgs'] = ['--port', str(self._localPort)] + list(kwargs['extraArgs'])
+        return super()._startFastFileLink(**kwargs)
+
+    def _parseShareLink(self, shareLink):
+        # Ignore the tunnel URL returned by the process; use the known local
+        # port instead so requests go directly to the server, bypassing the
+        # tunnel (and its DNS/warm-up delay) entirely.
+        uid = shareLink.rstrip('/').split('/')[-1].split('?')[0]
+        return f'http://127.0.0.1:{self._localPort}', uid
+
+    def _waitForProcessExit(self, timeout):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.coreProcess.poll() is not None:
+                return
+            time.sleep(0.5)
+        self.fail(f'Process did not terminate within {timeout} seconds')
+
+    def testBoundedRangeChunksDoNotTriggerMaxDownloadsShutdown(self):
+        """Two bounded Range chunk requests must not, by themselves, reach
+        --max-downloads 1 -- only the open-ended tail request that actually
+        completes the transfer should."""
+        self.outputCapture = {}
+        shareLink = self._startFastFileLink(
+            p2p=True, extraArgs=['--max-downloads', '1'], captureOutputIn=self.outputCapture
+        )
+        baseUrl, uid = self._parseShareLink(shareLink)
+        downloadUrl = f'{baseUrl}/{uid}/download'
+
+        # First parallel-chunk-style bounded Range request.
+        firstChunk = requests.get(downloadUrl, headers={'Range': 'bytes=0-1023'}, timeout=15)
+        self.assertEqual(firstChunk.status_code, 206)
+        self.assertEqual(len(firstChunk.content), 1024)
+
+        # Give the server enough time to (incorrectly) act on the first chunk
+        # alone, then prove it did not. This must clear the 5s grace window
+        # _waitForHTTPDownloadComplete() gives a logical-completion request to
+        # receive its /complete ACK (see bases/Server.py) -- otherwise a
+        # regression here would only show up several seconds later, outside
+        # the window this assertion checks.
+        time.sleep(7)
+        self.assertIsNone(
+            self.coreProcess.poll(),
+            'Server should NOT shut down after a single bounded Range chunk request',
+        )
+
+        # A second bounded chunk must still be servable -- proving the session
+        # (and its maxDownloads budget) was not already consumed/torn down.
+        secondChunk = requests.get(downloadUrl, headers={'Range': 'bytes=1024-2047'}, timeout=15)
+        self.assertEqual(
+            secondChunk.status_code, 206,
+            'Server session should still be alive to serve a second bounded chunk',
+        )
+        self.assertEqual(len(secondChunk.content), 1024)
+
+        # Same 5s grace window as above, this time for the second chunk.
+        time.sleep(7)
+        self.assertIsNone(
+            self.coreProcess.poll(),
+            'Server should still NOT have shut down after two bounded Range chunk requests',
+        )
+
+        # Now the open-ended tail request that actually completes the logical
+        # download -- this is the one that should count toward --max-downloads.
+        tailResponse = requests.get(
+            downloadUrl, headers={'Range': 'bytes=2048-'}, stream=True, timeout=15
+        )
+        self.assertEqual(tailResponse.status_code, 206)
+        for _chunk in tailResponse.iter_content(chunk_size=65536):
+            pass
+        tailResponse.close()
+
+        self._waitForProcessExit(timeout=15)
+        self.assertIn(
+            'Maximum downloads (1) reached. Shutting down server.',
+            self._updateCapturedOutput(self.outputCapture),
+        )
+
+    def testOpenEndedTailRangeAloneTriggersMaxDownloadsShutdown(self):
+        """An open-ended tail Range (bytes=N-) alone -- e.g. the HTTP-resume
+        tail that finishes a transfer started over WebRTC -- represents the
+        whole logical download and must, by itself, reach --max-downloads."""
+        self.outputCapture = {}
+        shareLink = self._startFastFileLink(
+            p2p=True, extraArgs=['--max-downloads', '1'], captureOutputIn=self.outputCapture
+        )
+        baseUrl, uid = self._parseShareLink(shareLink)
+        downloadUrl = f'{baseUrl}/{uid}/download'
+
+        response = requests.get(
+            downloadUrl,
+            headers={'Range': f'bytes={self.originalFileSize // 2}-'},
+            stream=True,
+            timeout=15,
+        )
+        self.assertEqual(response.status_code, 206)
+        for _chunk in response.iter_content(chunk_size=65536):
+            pass
+        response.close()
+
+        self._waitForProcessExit(timeout=15)
+        self.assertIn(
+            'Maximum downloads (1) reached. Shutting down server.',
+            self._updateCapturedOutput(self.outputCapture),
+        )
+
+    def testFullDownloadNoRangeStillTriggersMaxDownloadsShutdown(self):
+        """Regression guard: a plain full download (no Range header at all)
+        must keep triggering --max-downloads exactly as before this fix."""
+        self.outputCapture = {}
+        shareLink = self._startFastFileLink(
+            p2p=True, extraArgs=['--max-downloads', '1'], captureOutputIn=self.outputCapture
+        )
+        baseUrl, uid = self._parseShareLink(shareLink)
+        downloadUrl = f'{baseUrl}/{uid}/download'
+
+        downloadedFilePath = self._getDownloadedFilePath('logical_completion_full.bin')
+        self.downloadFileWithRequests(downloadUrl, downloadedFilePath)
+        self._verifyDownloadedFile(downloadedFilePath)
+
+        self._waitForProcessExit(timeout=15)
+        self.assertIn(
+            'Maximum downloads (1) reached. Shutting down server.',
+            self._updateCapturedOutput(self.outputCapture),
         )
 
 

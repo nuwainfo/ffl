@@ -390,6 +390,64 @@ Licensed under Apache-2.0 license.
             window.log = log;
         </script>
 
+        <!-- FFL event bus (SSE): session-wide server -> browser channel.
+             session.hello / share.snapshot land here today; download progress,
+             checksum manifest, and receipt confirmation land here in follow-up
+             work. POST /complete remains the client's ACK channel back to the
+             server — SSE is one-way, server -> browser only. -->
+        <script>
+            class FFLEventBus {
+                constructor(uid, sid, logFunction) {
+                    this.uid = uid;
+                    this.sid = sid;
+                    this.log = logFunction || (() => {});
+                    this.source = null;
+                    this.handlers = new Map();
+                }
+
+                connect() {
+                    const url = `/${encodeURIComponent(this.uid)}/events?sid=${encodeURIComponent(this.sid)}`;
+                    this.source = new EventSource(url);
+
+                    this.source.addEventListener('ffl', (e) => {
+                        let message;
+                        try {
+                            message = JSON.parse(e.data);
+                        } catch (err) {
+                            this.log('EventBus', `Failed to parse event: ${err}`);
+                            return;
+                        }
+
+                        this.log('EventBus', `<- ${message.topic}`, message.payload);
+                        this._dispatch(message);
+                    });
+
+                    this.source.onerror = () => {
+                        // EventSource reconnects automatically (sending Last-Event-ID); just note it.
+                        this.log('EventBus', `Connection error, readyState=${this.source.readyState}`);
+                    };
+
+                    return this;
+                }
+
+                on(topic, handler) {
+                    if (!this.handlers.has(topic)) {
+                        this.handlers.set(topic, new Set());
+                    }
+                    this.handlers.get(topic).add(handler);
+                    return () => this.handlers.get(topic)?.delete(handler);
+                }
+
+                _dispatch(message) {
+                    for (const handler of this.handlers.get(message.topic) || []) {
+                        handler(message);
+                    }
+                }
+            }
+
+            //window.fflEventBus = new FFLEventBus('{{ uid }}', generateSessionId(), log).connect();
+        </script>
+
         <!-- Initialize i18n using common initialization -->
         <script>
             // Initialize i18n system with log function and Download namespace

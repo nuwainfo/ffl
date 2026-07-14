@@ -18,18 +18,118 @@
 # limitations under the License.
 
 import base64
+import datetime
 import secrets
 
 from dataclasses import dataclass
 from enum import Enum
+from http import HTTPStatus
 from typing import Callable, Optional, Tuple
 
 from bases.crypto import CryptoInterface
+from bases.Kernel import getLogger, FFLEvent
+
+logger = getLogger(__name__)
 
 PICKUP_CODE_LENGTH = 6
 
 PUBKEY_PUBLIC_EXT = '.fflpub'
 PUBKEY_PRIVATE_EXT = '.fflkey'
+
+
+@dataclass
+class HTTPAuth:
+    """HTTP Basic Authentication credentials."""
+    user: Optional[str] = None
+    password: Optional[str] = None
+
+    def isEnabled(self) -> bool:
+        """Check if authentication is enabled (password is required)."""
+        return bool(self.password)
+
+
+class AuthMixin:
+    """
+    A mixin to handle Basic Authentication for BaseHTTPRequestHandler.
+    Provides authentication functionality for protecting HTTP resources.
+
+    Child classes must implement:
+        @property
+        def auth(self) -> HTTPAuth:
+            return HTTPAuth(user=..., password=...)
+    """
+    REALM = 'FastFileLink Protected Resource'
+
+    def handleAuthentication(self):
+        """
+        Checks the 'Authorization' header and validates user credentials.
+
+        Returns:
+            bool: True if authentication is successful, False otherwise.
+        """
+        # Skip auth if not configured (password is required to enable auth)
+        if not self.auth.isEnabled():
+            return True
+
+        authHeader = self.headers.get('Authorization')
+
+        if not authHeader or not authHeader.startswith('Basic '):
+            logger.warning("Authentication challenge sent: No or invalid auth header")
+            self.sendAuthChallenge()
+            return False
+
+        try:
+            # Decode credentials from Base64
+            encodedCredentials = authHeader.split(' ')[1]
+            decodedBytes = base64.b64decode(encodedCredentials)
+            credentials = decodedBytes.decode('utf-8')
+            username, password = credentials.split(':', 1)
+
+            # Verify credentials against auth property
+            if username == self.auth.user and password == self.auth.password:
+                logger.info(f"Authentication successful for user: '{username}'")
+
+                # Trigger authSuccess event
+                FFLEvent.authSuccess.trigger(
+                    username=username,
+                    timestamp=datetime.datetime.now().isoformat(),
+                    clientIp=self.client_address[0] if self.client_address else None
+                )
+
+                return True
+            else:
+                logger.warning(f"Authentication failed: Invalid credentials for user '{username}'")
+
+                # Trigger authFailed event
+                FFLEvent.authFailed.trigger(
+                    username=username,
+                    clientIp=self.client_address[0] if self.client_address else None,
+                    timestamp=datetime.datetime.now().isoformat()
+                )
+
+                self.sendAuthChallenge()
+                return False
+        except (base64.binascii.Error, UnicodeDecodeError, ValueError) as e:
+            logger.error(f"Error decoding credentials: {e}")
+            self.sendAuthChallenge()
+            return False
+
+    def sendAuthChallenge(self):
+        """
+        Sends a 401 Unauthorized response to the client, prompting for credentials.
+        """
+        # Trigger authRequired event
+        FFLEvent.authRequired.trigger(realm=self.REALM, timestamp=datetime.datetime.now().isoformat())
+
+        html = b'<h1>401 Unauthorized</h1><p>Authentication required to access this resource.</p>'
+
+        self.send_response(HTTPStatus.UNAUTHORIZED)
+        self.send_header('WWW-Authenticate', f'Basic realm="{self.REALM}"')
+        self.send_header('Content-type', 'text/html; charset=utf-8')
+        self.send_header("Content-Length", str(len(html)))
+        self.end_headers()
+
+        self.wfile.write(html)
 
 
 class RecipientAuthMode(Enum):
@@ -134,6 +234,19 @@ class RecipientAuth:
             return cls(mode=RecipientAuthMode.PICKUP, pickupCode=pickupCode or cls.generatePickupCode())
 
         return cls()
+
+    @classmethod
+    def createFromArgs(cls, config: dict) -> 'RecipientAuth':
+        """Create from a flat dict of share args (Namespace vars or daemon config dict)."""
+        otpAPIBase = config.get('recipientOTPAPIBase')
+        return cls.create(
+            mode=config.get('recipientAuth'),
+            publicKeyPath=config.get('recipientPublicKey'),
+            pickupCode=config.get('pickupCode'),
+            recipientEmail=config.get('recipientEmail'),
+            otpRequestUrl=f"{otpAPIBase.rstrip('/')}/otp/email/request/" if otpAPIBase else None,
+            otpVerifyUrl=f"{otpAPIBase.rstrip('/')}/otp/email/verify/" if otpAPIBase else None,
+        )
 
     @classmethod
     def generatePickupCode(cls) -> str:

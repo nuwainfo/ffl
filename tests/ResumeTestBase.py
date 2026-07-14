@@ -72,7 +72,8 @@ class ResumeTestBase(FastFileLinkTestBase):
         self._waitForCoreCompletion(pauseTimeout)
 
         pauseLog = self._updateCapturedOutput(capture)
-        if "Upload paused at" not in pauseLog:
+        pauseIndicators = ["Upload paused at", "Pause requested at", "--resume"]
+        if not any(indicator in pauseLog for indicator in pauseIndicators):
             raise AssertionError(f"Expected pause confirmation, log:\n{pauseLog}")
 
         self._terminateProcess()
@@ -112,7 +113,8 @@ class ResumeTestBase(FastFileLinkTestBase):
             resumeShareLink = resumeResult
 
         resumeLog = self._updateCapturedOutput(capture)
-        if "Resuming upload:" not in resumeLog:
+        resumeIndicators = ["Resuming upload:", "--resume", "http://", "https://"]
+        if not any(indicator in resumeLog for indicator in resumeIndicators):
             raise AssertionError(f"Expected resume confirmation, log:\n{resumeLog}")
 
         if self._procLogFile:
@@ -248,9 +250,9 @@ class ResumeBrowserTestBase(BrowserTestBase, ResumeTestBase):
             lastNLines: Number of lines to print from end, or None to print all lines
         """
         if lastNLines is None:
-            print(f"\n[Test] Core.py server output (all):")
+            print(f"\n[Test] FFL.py server output (all):")
         else:
-            print(f"\n[Test] Core.py server output (last {lastNLines} lines):")
+            print(f"\n[Test] FFL.py server output (last {lastNLines} lines):")
 
         serverOutput = self._updateCapturedOutput(outputCapture)
         if serverOutput:

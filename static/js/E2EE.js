@@ -163,9 +163,12 @@ async function deriveHKDF(keyMaterial, salt, info, length) {
  * @returns {Promise<boolean>} - True if commitment is valid
  */
 async function verifyKeyCommitment(contentKey, commitmentB64, chunkSize, filesize, filename, debug = false) {
+    // Commitment verification is mandatory, not opportunistic: it's the only
+    // thing that stops a tampered page (with a substituted contentKey/manifest)
+    // from silently succeeding. A missing commitment must fail closed.
     if (!commitmentB64) {
-        if (debug) console.log('[E2EE] No commitment to verify');
-        return true;
+        if (debug) console.log('[E2EE] No commitment present - failing closed');
+        return false;
     }
 
     try {
@@ -242,11 +245,11 @@ async function decryptRSA(privateKey, ciphertext) {
 // ========== WebRTCDecryptor Class ==========
 
 class WebRTCDecryptor {
-    constructor(contentKey, nonceBase, filename, filesize, log) {
+    constructor(contentKey, nonceBase, fileName, fileSize, log) {
         this.contentKey = contentKey;
         this.nonceBase = nonceBase;
-        this.filename = filename;
-        this.filesize = filesize;
+        this.fileName = fileName;
+        this.fileSize = fileSize;
         this.log = log || console.log;
 
         // TLV frame constants (match E2EE.py E2EEFramerBase)
@@ -269,7 +272,7 @@ class WebRTCDecryptor {
      * Format: filename(utf-8) | filesize(ascii) | chunkIndex(ascii)
      */
     buildAAD(chunkIndex) {
-        return buildAADStringFormat(this.filename, this.filesize, chunkIndex);
+        return buildAADStringFormat(this.fileName, this.fileSize, chunkIndex);
     }
 
     /**
@@ -331,6 +334,10 @@ class WebRTCDecryptor {
 
 // ========== E2EEManager Class ==========
 
+function e2eeManifestVersion(manifest) {
+    return (manifest && Number.isInteger(manifest.version)) ? manifest.version : 1;
+}
+
 class E2EEManager {
     constructor(log, options = {}) {
         this.log = log || console.log;
@@ -339,6 +346,17 @@ class E2EEManager {
 
         // Allow disabling /e2ee/manifest fallback (useful when using embedded-only mode)
         this.disableManifestFallback = options.disableManifestFallback || false;
+    }
+
+    // Server's advertised E2EE protocol version (1 = legacy / not advertised).
+    get protocolVersion() {
+        return e2eeManifestVersion(this.manifest);
+    }
+
+    // Whether the server serves E2EE Range/resume reads chunk-aligned (v2+).
+    // Legacy servers must only be used for full downloads from byte 0.
+    get supportsAlignedRange() {
+        return this.protocolVersion >= 2;
     }
 
     /**
@@ -420,7 +438,7 @@ class E2EEManager {
     /**
      * Perform RSA key exchange to get content key (Kc) and nonce base
      * This exchanges RSA public key (Ki) for wrapped content key
-     * @returns {Promise<{contentKey: Uint8Array, nonceBase: Uint8Array, filename: string, filesize: number}>}
+     * @returns {Promise<{contentKey: Uint8Array, nonceBase: Uint8Array, fileName: string, fileSize: number}>}
      */
     async performKeyExchange() {
         try {
@@ -455,8 +473,8 @@ class E2EEManager {
             return {
                 contentKey: new Uint8Array(contentKeyBytes),
                 nonceBase: new Uint8Array(nonceBaseBytes),
-                filename: initData.filename,
-                filesize: initData.filesize
+                fileName: initData.fileName ?? initData.filename,
+                fileSize: initData.fileSize ?? initData.filesize
             };
 
         } catch (error) {
@@ -474,8 +492,8 @@ class E2EEManager {
         const decryptor = new WebRTCDecryptor(
             keyData.contentKey,
             keyData.nonceBase,
-            keyData.filename,
-            keyData.filesize,
+            keyData.fileName,
+            keyData.fileSize,
             this.log
         );
         this.log('E2EE', '✓ WebRTC decryptor ready');
@@ -489,7 +507,7 @@ class E2EEManager {
      * @returns {Promise<HTTPDecryptor>} - HTTP decryptor instance
      */
     async setupHTTPDecryptor(userKeyB64 = null) {
-        let contentKey, nonceBase, filename, filesize, embeddedTags = null;
+        let contentKey, nonceBase, fileName, fileSize, embeddedTags = null;
 
         if (userKeyB64) {
             // Embedded mode: Use user-provided key with embedded tags
@@ -508,8 +526,8 @@ class E2EEManager {
                 contentKey,
                 this.embeddedTagsData.commitment,
                 this.manifest.chunkSize,
-                this.manifest.filesize,
-                this.manifest.filename
+                this.manifest.fileSize ?? this.manifest.filesize,
+                this.manifest.fileName ?? this.manifest.filename
             );
 
             if (!isValid) {
@@ -520,8 +538,8 @@ class E2EEManager {
 
             // Use embedded data
             nonceBase = base64ToBytes(this.embeddedTagsData.nonceBase);
-            filename = this.manifest.filename;
-            filesize = this.manifest.filesize;
+            fileName = this.manifest.fileName ?? this.manifest.filename;
+            fileSize = this.manifest.fileSize ?? this.manifest.filesize;
             embeddedTags = this.embeddedTagsData.tags;
 
         } else {
@@ -529,22 +547,31 @@ class E2EEManager {
             const keyData = await this.performKeyExchange();
             contentKey = keyData.contentKey;
             nonceBase = keyData.nonceBase;
-            filename = keyData.filename;
-            filesize = keyData.filesize;
+            fileName = keyData.fileName;
+            fileSize = keyData.fileSize;
         }
 
         // Create HTTPDecryptor
         const httpDecryptor = new HTTPDecryptor(
             contentKey,
             nonceBase,
-            filename,
-            filesize,
+            fileName,
+            fileSize,
             this.manifest.chunkSize,
             embeddedTags,
             this.log
         );
 
-        this.log('E2EE', embeddedTags ? '✓ HTTP decryptor ready with embedded tags' : '✓ HTTP decryptor ready');
+        // Stamp the negotiated protocol version into the context so both the
+        // Service Worker (via sendContextToServiceWorker) and DownloadManager
+        // can gate Range/resume on it.
+        httpDecryptor.e2eeContext.version = this.protocolVersion;
+
+        this.log(
+            'E2EE',
+            (embeddedTags ? '✓ HTTP decryptor ready with embedded tags' : '✓ HTTP decryptor ready') +
+                ` (protocol v${this.protocolVersion})`
+        );
         return httpDecryptor;
     }
 
@@ -608,8 +635,8 @@ class HTTPDecryptor {
     constructor(
         contentKey,
         nonceBase,
-        filename,
-        filesize,
+        fileName,
+        fileSize,
         chunkSize,
         embeddedTags = null,
         log = null,
@@ -618,8 +645,8 @@ class HTTPDecryptor {
     ) {
         this.contentKey = contentKey;
         this.nonceBase = nonceBase;
-        this.filename = filename;
-        this.filesize = filesize;
+        this.fileName = fileName;
+        this.fileSize = fileSize;
         this.chunkSize = chunkSize;
         this.streamId = streamId;
         this.log = log || console.log;
@@ -635,8 +662,8 @@ class HTTPDecryptor {
         this.e2eeContext = {
             contentKey: bytesToBase64(this.contentKey),
             nonceBase: bytesToBase64(this.nonceBase),
-            filename: this.filename,
-            filesize: this.filesize,
+            fileName: this.fileName,
+            fileSize: this.fileSize,
             chunkSize: this.chunkSize,
             tags: [] // Will be populated if using embedded mode
         };
@@ -671,8 +698,8 @@ class HTTPDecryptor {
      * @param {Object} e2eeContext - E2EE context/manifest with base64-encoded keys
      * @param {string} e2eeContext.contentKey - Base64-encoded AES-256-GCM content key
      * @param {string} e2eeContext.nonceBase - Base64-encoded nonce base
-     * @param {string} e2eeContext.filename - Original filename
-     * @param {number} e2eeContext.filesize - Original file size
+     * @param {string} e2eeContext.fileName - Original filename
+     * @param {number} e2eeContext.fileSize - Original file size
      * @param {number} e2eeContext.chunkSize - Encryption chunk size (e.g., 262144)
      * @param {Array} [e2eeContext.tags] - Optional array of embedded tags [{chunkIndex, tag}]
      * @param {Function} [log] - Optional logging function
@@ -696,8 +723,8 @@ class HTTPDecryptor {
 
         if (log) {
             log('HTTPDecryptor', 'Creating from context:', {
-                filename: e2eeContext.filename,
-                filesize: e2eeContext.filesize,
+                fileName: e2eeContext.fileName,
+                fileSize: e2eeContext.fileSize,
                 chunkSize: e2eeContext.chunkSize,
                 hasTags: !!embeddedTags,
                 tagCount: embeddedTags ? embeddedTags.length : 0
@@ -708,8 +735,8 @@ class HTTPDecryptor {
         return new HTTPDecryptor(
             contentKey,
             nonceBase,
-            e2eeContext.filename,
-            e2eeContext.filesize,
+            e2eeContext.fileName,
+            e2eeContext.fileSize,
             e2eeContext.chunkSize,
             embeddedTags,
             log
@@ -854,7 +881,7 @@ class HTTPDecryptor {
      */
     async decryptSingleChunk(chunkIndex, ciphertext, tag) {
         const nonce = buildNonce(this.nonceBase, chunkIndex);
-        const aad = buildAADStructFormat(this.filename, this.filesize, chunkIndex);
+        const aad = buildAADStructFormat(this.fileName, this.fileSize, chunkIndex);
         return await decryptAESGCM(this.contentKey, nonce, aad, ciphertext, tag);
     }
 
@@ -916,11 +943,11 @@ class TusEncryptedFileSource {
 }
 
 class TusUploadEncryptor {
-    constructor({ contentKey, nonceBase, filename, filesize, chunkSize, tags = [] }) {
+    constructor({ contentKey, nonceBase, fileName, fileSize, chunkSize, tags = [] }) {
         this.contentKey = contentKey;
         this.nonceBase = nonceBase;
-        this.filename = filename;
-        this.filesize = filesize;
+        this.fileName = fileName;
+        this.fileSize = fileSize;
         this.chunkSize = chunkSize;
         this._cryptoKeyPromise = TusUploadEncryptor.importAESGCMKey(contentKey, ['encrypt']);
         this._tagMap = new Map();
@@ -937,7 +964,7 @@ class TusUploadEncryptor {
     async encryptChunk(plaintextBytes, chunkIndex) {
         const cryptoKey = await this._cryptoKeyPromise;
         const nonce = buildNonce(this.nonceBase, chunkIndex);
-        const aad = buildAADStructFormat(this.filename, this.filesize, chunkIndex);
+        const aad = buildAADStructFormat(this.fileName, this.fileSize, chunkIndex);
         const ciphertextWithTag = await crypto.subtle.encrypt(
             {
                 name: 'AES-GCM',
@@ -965,7 +992,7 @@ class TusUploadEncryptor {
 
     async exportMetadata() {
         const tags = this.getTagEntries();
-        const expectedTagCount = Math.max(1, Math.ceil(this.filesize / this.chunkSize));
+        const expectedTagCount = Math.max(1, Math.ceil(this.fileSize / this.chunkSize));
         if (tags.length !== expectedTagCount) {
             throw new Error(`Missing encrypted chunk tags. Expected ${expectedTagCount}, got ${tags.length}.`);
         }
@@ -977,15 +1004,15 @@ class TusUploadEncryptor {
         }
 
         return {
-            filename: this.filename,
-            filesize: this.filesize,
+            fileName: this.fileName,
+            fileSize: this.fileSize,
             chunkSize: this.chunkSize,
             nonceBase: bytesToBase64(this.nonceBase),
             commitment: await TusUploadEncryptor.buildKeyCommitment(
                 this.contentKey,
                 this.chunkSize,
-                this.filesize,
-                this.filename
+                this.fileSize,
+                this.fileName
             ),
             tags
         };
@@ -1063,8 +1090,8 @@ class TusUploadEncryptor {
         const encryptor = new TusUploadEncryptor({
             contentKey: options.contentKey,
             nonceBase: options.nonceBase,
-            filename: file.name,
-            filesize: file.size,
+            fileName: file.name,
+            fileSize: file.size,
             chunkSize: options.chunkSize,
             tags: options.tags || []
         });

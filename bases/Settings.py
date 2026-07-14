@@ -160,6 +160,9 @@ class DummyFeatureManager(Singleton):
         """Dummy implementation - returns original manager class"""
         return managerClass
 
+    def getShareRequestClass(self, shareRequestClass):
+        return shareRequestClass
+
     def invite(self, link, params=None):
         """Open invite page in browser with the sharing link for referral rewards
 

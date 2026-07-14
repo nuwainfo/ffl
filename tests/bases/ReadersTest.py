@@ -273,7 +273,7 @@ class FolderTransferTest(FastFileLinkTestBase):
         self.testFilePath = self.testFolderPath
 
         # Calculate expected ZIP size using Reader abstraction
-        # This is what Core.py will report in the JSON
+        # This is what FFL.py will report in the JSON
         reader = SourceReader.build(self.testFolderPath, compression='store')
         self.originalFileSize = reader.size if reader.size is not None else 0
         print(f"[Test] Expected ZIP size (Store mode): {self.originalFileSize} bytes")
@@ -957,12 +957,11 @@ class StdinStreamingTest(FastFileLinkTestBase):
     """Test stdin streaming with chunked transfer encoding (functional tests)"""
 
     def testStdinStreamingBasic(self):
-        """Test basic stdin streaming: `cat file | python Core.py --cli -`"""
+        """Test basic stdin streaming: `cat file | python FFL.py --cli -`"""
         print("\n[Test] Testing stdin streaming with chunked encoding")
 
         try:
-            # Start stdin streaming
-            shareLink = self._startStdinStreaming(self.testFilePath)
+            shareLink = self._startFastFileLink(stdinInputPath=self.testFilePath)
 
             # Download the file
             downloadedFilePath = self._getDownloadedFilePath("stdin")
@@ -978,16 +977,15 @@ class StdinStreamingTest(FastFileLinkTestBase):
             self._terminateProcess()
 
     def testStdinStreamingWithCustomName(self):
-        """Test stdin streaming with custom filename: `cat file | python Core.py --cli - --name custom.bin`"""
+        """Test stdin streaming with custom filename: `cat file | python FFL.py --cli - --name custom.bin`"""
         print("\n[Test] Testing stdin streaming with custom filename")
 
         customName = "my-custom-file.bin"
 
         try:
-            # Start stdin streaming with custom name
-            shareLink = self._startStdinStreaming(self.testFilePath, customName=customName)
+            shareLink = self._startFastFileLink(stdinInputPath=self.testFilePath, stdinFileName=customName)
 
-            # Verify content_name in JSON output
+            # Verify contentName in JSON output
             with open(self.jsonOutputPath, 'r', encoding='utf-8') as f:
                 jsonOutput = json.load(f)
 
@@ -1014,8 +1012,7 @@ class StdinStreamingTest(FastFileLinkTestBase):
         print("\n[Test] Testing stdin streaming download with curl")
 
         try:
-            # Start stdin streaming
-            shareLink = self._startStdinStreaming(self.testFilePath)
+            shareLink = self._startFastFileLink(stdinInputPath=self.testFilePath)
 
             # Download with curl
             downloadedFilePath = self._getDownloadedFilePath("stdin_curl")
@@ -1053,8 +1050,7 @@ class StdinStreamingTest(FastFileLinkTestBase):
         largeFileHash = self.getFileHash(largeFilePath)
 
         try:
-            # Start stdin streaming with large file
-            shareLink = self._startStdinStreaming(largeFilePath)
+            shareLink = self._startFastFileLink(stdinInputPath=largeFilePath)
 
             # Download the file
             downloadedFilePath = self._getDownloadedFilePath("stdin_large")
@@ -1074,8 +1070,7 @@ class StdinStreamingTest(FastFileLinkTestBase):
         print("\n[Test] Testing stdin caching for multiple reads")
 
         try:
-            # Start stdin streaming
-            shareLink = self._startStdinStreaming(self.testFilePath)
+            shareLink = self._startFastFileLink(stdinInputPath=self.testFilePath)
 
             # First download should succeed and cache the data
             downloadedFilePath1 = self._getDownloadedFilePath("stdin_first")

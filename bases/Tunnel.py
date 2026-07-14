@@ -30,6 +30,7 @@ import requests
 
 from bases.Bore import BoreClient
 from bases.Kernel import getLogger, FFLEvent
+from bases.Settings import SettingsGetter
 
 # Set ONLY_BUILTIN_TUNNEL="True" if Features addon enabled if needed.
 BUILTIN_TUNNEL = os.getenv('BUILTIN_TUNNEL', '33.fastfilelink.com')
@@ -185,7 +186,7 @@ class AsyncTunnelThread(threading.Thread):
 class TunnelRunner:
     """
     Tunnel management class that handles tunnel creation, running, and cleanup.
-    Designed specifically for Core.py usage pattern.
+    Designed specifically for FFL.py usage pattern.
     """
 
     def __init__(self, fileSize, proxyConfig=None):
@@ -395,3 +396,29 @@ class TunnelRunner:
         """Context manager exit with automatic cleanup"""
         self.stop()
         return False
+
+
+def createTunnelRunner(fileSize, proxyConfig=None, onTunnelError=None) -> TunnelRunner:
+    """Return an addon-enhanced TunnelRunner instance if addons are loaded, else base TunnelRunner.
+
+    If the Tunnels addon config is invalid: always logs a warning, calls onTunnelError(exc)
+    and falls back to the current class if provided, or re-raises if not.
+    """
+    settingsGetter = SettingsGetter.getInstance()
+
+    tunnelRunnerClass = TunnelRunner
+    if settingsGetter.hasFeaturesSupport():
+        tunnelRunnerClass = settingsGetter.getFeatureManager().getTunnelRunnerClass(tunnelRunnerClass)
+
+    if settingsGetter.hasTunnelsSupport():
+        try:
+            from addons.Tunnels import TunnelRunnerProvider
+            tunnelRunnerClass = TunnelRunnerProvider().getTunnelRunnerClass(tunnelRunnerClass)
+        except Exception as e:
+            logger.warning(f"Failed to load tunnel addon, falling back to default tunnel: {e}")
+            if onTunnelError:
+                onTunnelError(e)
+            else:
+                raise
+
+    return tunnelRunnerClass(fileSize, proxyConfig=proxyConfig)

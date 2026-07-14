@@ -13,6 +13,8 @@
 (function() {
     'use strict';
 
+    const DEFAULT_METADATA_FETCH_TIMEOUT_MS = 5000;
+    const PREVIEW_METADATA_TIMEOUT_ERROR = 'Preview metadata fetch timed out';
 
     // Utility functions for file size formatting
     const FormatUtils = {
@@ -83,6 +85,9 @@
             this.viewer = null;
             this.extractor = null;
             this._currentViewEntry = null;
+            this.metadataFetchTimeoutMs = Number.isFinite(options.metadataFetchTimeoutMs)
+                ? Math.max(0, options.metadataFetchTimeoutMs)
+                : DEFAULT_METADATA_FETCH_TIMEOUT_MS;
 
             // Store getDownloadState function
             this.getDownloadState = options.getDownloadState || null;
@@ -121,13 +126,13 @@
 
             this.log('PreviewUI', 'Constructed');
 
-            // Initialize immediately in constructor
+            // Initialize preview support immediately; UI-only work stays separate so writer setup
+            // never waits on i18n or hint rendering.
+            this._previewSupportPromise = this._initializePreviewSupport();
             this._initPromise = this._initialize();
         }
 
-        async _initialize() {
-            this.log('ZipPreview', 'Initializing...');
-
+        async _initializePreviewSupport() {
             // If E2EE key promise is provided, wait for user to provide decryption key
             // before fetching metadata (manifest is encrypted and can't be parsed without key)
             if (this.options.e2eeKeyPromise) {
@@ -138,35 +143,24 @@
                 } catch (e) {
                     this.log('ZipPreview', `E2EE key promise rejected: ${e}`);
                     this.isPreviewableZip = false;
-                    this.enhanceInfoIcon();
                     return;
                 }
             }
 
-            // Try to fetch metadata to determine if this is a previewable ZIP
-            try {
-                this.log('ZipPreview', 'Checking for preview support (fetching metadata)...');
-                const response = await fetch(this.options.metadataURL, {
-                    cache: 'no-cache'
-                });
-
-                if (response.ok) {
-                    // Fetch raw data (don't parse - let extractor handle decryption)
-                    const rawData = await response.arrayBuffer();
-                    this.log('ZipPreview', `Metadata fetched: ${rawData.byteLength} bytes`);
-
-                    // Metadata fetch succeeded - create extractor with raw data
-                    this.isPreviewableZip = true;
-                    this.createExtractor(rawData);
-                    this.log('ZipPreview', 'Extractor created with metadata');
-                } else {
-                    this.log('ZipPreview', `No preview support (metadata fetch failed: ${response.status})`);
-                    this.isPreviewableZip = false;
-                }
-            } catch (e) {
-                this.log('ZipPreview', `No preview support (metadata error: ${e})`);
+            const rawData = await this.fetchPreviewMetadata();
+            if (!rawData) {
                 this.isPreviewableZip = false;
+                return;
             }
+
+            this.isPreviewableZip = true;
+            this.createExtractor(rawData);
+            this.log('ZipPreview', 'Extractor created with metadata');
+        }
+
+        async _initialize() {
+            this.log('ZipPreview', 'Initializing...');
+            await this._previewSupportPromise;
 
             // Enhance info icon for hover behavior (for all files)
             this.enhanceInfoIcon();
@@ -187,6 +181,82 @@
             setTimeout(() => this.hideInlineHint(), 5000);
 
             this.log('ZipPreview', 'Initialization complete - inline hint shown, will auto-hide after 5s');
+        }
+
+        createPreviewMetadataTimeoutError() {
+            const error = new Error(PREVIEW_METADATA_TIMEOUT_ERROR);
+            error.code = 'FFL_PREVIEW_METADATA_TIMEOUT';
+            return error;
+        }
+
+        async awaitWithTimeout(promise, timeoutMs, onTimeout = null) {
+            if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+                return promise;
+            }
+
+            let timeoutId = null;
+            const timeoutPromise = new Promise((_, reject) => {
+                timeoutId = setTimeout(() => {
+                    if (typeof onTimeout === 'function') {
+                        onTimeout();
+                    }
+                    reject(this.createPreviewMetadataTimeoutError());
+                }, timeoutMs);
+            });
+
+            try {
+                return await Promise.race([promise, timeoutPromise]);
+            } finally {
+                if (timeoutId !== null) {
+                    clearTimeout(timeoutId);
+                }
+            }
+        }
+
+        async fetchPreviewMetadata() {
+            this.log('ZipPreview', 'Checking for preview support (fetching metadata)...');
+
+            const timeoutMs = this.metadataFetchTimeoutMs;
+            const supportsAbortController = typeof AbortController === 'function';
+            const controller = (supportsAbortController && timeoutMs > 0) ? new AbortController() : null;
+            let timeoutTriggered = false;
+
+            try {
+                const response = await this.awaitWithTimeout(
+                    fetch(this.options.metadataURL, {
+                        cache: 'no-cache',
+                        ...(controller ? { signal: controller.signal } : {})
+                    }).then(async (fetchResponse) => {
+                        if (!fetchResponse.ok) {
+                            this.log('ZipPreview', `No preview support (metadata fetch failed: ${fetchResponse.status})`);
+                            return null;
+                        }
+
+                        const rawData = await fetchResponse.arrayBuffer();
+                        this.log('ZipPreview', `Metadata fetched: ${rawData.byteLength} bytes`);
+                        return rawData;
+                    }),
+                    timeoutMs,
+                    () => {
+                        timeoutTriggered = true;
+                        if (controller) {
+                            controller.abort();
+                        }
+                    }
+                );
+
+                return response;
+            } catch (e) {
+                if (timeoutTriggered || e?.code === 'FFL_PREVIEW_METADATA_TIMEOUT') {
+                    this.log(
+                        'ZipPreview',
+                        `No preview support (metadata fetch timed out after ${timeoutMs}ms)`
+                    );
+                } else if (!(controller && timeoutTriggered && e?.name === 'AbortError')) {
+                    this.log('ZipPreview', `No preview support (metadata error: ${e})`);
+                }
+                return null;
+            }
         }
 
         log(tag, message) {
@@ -2244,8 +2314,9 @@
          * @returns {Promise<Object>} Wrapped writer or original writer
          */
         async wrapWriter(writer) {
-            // Wait for initialization to complete (metadata fetch)
-            await this._initPromise;
+            // Only wait for preview capability detection. Writer setup must not block on
+            // i18n readiness or hint rendering.
+            await this._previewSupportPromise;
 
             this.log('ZipPreview',
                 `wrapWriter - isPreviewableZip: ${this.isPreviewableZip}, hasExtractor: ${!!this.extractor}`
