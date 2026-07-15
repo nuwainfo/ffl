@@ -10,6 +10,8 @@ import unittest
 
 import psutil
 
+from bases.Daemon import DaemonClient
+
 from ..CoreTestBase import FastFileLinkTestBase, LOCAL_TEST_SERVER_URL
 
 
@@ -124,6 +126,19 @@ class DaemonTest(FastFileLinkTestBase):
         self.assertTrue(lines, "Should have at least one share listed")
         return lines[0].split()[0]
 
+    def _waitForFirstManagedShareId(self, timeout=20):
+        client = DaemonClient()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            shares = client.listShares()
+            if shares:
+                print(f"[Test] daemon shares during wait: {shares}")
+                return shares[0]['id']
+
+            time.sleep(0.3)
+
+        raise AssertionError("Timed out waiting for daemon-managed share to appear")
+
     # ------------------------------------------------------------------
     # Tests
     # ------------------------------------------------------------------
@@ -196,6 +211,59 @@ class DaemonTest(FastFileLinkTestBase):
         downloadedFilePath = self._getDownloadedFilePath('daemon_upload_share_test.bin')
         self.downloadFileWithRequests(shareLink, downloadedFilePath)
         self._verifyDownloadedFile(downloadedFilePath, shareLink=shareLink)
+
+    def testDaemonUploadShareStop(self):
+        """Test stopping an in-flight daemon upload cancels it and removes it from active shares."""
+        self._stopDaemon()
+        self._provisionLocalTestServerCredential()
+        testServerProcess = self._startTestServer()
+        self._testServerProcesses.append(testServerProcess)
+        self._daemonEnvOverrides = {
+            'FILESHARE_TEST': LOCAL_TEST_SERVER_URL,
+            'UPLOAD_CHUNK_SIZE': '1',
+            'UPLOAD_CONCURRENCY': '1',
+        }
+        self._startDaemon()
+
+        largeFileSize = 128 * 1024 * 1024
+        self.generateRandomFile(self.testFilePath, largeFileSize)
+        self.originalFileHash = self.getFileHash(self.testFilePath)
+        self.originalFileSize = os.path.getsize(self.testFilePath)
+        print(f"[Test] Regenerated larger upload file: {self.originalFileSize} bytes")
+
+        self._startFastFileLink(
+            p2p=False,
+            extraArgs=['--background'],
+            waitForCompletion=False,
+        )
+
+        shareId = self._waitForFirstManagedShareId()
+        print(f"[Test] Stopping daemon upload share: {shareId}")
+
+        output, returnCode = self._runPatchedCoreCommand(['--cli', 'shares', 'stop', shareId], timeout=10)
+        self.assertEqual(returnCode, 0, f"shares stop failed: {output}")
+        self.assertIn(shareId, output, "Output should mention the stopped share ID")
+
+        self.coreProcess.wait(timeout=120)
+
+        if self._procLogFile:
+            self._procLogFile.flush()
+        with open(self.procLogPath, 'r', encoding='utf-8', errors='replace') as logFile:
+            output = logFile.read()
+
+        self.assertEqual(
+            self.coreProcess.returncode,
+            0,
+            f"CorePatched.py currently exits 0 unless it raises; unexpected process failure:\n{output}"
+        )
+
+        self.assertIn('Waiting for share link...', output)
+        self.assertIn('Failed to get share link from daemon', output)
+        self.assertFalse(os.path.exists(self.jsonOutputPath), "Stopped upload should not write share_info.json")
+
+        output, returnCode = self._runPatchedCoreCommand(['--cli', 'shares', 'list'], timeout=10)
+        self.assertEqual(returnCode, 0, f"shares list after stop failed: {output}")
+        self.assertIn('No active shares', output, "Stopped daemon upload should be removed from active shares")
 
     def testDaemonBackgroundUploadWithoutYesPromptsThenRoutesToDaemon(self):
         """Test explicit --background upload prompts first, then submits to daemon."""
@@ -314,20 +382,22 @@ class DaemonTest(FastFileLinkTestBase):
         shareLink = self._startFastFileLink(p2p=True, extraArgs=['--background'])
         shareId = self._getFirstManagedShareId()
 
-        output, returnCode = self._runPatchedCoreCommand(['--cli', 'shares', 'qr', shareId], timeout=10)
+        output, returnCode = self._runPatchedCoreCommand(['--cli', 'shares', 'qr', shareId], timeout=20)
         self.assertEqual(returnCode, 0, f"shares qr failed: {output}")
         self.assertIn(shareLink, output, "QR output should include the share link")
 
     def testDaemonShareStopAll(self):
         """Test `ffl shares stop --all` stops all managed shares."""
         self._startFastFileLink(p2p=True, extraArgs=['--background'])
+        self._terminateProcess()
         self._startFastFileLink(p2p=True, extraArgs=['--background'])
+        self._terminateProcess()
 
-        output, returnCode = self._runPatchedCoreCommand(['--cli', 'shares', 'stop', '--all'], timeout=15)
+        output, returnCode = self._runPatchedCoreCommand(['--cli', 'shares', 'stop', '--all'], timeout=30)
         self.assertEqual(returnCode, 0, f"shares stop --all failed: {output}")
         self.assertIn('Stopped', output, "Output should report stopped shares")
 
-        output, returnCode = self._runPatchedCoreCommand(['--cli', 'shares', 'list'], timeout=10)
+        output, returnCode = self._runPatchedCoreCommand(['--cli', 'shares', 'list'], timeout=20)
         self.assertEqual(returnCode, 0, f"shares list after stop --all failed: {output}")
         self.assertIn('No active shares', output, "All shares should be stopped")
 

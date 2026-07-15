@@ -466,6 +466,10 @@ class ShareExecutionContext:
     interactionHandler: Any = None
     allowUserInteraction: bool = True
     proxyConfig: Optional[ProxyConfig] = None
+    stopEvent: threading.Event = field(default_factory=threading.Event)
+
+    def isStopRequested(self):
+        return self.stopEvent.is_set()
 
 
 class ScanFolderProgressReporter(SourceReaderProgressReporter):
@@ -646,6 +650,9 @@ def processSharing(shareRequest: ShareRequest, context: ShareExecutionContext):
                 output(featureManager.getUploadUnavailableMessage())
                 return 1
 
+        if context.isStopRequested():
+            return 0
+
         # registered or for testing
         if not featureManager.isRegisteredUser():
             reporter.sendException(_('User email address has been lost'))
@@ -675,6 +682,9 @@ def processSharing(shareRequest: ShareRequest, context: ShareExecutionContext):
             stdinCache=(args.stdinCache != 'off')
         )
         size = reader.size # None means unknown size (e.g., stdin)
+
+        if context.isStopRequested():
+            return 0
 
         # Show E2EE status if enabled (first line, before establishing tunnel)
         e2eeEnabled = args.e2ee
@@ -710,6 +720,9 @@ def processSharing(shareRequest: ShareRequest, context: ShareExecutionContext):
                 
             uid = uploadProcessor.uid
 
+        if context.isStopRequested():
+            return 0
+
         # If we reach here, we need to start local server (either P2P or Pull upload)
         if uid is None:
             uid = generateUID(featureManager)
@@ -740,6 +753,9 @@ def processSharing(shareRequest: ShareRequest, context: ShareExecutionContext):
             domain, tunnelLink = tunnelRunner.start(port)
             link = f"{tunnelLink}{uid}"
 
+            if context.isStopRequested():
+                return 0
+
             # Determine recipient auth mode (P2P only; pull-upload uses server-side auth)
             recipientAuth = RecipientAuth.createFromArgs(args.toDict())
 
@@ -751,9 +767,15 @@ def processSharing(shareRequest: ShareRequest, context: ShareExecutionContext):
                     output(_('Upload failed: {error}').format(error=str(uploadError)))
                     reporter.sendException(str(uploadError))
                     return 1
+
+                if uploadProcessor.isDone():
+                    return uploadProcessor.exitCode
             else:
                 # P2P mode
                 handlerClass = DownloadHandler
+
+                if context.isStopRequested():
+                    return 0
 
                 output(_("Please share the link below with the person you'd like to share the file with."))
                 output(f'{link}\n')
@@ -830,9 +852,14 @@ def processSharing(shareRequest: ShareRequest, context: ShareExecutionContext):
 
                 threading.Thread(target=server.serve_forever, daemon=True, name='http-server').start()
                 try:
-                    server._doneEvent.wait()
+                    while not server._doneEvent.wait(timeout=0.5):
+                        if context.isStopRequested():
+                            break
                 finally:
                     server.shutdown()
+
+                if context.isStopRequested():
+                    return 0
 
                 if server.error:
                     logger.error("Server encountered an error during file sharing")
@@ -851,6 +878,9 @@ def processSharing(shareRequest: ShareRequest, context: ShareExecutionContext):
 
             # If we used pull upload, publish the link after server ends
             if uploadProcessor:
+                if context.isStopRequested():
+                    return 0
+
                 link = uploadProcessor.publish()
                 if not link: # !?
                     reporter.sendException(_('Unable to get uploaded link'))

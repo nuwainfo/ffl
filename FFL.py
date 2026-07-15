@@ -48,9 +48,9 @@ from bases.crypto import CryptoInterface
 from bases.Kernel import FFLEvent 
 from bases.Settings import DEFAULT_STATIC_ROOT, ExecutionMode, SettingsGetter 
 from bases.Auth import PUBKEY_PRIVATE_EXT, PUBKEY_PUBLIC_EXT, RecipientAuth 
-from bases.Download import FFLDownloader 
+from bases.Download import processDownload
 from bases.FileSystems import ExcludeFilter
-from bases.Readers import FolderChangedException, SourceReader
+from bases.Readers import SourceReader
 from bases.Tunnel import TunnelUnavailableError
 from bases.Share import ShareExecutionContext, ShareReporter, createShareRequest, processSharing
 from bases.Daemon import DaemonClient, DaemonManager
@@ -58,9 +58,7 @@ from bases.CLI import (
     ShareCLIArgumentAdapter, configureCLIParser, loadEnvFile, preprocessArguments, processArgumentsAndCommands,
     processGlobalArguments
 ) 
-from bases.Utils import (  
-    flushPrint, getLogger, sendException, validateCompatibleWithServer
-) 
+from bases.Utils import flushPrint, getLogger, sendException, validateCompatibleWithServer
 from bases.I18n import _ # isort:skip
 
 logger = getLogger(__name__)
@@ -162,58 +160,6 @@ featureManager = settingsGetter.getFeatureManager()
 
 # Setup graceful shutdown handling
 setupGracefulShutdown()
-
-
-def processDownload(args):
-
-    downloader = None
-    try:
-        # Setup credentials if provided
-        credentials = None
-        if args.authPassword:
-            credentials = (args.authUser, args.authPassword)
-
-        logCallback = (lambda text: print(text, file=sys.stderr, flush=True)) if args.stdout else flushPrint
-
-        # Create downloader and download file
-        downloader = FFLDownloader(loggerCallback=logCallback)
-        outputPath = downloader.downloadFile(
-            args.url,
-            "-" if args.stdout else args.output,
-            credentials,
-            resume=args.resume,
-            pickupCode=args.pickupCode,
-            recipientPrivateKey=args.recipientPrivateKey
-        )
-
-        logger.debug(f"File downloaded successfully: {outputPath}")
-
-        if args.stdout:
-            logCallback(_('Download complete'))
-        else:
-            logCallback(_('Downloaded: {outputPath}').format(outputPath=outputPath))
-
-        return 0
-
-    except Exception as e:
-        # Check if this is a FolderChangedException
-        if isinstance(e, FolderChangedException):
-            # Add user-facing guidance to server error message
-            serverMsg = str(e)
-            clientMsg = _(
-                '{serverMsg}\n\n'
-                'The shared folder contents changed during the transfer.\n'
-                'Please contact the person who shared the file and ask them to share it again.'
-            ).format(serverMsg=serverMsg)
-            sendException(logger, clientMsg)
-            return 1
-        else:
-            sendException(logger, _('Download failed: {error}').format(error=e))
-            return 1
-    finally:
-        # Clean up downloader resources
-        if downloader:
-            downloader.close()
 
 
 # CLI mode implementation

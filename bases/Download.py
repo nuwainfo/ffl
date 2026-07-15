@@ -37,7 +37,7 @@ import requests
 
 from bases.Checksum import DEFAULT_CHECKSUM_ALGORITHM
 from bases.Kernel import getLogger
-from bases.Utils import formatSize, getEnv, StallResilientAdapter
+from bases.Utils import flushPrint, formatSize, getEnv, sendException, StallResilientAdapter
 from bases.Progress import Progress
 from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
 from bases.E2EE import E2EEClient
@@ -1152,3 +1152,54 @@ class FFLDownloader(WebRTCDownloadMixin, HTTPDownloader):
          class FFLDownloader(WebRTCDownloadMixin, IrohDownloadMixin, HTTPDownloader):
     """
     pass
+
+
+def processDownload(args):
+
+    downloader = None
+    try:
+        # Setup credentials if provided
+        credentials = None
+        if args.authPassword:
+            credentials = (args.authUser, args.authPassword)
+
+        logCallback = (lambda text: print(text, file=sys.stderr, flush=True)) if args.stdout else flushPrint
+
+        # Create downloader and download file
+        downloader = FFLDownloader(loggerCallback=logCallback)
+        outputPath = downloader.downloadFile(
+            args.url,
+            "-" if args.stdout else args.output,
+            credentials,
+            resume=args.resume,
+            pickupCode=args.pickupCode,
+            recipientPrivateKey=args.recipientPrivateKey
+        )
+
+        logger.debug(f"File downloaded successfully: {outputPath}")
+
+        if args.stdout:
+            logCallback(_('Download complete'))
+        else:
+            logCallback(_('Downloaded: {outputPath}').format(outputPath=outputPath))
+
+        return 0
+
+    except Exception as e:
+        # Check if this is a FolderChangedException
+        if isinstance(e, FolderChangedException):
+            # Add user-facing guidance to server error message
+            clientMsg = _(
+                '{serverMsg}\n\n'
+                'The shared folder contents changed during the transfer.\n'
+                'Please contact the person who shared the file and ask them to share it again.'
+            ).format(serverMsg=str(e))
+            sendException(logger, clientMsg)
+            return 1
+        else:
+            sendException(logger, _('Download failed: {error}').format(error=e))
+            return 1
+    finally:
+        # Clean up downloader resources
+        if downloader:
+            downloader.close()

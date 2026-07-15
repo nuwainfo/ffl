@@ -359,10 +359,12 @@ class InProcessShareManager(ShareManager):
             session = self._sessions.get(uid)
             worker = self._workers.get(uid)
 
-        if session is None:
-            return False
+            if session is None:
+                return False
 
-        session.status = ShareStatus.STOPPED
+            session.status = ShareStatus.STOPPED
+            if worker:
+                worker.context.stopEvent.set()
 
         if worker and worker.server:
             try:
