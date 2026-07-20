@@ -23,6 +23,7 @@ import os
 import urllib.parse
 import webbrowser
 
+from dataclasses import asdict, dataclass
 from datetime import timedelta
 from enum import Enum
 
@@ -87,19 +88,36 @@ class ExecutionMode(Enum):
     EXECUTABLE = 3
 
 
+class ShareMode:
+    P2P = 'p2p'
+    SERVER = 'server'
+
+
 logger = getLogger(__name__)
 
 
+@dataclass
+class AbstractUser:
+    serialNumber: str | None = None
+    name: str | None = None
+    email: str | None = None
+    points: int = 0
+    level: int | None = None
+
+    def toDict(self):
+        return asdict(self)
+
+
 # Dummy objects for consistent interface when Features addon is not available
-class DummyUser:
+class DummyUser(AbstractUser):
     """Dummy User implementation for consistent interface"""
 
-    def __init__(self):
-        self.serialNumber = '0123456789'
-        self.name = None
-        self.email = None
-        self.points = 0
-        self.level = 0 # FREE level
+    def __post_init__(self):
+        if self.serialNumber is None:
+            self.serialNumber = '0123456789'
+
+        if self.level is None:
+            self.level = 0
 
     def isRegistered(self):
         return True # Without FeatureManager, user should be considered as registered.

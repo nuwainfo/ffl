@@ -17,10 +17,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sys
+import os
 import platform
+import sys
 
 # Initialize SettingsGetter
 from bases.Settings import SettingsGetter
 
-settingsGetter = SettingsGetter(platform=platform.system(), exePath=sys.executable)
+settingsGetter = SettingsGetter(
+    baseDir=os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..')),
+    platform=platform.system(),
+    exePath=sys.executable,
+)

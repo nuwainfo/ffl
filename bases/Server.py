@@ -81,14 +81,11 @@ import uuid
 import datetime
 import threading
 import time
-import requests
 
 from collections import OrderedDict
-from typing import Optional
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
-
 
 from bases.Kernel import getLogger, PUBLIC_VERSION, FFLEvent, Throttler
 from bases.Utils import flushPrint, utf8, formatSize
@@ -97,15 +94,17 @@ from bases.WebRTC import WebRTCManager
 from bases.Progress import Progress
 from bases.Auth import AuthMixin, HTTPAuth
 from bases.E2EE import CryptoHelper, E2EEManager
-from bases.Checksum import DEFAULT_CHECKSUM_ALGORITHM, TransferChecksumStore
+from bases.Checksum import TransferChecksumStore
 from bases.Readers import FolderChangedException
 from bases.I18n import _
 from bases.HTTP import HTTPMethod, RangeResolver
 from bases.SSE import EventHub, SSEMixin
 from bases.Session import (
-    ShareStatus, ShareSession, AuthRateLimiter, DownloadSessionStore, DownloadProgressStore,
+    AuthRateLimiter, DownloadSessionStore, DownloadProgressStore,
     HTTPDownloadCompletionStore, LogicalDownloadRequestStore, SupersededDownloadError, ServerConfig
 )
+from bases.Share import ShareSession, ShareStatus
+from bases.Session import ServerSession
 
 from bases.views import ViewsMixin
 from bases.views.Auth import RecipientAuthView
@@ -172,17 +171,16 @@ class SessionSSEMixin(SSEMixin):
         ]
 
 
-
 class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestHandler):
 
     # Feature modules that mount their own routes and/or guard existing ones.
     # See bases.views.BaseView for the contract.
     VIEWS = (
-        RecipientAuthView, 
-        ChecksumView, 
-        E2EEView, 
-        WebRTCView, 
-        StatusView, 
+        RecipientAuthView,
+        ChecksumView,
+        E2EEView,
+        WebRTCView,
+        StatusView,
         DebugView,
         DownloadCompleteView,
     )
@@ -427,7 +425,7 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
         return False
 
     def _getFileInfo(self, quoteName=True):
-        # Reader is always available and provides file/directory information        
+        # Reader is always available and provides file/directory information
         reader = self.session.reader
         path = os.path.join(reader.directory, reader.file) if reader.directory else reader.file
 
@@ -772,9 +770,7 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
             except OSError as e:
                 logger.debug(f"Superseded logical download close failed: {e}")
 
-            raise SupersededDownloadError(
-                f"Superseded by newer overlapping request for logical dl={logicalDl}"
-            )
+            raise SupersededDownloadError(f"Superseded by newer overlapping request for logical dl={logicalDl}")
 
     def _guardRequest(self) -> bool:
         """Return True if the request may proceed; otherwise send the error response and return False."""
@@ -1125,7 +1121,7 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
             'pageFooterNote': '',
             'extraBodyContent': '',
         }
-    
+
         # Get context from views.
         context.update(self._collectViewTemplateContext(args))
 
@@ -1164,9 +1160,10 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
 
     def _handleProgressServiceWorker(self, args):
         """Handle ProgressServiceWorker.js - proxy from remote or serve locally"""
-        # Service worker requires special headers
-        requestHeaders = {'Service-Worker': 'script', 'Cache-Control': 'no-cache', 'Service-Worker-Allowed': '/'}
-        self._handleStaticScript("/static/js/ProgressServiceWorker.js", requestHeaders)
+        # _handleStaticScript recognizes this as a Service Worker script from its
+        # filename and adds the required headers (Service-Worker-Allowed, Cache-Control)
+        # itself -- see StaticMixin._SERVICE_WORKER_SCRIPT_RE.
+        self._handleStaticScript("/static/js/ProgressServiceWorker.js")
 
     def do_GET(self):
         if not self._guardRequest():
@@ -1322,7 +1319,7 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
             mode = "P2P" if self.session.config.defaultWebRTC else "HTTP"
             if self.session.config.e2eeEnabled:
                 mode += "+E2EE"
-                
+
             self.send_header("FFL-Mode", mode)
 
         # Add any extra headers if set (for static scripts like service workers)
@@ -1363,21 +1360,18 @@ class MultiShareServer(ThreadingHTTPServer):
         self._doneEvent = threading.Event()
         self._startTime = time.time()
         self._autoShutdown = autoShutdown
-        
+
         super().__init__(serverAddress, requestHandlerClass)
 
-    def addSession(self, session, webRTCManagerClass=None):
+    def addSession(self, session):
         """Initialize per-session stores, WebRTC, and E2EE; register in routing table."""
-        if webRTCManagerClass is None:
-            webRTCManagerClass = WebRTCManager
-
         session.e2eeManager = None
         session.checksumStore = TransferChecksumStore()
         session.downloadSessionStore = DownloadSessionStore()
         session.authRateLimiter = AuthRateLimiter()
         session.downloadProgressStore = DownloadProgressStore()
         session.logicalDownloadRequestStore = LogicalDownloadRequestStore()
-        
+
         # HTTP relay completion ACK tracking. Both page JS and Service Worker may
         # POST /complete; treat the first ACK as authoritative and ignore duplicates.
         session.httpDownloadCompletionStore = HTTPDownloadCompletionStore()
@@ -1387,17 +1381,18 @@ class MultiShareServer(ThreadingHTTPServer):
 
         if session.config.e2eeEnabled:
             session.e2eeManager = E2EEManager(WebRTCManager.CHUNK_SIZE)
-            
+
             FFLEvent.e2eeInitialized.trigger(
                 e2eeEnabled=True, mode='p2p', algorithm='AES-256-GCM', chunkSize=WebRTCManager.CHUNK_SIZE
             )
-        
+
         requestHandlerClass = self.RequestHandlerClass
 
         # Create exception handler that will be called by WebRTC on errors
         def handleWebRTCException(exception):
             # Use a dummy handler object to call _handleDownloadExceptionActions
             class ExceptionHandler(requestHandlerClass):
+
                 def __init__(self, server, session):
                     self.server = server
                     self.session = session
@@ -1406,7 +1401,7 @@ class MultiShareServer(ThreadingHTTPServer):
 
             ExceptionHandler(self, session)._handleDownloadExceptionActions(exception)
 
-        session.webRTC = webRTCManagerClass(
+        session.webRTC = session.webRTCManagerClass(
             loggerCallback=flushPrint,
             downloadCallback=lambda: self.doAfterDownload(session.uid),
             exceptionCallback=handleWebRTCException,
@@ -1415,7 +1410,7 @@ class MultiShareServer(ThreadingHTTPServer):
         )
 
         config = session.config
-        
+
         FFLEvent.sessionStarted.trigger(
             uid=session.uid,
             domain=session.domain,
@@ -1441,7 +1436,7 @@ class MultiShareServer(ThreadingHTTPServer):
 
         if session:
             session.stop()
-            
+
             FFLEvent.sessionRemoved.trigger(
                 uid=uid,
                 downloadCount=session.downloadCount,
@@ -1456,12 +1451,24 @@ class MultiShareServer(ThreadingHTTPServer):
             return self._sessions.get(uid)
 
     def getDefaultSession(self):
+        # "Exactly one session currently active" is only a safe stand-in for "the
+        # session this UID-less request must mean" when this server can only ever
+        # host one session for its whole lifetime (autoShutdown=True, FFL.py mode).
+        # In daemon mode (autoShutdown=False) the active-session count is transient
+        # -- it drops to 1 every time a share ends or hasn't started yet -- so
+        # falling back here would silently hand a request for a removed/mistyped
+        # UID (stale tab, bot, typo) to whatever unrelated share happens to be the
+        # sole survivor at that instant, mixing that share's reader/data into a
+        # page that still thinks it's viewing a different one. Refuse the guess.
+        if not self._autoShutdown:
+            return None
+
         with self._sessionsLock:
             sessions = list(self._sessions.values())
-            
+
         if len(sessions) == 1:
             return sessions[0]
-            
+
         return None
 
     def getSessionCount(self):
@@ -1475,19 +1482,19 @@ class MultiShareServer(ThreadingHTTPServer):
             while True:
                 if self.getSession(uid) is None:
                     return
-                    
+
                 if (time.time() - startTime) >= timeout:
                     session = self.getSession(uid)
                     downloadCount = session.downloadCount if session else 0
-                    
+
                     flushPrint(_('Timeout ({timeout} seconds) reached. Shutting down server.').format(
                         timeout=timeout))
-                        
+
                     FFLEvent.sessionTimeout.trigger(uid=uid, timeout=timeout, downloadCount=downloadCount)
-                    
+
                     self.removeSession(uid)
                     return
-                    
+
                 time.sleep(0.5)
 
         threading.Thread(target=check, daemon=True, name=f'timeout-{uid}').start()
@@ -1496,20 +1503,20 @@ class MultiShareServer(ThreadingHTTPServer):
         session = self.getSession(uid)
         if session is None:
             return
-            
+
         session.downloadCount += 1
         if session.config.maxDownloads > 0 and session.downloadCount >= session.config.maxDownloads:
             session.status = ShareStatus.COMPLETED
-            
+
             flushPrint(_('Maximum downloads ({maxDownloads}) reached. Shutting down server.').format(
                 maxDownloads=session.config.maxDownloads))
-                
+
             FFLEvent.maxDownloadsReached.trigger(
                 uid=uid,
                 maxDownloads=session.config.maxDownloads,
                 downloadCount=session.downloadCount,
             )
-        
+
             self.removeSession(uid)
 
     def handle_error(self, request, client_address):
@@ -1545,40 +1552,14 @@ class MultiShareServer(ThreadingHTTPServer):
 Server = MultiShareServer # backward compatibility alias
 
 
-def createServer(reader, port, uid, domain, handlerClass=None, webRTCManagerClass=None, config: ServerConfig = None):
-    """Factory that creates a single-session MultiShareServer (FFL.py mode).
+def createServer(session: ServerSession, autoShutdown=True):
+    """Create a MultiShareServer from a prepared ServerSession.
 
-    Wraps the reader + config in a ShareSession and builds a MultiShareServer.
-    The server stops when the session's maxDownloads is reached or its timeout
-    expires; FFL.py waits on that event and calls shutdown().
+    autoShutdown=True stops foreground shares after their session ends; daemon
+    infrastructure passes False to remain available while it has no sessions.
     """
-    if config is None:
-        config = ServerConfig()
-        
-    if handlerClass is None:
-        handlerClass = DownloadHandler
-
-    server = MultiShareServer(('127.0.0.1', port), handlerClass, autoShutdown=True)
-    session = ShareSession(
-        uid=uid,
-        filePaths=[reader.file] if reader.file else [],
-        createdAt=datetime.datetime.now().isoformat(),
-        domain=domain,
-        reader=reader,
-        config=config,
-    )
-    server.addSession(session, webRTCManagerClass=webRTCManagerClass)
-
-    FFLEvent.serverStarting.trigger(
-        uid=session.uid,
-        port=server.server_address[1],
-        domain=session.domain,
-        maxDownloads=config.maxDownloads,
-        timeout=config.timeout,
-        authEnabled=config.authPassword is not None,
-        e2eeEnabled=config.e2eeEnabled,
-        torEnabled=config.torEnabled,
-        webrtcEnabled=config.defaultWebRTC,
-    )
+    server = MultiShareServer(('127.0.0.1', session.port), session.handlerClass, autoShutdown=autoShutdown)
+    session.port = server.server_address[1]
+    server.addSession(session)
 
     return server

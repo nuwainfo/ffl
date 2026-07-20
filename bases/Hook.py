@@ -727,7 +727,11 @@ class HookEventForwarder(Singleton):
         if sender is None:
             return
 
-        forwardEventToHook(sender, eventName, **eventData)
+        try:
+            forwardEventToHook(sender, eventName, **eventData)
+        except HookError as e:
+            logger.warning("Failed to forward hook event %s: %s", eventName, e)
+            self.clear()
 
     @staticmethod
     def _closeSender(sender):

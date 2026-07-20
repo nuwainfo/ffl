@@ -17,46 +17,43 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 import threading
 
-from dataclasses import dataclass, field
-from functools import partial
-from typing import Any, Callable, Optional
-
 import segno
 
-from bases.Auth import RecipientAuth
-from bases.Download import FFLDownloader
+from dataclasses import InitVar, dataclass, field, fields
+from enum import IntEnum
+from typing import Any, Callable, Optional, Protocol
+
 from bases.FileSystems import ExcludeFilter
-from bases.I18n import _
 from bases.Kernel import FFLEvent, UIDGenerator, getLogger
 from bases.Progress import Progress
 from bases.Readers import SourceReader, SourceReaderProgressReporter
-from bases.Server import DownloadHandler, createServer
-from bases.Session import ServerConfig
-from bases.Settings import DEFAULT_AUTH_USER_NAME, DEFAULT_UPLOAD_DURATION, SettingsGetter
+from bases.Settings import (
+    AbstractUser,
+    DEFAULT_AUTH_USER_NAME,
+    DEFAULT_UPLOAD_DURATION,
+    SettingsGetter,
+    ShareMode,
+)
 from bases.Tor import verifyTorProxy
-from bases.Tunnel import createTunnelRunner
 from bases.VFS import processVFS
 from bases.Utils import (
     DataclassDictMixin,
     ProxyConfig,
-    copy2Clipboard,
     flushPrint,
     formatSize,
-    getAvailablePort,
-    sendException,
-    writeShareJsonOutput,
 )
-from bases.WebRTC import DummyWebRTCManager, WebRTCManager
+from bases.I18n import _
 
 logger = getLogger(__name__)
 
 
 @dataclass
 class ShareRequest(DataclassDictMixin):
-    
+
     file: Any = field(default=None, metadata={
         'cli': {
             'flags': ('file',),
@@ -83,7 +80,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     exclude: Optional[str] = field(default=None, metadata={
         'cli': {
             'flags': ('--exclude',),
@@ -97,7 +94,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     json: Optional[str] = field(default=None, metadata={
         'cli': {
             'flags': ('--json',),
@@ -107,7 +104,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     upload: Optional[str] = field(default=None, metadata={
         'cli': {
             'flags': ('--upload',),
@@ -122,7 +119,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     resume: bool = field(default=False, metadata={
         'cli': {
             'flags': ('--resume',),
@@ -134,7 +131,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     pause: Optional[int] = field(default=None, metadata={
         'cli': {
             'flags': ('--pause',),
@@ -145,7 +142,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     yes: bool = field(default=False, metadata={
         'cli': {
             'flags': ('--yes',),
@@ -155,7 +152,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     legacyLink: Optional[str] = field(default=None, metadata={
         'cli': {
             'flags': ('--legacy-link',),
@@ -165,7 +162,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     maxDownloads: int = field(default=0, metadata={
         'cli': {
             'flags': ('--max-downloads',),
@@ -178,7 +175,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     timeout: int = field(default=0, metadata={
         'cli': {
             'flags': ('--timeout',),
@@ -191,7 +188,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     port: Optional[int] = field(default=None, metadata={
         'cli': {
             'flags': ('--port',),
@@ -204,7 +201,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     authUser: str = field(default=DEFAULT_AUTH_USER_NAME, metadata={
         'cli': {
             'flags': ('--auth-user',),
@@ -216,7 +213,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     authPassword: Optional[str] = field(default=None, metadata={
         'cli': {
             'flags': ('--auth-password',),
@@ -226,7 +223,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     recipientAuth: Optional[str] = field(default=None, metadata={
         'cli': {
             'flags': ('--recipient-auth',),
@@ -237,7 +234,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     pickupCode: Optional[str] = field(default=None, metadata={
         'cli': {
             'flags': ('--pickup-code',),
@@ -247,7 +244,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     recipientPublicKey: Optional[str] = field(default=None, metadata={
         'cli': {
             'flags': ('--recipient-public-key',),
@@ -257,7 +254,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     recipientEmail: Optional[str] = field(default=None, metadata={
         'cli': {
             'flags': ('--recipient-email',),
@@ -267,7 +264,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     recipientOTPAPIBase: Optional[str] = field(default=None, metadata={
         'cli': {
             'flags': ('--recipient-otp-api-base',),
@@ -280,7 +277,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     forceRelay: bool = field(default=False, metadata={
         'cli': {
             'flags': ('--force-relay',),
@@ -293,7 +290,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     e2ee: bool = field(default=False, metadata={
         'cli': {
             'flags': ('--e2ee',),
@@ -303,7 +300,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     invite: bool = field(default=False, metadata={
         'cli': {
             'flags': ('--invite',),
@@ -313,7 +310,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     qr: Any = field(default=False, metadata={
         'cli': {
             'flags': ('--qr',),
@@ -325,7 +322,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     disableClipboard: Optional[bool] = field(default=None, metadata={
         'cli': {
             'flags': ('--disable-clipboard',),
@@ -338,7 +335,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     vfs: bool = field(default=False, metadata={
         'cli': {
             'flags': ('--vfs',),
@@ -351,7 +348,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     stdinCache: str = field(default='on', metadata={
         'cli': {
             'flags': ('--stdin-cache',),
@@ -363,7 +360,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     background: bool = field(default=False, metadata={
         'cli': {
             'flags': ('--background',),
@@ -373,7 +370,7 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     foreground: bool = field(default=False, metadata={
         'cli': {
             'flags': ('--foreground',),
@@ -383,9 +380,9 @@ class ShareRequest(DataclassDictMixin):
             },
         },
     })
-    
+
     uploadConfirmed: bool = False
-    
+
     uid: Optional[str] = None
     extraOptions: dict = field(default_factory=dict)
 
@@ -411,26 +408,115 @@ class ShareRequest(DataclassDictMixin):
             raise AttributeError(name) from e
 
 
+class ShareStatus(IntEnum):
+    CREATING = 1
+    ONLINE = 2
+    COMPLETED = 3
+    STOPPED = 4
+    CRASHED = 5
+
+
+@dataclass
+class ShareSession(DataclassDictMixin):
+    """All state for one share lifecycle, independent of any specific server implementation."""
+
+    id: str
+    filePaths: list
+    createdAt: str
+    status: ShareStatus = ShareStatus.CREATING
+    link: Optional[str] = None
+    port: Optional[int] = None
+    downloads: int = 0
+    error: Optional[str] = None
+
+    @classmethod
+    def getSerializableFields(cls):
+        return fields(ShareSession)
+
+    @property
+    def uid(self):
+        return self.id
+
+    @uid.setter
+    def uid(self, value):
+        self.id = value
+
+    @property
+    def downloadCount(self):
+        return self.downloads
+
+    @downloadCount.setter
+    def downloadCount(self, value):
+        self.downloads = value
+
+    def stop(self):
+        if self.status not in (ShareStatus.COMPLETED, ShareStatus.CRASHED):
+            self.status = ShareStatus.STOPPED
+
+
 @dataclass
 class ShareReporter:
     outputCallback: Callable[[str], None]
     exceptionCallback: Optional[Callable[..., None]] = None
     shareLinkCallback: Optional[Callable[..., None]] = None
+    encryptionKeyCallback: Optional[Callable[..., None]] = None
     serverCreatedCallback: Optional[Callable[..., None]] = None
     vfsServerCreatedCallback: Optional[Callable[..., None]] = None
 
     def output(self, text: str):
         self.outputCallback(text)
 
-    def shareLinkCreated(self, **kwargs):
-        if self.shareLinkCallback:
-            self.shareLinkCallback(**kwargs)
+    def notifyEncryptionKeyAvailable(self, encryptionKey):
+        if not self.encryptionKeyCallback:
+            return False
 
-    def serverCreated(self, server, uid=None):
+        self.encryptionKeyCallback(encryptionKey=encryptionKey)
+        return True
+
+    def notifyShareLinkCreated(self, shareResult, uid=None, reader=None):
+        shareResultData = shareResult.toDict()
+        shareResultData['filePath'] = shareResultData['file']
+        FFLEvent.shareLinkCreate.trigger(
+            uid=uid,
+            reader=reader,
+            upload=(shareResultData['uploadMode'] == ShareMode.SERVER),
+            **shareResultData,
+        )
+
+        if self.shareLinkCallback:
+            self.shareLinkCallback(shareResult=shareResult, uid=uid, reader=reader)
+
+    def notifyServerCreated(self, server, uid=None):
+        session = server.getSession(uid) if uid else server.getDefaultSession()
+        configData = session.config.toDict()
+        configData['authEnabled'] = configData.pop('authPassword') is not None
+        configData['webrtcEnabled'] = configData.pop('defaultWebRTC')
+
+        FFLEvent.serverStarting.trigger(
+            uid=session.uid,
+            port=server.server_address[1],
+            domain=session.domain,
+            **configData,
+        )
+
         if self.serverCreatedCallback:
             self.serverCreatedCallback(server=server, uid=uid)
 
-    def vfsServerCreated(self, vfsServer, link=None, uid=None):
+    def notifyVFSServerCreated(self, vfsServer, link=None, uid=None):
+        FFLEvent.serverStarting.trigger(
+            uid=uid,
+            port=vfsServer.actualPort,
+            domain=vfsServer.host,
+            maxDownloads=0,
+            timeout=0,
+            authEnabled=bool(vfsServer.authPassword),
+            e2eeEnabled=False,
+            torEnabled=False,
+            webrtcEnabled=False,
+            link=link,
+            tunnelType='vfs',
+        )
+
         if self.vfsServerCreatedCallback:
             self.vfsServerCreatedCallback(vfsServer=vfsServer, link=link, uid=uid)
 
@@ -453,7 +539,7 @@ class ShareReporter:
 
         settingsGetter = SettingsGetter.getInstance()
         supportURL = settingsGetter.getSupportURL()
-        
+
         self.output(_('\nIf you still get the same problem, please contact us at {supportURL}.').format(
             supportURL=supportURL))
         self.output(_('We will fix the problem as soon as possible.\n'))
@@ -461,15 +547,57 @@ class ShareReporter:
 
 
 @dataclass
+class ShareResult(DataclassDictMixin):
+    file: str
+    contentName: str
+    fileSize: Optional[int]
+    uploadMode: str
+    tunnelType: Optional[str]
+    link: str
+    e2ee: bool
+    pickupCode: Optional[str] = None
+    pubkeyEnabled: bool = False
+    user: Optional[AbstractUser] = None
+    recipientAuth: InitVar[Any] = None
+
+    def __post_init__(self, recipientAuth):
+        if self.fileSize is None:
+            self.fileSize = -1
+
+        if not self.tunnelType:
+            self.tunnelType = "default"
+
+        if recipientAuth:
+            if self.pickupCode is None and recipientAuth.requiresPickup():
+                self.pickupCode = recipientAuth.pickupCode
+
+            if not self.pubkeyEnabled:
+                self.pubkeyEnabled = recipientAuth.requiresPubkey()
+
+
+class RuntimeProtocol(Protocol):
+
+    def run(self, shareRequest: ShareRequest, context, *, reader, size, torDetected: bool):
+        raise NotImplementedError
+
+
+@dataclass
 class ShareExecutionContext:
     reporter: ShareReporter
+    runtime: Optional[RuntimeProtocol] = None
     interactionHandler: Any = None
+    session: Optional[ShareSession] = None
+    result: Optional[ShareResult] = None
     allowUserInteraction: bool = True
     proxyConfig: Optional[ProxyConfig] = None
     stopEvent: threading.Event = field(default_factory=threading.Event)
 
     def isStopRequested(self):
         return self.stopEvent.is_set()
+
+    def createShareResult(self, *args, **kwargs):
+        self.result = ShareResult(*args, **kwargs)
+        return self.result
 
 
 class ScanFolderProgressReporter(SourceReaderProgressReporter):
@@ -530,68 +658,6 @@ class ScanFolderProgressReporter(SourceReaderProgressReporter):
         if self._useBar:
             self._progress.finishBar(complete=False)
 
-def onShareLinkCreate(args, link, filePath, fileSize, tunnelType, e2ee, reader,
-                      reporter, recipientAuth=None, **kwargs):
-    """Handle share link creation - invite, QR code, and JSON writing"""
-    output = reporter.output
-    featureManager = SettingsGetter.getInstance().getFeatureManager()
-
-    # Handle --invite flag
-    if args.invite:
-        output(_('Opening invite page in browser...'))
-        featureManager.invite(link)
-
-    # Handle --qr flag
-    if args.qr:
-        try:
-            qr = segno.make(link)
-
-            # Check if args.qr is a file path (string) or True (terminal display)
-            if isinstance(args.qr, str):
-                # Save QR code to file
-                qr.save(args.qr, scale=5)
-                output(_('QR code saved to: {filePath}').format(filePath=args.qr))
-            else:
-                # Display in terminal
-                output(_('\nQR Code:\n'))
-                qr.terminal(compact=True)
-                output('')
-        except Exception as e:
-            output(_('Error generating QR code: {error}').format(error=e))
-            # It's ok only not generate QR code.
-
-    # Handle --json flag
-    if args.json:
-        user = featureManager.user
-
-        # Get content name (VFS mode has reader=None, use basename)
-        contentName = reader.contentName if reader else os.path.basename(filePath)
-        pickupCode = recipientAuth.pickupCode if recipientAuth and recipientAuth.requiresPickup() else None
-        pubkeyEnabled = recipientAuth.requiresPubkey() if recipientAuth else False
-
-        try:
-            writeShareJsonOutput(
-                args.json,
-                filePath=filePath,
-                contentName=contentName,
-                fileSize=fileSize,
-                uploadMode="server" if args.upload else "p2p",
-                tunnelType=tunnelType,
-                link=link,
-                e2ee=e2ee,
-                pickupCode=pickupCode,
-                pubkeyEnabled=pubkeyEnabled,
-                userName=user.name,
-                email=user.email,
-                level=user.level,
-                points=user.points,
-                serialNumber=user.serialNumber,
-            )
-            output(_('Sharing information saved to {jsonFile}').format(jsonFile=args.json))
-        except Exception as e:
-            output(_('Failed to write JSON file: {error}').format(error=e))
-            reporter.sendException(e)
-
 
 def generateUID(featureManager):
     # Get UIDGenerator from FeatureManager
@@ -607,8 +673,8 @@ def generateUID(featureManager):
 def createShareRequest(source, settingsGetter=None, **overrides):
     settingsGetter = settingsGetter or SettingsGetter.getInstance()
     featureManager = settingsGetter.getFeatureManager()
-    
-    shareRequestClass = featureManager.getShareRequestClass(ShareRequest)    
+
+    shareRequestClass = featureManager.getShareRequestClass(ShareRequest)
     return shareRequestClass.fromObject(source, **overrides)
 
 
@@ -631,14 +697,59 @@ def processSharing(shareRequest: ShareRequest, context: ShareExecutionContext):
     featureManager = settingsGetter.getFeatureManager()
     cliMode = settingsGetter.isCLIMode()
 
+    def handleShareLinkCreated(**eventData):
+        if args.uid and eventData.get('uid') != args.uid:
+            return
+
+        shareResult = context.result
+        link = shareResult.link
+
+        # Handle --invite flag
+        if args.invite:
+            output(_('Opening invite page in browser...'))
+            featureManager.invite(link)
+
+        # Handle --qr flag
+        if args.qr:
+            try:
+                qr = segno.make(link)
+
+                # Check if args.qr is a file path (string) or True (terminal display)
+                if isinstance(args.qr, str):
+                    # Save QR code to file
+                    qr.save(args.qr, scale=5)
+                    output(_('QR code saved to: {filePath}').format(filePath=args.qr))
+                else:
+                    # Display QR code in terminal
+                    output(_('\nQR Code:\n'))
+                    qr.terminal(compact=True)
+                    output('')
+            except Exception as e:
+                output(_('Error generating QR code: {error}').format(error=e))
+                # It's ok only not generate QR code.
+
+        # Handle --json flag
+        if args.json:
+            try:
+                # Write to a temp file and rename into place so readers polling
+                # for the file's existence never observe a truncated/empty file.
+                tempJsonPath = f'{args.json}.tmp{os.getpid()}'
+                with open(tempJsonPath, 'w', encoding='utf-8') as fileHandle:
+                    json.dump(shareResult.toDict(snakeKey=True), fileHandle, indent=2)
+                    
+                os.replace(tempJsonPath, args.json)
+
+                output(_('Sharing information saved to {jsonFile}').format(jsonFile=args.json))
+            except Exception as e:
+                output(_('Failed to write JSON file: {error}').format(error=e))
+                reporter.sendException(e)
+
     if not args.file:
         output(_('Error: Please select a file or folder to share'))
         return 1
 
     # Subscribe handler for share link creation with bound args
-    handler = partial(onShareLinkCreate, args, reporter=reporter)
-    FFLEvent.shareLinkCreate.subscribe(handler)
-
+    FFLEvent.shareLinkCreate.subscribe(handleShareLinkCreated)
     try:
         if args.upload:
             if not settingsGetter.hasUploadSupport():
@@ -660,7 +771,7 @@ def processSharing(shareRequest: ShareRequest, context: ShareExecutionContext):
 
         # Handle VFS mode (--vfs): Start VFSServer instead of tunnelRunner
         if args.vfs:
-            return processVFS(args, reporter=reporter)
+            return processVFS(args, context)
 
         if not cliMode:
             output(_('If a firewall notification appears, please allow the application to connect.\n'))
@@ -709,198 +820,10 @@ def processSharing(shareRequest: ShareRequest, context: ShareExecutionContext):
         if torDetected:
             output(_("🧅 Tor Privacy Mode Active"))
 
-        uploadProcessor = None
-        uid = args.uid
-        if args.upload:
-            from addons.Upload import processUpload
-            
-            uploadProcessor = processUpload(args, reader, context)
-            if uploadProcessor.isDone():
-                return uploadProcessor.exitCode
-                
-            uid = uploadProcessor.uid
-
         if context.isStopRequested():
             return 0
 
-        # If we reach here, we need to start local server (either P2P or Pull upload)
-        if uid is None:
-            uid = generateUID(featureManager)
-
-        userPort = args.port
-        port = getAvailablePort(userPort)
-
-        with createTunnelRunner(
-            size,
-            proxyConfig=proxyConfig,
-            onTunnelError=partial(
-                reporter.sendException,
-                errorPrefix=_('Unable to create tunnel by your tunnel configuration.')
-            ),
-        ) as tunnelRunner:
-            tunnelType = tunnelRunner.getTunnelType()
-            if tunnelType != "default":
-                output(_('Using tunnel: {tunnelType}').format(tunnelType=tunnelType))
-
-            # Show proxy status for tunnel connections
-            proxyInfo = tunnelRunner.getProxyInfo()
-            if proxyInfo:
-                output(_('Establishing tunnel connection via proxy {proxyInfo}...\n').format(
-                    proxyInfo=proxyInfo))
-            else:
-                output(_('Establishing tunnel connection...\n'))
-
-            domain, tunnelLink = tunnelRunner.start(port)
-            link = f"{tunnelLink}{uid}"
-
-            if context.isStopRequested():
-                return 0
-
-            # Determine recipient auth mode (P2P only; pull-upload uses server-side auth)
-            recipientAuth = RecipientAuth.createFromArgs(args.toDict())
-
-            # Determine handler class and setup link
-            if uploadProcessor:
-                try:
-                    handlerClass = uploadProcessor.getDownloadHandlerClass(link, uid)
-                except RuntimeError as uploadError:
-                    output(_('Upload failed: {error}').format(error=str(uploadError)))
-                    reporter.sendException(str(uploadError))
-                    return 1
-
-                if uploadProcessor.isDone():
-                    return uploadProcessor.exitCode
-            else:
-                # P2P mode
-                handlerClass = DownloadHandler
-
-                if context.isStopRequested():
-                    return 0
-
-                output(_("Please share the link below with the person you'd like to share the file with."))
-                output(f'{link}\n')
-                if not args.disableClipboard:
-                    copy2Clipboard(f'{link}')
-
-                shareLinkData = {
-                    'uid': uid,
-                    'link': link,
-                    'filePath': args.file,
-                    'contentName': reader.contentName,
-                    'fileSize': size,
-                    'tunnelType': tunnelType,
-                    'e2ee': e2eeEnabled,
-                    'reader': reader,
-                    'recipientAuth': recipientAuth,
-                    'upload': args.upload,
-                }
-                FFLEvent.shareLinkCreate.trigger(**shareLinkData)
-                reporter.shareLinkCreated(**shareLinkData)
-
-                output(_('Please keep the application running so the recipient can download the file.'))
-                if cliMode:
-                    output(_('Press Ctrl+C to terminate the program when done.\n'))
-                else:
-                    output('')
-
-            try:
-                # Get maxDownloads and timeout values
-                maxDownloads = args.maxDownloads
-                timeout = args.timeout
-
-                # Get enhanced handlers from FeatureManager if Features addon is available
-                webRTCManagerClass = WebRTCManager
-                if settingsGetter.hasFeaturesSupport():
-                    handlerClass = featureManager.getDownloadHandlerClass(handlerClass)
-                    webRTCManagerClass = featureManager.getWebRTCManagerClass(
-                        webRTCManagerClass, forceRelay=args.forceRelay
-                    )
-                else:
-                    if torDetected:
-                        # Tor mode without Features addon: use DummyWebRTCManager to totally block WebRTC
-                        webRTCManagerClass = DummyWebRTCManager
-
-                authPassword = args.authPassword or os.getenv('FFL_AUTH_PASSWORD')
-                authUser = args.authUser if authPassword else None
-                # Show auth info if enabled (password enables auth)
-                if authPassword:
-                    output(_('Authentication enabled - Username: {authUser}\n').format(authUser=authUser))
-
-                if recipientAuth.isEnabled():
-                    if recipientAuth.requiresPickup():
-                        output(_('Pickup code: {code}\n').format(code=recipientAuth.pickupCode))
-
-                # WebRTC default state: disabled by --force-relay flag
-                defaultWebRTC = not args.forceRelay
-
-                # Create server configuration
-                serverConfig = ServerConfig(
-                    maxDownloads=maxDownloads,
-                    timeout=timeout,
-                    authUser=authUser,
-                    authPassword=authPassword,
-                    defaultWebRTC=defaultWebRTC,
-                    e2eeEnabled=e2eeEnabled,
-                    torEnabled=torDetected,
-                    recipientAuth=recipientAuth,
-                )
-
-                # Create server with enhanced handler and WebRTC manager
-                # Reader provides file and directory information
-                server = createServer(reader, port, uid, domain, handlerClass, webRTCManagerClass, serverConfig)
-                reporter.serverCreated(server, uid=uid)
-
-                threading.Thread(target=server.serve_forever, daemon=True, name='http-server').start()
-                try:
-                    while not server._doneEvent.wait(timeout=0.5):
-                        if context.isStopRequested():
-                            break
-                finally:
-                    server.shutdown()
-
-                if context.isStopRequested():
-                    return 0
-
-                if server.error:
-                    logger.error("Server encountered an error during file sharing")
-                    raise ChildProcessError()
-
-            except KeyboardInterrupt:
-                output(_('\nExiting on user request (Ctrl+C)...'))
-
-                # Trigger applicationInterrupted event
-                FFLEvent.applicationInterrupted.trigger(reason='user-interrupt')
-
-                # Clean exit without stack trace - context manager will handle cleanup
-                return 0
-            except Exception as e:
-                raise e
-
-            # If we used pull upload, publish the link after server ends
-            if uploadProcessor:
-                if context.isStopRequested():
-                    return 0
-
-                link = uploadProcessor.publish()
-                if not link: # !?
-                    reporter.sendException(_('Unable to get uploaded link'))
-                    return 1
-
-                shareLinkData = {
-                    'uid': uid,
-                    'link': link,
-                    'filePath': args.file,
-                    'contentName': reader.contentName,
-                    'fileSize': size,
-                    'tunnelType': tunnelType,
-                    'e2ee': e2eeEnabled,
-                    'reader': reader,
-                    'recipientAuth': recipientAuth,
-                    'upload': args.upload,
-                }
-                FFLEvent.shareLinkCreate.trigger(**shareLinkData)
-                reporter.shareLinkCreated(**shareLinkData)
-                return 0
+        return context.runtime.run(shareRequest, context, reader=reader, size=size, torDetected=torDetected)
 
     except KeyboardInterrupt:
         output(_('\nExiting on user request (Ctrl+C)...'))
@@ -908,7 +831,4 @@ def processSharing(shareRequest: ShareRequest, context: ShareExecutionContext):
         # Ensure clean exit
         return 0
     finally:
-        FFLEvent.shareLinkCreate.unsubscribe(handler)
-
-    # Default success return for normal P2P completion
-    return 0
+        FFLEvent.shareLinkCreate.unsubscribe(handleShareLinkCreated)

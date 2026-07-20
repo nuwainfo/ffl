@@ -22,8 +22,9 @@ import json
 import re
 
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import MISSING, dataclass, field, fields
 from http import HTTPMethod, HTTPStatus
+from types import SimpleNamespace
 from typing import Optional
 from urllib.parse import parse_qs
 
@@ -31,6 +32,7 @@ import requests
 
 from bases.Kernel import getLogger
 from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
+from bases.Utils import DataclassDictMixin
 
 logger = getLogger(__name__)
 
@@ -50,6 +52,206 @@ class ResolvedRange:
     end: Optional[int]
     satisfiable: bool
     contentLength: Optional[int]  # None when the resource size is unknown, so no clamping was possible
+
+
+class FormDataMixin(DataclassDictMixin):
+
+    _NO_FORM_VALUE = object()
+
+    class ValueResolver:
+    
+        EMAIL_REGEX = re.compile(
+            r"^[A-Z0-9](?:[A-Z0-9._%+\-]{0,62}[A-Z0-9])?@"
+            r"(?:[A-Z0-9](?:[A-Z0-9\-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,63}$",
+            re.IGNORECASE,
+        )
+
+        @staticmethod
+        def parseOptionalCount(rawValue, fieldName, errorTemplate=None):
+            if rawValue == '':
+                return 0
+
+            try:
+                value = int(rawValue)
+            except ValueError:
+                if errorTemplate is None:
+                    raise ValueError(fieldName)
+
+                raise ValueError(errorTemplate.format(fieldName=fieldName))
+
+            if value < 0:
+                if errorTemplate is None:
+                    raise ValueError(fieldName)
+
+                raise ValueError(errorTemplate.format(fieldName=fieldName))
+
+            return value
+
+        @staticmethod
+        def parseDelimitedValues(rawValue, normalizer=None):
+            if not rawValue:
+                return ()
+
+            values = []
+            seenValues = set()
+
+            if isinstance(rawValue, (list, tuple)):
+                rawParts = rawValue
+            else:
+                rawParts = re.split(r'[\r\n,]+', str(rawValue))
+
+            for rawPart in rawParts:
+                value = str(rawPart).strip()
+                if not value:
+                    continue
+
+                normalizedValue = normalizer(value) if normalizer else value
+                if normalizedValue in seenValues:
+                    continue
+
+                seenValues.add(normalizedValue)
+                values.append(normalizedValue)
+
+            return tuple(values)
+
+        @classmethod
+        def buildSerializedDelimitedValue(cls, rawValue, normalizer=None, serializer=None, emptyValue=None):
+            values = cls.parseDelimitedValues(rawValue, normalizer=normalizer)
+            if not values:
+                return emptyValue
+
+            if serializer is None:
+                serializer = ','.join
+
+            return serializer(values)
+
+        @classmethod
+        def isLikelyValidEmail(cls, email):
+            if len(email) > 254 or '..' in email:
+                return False
+
+            localPart, _separator, domainPart = email.partition('@')
+            if not localPart or not domainPart or len(localPart) > 64 or len(domainPart) > 253:
+                return False
+
+            return bool(cls.EMAIL_REGEX.fullmatch(email))
+
+        @classmethod
+        def validateEmailValues(cls, emailValues, emptyMessage=None, invalidMessage=None):
+            if not emailValues:
+                if emptyMessage:
+                    raise ValueError(emptyMessage)
+                return
+
+            invalidEmails = [value for value in emailValues if not cls.isLikelyValidEmail(value)]
+            if invalidEmails:
+                raise ValueError(invalidMessage or 'Invalid email address(es).')
+
+    @staticmethod
+    def getFieldRefs(sourceClass):
+        return SimpleNamespace(**sourceClass.__dataclass_fields__)
+
+    @staticmethod
+    def makeField(sourceField, **formMetadata):
+        metadata = dict(sourceField.metadata)
+        metadata.update(formMetadata)
+
+        fieldOptions = {'metadata': metadata}
+        if sourceField.default is not MISSING:
+            fieldOptions['default'] = sourceField.default
+        elif sourceField.default_factory is not MISSING:
+            fieldOptions['default_factory'] = sourceField.default_factory
+        else:
+            fieldOptions['default'] = None
+
+        return field(**fieldOptions)
+
+    @classmethod
+    def buildFormDataUpdate(cls, formData, fieldNames=None):
+        if not formData:
+            return {}
+
+        if fieldNames is None:
+            fieldNames = cls.__dataclass_fields__.keys()
+
+        fieldNameSet = set(fieldNames)
+        updates = {}
+
+        for fieldInfo in fields(cls):
+            if fieldInfo.name not in fieldNameSet:
+                continue
+
+            fieldConfig = cls._getFormFieldConfig(fieldInfo)
+            value = cls._resolveFormFieldValue(fieldInfo, fieldConfig, formData)
+            if value is cls._NO_FORM_VALUE:
+                continue
+
+            updates[fieldInfo.name] = value
+
+        return updates
+
+    @classmethod
+    def _getFormFieldConfig(cls, fieldInfo):
+        return {'formKey': fieldInfo.name, **dict(fieldInfo.metadata)}
+
+    @classmethod
+    def _getFormDataRawValue(cls, fieldConfig, formData):
+        formKeys = fieldConfig.get('formKeys')
+        if formKeys:
+            for formKey in formKeys:
+                if formKey in formData:
+                    return formData[formKey]
+
+            return cls._NO_FORM_VALUE
+
+        formKey = fieldConfig.get('formKey')
+        if formKey is None:
+            return cls._NO_FORM_VALUE
+
+        if formKey not in formData:
+            return cls._NO_FORM_VALUE
+
+        return formData[formKey]
+
+    def applyForm(self, formData, fieldNames=None):
+        self.updateFromDict(
+            type(self).buildFormDataUpdate(formData, fieldNames=fieldNames),
+            replace=False,
+        )
+
+    @classmethod
+    def _resolveFormFieldValue(cls, fieldInfo, fieldConfig, formData):
+        formValueFactory = fieldConfig.get('formValueFactory')
+        if formValueFactory:
+            return formValueFactory(formData)
+
+        rawValue = cls._getFormDataRawValue(fieldConfig, formData)
+        if rawValue is cls._NO_FORM_VALUE:
+            return cls._NO_FORM_VALUE
+
+        return cls._coerceFormDataValue(fieldInfo, rawValue, fieldConfig)
+
+    @classmethod
+    def _coerceFormDataValue(cls, fieldInfo, rawValue, fieldConfig):
+        parser = fieldConfig.get('formParser')
+        if parser:
+            if isinstance(parser, str):
+                parser = getattr(cls, parser)
+
+            return parser(rawValue)
+
+        if fieldInfo.type is bool:
+            return rawValue == '1'
+
+        if isinstance(rawValue, str):
+            value = rawValue.strip() if fieldConfig.get('formStrip') else rawValue
+
+            if fieldConfig.get('formEmptyAsNone') and value == '':
+                return None
+
+            return value
+
+        return rawValue
 
 
 class RangeResolver:
@@ -126,7 +328,12 @@ class HTTPRequestHandlerHelper:
 
     def _handleForbidden(self, message='Disabled by server policy'):
         self._handleForbiddenHead(message)
-        self.wfile.write(message.encode('utf-8'))
+        
+        # a HEAD response must never include a body (RFC 7231 4.3.2), or a strict
+        # reverse proxy sees stray bytes after Content-Length: 0 and desyncs the
+        # persistent connection's framing for the next request.
+        if self.command != 'HEAD':
+            self.wfile.write(message.encode('utf-8'))
 
     def _handle404(self, message=None):
         if message:
@@ -137,7 +344,10 @@ class HTTPRequestHandlerHelper:
         self.send_header("Content-Type", "text/html")
         self.send_header('Content-Length', str(len(content)))
         self.end_headers()
-        self.wfile.write(content.encode())
+        
+        # Same HEAD-must-not-have-a-body rule as _handleForbidden() above --
+        if self.command != 'HEAD':
+            self.wfile.write(content.encode())
 
     def _sendConnectionHeader(self, keepAlive: Optional[bool]):
         """Send the Connection header for a hand-rolled keep-alive protocol"""
@@ -361,14 +571,26 @@ class StaticMixin:
     reaches it via self.handler, same as any other handler-owned method.
     """
 
+    # Mirrors FileShareServer's own SW_FILENAME_RE --
+    # both sides must agree on what counts as a Service Worker script, since
+    # that's what gates the Service-Worker-Allowed/Cache-Control headers below.
+    _SERVICE_WORKER_SCRIPT_RE = re.compile(r'.*(?:ServiceWorker|sw)\.js$', re.IGNORECASE)
+
     def _handleStatic(self, args=None, requestHeaders=None):
         """Serve a local static file through SimpleHTTPRequestHandler."""
         self._extraHeaders = requestHeaders or {}
         super().do_GET()
 
-    def _serveLocalStaticScript(self, requestHeaders=None):
+    def _serveLocalStaticScript(self, scriptPath, requestHeaders=None):
         """Serve script from local filesystem."""
-        self._handleStatic(requestHeaders=requestHeaders)
+        headers = dict(requestHeaders or {})
+        if self._SERVICE_WORKER_SCRIPT_RE.match(scriptPath):
+            # No upstream response to relay Service-Worker-Allowed/Cache-Control
+            # from here (see _proxyStaticScript below), so set them directly.
+            headers.setdefault('Service-Worker-Allowed', '/')
+            headers.setdefault('Cache-Control', 'no-cache')
+            
+        self._handleStatic(requestHeaders=headers)
 
     def _proxyStaticScript(self, scriptPath, requestHeaders=None, fallbackToLocal=False):
         """Generic method to proxy JavaScript files from static server
@@ -383,12 +605,20 @@ class StaticMixin:
             staticServer = settingsGetter.getStaticServer()
             remoteUrl = f"{staticServer}{scriptPath}"
 
+
             # Force identity encoding so the upstream returns plain bytes.
             # Copying remote Content-Encoding (zstd/gzip) while requests may have
             # already decoded the body causes Content-Length mismatches that break
             # HTTP/2 streams with INTERNAL_ERROR.
             headers = dict(requestHeaders or {})
             headers['Accept-Encoding'] = 'identity'
+
+            if self._SERVICE_WORKER_SCRIPT_RE.match(scriptPath):
+                # Tells the upstream this is a Service Worker script fetch, so it
+                # can decide to add Service-Worker-Allowed/Cache-Control to its
+                # own response (see FileShareServer's serveDevStatic()) -- relayed
+                # back to the browser below.
+                headers.setdefault('Service-Worker', 'script')
 
             response = requests.get(remoteUrl, headers=headers, timeout=10)
             response.raise_for_status()
@@ -399,6 +629,17 @@ class StaticMixin:
             self.send_response(HTTPStatus.OK)
             self.send_header('Content-Type', contentType)
             self.send_header('Content-Length', str(len(content)))
+
+            # Relay the upstream's own response headers for these -- they're
+            # response-only headers (e.g. Service-Worker-Allowed widens the SW
+            # registration scope, computed upstream from the Service-Worker
+            # request header above), not something this proxy can compute
+            # itself. 
+            for headerName in ('Service-Worker-Allowed', 'Cache-Control'):
+                headerValue = response.headers.get(headerName)
+                if headerValue:
+                    self.send_header(headerName, headerValue)
+
             self.end_headers()
             self.wfile.write(content)
 
@@ -407,7 +648,7 @@ class StaticMixin:
                 logger.warning(
                     f"Failed to fetch {scriptPath} from {remoteUrl}, fallback to local script: {e}"
                 )
-                self._serveLocalStaticScript(requestHeaders=requestHeaders)
+                self._serveLocalStaticScript(scriptPath, requestHeaders=requestHeaders)
                 return
 
             logger.error(f"Failed to fetch {scriptPath} from {remoteUrl}: {e}")
@@ -423,7 +664,10 @@ class StaticMixin:
 
         Args:
             scriptPath: Path to the script file
-            requestHeaders: Headers to send with remote request (proxy mode) or set in response (local mode)
+            requestHeaders: Optional extra headers, merged with the caller's own dict
+                and any Service Worker headers _SERVICE_WORKER_SCRIPT_RE derives
+                automatically from scriptPath (proxy mode: request headers sent
+                upstream; local mode: response headers set directly)
             fallbackToLocal: If True, fallback to local script when remote fetch fails
         """
         settingsGetter = SettingsGetter.getInstance()
@@ -434,7 +678,7 @@ class StaticMixin:
             self._proxyStaticScript(scriptPath, requestHeaders, fallbackToLocal=fallbackToLocal)
         else:
             # Static server is local - serve from local filesystem
-            self._serveLocalStaticScript(requestHeaders=requestHeaders)
+            self._serveLocalStaticScript(scriptPath, requestHeaders=requestHeaders)
 
 
 class PathResolverMixin:
@@ -483,6 +727,15 @@ class PathResolverMixin:
     def _mapRoute(self, method, path, handler, name=None):
         routeMap = self.paths[method]
         if path in routeMap:
+            # Re-registering the same handler for the same path is a no-op, not a
+            # conflict: _registerAdditionalEndpoints() runs on every request (see
+            # bases.Server._prepareRequestContext), not once per connection, so
+            # addons re-mapping their own routes each request must stay idempotent
+            # across the keep-alive connection's whole request sequence. Only a
+            # different handler claiming an already-mapped path is a real conflict.
+            if routeMap[path] == handler:
+                return
+
             raise RuntimeError(f"Route conflict: {path} is already mapped for {method.name}")
 
         routeMap[path] = handler

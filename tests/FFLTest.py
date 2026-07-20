@@ -26,6 +26,8 @@ tracemalloc.start()
 
 from .CoreTestBase import FastFileLinkTestBase
 
+USE_TEST_SERVER_FOR_SERVER_UPLOAD = False
+
 
 # ---------------------------
 # Core CLI Test Class
@@ -54,10 +56,10 @@ class CoreCliTest(FastFileLinkTestBase):
         # Call parent constructor with or without custom file size
         super().__init__(methodName, **kwargs)
 
-    def _testCliWithJsonOutput(self, p2p=True):
+    def _testCliWithJsonOutput(self, p2p=True, useTestServer=False):
         """Test CLI mode with JSON output using requests"""
         try:
-            shareLink = self._startFastFileLink(p2p)#, output=True, showOutput=True) 
+            shareLink = self._startFastFileLink(p2p, useTestServer=useTestServer)#, output=True, showOutput=True)
             downloadedFilePath = self._getDownloadedFilePath()
 
             self.downloadFileWithRequests(shareLink, downloadedFilePath)
@@ -73,7 +75,7 @@ class CoreCliTest(FastFileLinkTestBase):
 
     def testCliByServer(self):
         """Test core CLI functionality with Server mode"""
-        self._testCliWithJsonOutput(p2p=False)
+        self._testCliWithJsonOutput(p2p=False, useTestServer=USE_TEST_SERVER_FOR_SERVER_UPLOAD)
 
 
 if __name__ == '__main__':

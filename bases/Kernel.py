@@ -45,7 +45,7 @@ from signalslot import Signal
 from sentry_sdk.integrations.logging import SentryHandler, LoggingIntegration
 from sentry_sdk.integrations import atexit as sentryAtexit
 
-PUBLIC_VERSION = '4.0.0'
+PUBLIC_VERSION = '4.0.1'
 
 # Map string levels to logging constants for standard level names
 LOG_LEVEL_MAPPING = {'DEBUG': logging.DEBUG, 'INFO': logging.INFO, 'WARNING': logging.WARNING, 'ERROR': logging.ERROR}
@@ -1207,6 +1207,7 @@ class FFLEvent:
     # Application lifecycle events
     applicationStarted = Event('/application/start')
     shareLinkCreate = Event('/share/link/create')
+    shareStopped = Event('/share/stop')
     applicationShutdown = Event('/application/shutdown')
     applicationInterrupted = Event('/application/interrupt')
 

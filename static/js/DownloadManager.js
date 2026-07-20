@@ -33,847 +33,6 @@ const dmT = (typeof window !== 'undefined' && typeof window.t === 'function') ? 
     return defaultValue || key;
 };
 
-class DownloadTelemetryTracker {
-    constructor({ onSnapshot = null, emitIntervalMs = 500, sampleWindowMs = 500 } = {}) {
-        this.onSnapshot = typeof onSnapshot === 'function' ? onSnapshot : null;
-        this.emitIntervalMs = Math.max(100, emitIntervalMs);
-        this.sampleWindowMs = Math.max(100, sampleWindowMs);
-        this.state = this.createEmptyState();
-        this.lastEmittedAt = 0;
-    }
-
-    createEmptyState() {
-        return {
-            logicalDownloadId: '',
-            serverDownloadId: '',
-            totalBytes: 0,
-            bytesReceived: 0,
-            bytesWritten: 0,
-            recvBps: 0,
-            writeBps: 0,
-            senderBytesSent: 0,
-            senderSendBps: 0,
-            backlogBytes: 0,
-            activeRangeCount: 1,
-            startedAt: 0,
-            lastReceiveAt: 0,
-            lastWriteAt: 0,
-            lastSenderTs: 0,
-            receiveSampleBytes: 0,
-            receiveSampleTs: 0,
-            writeSampleBytes: 0,
-            writeSampleTs: 0,
-            manualStallMs: 0,
-            complete: false,
-            error: '',
-        };
-    }
-
-    reset(downloadId, totalBytes = 0, initialBytes = 0) {
-        const now = Date.now();
-        this.state = {
-            ...this.createEmptyState(),
-            logicalDownloadId: downloadId || '',
-            totalBytes: Number.isFinite(totalBytes) ? Math.max(0, totalBytes) : 0,
-            bytesReceived: Math.max(0, initialBytes || 0),
-            bytesWritten: Math.max(0, initialBytes || 0),
-            startedAt: now,
-            lastReceiveAt: now,
-            lastWriteAt: now,
-            receiveSampleBytes: Math.max(0, initialBytes || 0),
-            receiveSampleTs: now,
-            writeSampleBytes: Math.max(0, initialBytes || 0),
-            writeSampleTs: now,
-        };
-        this.emit(true);
-    }
-
-    setServerDownloadId(serverDownloadId) {
-        if (!serverDownloadId) {
-            return;
-        }
-
-        this.state.serverDownloadId = serverDownloadId;
-        this.emit(true);
-    }
-
-    updateTotalBytes(totalBytes) {
-        if (!Number.isFinite(totalBytes) || totalBytes <= 0) {
-            return;
-        }
-
-        this.state.totalBytes = Math.max(this.state.totalBytes || 0, totalBytes);
-    }
-
-    observeReceived(bytesReceived, totalBytes = 0) {
-        const now = Date.now();
-        const safeBytes = Math.max(0, bytesReceived || 0);
-        this.updateTotalBytes(totalBytes);
-        this.state.bytesReceived = safeBytes;
-        this.state.lastReceiveAt = now;
-        this.state.manualStallMs = 0;
-        this.updateRate('receive', safeBytes, now, 'recvBps');
-        this.refreshBacklog();
-        this.emit();
-    }
-
-    observeWritten(bytesWritten, totalBytes = 0) {
-        const now = Date.now();
-        const safeBytes = Math.max(0, bytesWritten || 0);
-        this.updateTotalBytes(totalBytes);
-        this.state.bytesWritten = safeBytes;
-        this.state.lastWriteAt = now;
-        this.state.manualStallMs = 0;
-        this.updateRate('write', safeBytes, now, 'writeBps');
-        this.refreshBacklog();
-        this.emit();
-    }
-
-    observeSenderTelemetry(payload = {}) {
-        const senderLogicalDownloadId = payload.logicalDownloadId || '';
-        const senderServerDownloadId = payload.downloadId || '';
-        if (
-            this.state.logicalDownloadId
-            && senderLogicalDownloadId
-            && senderLogicalDownloadId !== this.state.logicalDownloadId
-        ) {
-            return;
-        }
-
-        if (
-            this.state.serverDownloadId
-            && senderServerDownloadId
-            && senderServerDownloadId !== this.state.serverDownloadId
-            && !senderLogicalDownloadId
-        ) {
-            return;
-        }
-
-        this.state.senderBytesSent = Math.max(0, payload.bytesSent || 0);
-        this.state.senderSendBps = Math.max(0, payload.sendBps || 0);
-        this.state.activeRangeCount = Math.max(1, payload.activeRangeCount || 1);
-        this.state.lastSenderTs = Number.isFinite(payload.lastSendTs) ? payload.lastSendTs : Date.now();
-        if (senderServerDownloadId) {
-            this.state.serverDownloadId = senderServerDownloadId;
-        }
-        this.updateTotalBytes(payload.totalBytes || 0);
-        this.refreshBacklog();
-        this.emit();
-    }
-
-    noteStall(stallMs = 0) {
-        this.state.manualStallMs = Math.max(this.state.manualStallMs || 0, Math.max(0, stallMs || 0));
-        this.emit(true);
-    }
-
-    markComplete() {
-        this.state.complete = true;
-        this.state.error = '';
-        this.emit(true);
-    }
-
-    markError(message) {
-        this.state.error = String(message || '');
-        this.state.complete = false;
-        this.emit(true);
-    }
-
-    updateRate(prefix, currentBytes, now, targetField) {
-        const sampleBytesKey = `${prefix}SampleBytes`;
-        const sampleTsKey = `${prefix}SampleTs`;
-        const previousTs = this.state[sampleTsKey] || now;
-        const elapsedMs = now - previousTs;
-
-        if (elapsedMs < this.sampleWindowMs) {
-            return;
-        }
-
-        const previousBytes = this.state[sampleBytesKey] || 0;
-        const bytesDelta = Math.max(0, currentBytes - previousBytes);
-        this.state[targetField] = elapsedMs > 0 ? Math.round((bytesDelta * 1000) / elapsedMs) : 0;
-        this.state[sampleBytesKey] = currentBytes;
-        this.state[sampleTsKey] = now;
-    }
-
-    refreshBacklog() {
-        this.state.backlogBytes = Math.max(0, (this.state.senderBytesSent || 0) - (this.state.bytesWritten || 0));
-    }
-
-    getSnapshot() {
-        const now = Date.now();
-        const latestActivityAt = Math.max(this.state.lastReceiveAt || 0, this.state.lastWriteAt || 0, this.state.startedAt || 0);
-        const computedStallMs = latestActivityAt > 0 ? Math.max(0, now - latestActivityAt) : 0;
-        return {
-            logicalDownloadId: this.state.logicalDownloadId,
-            serverDownloadId: this.state.serverDownloadId,
-            totalBytes: this.state.totalBytes,
-            bytesReceived: this.state.bytesReceived,
-            recvBps: this.state.recvBps,
-            bytesWritten: this.state.bytesWritten,
-            writeBps: this.state.writeBps,
-            senderBytesSent: this.state.senderBytesSent,
-            senderSendBps: this.state.senderSendBps,
-            backlogBytes: this.state.backlogBytes,
-            activeRangeCount: this.state.activeRangeCount,
-            lastSenderTs: this.state.lastSenderTs,
-            stallMs: Math.max(computedStallMs, this.state.manualStallMs || 0),
-            complete: this.state.complete,
-            error: this.state.error,
-        };
-    }
-
-    emit(force = false) {
-        if (!this.onSnapshot) {
-            return;
-        }
-
-        const now = Date.now();
-        if (!force && now - this.lastEmittedAt < this.emitIntervalMs) {
-            return;
-        }
-
-        this.lastEmittedAt = now;
-        this.onSnapshot(this.getSnapshot());
-    }
-}
-
-class TransferDiagnosisEngine {
-    constructor(config = {}) {
-        this.minimumBytesForDiagnosis = Number.isFinite(config.minimumBytesForDiagnosis) ? config.minimumBytesForDiagnosis : 2 * 1024 * 1024;
-        this.senderHealthyBps = Number.isFinite(config.senderHealthyBps) ? config.senderHealthyBps : 192 * 1024;
-        this.slowSenderBps = Number.isFinite(config.slowSenderBps) ? config.slowSenderBps : 96 * 1024;
-        this.slowTransferBps = Number.isFinite(config.slowTransferBps) ? config.slowTransferBps : 96 * 1024;
-        this.slowTransferObservationMs = Number.isFinite(config.slowTransferObservationMs) ? config.slowTransferObservationMs : 3000;
-        this.slowTransferMaxProgressBytes = Number.isFinite(config.slowTransferMaxProgressBytes) ? config.slowTransferMaxProgressBytes : 384 * 1024;
-        this.receiverRatioThreshold = Number.isFinite(config.receiverRatioThreshold) ? config.receiverRatioThreshold : 0.45;
-        this.backlogThresholdBytes = Number.isFinite(config.backlogThresholdBytes) ? config.backlogThresholdBytes : 3 * 1024 * 1024;
-        this.warningThresholdMs = Number.isFinite(config.warningThresholdMs) ? config.warningThresholdMs : 6000;
-        this.slowTransferState = null;
-    }
-
-    reset() {
-        this.slowTransferState = null;
-    }
-
-    resolveDiagnosis(transferStateSummary = {}) {
-        const localSnapshot = transferStateSummary.localSnapshot || null;
-        const serverSnapshot = transferStateSummary.serverSnapshot || null;
-        const serverDiagnosis = this.resolveServerDiagnosis(serverSnapshot);
-        if (serverDiagnosis) {
-            this.reset();
-            return serverDiagnosis;
-        }
-
-        return this.resolveLocalDiagnosis(localSnapshot);
-    }
-
-    resolveServerDiagnosis(serverSnapshot) {
-        if (!serverSnapshot || typeof serverSnapshot !== 'object') {
-            return null;
-        }
-
-        if (serverSnapshot.classification === 'server_stalled') {
-            return {
-                kind: 'sender_or_relay_stalled',
-                heading: 'This transfer is currently waiting on the sender side.',
-                detail: 'The sender or relay path stopped making progress for a while. If this keeps happening, ask the sender to try cloud pickup for a more reliable transfer.',
-            };
-        }
-
-        if (serverSnapshot.classification === 'client_ack_missing') {
-            return {
-                kind: 'browser_save_unconfirmed',
-                heading: 'The file was sent, but this browser did not confirm the save automatically.',
-                detail: 'Please check your browser downloads list. If the file is missing or incomplete, retry once or ask the sender to use cloud pickup.',
-            };
-        }
-
-        if (serverSnapshot.classification === 'network_interrupted') {
-            return {
-                kind: 'route_interrupted',
-                heading: 'This download was interrupted by the network path.',
-                detail: 'The connection between the sender and this device did not stay stable long enough to finish. If this keeps happening, ask the sender to use cloud pickup.',
-            };
-        }
-
-        if (serverSnapshot.classification === 'folder_changed') {
-            return {
-                kind: 'sender_source_changed',
-                heading: 'The sender changed the shared file before this download could finish.',
-                detail: 'Please ask the sender to reopen the share or switch to cloud pickup if the file keeps moving or changing.',
-            };
-        }
-
-        return null;
-    }
-
-    resolveLocalDiagnosis(snapshot) {
-        if (!snapshot || snapshot.complete || snapshot.error) {
-            this.reset();
-            return null;
-        }
-
-        const bytesObserved = Math.max(snapshot.bytesReceived || 0, snapshot.bytesWritten || 0);
-        const senderSendBps = snapshot.senderSendBps || 0;
-        const receiverBps = Math.max(snapshot.recvBps || 0, snapshot.writeBps || 0);
-        const writeBps = snapshot.writeBps || 0;
-        const backlogBytes = snapshot.backlogBytes || 0;
-        const totalBytes = snapshot.totalBytes || 0;
-        const remainingBytes = Math.max(0, totalBytes - bytesObserved);
-
-        if (snapshot.stallMs >= this.warningThresholdMs) {
-            if (senderSendBps >= this.senderHealthyBps) {
-                this.reset();
-                return {
-                    kind: 'receiver_path_slow',
-                    heading: 'This download is having network trouble right now.',
-                    detail: 'The connection to this device looks unstable. If this keeps happening, ask the sender to use cloud pickup for a more reliable transfer.',
-                };
-            }
-
-            if (senderSendBps > 0 && senderSendBps <= this.slowSenderBps) {
-                this.reset();
-                return {
-                    kind: 'sender_or_upstream_slow',
-                    heading: 'This download is currently waiting on the sender connection.',
-                    detail: 'The sender may need a steadier network or cloud pickup to finish reliably.',
-                };
-            }
-        }
-
-        if (bytesObserved < this.minimumBytesForDiagnosis) {
-            this.reset();
-            return null;
-        }
-
-        if (
-            senderSendBps >= this.senderHealthyBps
-            && writeBps > 0
-            && writeBps < senderSendBps * this.receiverRatioThreshold
-            && backlogBytes >= this.backlogThresholdBytes
-        ) {
-            this.reset();
-            return {
-                kind: 'receiver_path_slow',
-                heading: 'This download is having network trouble right now.',
-                detail: 'The connection to this device looks unstable. If this keeps happening, ask the sender to use cloud pickup for a more reliable transfer.',
-            };
-        }
-
-        if (senderSendBps > 0 && senderSendBps <= this.slowSenderBps && receiverBps <= this.slowSenderBps) {
-            this.reset();
-            return {
-                kind: 'sender_or_upstream_slow',
-                heading: 'This download is currently waiting on the sender connection.',
-                detail: 'The sender may need a steadier network or cloud pickup to finish reliably.',
-            };
-        }
-
-        return this.resolveSlowTransferDiagnosis({
-            receiverBps,
-            bytesObserved,
-            totalBytes,
-            remainingBytes,
-        });
-    }
-
-    resolveSlowTransferDiagnosis({ receiverBps = 0, bytesObserved = 0, totalBytes = 0, remainingBytes = 0 } = {}) {
-        if (!this.isSlowTransferCandidate({ receiverBps, bytesObserved, totalBytes, remainingBytes })) {
-            this.reset();
-            return null;
-        }
-
-        const now = Date.now();
-        if (!this.slowTransferState) {
-            this.slowTransferState = {
-                firstSeenAt: now,
-                startBytes: bytesObserved,
-            };
-            return null;
-        }
-
-        const progressBytes = Math.max(0, bytesObserved - this.slowTransferState.startBytes);
-        if (progressBytes > this.slowTransferMaxProgressBytes) {
-            this.slowTransferState = {
-                firstSeenAt: now,
-                startBytes: bytesObserved,
-            };
-            return null;
-        }
-
-        if (now - this.slowTransferState.firstSeenAt < this.slowTransferObservationMs) {
-            return null;
-        }
-
-        return {
-            kind: 'overall_download_slow',
-            heading: 'This download is moving unusually slowly right now.',
-            detail: 'The connection is making very little progress right now. If this keeps happening, ask the sender to use cloud pickup for a more reliable transfer.',
-        };
-    }
-
-    isSlowTransferCandidate({ receiverBps = 0, bytesObserved = 0, totalBytes = 0, remainingBytes = 0 } = {}) {
-        if (bytesObserved < this.minimumBytesForDiagnosis) {
-            return false;
-        }
-
-        if (receiverBps <= 0 || receiverBps > this.slowTransferBps) {
-            return false;
-        }
-
-        if (totalBytes > 0 && remainingBytes <= this.minimumBytesForDiagnosis) {
-            return false;
-        }
-
-        return true;
-    }
-}
-
-class DownloadIssueNotificationPresenter {
-    constructor(config = {}) {
-        this.notificationId = config.notificationId || 'download-network-issue-notification';
-        this.reportModalId = config.reportModalId || 'downloadIssueModal';
-        this.showNotification = typeof config.showNotification === 'function' ? config.showNotification : null;
-        this.hideNotification = typeof config.hideNotification === 'function' ? config.hideNotification : null;
-    }
-
-    buildReportButtonHtml() {
-        if (!document.getElementById(this.reportModalId)) {
-            return '';
-        }
-
-        return `
-            <button
-                type="button"
-                class="btn btn-light btn-sm"
-                data-bs-toggle="modal"
-                data-bs-target="#${this.reportModalId}"
-                style="margin-top: 12px;"
-            >
-                Report this problem
-            </button>
-        `;
-    }
-
-    buildNotificationHtml(diagnosis) {
-        return `
-            <div style="font-size: 17px; font-weight: 600; margin-bottom: 6px;">${diagnosis.heading}</div>
-            <div style="font-size: 14px; line-height: 1.5;">${diagnosis.detail}</div>
-            ${this.buildReportButtonHtml()}
-        `;
-    }
-
-    show(diagnosis) {
-        const notificationHtml = this.buildNotificationHtml(diagnosis);
-        if (this.showNotification) {
-            this.showNotification({
-                id: this.notificationId,
-                html: notificationHtml,
-                maxWidth: '680px',
-                textAlign: 'left',
-                padding: '16px 22px',
-            });
-            return;
-        }
-
-        let notification = document.getElementById(this.notificationId);
-        if (!notification) {
-            notification = document.createElement('div');
-            notification.id = this.notificationId;
-            notification.style.cssText = `
-                position: fixed;
-                top: 20px;
-                left: 50%;
-                transform: translateX(-50%);
-                background-color: #dc3545;
-                color: white;
-                padding: 16px 22px;
-                border-radius: 8px;
-                box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
-                z-index: 10000;
-                max-width: 680px;
-                width: calc(100% - 32px);
-                text-align: left;
-            `;
-            document.body.appendChild(notification);
-        }
-
-        notification.innerHTML = notificationHtml;
-        notification.style.display = 'block';
-    }
-
-    hide() {
-        if (this.hideNotification) {
-            this.hideNotification(this.notificationId);
-            return;
-        }
-
-        const notification = document.getElementById(this.notificationId);
-        if (notification) {
-            notification.style.display = 'none';
-        }
-    }
-}
-
-class DownloadNetworkIssueMonitor {
-    constructor(config = {}) {
-        if (!config.downloadManager || typeof config.downloadManager.registerOnTelemetry !== 'function') {
-            throw new Error('DownloadNetworkIssueMonitor requires a DownloadManager with telemetry callbacks');
-        }
-
-        this.downloadManager = config.downloadManager;
-        this.eventBus = config.eventBus || null;
-        this.log = typeof config.log === 'function' ? config.log : dmLog;
-        this.sustainMs = Number.isFinite(config.sustainMs) ? config.sustainMs : 3000;
-        this.displayedDiagnosis = '';
-        this.pendingDiagnosis = null;
-        this.unsubscribeCallbacks = [];
-        this.diagnosisEngine = config.diagnosisEngine instanceof TransferDiagnosisEngine
-            ? config.diagnosisEngine
-            : new TransferDiagnosisEngine(config);
-        this.notificationPresenter = config.notificationPresenter instanceof DownloadIssueNotificationPresenter
-            ? config.notificationPresenter
-            : new DownloadIssueNotificationPresenter(config);
-
-        this.attach();
-    }
-
-    attach() {
-        if (typeof this.downloadManager.registerOnDownloadStart === 'function') {
-            this.unsubscribeCallbacks.push(
-                this.downloadManager.registerOnDownloadStart(() => {
-                    this.dismissDiagnosis();
-                })
-            );
-        }
-
-        this.unsubscribeCallbacks.push(
-            this.downloadManager.registerOnTelemetry((snapshot) => {
-                this.evaluate(snapshot);
-            })
-        );
-        this.unsubscribeCallbacks.push(
-            this.downloadManager.registerOnDownloadComplete(() => {
-                this.dismissDiagnosis();
-            })
-        );
-        this.unsubscribeCallbacks.push(
-            this.downloadManager.registerOnDownloadError(() => {
-                this.dismissDiagnosis();
-            })
-        );
-
-        if (this.eventBus && typeof this.eventBus.on === 'function') {
-            const unsubscribeTelemetry = this.eventBus.on('download.telemetry', (message) => {
-                this.downloadManager.handleSenderTelemetry(message && message.payload ? message.payload : {});
-            });
-            if (typeof unsubscribeTelemetry === 'function') {
-                this.unsubscribeCallbacks.push(unsubscribeTelemetry);
-            }
-
-            const handleLifecycleEvent = (message) => {
-                const payload = message && message.payload ? message.payload : {};
-                if (this.downloadManager.handleServerLifecycleSnapshot(payload)) {
-                    this.evaluate();
-                }
-            };
-
-            const unsubscribeLifecycle = this.eventBus.on('download.lifecycle', handleLifecycleEvent);
-            if (typeof unsubscribeLifecycle === 'function') {
-                this.unsubscribeCallbacks.push(unsubscribeLifecycle);
-            }
-
-            const unsubscribeStatus = this.eventBus.on('download.statusSnapshot', handleLifecycleEvent);
-            if (typeof unsubscribeStatus === 'function') {
-                this.unsubscribeCallbacks.push(unsubscribeStatus);
-            }
-        }
-    }
-
-    clearPendingDiagnosis() {
-        this.pendingDiagnosis = null;
-    }
-
-    dismissDiagnosis() {
-        this.clearPendingDiagnosis();
-        this.displayedDiagnosis = '';
-        this.diagnosisEngine.reset();
-        this.notificationPresenter.hide();
-    }
-
-    buildTransferStateSummary(localSnapshot = null) {
-        const fallbackSummary = {
-            localSnapshot: null,
-            serverSnapshot: null,
-        };
-        const transferState = typeof this.downloadManager.getTransferStateSummary === 'function'
-            ? (this.downloadManager.getTransferStateSummary() || fallbackSummary)
-            : fallbackSummary;
-
-        return {
-            localSnapshot: localSnapshot || transferState.localSnapshot || null,
-            serverSnapshot: transferState.serverSnapshot || null,
-        };
-    }
-
-    evaluate(snapshot = null) {
-        const transferStateSummary = this.buildTransferStateSummary(snapshot);
-        const activeLocalSnapshot = transferStateSummary.localSnapshot;
-        if (
-            (!activeLocalSnapshot || activeLocalSnapshot.complete || activeLocalSnapshot.error)
-            && !transferStateSummary.serverSnapshot
-        ) {
-            this.dismissDiagnosis();
-            return;
-        }
-
-        const diagnosis = this.resolveDiagnosis(activeLocalSnapshot);
-        if (!diagnosis) {
-            this.clearPendingDiagnosis();
-            return;
-        }
-
-        if (this.displayedDiagnosis === diagnosis.kind) {
-            return;
-        }
-
-        const now = Date.now();
-        if (!this.pendingDiagnosis || this.pendingDiagnosis.kind !== diagnosis.kind) {
-            this.pendingDiagnosis = {
-                kind: diagnosis.kind,
-                firstSeenAt: now,
-                diagnosis,
-            };
-            return;
-        }
-
-        if (now - this.pendingDiagnosis.firstSeenAt < this.sustainMs) {
-            return;
-        }
-
-        this.displayedDiagnosis = diagnosis.kind;
-        this.showWarning(diagnosis);
-        this.log('DownloadMonitor', `Displayed network issue warning: ${diagnosis.kind}`, transferStateSummary);
-    }
-
-    _resolveDiagnosisLegacy(snapshot) {
-        return this.resolveDiagnosis(snapshot);
-
-        /*
-        const transferState = typeof this.downloadManager.getTransferStateSummary === 'function'
-            ? this.downloadManager.getTransferStateSummary()
-            : { serverSnapshot: null };
-        const serverDiagnosis = this.resolveServerDiagnosis(transferState.serverSnapshot);
-        if (serverDiagnosis) {
-            return serverDiagnosis;
-        }
-
-        const bytesObserved = Math.max(snapshot.bytesReceived || 0, snapshot.bytesWritten || 0);
-        const senderSendBps = snapshot.senderSendBps || 0;
-        const receiverBps = Math.max(snapshot.recvBps || 0, snapshot.writeBps || 0);
-        const writeBps = snapshot.writeBps || 0;
-        const backlogBytes = snapshot.backlogBytes || 0;
-        const totalBytes = snapshot.totalBytes || 0;
-        const remainingBytes = Math.max(0, totalBytes - bytesObserved);
-
-        if (snapshot.stallMs >= this.warningThresholdMs) {
-            if (senderSendBps >= this.senderHealthyBps) {
-                return {
-                    kind: 'receiver_path_slow',
-                    heading: 'This download is having network trouble right now.',
-                    detail: 'The connection to this device looks unstable. If this keeps happening, ask the sender to use cloud pickup for a more reliable transfer.',
-                };
-            }
-
-            if (senderSendBps > 0 && senderSendBps <= this.slowSenderBps) {
-                return {
-                    kind: 'sender_or_upstream_slow',
-                    heading: 'This download is waiting on the sender’s connection right now.',
-                    detail: 'The sender may need a steadier network or cloud pickup to finish reliably.',
-                };
-            }
-        }
-
-        if (bytesObserved < this.minimumBytesForDiagnosis) {
-            return null;
-        }
-
-        if (
-            senderSendBps >= this.senderHealthyBps
-            && writeBps > 0
-            && writeBps < senderSendBps * this.receiverRatioThreshold
-            && backlogBytes >= this.backlogThresholdBytes
-        ) {
-            return {
-                kind: 'receiver_path_slow',
-                heading: 'This download is having network trouble right now.',
-                detail: 'The connection to this device looks unstable. If this keeps happening, ask the sender to use cloud pickup for a more reliable transfer.',
-            };
-        }
-
-        if (senderSendBps > 0 && senderSendBps <= this.slowSenderBps && receiverBps <= this.slowSenderBps) {
-            return {
-                kind: 'sender_or_upstream_slow',
-                heading: 'This download is waiting on the sender’s connection right now.',
-                detail: 'The sender may need a steadier network or cloud pickup to finish reliably.',
-            };
-        }
-
-        if (this.isSlowTransferCandidate({ receiverBps, bytesObserved, totalBytes, remainingBytes })) {
-            const now = Date.now();
-            if (!this.slowTransferState) {
-                this.slowTransferState = {
-                    firstSeenAt: now,
-                    startBytes: bytesObserved,
-                };
-                return null;
-            }
-
-            const progressBytes = Math.max(0, bytesObserved - this.slowTransferState.startBytes);
-            if (progressBytes > this.slowTransferMaxProgressBytes) {
-                this.slowTransferState = {
-                    firstSeenAt: now,
-                    startBytes: bytesObserved,
-                };
-                return null;
-            }
-
-            if (now - this.slowTransferState.firstSeenAt < this.slowTransferObservationMs) {
-                return null;
-            }
-
-            return {
-                kind: 'overall_download_slow',
-                heading: 'This download is moving unusually slowly right now.',
-                detail: 'The connection is making very little progress right now. If this keeps happening, ask the sender to use cloud pickup for a more reliable transfer.',
-            };
-        }
-
-        this.resetSlowTransferState();
-        return null;
-        */
-    }
-
-    _resolveServerDiagnosisLegacy(serverSnapshot) {
-        return this.resolveServerDiagnosis(serverSnapshot);
-
-        /*
-        if (!serverSnapshot || typeof serverSnapshot !== 'object') {
-            return null;
-        }
-
-        if (serverSnapshot.classification === 'server_stalled') {
-            return {
-                kind: 'sender_or_relay_stalled',
-                heading: 'This transfer is currently waiting on the sender side.',
-                detail: 'The sender or relay path stopped making progress for a while. If this keeps happening, ask the sender to try cloud pickup for a more reliable transfer.',
-            };
-        }
-
-        return null;
-        */
-    }
-
-    _isSlowTransferCandidateLegacy({ receiverBps = 0, bytesObserved = 0, totalBytes = 0, remainingBytes = 0 } = {}) {
-        return this.isSlowTransferCandidate({ receiverBps, bytesObserved, totalBytes, remainingBytes });
-
-        /*
-        if (bytesObserved < this.minimumBytesForDiagnosis) {
-            return false;
-        }
-
-        if (receiverBps <= 0 || receiverBps > this.slowTransferBps) {
-            return false;
-        }
-
-        if (totalBytes > 0 && remainingBytes <= this.minimumBytesForDiagnosis) {
-            return false;
-        }
-
-        return true;
-        */
-    }
-
-    _showWarningLegacy(diagnosis) {
-        this.showWarning(diagnosis);
-        return;
-
-        /*
-        const reportButtonHtml = document.getElementById(this.reportModalId)
-            ? `
-                <button
-                    type="button"
-                    class="btn btn-light btn-sm"
-                    data-bs-toggle="modal"
-                    data-bs-target="#${this.reportModalId}"
-                    style="margin-top: 12px;"
-                >
-                    Report this problem
-                </button>
-            `
-            : '';
-
-        const notificationHtml = `
-            <div style="font-size: 17px; font-weight: 600; margin-bottom: 6px;">${diagnosis.heading}</div>
-            <div style="font-size: 14px; line-height: 1.5;">${diagnosis.detail}</div>
-            ${reportButtonHtml}
-        `;
-
-        if (this.showNotification) {
-            this.showNotification({
-                id: this.notificationId,
-                html: notificationHtml,
-                maxWidth: '680px',
-                textAlign: 'left',
-                padding: '16px 22px',
-            });
-            return;
-        }
-
-        let notification = document.getElementById(this.notificationId);
-        if (!notification) {
-            notification = document.createElement('div');
-            notification.id = this.notificationId;
-            notification.style.cssText = `
-                position: fixed;
-                top: 20px;
-                left: 50%;
-                transform: translateX(-50%);
-                background-color: #dc3545;
-                color: white;
-                padding: 16px 22px;
-                border-radius: 8px;
-                box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
-                z-index: 10000;
-                max-width: 680px;
-                width: calc(100% - 32px);
-                text-align: left;
-            `;
-            document.body.appendChild(notification);
-        }
-
-        notification.innerHTML = notificationHtml;
-        notification.style.display = 'block';
-        */
-    }
-
-    resolveDiagnosis(snapshot) {
-        return this.diagnosisEngine.resolveDiagnosis(this.buildTransferStateSummary(snapshot));
-    }
-
-    resolveServerDiagnosis(serverSnapshot) {
-        return this.diagnosisEngine.resolveServerDiagnosis(serverSnapshot);
-    }
-
-    isSlowTransferCandidate({ receiverBps = 0, bytesObserved = 0, totalBytes = 0, remainingBytes = 0 } = {}) {
-        return this.diagnosisEngine.isSlowTransferCandidate({ receiverBps, bytesObserved, totalBytes, remainingBytes });
-    }
-
-    showWarning(diagnosis) {
-        this.notificationPresenter.show(diagnosis);
-    }
-}
-
 class DownloadIssueReporter {
     static FORM_ID = 'downloadIssueForm';
     static STORAGE_KEY = 'ffl_download_issue_report_v2';
@@ -1442,32 +601,13 @@ class DownloadIssueReporter {
         });
     }
 
-    buildTransferStateSummary() {
-        if (!this.boundDownloadManager || typeof this.boundDownloadManager.getTransferStateSummary !== 'function') {
-            return null;
-        }
-
-        const summary = this.boundDownloadManager.getTransferStateSummary();
-        if (!summary || typeof summary !== 'object') {
-            return null;
-        }
-
-        return {
-            localSnapshot: summary.localSnapshot || null,
-            serverSnapshot: summary.serverSnapshot || null,
-        };
-    }
-
     async sendSenderPayload(payload) {
         const endpoint = this.resolveSenderEndpoint(payload.uid);
         if (!endpoint) {
             return;
         }
 
-        await this.sendJSON(endpoint, {
-            ...payload,
-            transferStateSummary: this.buildTransferStateSummary(),
-        }, {
+        await this.sendJSON(endpoint, payload, {
             mode: 'same-origin',
             credentials: 'same-origin',
         });
@@ -1478,10 +618,7 @@ class DownloadIssueReporter {
             return;
         }
 
-        await this.sendJSON(this.developerEndpoint, {
-            ...payload,
-            transferStateSummary: this.buildTransferStateSummary(),
-        }, {
+        await this.sendJSON(this.developerEndpoint, payload, {
             mode: 'cors',
             credentials: 'omit',
             useBeacon,
@@ -2827,7 +1964,6 @@ class DownloadManager {
         this.serverDownloadId = null;
         this.serverAckSent = false;
         this.activeDownloadPath = null;
-        this.serverLifecycleSnapshot = null;
 
         // Resume support state
         this.resumeConfig = null;
@@ -2858,13 +1994,11 @@ class DownloadManager {
             downloadStart: new Set(),
             downloadComplete: new Set(),
             downloadError: new Set(),
-            telemetry: new Set(),
         };
         this._registerLifecycleCallback('serviceWorkerReady', options.onServiceWorkerReadyCallback, { allowMissing: true });
         this._registerLifecycleCallback('downloadStart', options.onDownloadStartCallback, { allowMissing: true });
         this._registerLifecycleCallback('downloadComplete', options.onDownloadCompleteCallback, { allowMissing: true });
         this._registerLifecycleCallback('downloadError', options.onDownloadErrorCallback, { allowMissing: true });
-        this._registerLifecycleCallback('telemetry', options.onTelemetryCallback, { allowMissing: true });
 
         // Custom log function (if provided, use it; otherwise use default dmLog)
         this.customLogFn = options.logFunction || null;
@@ -2878,12 +2012,6 @@ class DownloadManager {
         this.t = this.t.bind(this);
         this.formatBytes = this.formatBytes.bind(this);
         this.calculateSpeed = this.calculateSpeed.bind(this);
-        this.handleSenderTelemetry = this.handleSenderTelemetry.bind(this);
-        this.telemetryTracker = new DownloadTelemetryTracker({
-            onSnapshot: (snapshot) => {
-                this._notifyLifecycleCallbacks('telemetry', [snapshot]).catch(() => {});
-            }
-        });
         
         // Initialize
         this.setupBroadcastChannel();
@@ -2921,10 +2049,6 @@ class DownloadManager {
         return this._registerLifecycleCallback('downloadError', callback);
     }
 
-    registerOnTelemetry(callback) {
-        return this._registerLifecycleCallback('telemetry', callback);
-    }
-
     async _notifyLifecycleCallbacks(eventName, args = [], { awaitCallbacks = false } = {}) {
         const callbacks = Array.from(this._lifecycleCallbacks[eventName] || []);
         for (const callback of callbacks) {
@@ -2937,81 +2061,6 @@ class DownloadManager {
                 this.log('DownloadManager', `Error in ${eventName} callback:`, e);
             }
         }
-    }
-
-    handleSenderTelemetry(payload = {}) {
-        this.telemetryTracker.observeSenderTelemetry(payload);
-    }
-
-    shouldAcceptServerLifecycleSnapshot(snapshot = {}) {
-        if (!snapshot || typeof snapshot !== 'object') {
-            return false;
-        }
-
-        const snapshotLogicalDownloadId = snapshot.logicalDownloadId || '';
-        const snapshotServerDownloadId = snapshot.downloadId || '';
-        if (this.activeDlId && snapshotLogicalDownloadId && snapshotLogicalDownloadId !== this.activeDlId) {
-            return false;
-        }
-
-        if (this.serverDownloadId && snapshotServerDownloadId && snapshotServerDownloadId !== this.serverDownloadId) {
-            return false;
-        }
-
-        return true;
-    }
-
-    handleServerLifecycleSnapshot(snapshot = {}) {
-        if (!this.shouldAcceptServerLifecycleSnapshot(snapshot)) {
-            return false;
-        }
-
-        this.serverLifecycleSnapshot = snapshot;
-        if (snapshot.downloadId && !this.serverDownloadId) {
-            this.serverDownloadId = snapshot.downloadId;
-            this.telemetryTracker.setServerDownloadId(snapshot.downloadId);
-        }
-        if (typeof snapshot.totalBytes === 'number' && snapshot.totalBytes > 0) {
-            this.totalBytesHint = Math.max(this.totalBytesHint || 0, snapshot.totalBytes);
-        }
-        if (snapshot.downloadPath) {
-            this.activeDownloadPath = snapshot.downloadPath;
-        }
-        this.serverAckSent = this.serverAckSent || !!snapshot.clientAckReceived;
-
-        if (this.currentPlan && this.currentPlan.mode === 'pass') {
-            this.handlePassThroughLifecycleSnapshot(snapshot);
-        }
-
-        return true;
-    }
-
-    handlePassThroughLifecycleSnapshot(snapshot = {}) {
-        if (this.completionHandled) {
-            return;
-        }
-
-        if (snapshot.state === 'server_stream_drained') {
-            this.updateStatus(
-                this.t('Download:passThrough.serverSent', 'The file was sent. Please check your browser downloads to confirm it finished saving.'),
-                this.t('Download:passThrough.browserSaving', 'Your browser may still be finishing the save in the background.')
-            );
-            return;
-        }
-
-        if (snapshot.state === 'client_ack_timeout') {
-            this.updateStatus(
-                this.t('Download:passThrough.ackMissing', 'This browser did not confirm the download automatically.'),
-                this.t('Download:passThrough.checkDownloads', 'Please check your browser downloads list. If the file is missing or incomplete, retry once or ask the sender to use cloud pickup.')
-            );
-        }
-    }
-
-    getTransferStateSummary() {
-        return {
-            localSnapshot: this.telemetryTracker.getSnapshot(),
-            serverSnapshot: this.serverLifecycleSnapshot,
-        };
     }
     
     extractUidFromPath() {
@@ -3269,8 +2318,6 @@ class DownloadManager {
     handleDownloadStarted(id, total, sent = 0) {
         const initialSent = typeof sent === 'number' ? sent : 0;
         this.log('DownloadManager', `Download started: id=${id}, total=${total}, initialSent=${initialSent}`);
-        this.serverLifecycleSnapshot = null;
-        this.telemetryTracker.reset(id, total, initialSent);
         this.onDownloadStart(total, initialSent);
 
         // Call external callback if provided
@@ -3289,7 +2336,6 @@ class DownloadManager {
         const baseBytes = this.resumeConfig ? (this.resumeConfig.baseBytes || 0) : 0;
         const httpSent = Math.max(0, safeSent - baseBytes);
         const speed = this.calculateSpeed(httpSent, this.startTime);
-        this.telemetryTracker.observeReceived(safeSent, resolvedTotal);
 
         // Unified progress display based on whether we know the total size
         if (this.isValidSize(resolvedTotal)) {
@@ -3318,7 +2364,6 @@ class DownloadManager {
 
         this.completionHandled = true;
         this.log('DownloadManager', 'Download complete');
-        this.telemetryTracker.markComplete();
         this.stopProgressMonitoring();
         this.stopCompletionReplayChecks();
         if (this.adaptiveUnlockTimer) {
@@ -3354,7 +2399,6 @@ class DownloadManager {
     handleDownloadCompleteEvent(data = {}, source = 'event') {
         if (data.serverId) {
             this.serverDownloadId = data.serverId;
-            this.telemetryTracker.setServerDownloadId(data.serverId);
         }
         if (data.downloadPath) {
             this.activeDownloadPath = data.downloadPath;
@@ -3367,7 +2411,6 @@ class DownloadManager {
 
     handleDownloadError(message) {
         this.log('DownloadManager', 'Download error:', message);
-        this.telemetryTracker.markError(message);
         this.stopProgressMonitoring();
         this.stopCompletionReplayChecks();
         if (this.adaptiveUnlockTimer) {
@@ -3515,7 +2558,6 @@ class DownloadManager {
             );
         } else if (type === 'download-stall') {
             this.log('DownloadManager', `SW stall [${eventData.phase}]: delivered=${eventData.delivered}/${eventData.total} (${eventData.percent}%), probe=${eventData.probeStatus}, rangeOk=${eventData.rangeOk}, stallMs=${eventData.stallDurationMs}`);
-            this.telemetryTracker.noteStall(eventData.stallDurationMs || 0);
             this.writerResumeController.handleDownloadStall(eventData);
         } else if (type === 'download-error') {
             this.handleDownloadError(eventData.message);
@@ -4272,14 +3314,7 @@ class DownloadManager {
                 method: 'POST',
                 keepalive: true,
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    downloadId,
-                    logicalDownloadId: this.activeDlId || '',
-                    receivedBytes: receivedBytes || 0,
-                    source: 'download_manager',
-                    confidence: 'stream_complete',
-                    downloadPath: this.activeDownloadPath || '',
-                }),
+                body: JSON.stringify({ downloadId, receivedBytes: receivedBytes || 0 }),
             });
 
             const data = await response.json().catch(() => null);
@@ -4573,7 +3608,6 @@ class DownloadManager {
                 const serverDlId = response.headers.get('FFL-DownloadId');
                 if (serverDlId) {
                     this.serverDownloadId = serverDlId;
-                    this.telemetryTracker.setServerDownloadId(serverDlId);
                 }
 
                 if (wantRange) {
@@ -4675,7 +3709,6 @@ class DownloadManager {
                         throw error;
                     }
                     totalWritten += chunk.byteLength;
-                    this.telemetryTracker.observeWritten(baseBytes + totalWritten, expectedTotal || totalSizeFromServer);
                     fetchResponseRetryIndex = 0;
 
                     if (activeProgressCallback) {
@@ -5445,23 +4478,10 @@ class WriterFactory {
 
 // Export for use in other scripts
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = {
-        DownloadManager,
-        BlobWriter,
-        WriterFactory,
-        DownloadIssueReporter,
-        DownloadTelemetryTracker,
-        TransferDiagnosisEngine,
-        DownloadIssueNotificationPresenter,
-        DownloadNetworkIssueMonitor
-    };
+    module.exports = { DownloadManager, BlobWriter, WriterFactory, DownloadIssueReporter };
 } else {
     window.DownloadManager = DownloadManager;
     window.BlobWriter = BlobWriter;
     window.WriterFactory = WriterFactory;
     window.DownloadIssueReporter = DownloadIssueReporter;
-    window.DownloadTelemetryTracker = DownloadTelemetryTracker;
-    window.TransferDiagnosisEngine = TransferDiagnosisEngine;
-    window.DownloadIssueNotificationPresenter = DownloadIssueNotificationPresenter;
-    window.DownloadNetworkIssueMonitor = DownloadNetworkIssueMonitor;
 }

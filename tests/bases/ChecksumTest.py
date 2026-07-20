@@ -150,28 +150,24 @@ class ChecksumTest(ChecksumAssertionsMixin, FastFileLinkTestBase):
 
     def testUploadEndSendsChecksumAndAlgorithm(self):
         """Functional test: upload/end should include checksum metadata from uploader."""
-        testServerProcess = None
-        try:
-            shareLink, testServerProcess = self._startFastFileLink(p2p=False, useTestServer=True)
-            uid = [segment for segment in urlparse(shareLink).path.split('/') if segment][-1]
+        shareLink = self._startFastFileLink(p2p=False, useTestServer=True)
+        uid = [segment for segment in urlparse(shareLink).path.split('/') if segment][-1]
 
-            checksumResponse = requests.get(
-                f'{LOCAL_TEST_SERVER_URL}/{uid}/checksum',
-                timeout=30
-            )
-            self.assertEqual(checksumResponse.status_code, 200)
-            checksumData = checksumResponse.json()
+        checksumResponse = requests.get(
+            f'{LOCAL_TEST_SERVER_URL}/{uid}/checksum',
+            timeout=30
+        )
+        self.assertEqual(checksumResponse.status_code, 200)
+        checksumData = checksumResponse.json()
 
-            self.assertTrue(checksumData.get('ready'))
-            self.assertEqual(checksumData.get('algorithm'), 'blake2b')
-            self.assertEqual(checksumData.get('transport'), 'upload')
-            self.assertTrue(checksumData.get('verified'))
+        self.assertTrue(checksumData.get('ready'))
+        self.assertEqual(checksumData.get('algorithm'), 'blake2b')
+        self.assertEqual(checksumData.get('transport'), 'upload')
+        self.assertTrue(checksumData.get('verified'))
 
-            expectedChecksum = self._calculateBlake2b(self.testFilePath)
-            self.assertEqual(checksumData.get('checksum'), expectedChecksum)
-            self.assertEqual(checksumData.get('calculated'), expectedChecksum)
-        finally:
-            self._stopTestServer(testServerProcess)
+        expectedChecksum = self._calculateBlake2b(self.testFilePath)
+        self.assertEqual(checksumData.get('checksum'), expectedChecksum)
+        self.assertEqual(checksumData.get('calculated'), expectedChecksum)
 
 
 class ChecksumBrowserTest(ChecksumAssertionsMixin, BrowserTestBase):

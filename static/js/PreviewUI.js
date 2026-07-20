@@ -108,10 +108,11 @@
             this._currentViewEntries = [];
             this._currentViewIndex = -1;
 
-            // Sort and filter state — defaults, then overridden by URL params
+            // Sort, filter and view state — defaults, then overridden by URL params
             this._sortBy = null; // null = no sort (original manifest order)
             this._sortAsc = true;
             this._filterMedia = false;
+            this._viewMode = 'masonry'; // 'masonry' (variable-size photos) or 'grid' (uniform cards)
             this._applyURLParams();
 
             // Translation helper (uses window.t if available)
@@ -413,7 +414,7 @@
 
             // Create overlay HTML
             const overlayHtml = `
-                <div class="zip-preview-overlay" id="zip-preview-overlay">
+                <div class="zip-preview-overlay${this._isPreviewOnlyMode ? ' zip-preview-fullscreen' : ''}" id="zip-preview-overlay">
                     <div class="zip-preview-container">
                         <!-- Header -->
                         <div class="zip-preview-header">
@@ -429,6 +430,14 @@
                                 <button class="zip-preview-play-btn" id="zip-preview-play-btn" title="${this.t('Download:zipPreview.startDownload', 'Start download')}">
                                     <i class="fas fa-download"></i>
                                 </button>
+                                <div class="zip-preview-view-btn-group">
+                                    <button class="zip-preview-view-btn" data-view="masonry" title="${this.t('Download:zipPreview.viewMasonryHint', 'Masonry view (variable size)')}">
+                                        <i class="fas fa-columns"></i>
+                                    </button>
+                                    <button class="zip-preview-view-btn" data-view="grid" title="${this.t('Download:zipPreview.viewGridHint', 'Grid view (uniform size)')}">
+                                        <i class="fas fa-th"></i>
+                                    </button>
+                                </div>
                                 <button class="zip-preview-settings-btn" id="zip-preview-settings-btn" title="${this.t('Download:zipPreview.sortFilter', 'Sort & Filter')}">
                                     <i class="fas fa-sliders-h"></i>
                                 </button>
@@ -458,7 +467,7 @@
                                 <div class="zip-preview-loading-text">${this.t('Download:zipPreview.loadingContents', 'Loading archive contents...')}</div>
                             </div>
 
-                            <div class="zip-preview-grid" id="zip-preview-grid" style="display: none;">
+                            <div class="zip-preview-grid zip-grid-hidden" id="zip-preview-grid">
                                 <!-- Gallery cards will be inserted here -->
                             </div>
 
@@ -486,6 +495,20 @@
                             <button class="zip-preview-settings-sort-btn" data-sort="type" id="zip-sort-type">
                                 ${this.t('Download:zipPreview.sortType', 'Type')}
                                 <i class="fas fa-sort-alpha-down" id="zip-sort-icon-type"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="zip-preview-settings-divider"></div>
+                    <div class="zip-preview-settings-section">
+                        <div class="zip-preview-settings-title">${this.t('Download:zipPreview.view', 'View')}</div>
+                        <div class="zip-preview-settings-sort-options">
+                            <button class="zip-preview-settings-view-btn" data-view="masonry" id="zip-view-masonry" title="${this.t('Download:zipPreview.viewMasonryHint', 'Masonry view (variable size)')}">
+                                <i class="fas fa-columns"></i>
+                                ${this.t('Download:zipPreview.viewMasonry', 'Masonry')}
+                            </button>
+                            <button class="zip-preview-settings-view-btn" data-view="grid" id="zip-view-grid" title="${this.t('Download:zipPreview.viewGridHint', 'Grid view (uniform size)')}">
+                                <i class="fas fa-th"></i>
+                                ${this.t('Download:zipPreview.viewGrid', 'Grid')}
                             </button>
                         </div>
                     </div>
@@ -548,6 +571,19 @@
             if (closeBtn) {
                 closeBtn.addEventListener('click', () => this.closePreview());
             }
+
+            // View toggle - wires both the header quick-access buttons and the
+            // settings panel buttons (both share the `data-view` attribute).
+            document.querySelectorAll('[data-view]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const mode = btn.dataset.view;
+                    if (this._viewMode === mode) return;
+                    this._viewMode = mode;
+                    this._updateSettingsUI();
+                    this._syncURLParams();
+                    this.renderGallery();
+                });
+            });
 
             // Play button - handle both client and server modes
             const overlayPlayBtn = document.getElementById('zip-preview-play-btn');
@@ -896,7 +932,7 @@
                 loadingEl.style.display = 'flex';
             }
             if (gridEl) {
-                gridEl.style.display = 'none';
+                gridEl.classList.add('zip-grid-hidden');
             }
 
             // Wait for metadata to be decrypted and loaded (E2EE takes time)
@@ -988,7 +1024,7 @@
                 if (loadingEl)
                     loadingEl.style.display = 'none';
                 if (gridEl)
-                    gridEl.style.display = 'none';
+                    gridEl.classList.add('zip-grid-hidden');
                 if (emptyEl)
                     emptyEl.style.display = 'flex';
                 return;
@@ -998,8 +1034,11 @@
             if (loadingEl)
                 loadingEl.style.display = 'none';
 
-            if (gridEl)
-                gridEl.style.display = 'grid';
+            if (gridEl) {
+                gridEl.classList.remove('zip-grid-hidden');
+                gridEl.classList.toggle('view-masonry', this._viewMode === 'masonry');
+                gridEl.classList.toggle('view-grid', this._viewMode !== 'masonry');
+            }
 
             if (emptyEl)
                 emptyEl.style.display = 'none';
@@ -1039,6 +1078,27 @@
             if (params.get('filter') === 'media') {
                 this._filterMedia = true;
             }
+
+            const view = params.get('view');
+            if (view === 'masonry' || view === 'grid') {
+                this._viewMode = view;
+            }
+
+            // ?preview=true means the user explicitly asked to see the full preview
+            // (e.g. via the "Preview only" option) - go fullscreen instead of the
+            // normal floating card. This param is owned/written by the host page
+            // (FileDownloading.html), not by PreviewUI, so it's read-only here.
+            this._isPreviewOnlyMode = this._parseBooleanParam(params.get('preview'));
+        }
+
+        // Matches CaddyBase.html's parseBooleanParam() so URL flags behave consistently
+        // whether they're read by the host page or by PreviewUI itself.
+        _parseBooleanParam(value) {
+            if (!value) {
+                return false;
+            }
+
+            return ['true', '1', 'on', 'yes'].includes(value.toLowerCase());
         }
 
         _syncURLParams() {
@@ -1060,6 +1120,12 @@
                 params.set('filter', 'media');
             } else {
                 params.delete('filter');
+            }
+
+            if (this._viewMode !== 'masonry') {
+                params.set('view', this._viewMode);
+            } else {
+                params.delete('view');
             }
 
             const qs = params.toString();
@@ -1162,11 +1228,17 @@
 
             const settingsBtn = document.getElementById('zip-preview-settings-btn');
             if (settingsBtn) {
-                settingsBtn.classList.toggle('has-active', this._filterMedia || this._sortBy !== null);
+                settingsBtn.classList.toggle('has-active',
+                    this._filterMedia || this._sortBy !== null || this._viewMode !== 'masonry');
             }
 
             const mediaBtn = document.getElementById('zip-filter-media');
             if (mediaBtn) mediaBtn.classList.toggle('active', this._filterMedia);
+
+            // View toggle exists in both the header (quick access) and settings panel
+            document.querySelectorAll('[data-view]').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.view === this._viewMode);
+            });
         }
 
         _getFilteredSortedEntries() {
@@ -1214,13 +1286,15 @@
                 .hash));
             const fileName = entry.name || `#${entry.index + 1}`; // User-friendly index (1-based)
             const fileSize = this.formatFileSize(entry.size || 0);
+            // Photos keep their natural aspect ratio in masonry view; other files fall back to a fixed box.
+            const isPhoto = (entry.mime || '').startsWith('image/');
 
             // Check debug mode (URL parameter or localStorage)
             const debugMode = new URLSearchParams(window.location.search).has('debug') ||
                             localStorage.getItem('zip_preview_debug') === 'true';
 
             card.innerHTML = `
-                <div class="zip-preview-thumb-wrap">
+                <div class="zip-preview-thumb-wrap ${isPhoto ? 'is-photo' : 'is-file'}">
                     <img class="zip-preview-thumb"
                          data-thumbnail-url="${thumbnailURL}"
                          data-arcname="${entry.name}"
@@ -1488,6 +1562,12 @@
                 if (card) {
                     card.classList.remove('loading');
                 }
+
+                // The server-generated thumbnail is a fixed-size box (baked in at upload time,
+                // not resizable via URL params), so a portrait photo stretched to fill a wide
+                // masonry column can look upscaled/blurry. Fire-and-forget an upgrade to the
+                // full-resolution file in that case; don't block thumbnail display on it.
+                this._maybeUpgradeThumbnailSharpness(imgEl, card);
             } catch (error) {
                 this.log('ZipPreview', `Thumbnail load error for ${arcname}: ${error.message}`);
                 // Remove loading class on error
@@ -1496,6 +1576,108 @@
                 }
                 // On error, try direct load as fallback
                 imgEl.src = thumbnailURL;
+            }
+        }
+
+        /**
+         * Progressive enhancement: if the thumbnail is being displayed larger than its native
+         * resolution (common for portrait photos in masonry view, since the thumbnail's shorter
+         * side is capped by the fixed thumbnail box), swap in the full-resolution file once it's
+         * fetched so the image doesn't look blurry.
+         * @private
+         */
+        async _maybeUpgradeThumbnailSharpness(imgEl, card) {
+            if (!imgEl.isConnected || imgEl.dataset.sharpened === 'true' || imgEl.dataset.sharpening === 'true') {
+                return;
+            }
+
+            // Only worth it for photos in masonry view - grid view's fixed small box rarely
+            // needs it, and non-photo entries don't have a meaningful "full resolution" image.
+            const wrap = imgEl.closest('.zip-preview-thumb-wrap.is-photo');
+            if (!wrap || !wrap.closest('.zip-preview-grid.view-masonry')) {
+                return;
+            }
+
+            if (!this.extractor || typeof this.extractor.getFileBlob !== 'function') {
+                return;
+            }
+
+            const renderedWidth = imgEl.clientWidth;
+            const naturalWidth = imgEl.naturalWidth;
+            if (!renderedWidth || !naturalWidth) {
+                return;
+            }
+
+            // Account for high-DPI screens (e.g. Retina) needing more physical pixels.
+            const dpr = window.devicePixelRatio || 1;
+            const neededWidth = renderedWidth * dpr;
+            if (naturalWidth >= neededWidth * 0.9) {
+                return; // Thumbnail is already sharp enough at this display size
+            }
+
+            const index = Number(card?.dataset.index);
+            if (!Number.isFinite(index)) {
+                return;
+            }
+
+            imgEl.dataset.sharpening = 'true';
+
+            try {
+                // getFileBlob may resolve from IndexedDB (already extracted from the download
+                // stream) without going through onFileReady, so we apply the swap ourselves
+                // here rather than relying solely on updateCardBadge().
+                const blob = await this.extractor.getFileBlob(index, true);
+                if (!blob || blob.size === 0 || !imgEl.isConnected) {
+                    return;
+                }
+
+                await this._applySharpPhotoToImage(imgEl, blob);
+            } catch (error) {
+                this.log('ZipPreview', `Thumbnail sharpen upgrade skipped: ${error.message || error}`);
+            } finally {
+                imgEl.dataset.sharpening = 'false';
+            }
+        }
+
+        /**
+         * Swap a photo's <img> to a full-resolution blob (masonry view). Shared by the
+         * on-demand upgrade path and the live-download-stream ready path so a file that
+         * becomes ready via both triggers only gets applied once.
+         * @private
+         */
+        async _applySharpPhotoToImage(imgEl, blob) {
+            if (imgEl.dataset.sharpened === 'true') {
+                return;
+            }
+
+            const url = URL.createObjectURL(blob);
+
+            try {
+                // Preload off-DOM so the swap is instant (no flash of a broken/empty image).
+                await new Promise((resolve, reject) => {
+                    const preload = new Image();
+                    preload.onload = resolve;
+                    preload.onerror = reject;
+                    preload.src = url;
+                });
+            } catch (error) {
+                URL.revokeObjectURL(url);
+                throw error;
+            }
+
+            if (imgEl.dataset.sharpened === 'true') {
+                URL.revokeObjectURL(url); // lost the race to another trigger; discard ours
+                return;
+            }
+
+            const previousSrc = imgEl.src;
+            imgEl.src = url;
+            imgEl.dataset.sharpened = 'true';
+            imgEl.dataset.thumbnailLoaded = 'true';
+            imgEl.dataset.pendingLoad = 'false';
+
+            if (previousSrc && previousSrc.startsWith('blob:') && previousSrc !== url) {
+                URL.revokeObjectURL(previousSrc);
             }
         }
 
@@ -2178,6 +2360,7 @@
             this.extractor = new ZipPreviewExtractor({
                 dbName: 'zip_gallery',
                 storeName: 'files',
+                uid: this.options.uid,
                 metadataURL: this.options.metadataURL,
                 fileURLTemplate: this.options.fileURLTemplate,
                 rawMetadata: rawMetadata,
@@ -2240,11 +2423,22 @@
                 const img = card.querySelector('.zip-preview-thumb');
                 if (img) {
                     try {
-                        // Generate client-side thumbnail from extracted blob
-                        const thumbnailURL = await this.createThumbnail(blob, 420, 320);
-                        img.src = thumbnailURL;
-                        img.dataset.thumbnailLoaded = 'true';
-                        img.dataset.pendingLoad = 'false';
+                        const wrap = img.closest('.zip-preview-thumb-wrap.is-photo');
+                        const inMasonry = !!(wrap && wrap.closest('.zip-preview-grid.view-masonry'));
+
+                        // Masonry shows photos at (near) full column width, so a re-compressed
+                        // 420x320 thumbnail would look upscaled/blurry there - use the
+                        // full-resolution file directly instead (shared with the on-demand
+                        // sharpen-upgrade path). Grid view's small fixed box keeps the cheaper
+                        // canvas-downscaled thumbnail.
+                        if (inMasonry) {
+                            await this._applySharpPhotoToImage(img, blob);
+                        } else {
+                            img.src = await this.createThumbnail(blob, 420, 320);
+                            img.dataset.thumbnailLoaded = 'true';
+                            img.dataset.pendingLoad = 'false';
+                        }
+
                         this.log('ZipPreview', `Thumbnail updated from IndexedDB for index ${index}`);
                     } catch (e) {
                         this.log('ZipPreview', `Failed to create thumbnail for index ${index}: ${e}`);

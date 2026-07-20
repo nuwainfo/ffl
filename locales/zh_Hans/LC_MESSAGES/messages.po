@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-07-12 21:09+0800\n"
+"POT-Creation-Date: 2026-07-20 17:12+0800\n"
 "PO-Revision-Date: 2025-12-21 08:43+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -16,236 +16,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.17.0\n"
-
-msgid "Scanning folder"
-msgstr "正在扫描文件夹"
-
-msgid "Scanning folder. Calculating size may take some time..."
-msgstr "正在扫描文件夹，计算大小可能需要一些时间…"
-
-#, python-brace-format
-msgid "Scanned {size}"
-msgstr "已扫描 {size}"
-
-#, python-brace-format
-msgid "Authentication enabled - Username: {authUser}\n"
-msgstr "已启用身份验证 - 使用者名称：{authUser}\n"
-
-#, python-brace-format
-msgid "Pickup code: {code}\n"
-msgstr "取件码：{code}\n"
-
-msgid "Opening invite page in browser..."
-msgstr "正在浏览器中开启邀请页面..."
-
-#, python-brace-format
-msgid "QR code saved to: {filePath}"
-msgstr "二维码已保存到：{filePath}"
-
-msgid ""
-"\n"
-"QR Code:\n"
-msgstr ""
-"\n"
-"二维码：\n"
-
-#, python-brace-format
-msgid "Error generating QR code: {error}"
-msgstr "生成二维码时出错：{error}"
-
-#, python-brace-format
-msgid "Sharing information saved to {jsonFile}"
-msgstr "分享资讯已储存至 {jsonFile}"
-
-#, python-brace-format
-msgid "Failed to write JSON file: {error}"
-msgstr "无法写入 JSON 档案：{error}"
-
-msgid "You can stop the upload at any time and resume it later.\n"
-msgstr "您可以随时停止上传并稍后继续。\n"
-
-#, python-brace-format
-msgid ""
-"Upload paused at {percentage:.1f}% ({completedChunks}/{totalChunks} "
-"chunks completed)"
-msgstr "上传已暂停于 {percentage:.1f}%（已完成 {completedChunks}/{totalChunks} 个区块）"
-
-msgid "Use --resume to continue upload"
-msgstr "使用 --resume 继续上传"
-
-msgid ""
-"Resume is only available for direct upload mode (without external "
-"tunnels).\n"
-"Please restart the upload without --resume to upload the file normally."
-msgstr ""
-"继续上传仅适用于直接上传模式（不使用外部通道）。\n"
-"请在不使用 --resume 的情况下重新启动上传以正常上传档案。"
-
-msgid ""
-"Pause functionality is only available for direct upload mode (without "
-"external tunnels).\n"
-"Please restart the upload without --pause to upload the file normally."
-msgstr ""
-"暂停功能仅适用于直接上传模式（不使用外部通道）。\n"
-"请在不使用 --pause 的情况下重新启动上传以正常上传档案。"
-
-msgid ""
-"End-to-end encryption is only available for direct upload mode (without "
-"external tunnels).\n"
-"Please restart the upload without --e2ee to upload the file normally."
-msgstr ""
-"端对端加密仅适用于直接上传模式（不使用外部通道）。\n"
-"请在不使用 --e2ee 的情况下重新启动上传以正常上传档案。"
-
-#, python-brace-format
-msgid ""
-"Cannot resume: {parameter} mismatch.\n"
-"Original upload used \"{originalValue}\" but \"{requestedValue}\" was "
-"requested.\n"
-"Please use the same parameters as the original upload."
-msgstr ""
-"无法继续：{parameter} 不匹配。\n"
-"原始上传使用 \"{originalValue}\"，但要求使用 \"{requestedValue}\"。\n"
-"请使用与原始上传相同的参数。"
-
-msgid "Unknown error"
-msgstr "未知错误"
-
-msgid ""
-"Your user points are not enough. Please top up on our website "
-"(https://fastfilelink.com/)."
-msgstr "您的使用者点数不足。请在我们的网站上储值 (https://fastfilelink.com/)。"
-
-msgid "Upload not allowed."
-msgstr "不允许上传。"
-
-msgid "Upload cancelled before transfer started."
-msgstr "上传在传输开始前已取消。"
-
-msgid "Retrying...\n"
-msgstr "正在重试...\n"
-
-msgid "Error: VFS mode requires a file or folder path"
-msgstr "错误：VFS 模式需要文件或文件夹路径"
-
-msgid "VFS server started successfully!\n"
-msgstr "VFS 伺服器已成功启动！\n"
-
-#, python-brace-format
-msgid "Please share the URI below to access the {type} remotely:\n"
-msgstr "请分享以下 URI 以远程访问{type}：\n"
-
-msgid ""
-"VFS server is running on loopback (127.0.0.1) - only accessible from this"
-" machine."
-msgstr "VFS 伺服器正在环回地址（127.0.0.1）上运行 - 仅可从本机访问。"
-
-msgid "Please keep the application running for remote access."
-msgstr "请保持应用程序运行以进行远程访问。"
-
-msgid "Press Ctrl+C to stop the server.\n"
-msgstr "按 Ctrl+C 停止伺服器。\n"
-
-msgid ""
-"\n"
-"Shutting down VFS server..."
-msgstr ""
-"\n"
-"正在关闭 VFS 伺服器..."
-
-msgid "VFS server stopped."
-msgstr "VFS 伺服器已停止。"
-
-msgid "Error: Please select a file or folder to share"
-msgstr "错误：请选择要分享的文件或文件夹"
-
-msgid "Error: Upload functionality requires Upload addon (addons/Upload.py)"
-msgstr "错误：上传功能需要 Upload 附加元件 (addons/Upload.py)"
-
-msgid "User email address has been lost"
-msgstr "使用者电子邮件地址已遗失"
-
-msgid ""
-"If a firewall notification appears, please allow the application to "
-"connect.\n"
-msgstr "如果出现防火墙通知，请允许应用程式连线。\n"
-
-msgid ""
-"📁 Sharing folder as ZIP - please keep folder contents unchanged during "
-"transfer\n"
-msgstr "📁 以 ZIP 格式分享资料夹 - 请在传输过程中保持资料夹内容不变\n"
-
-msgid "🔐 End-to-end encryption enabled\n"
-msgstr "🔐 已启用端对端加密\n"
-
-msgid "🧅 Tor Privacy Mode Active"
-msgstr "🧅 Tor 隐私模式已启用"
-
-msgid "Unable to create tunnel by your tunnel configuration."
-msgstr "无法使用您的通道配置建立通道。"
-
-#, python-brace-format
-msgid "Using tunnel: {tunnelType}"
-msgstr "使用通道：{tunnelType}"
-
-#, python-brace-format
-msgid "Establishing tunnel connection via proxy {proxyInfo}...\n"
-msgstr "正在透过代理 {proxyInfo} 建立通道连线...\n"
-
-msgid "Establishing tunnel connection...\n"
-msgstr "正在建立通道连线...\n"
-
-#, python-brace-format
-msgid "Upload failed: {error}"
-msgstr "上传失败：{error}"
-
-msgid ""
-"Please share the link below with the person you'd like to share the file "
-"with."
-msgstr "请将以下连结分享给您想要分享档案的人。"
-
-msgid ""
-"Please keep the application running so the recipient can download the "
-"file."
-msgstr "请保持应用程式运作，以便接收者可以下载档案。"
-
-msgid "Press Ctrl+C to terminate the program when done.\n"
-msgstr "完成后请按 Ctrl+C 终止程式。\n"
-
-msgid ""
-"\n"
-"Exiting on user request (Ctrl+C)..."
-msgstr ""
-"\n"
-"应使用者要求退出 (Ctrl+C)..."
-
-msgid "Unable to get uploaded link"
-msgstr "无法获取上传链接"
-
-msgid "Download complete"
-msgstr ""
-
-#, python-brace-format
-msgid "Downloaded: {outputPath}"
-msgstr "已下载：{outputPath}"
-
-#, python-brace-format
-msgid ""
-"{serverMsg}\n"
-"\n"
-"The shared folder contents changed during the transfer.\n"
-"Please contact the person who shared the file and ask them to share it "
-"again."
-msgstr ""
-"{serverMsg}\n"
-"\n"
-"共享资料夹的内容在传输过程中发生变更。\n"
-"请联络分享档案的人并要求他们重新分享。"
-
-#, python-brace-format
-msgid "Download failed: {error}"
-msgstr "下载失败：{error}"
+"Generated-By: Babel 2.18.0\n"
 
 msgid "GUI support not available. Install required dependencies or use CLI mode."
 msgstr "GUI 支援不可用。请安装所需的相依套件或使用 CLI 模式。"
@@ -255,6 +26,13 @@ msgstr "错误：应用程式尚未注册"
 
 msgid "App has not been registered"
 msgstr "应用程式尚未注册"
+
+msgid ""
+"\n"
+"Exiting on user request (Ctrl+C)..."
+msgstr ""
+"\n"
+"应使用者要求退出 (Ctrl+C)..."
 
 msgid ""
 "Tunnel server temporarily unavailable. See "
@@ -345,139 +123,6 @@ msgstr "架构：{system} {release} {machine} - {version} ({processor})"
 msgid "Support: {supportURL}"
 msgstr "支援：{supportURL}"
 
-msgid ""
-"Recipient verification mode. 'pickup': 6-digit code required to download;"
-" 'pubkey': RSA public-key challenge required; 'pubkey+pickup': both "
-"required; 'email': one-time code sent to recipient's email"
-msgstr ""
-"收件人验证模式。'pickup'：下载需要 6 位数取件码；'pubkey'：需要 RSA "
-"公钥验证；'pubkey+pickup'：两者皆需要；'email'：发送一次性验证码到收件人邮箱"
-
-#, python-brace-format
-msgid ""
-"Custom {n}-digit pickup code (use with --recipient-auth pickup or "
-"pubkey+pickup)"
-msgstr "自定义 {n} 位数取件码（与 --recipient-auth pickup 或 pubkey+pickup 搭配使用）"
-
-#, python-brace-format
-msgid ""
-"Path to recipient RSA public key file ({ext}), or a comma-separated list "
-"of paths (implies --recipient-auth pubkey; with --pickup-code, implies "
-"pubkey+pickup)"
-msgstr ""
-"收件人 RSA 公钥文件路径（{ext}），或以逗号分隔的多个路径（隐含 --recipient-auth pubkey；与 --pickup-"
-"code 结合使用时，隐含 pubkey+pickup）"
-
-msgid ""
-"Recipient email address, or a comma-separated list of email addresses, "
-"for OTP verification (implies --recipient-auth email)"
-msgstr "收件人电子邮件地址，或以逗号分隔的多个地址，用于 OTP 验证（隐含 --recipient-auth email）"
-
-msgid ""
-"Base URL for OTP email API (e.g. https://myserver.com/api). Required for "
-"--recipient-auth email"
-msgstr ""
-"OTP 邮箱 API 的基础 URL（例如 https://myserver.com/api）。使用 --recipient-auth email"
-" 时必填"
-
-msgid ""
-"File(s) or folder to share. Use '-' for stdin, '@filelist.txt' to read "
-"paths from a file. Multiple files can be specified: file1 file2 file3"
-msgstr "要分享的文件或文件夹。使用 '-' 读取标准输入，'@filelist.txt' 从文件读取路径。可指定多个文件：file1 file2 file3"
-
-msgid ""
-"Specify custom download filename (default: original filename for files, "
-"folder.zip for folders, stdin-YYYYMMDD-HHMMSS.bin for stdin)"
-msgstr "指定自定义下载文件名（默认：文件使用原始文件名，文件夹使用 folder.zip，标准输入使用 stdin-YYYYMMDD-HHMMSS.bin）"
-
-msgid ""
-"Comma-separated patterns to exclude files/folders by name (e.g. "
-"'*.log,.svn,__pycache__'). Prefix with 're:' for regex (e.g. "
-"'re:\\.tmp$'). Applies at any depth."
-msgstr ""
-"以逗号分隔的排除模式，按名称排除文件/文件夹（例如 '*.log,.svn,__pycache__'）。使用 're:' 前缀表示正则表达式（例如"
-" 're:\\.tmp$'）。适用于任意深度。"
-
-msgid "Output link and settings to a JSON file"
-msgstr "将连结和设定输出到 JSON 档案"
-
-#, python-brace-format
-msgid ""
-"Upload file to FastFileLink server to share it (Share duration after "
-"upload). Default: {default}"
-msgstr "上传档案到 快档连结 云端以分享（上传后的分享期限）。预设：{default}"
-
-msgid ""
-"Resume a previously interrupted upload (requires previous upload session "
-"to exist)"
-msgstr "继续先前中断的上传（需要先前的上传工作阶段存在）"
-
-msgid "Pause upload at specified percentage (1-99, requires --upload)"
-msgstr "在指定百分比时暂停上传（1-99，需要 --upload）"
-
-msgid "Automatically answer yes to upload confirmation prompts"
-msgstr "自动对上传确认提示回答是"
-
-msgid "Legacy P2P share link to recover after this server upload completes"
-msgstr ""
-
-msgid ""
-"Maximum number of downloads before the server automatically shuts down "
-"(P2P mode only). 0 means unlimited."
-msgstr "伺服器自动关闭前的最大下载次数（仅限 P2P 模式）。0 表示无限制。"
-
-msgid ""
-"Timeout in seconds before the server automatically shuts down (P2P mode "
-"only). 0 means no timeout."
-msgstr "伺服器自动关闭前的逾时秒数（仅限 P2P 模式）。0 表示无逾时。"
-
-msgid ""
-"Port number for local server (1024-65535, default: auto-detect available "
-"port)"
-msgstr "本地伺服器的连接埠号码（1024-65535，预设：自动侦测可用连接埠）"
-
-#, python-brace-format
-msgid "Username for HTTP Basic Authentication (default: '{default}')"
-msgstr "HTTP 基本验证的使用者名称（预设：'{default}'）"
-
-msgid "Password for HTTP Basic Authentication (enables auth protection)"
-msgstr "HTTP 基本验证的密码（启用验证保护）"
-
-msgid ""
-"Force relayed P2P mode, disable direct WebRTC connections (can be "
-"overridden by ?webrtc=on URL parameter)"
-msgstr "强制中继 P2P 模式，停用直接 WebRTC 连线（可由 ?webrtc=on URL 参数覆写）"
-
-msgid "Enable end-to-end encryption for file sharing (both HTTP and WebRTC)"
-msgstr "启用档案分享的端对端加密（HTTP 和 WebRTC）"
-
-msgid "Open invite page in browser with the sharing link"
-msgstr "在浏览器中开启包含分享连结的邀请页面"
-
-msgid "Display QR code in terminal (default) or save to FILE (e.g., qr.png)"
-msgstr "在终端中显示二维码（默认）或保存到文件（例如 qr.png）"
-
-msgid ""
-"Disable automatically copying the share link to the clipboard (default: "
-"enabled in CLI mode, disabled in GUI mode)"
-msgstr ""
-
-msgid ""
-"Start VFS server and provide vfs:// URI instead of HTTPS link (P2P mode "
-"only, works with --port)"
-msgstr "启动 VFS 伺服器并提供 vfs:// URI 而不是 HTTPS 连结（仅限 P2P 模式，与 --port 一起使用）"
-
-msgid ""
-"Enable or disable stdin caching ('off' means a second read raises an "
-"error)"
-msgstr ""
-
-msgid "Submit share to background daemon (auto-starts daemon if needed)"
-msgstr ""
-
-msgid "Run share in foreground even if a daemon is running"
-msgstr ""
-
 #, python-brace-format
 msgid "Invalid log level '{logLevel}'. Valid levels are: {validLevels}"
 msgstr "无效的记录层级 '{logLevel}'。有效层级为：{validLevels}"
@@ -534,6 +179,10 @@ msgid ""
 "Resume incomplete download (like curl -C), otherwise overwrite existing "
 "file"
 msgstr "继续未完成的下载（类似 curl -C），否则覆写现有档案"
+
+#, python-brace-format
+msgid "Username for HTTP Basic Authentication (default: '{default}')"
+msgstr "HTTP 基本验证的使用者名称（预设：'{default}'）"
 
 msgid "Password for HTTP Basic Authentication"
 msgstr "HTTP 基本验证的密码"
@@ -764,10 +413,38 @@ msgid "Please specify a file or folder path instead of \"-\""
 msgstr "请指定文件或文件夹路径，而不是 \"-\""
 
 #, python-brace-format
+msgid "Share worker exited with code {exitCode}"
+msgstr ""
+
+#, python-brace-format
 msgid "Daemon started (PID: {pid}, port: {port})"
 msgstr ""
 
 msgid "Daemon is not running"
+msgstr ""
+
+msgid "Failed to configure daemon event hook"
+msgstr ""
+
+#, python-brace-format
+msgid "Daemon failed to start within {timeout} seconds"
+msgstr ""
+
+msgid "Failed to send stop command to daemon"
+msgstr ""
+
+msgid "Daemon may not have stopped cleanly"
+msgstr ""
+
+msgid "Daemon process may not have stopped cleanly"
+msgstr ""
+
+#, python-brace-format
+msgid "Error: Share {id} not found"
+msgstr ""
+
+#, python-brace-format
+msgid "Error: Share {id} has no link yet"
 msgstr ""
 
 msgid "Error: Daemon is not running. Start it with: ffl daemon"
@@ -794,14 +471,6 @@ msgid "Share {id} stopped"
 msgstr ""
 
 #, python-brace-format
-msgid "Error: Share {id} not found"
-msgstr ""
-
-#, python-brace-format
-msgid "Error: Share {id} has no link yet"
-msgstr ""
-
-#, python-brace-format
 msgid "Opened share {id}"
 msgstr ""
 
@@ -823,19 +492,11 @@ msgid "Share ID: {id} (managed by daemon)"
 msgstr ""
 
 #, python-brace-format
-msgid "Warning: Failed to write JSON output: {error}"
-msgstr ""
-
-#, python-brace-format
 msgid "Daemon already running (PID: {pid}, port: {port})"
 msgstr ""
 
 #, python-brace-format
-msgid "Error: Failed to build daemon start command: {error}"
-msgstr ""
-
-#, python-brace-format
-msgid "Error: Daemon failed to start within {timeout} seconds"
+msgid "Error: Failed to start daemon: {error}"
 msgstr ""
 
 msgid "Unable to locate FFL.py for daemon startup."
@@ -843,9 +504,6 @@ msgstr ""
 
 #, python-brace-format
 msgid "Executable not found for daemon startup: {path}"
-msgstr ""
-
-msgid "Error: Failed to send stop command to daemon"
 msgstr ""
 
 msgid "Daemon stopped"
@@ -942,6 +600,30 @@ msgid ""
 "wget)..."
 msgstr "⚠️  这不是 快档连结 网址，正在直接透过 HTTP 下载（类似 wget）..."
 
+msgid "Download complete"
+msgstr ""
+
+#, python-brace-format
+msgid "Downloaded: {outputPath}"
+msgstr "已下载：{outputPath}"
+
+#, python-brace-format
+msgid ""
+"{serverMsg}\n"
+"\n"
+"The shared folder contents changed during the transfer.\n"
+"Please contact the person who shared the file and ask them to share it "
+"again."
+msgstr ""
+"{serverMsg}\n"
+"\n"
+"共享资料夹的内容在传输过程中发生变更。\n"
+"请联络分享档案的人并要求他们重新分享。"
+
+#, python-brace-format
+msgid "Download failed: {error}"
+msgstr "下载失败：{error}"
+
 msgid "⚠️  IMPORTANT: ENCRYPTION KEY"
 msgstr "⚠️  重要：加密金钥"
 
@@ -982,6 +664,48 @@ msgid ""
 "Progress: {sizeDisplay}/{totalDisplay} ({percentage:.2f}%), "
 "{speedDisplay}/sec"
 msgstr "进度：{sizeDisplay}/{totalDisplay}（{percentage:.2f}%），{speedDisplay}/秒"
+
+#, python-brace-format
+msgid "Upload failed: {error}"
+msgstr "上传失败：{error}"
+
+msgid ""
+"Please share the link below with the person you'd like to share the file "
+"with."
+msgstr "请将以下连结分享给您想要分享档案的人。"
+
+msgid ""
+"Please keep the application running so the recipient can download the "
+"file."
+msgstr "请保持应用程式运作，以便接收者可以下载档案。"
+
+msgid "Press Ctrl+C to terminate the program when done.\n"
+msgstr "完成后请按 Ctrl+C 终止程式。\n"
+
+#, python-brace-format
+msgid "Authentication enabled - Username: {authUser}\n"
+msgstr "已启用身份验证 - 使用者名称：{authUser}\n"
+
+#, python-brace-format
+msgid "Pickup code: {code}\n"
+msgstr "取件码：{code}\n"
+
+msgid "Unable to create tunnel by your tunnel configuration."
+msgstr "无法使用您的通道配置建立通道。"
+
+#, python-brace-format
+msgid "Using tunnel: {tunnelType}"
+msgstr "使用通道：{tunnelType}"
+
+#, python-brace-format
+msgid "Establishing tunnel connection via proxy {proxyInfo}...\n"
+msgstr "正在透过代理 {proxyInfo} 建立通道连线...\n"
+
+msgid "Establishing tunnel connection...\n"
+msgstr "正在建立通道连线...\n"
+
+msgid "Unable to get uploaded link"
+msgstr "无法获取上传链接"
 
 #, python-brace-format
 msgid "[{timestamp}] Downloading by user"
@@ -1067,6 +791,194 @@ msgstr "14天"
 
 msgid "30 days"
 msgstr "30天"
+
+msgid ""
+"File(s) or folder to share. Use '-' for stdin, '@filelist.txt' to read "
+"paths from a file. Multiple files can be specified: file1 file2 file3"
+msgstr "要分享的文件或文件夹。使用 '-' 读取标准输入，'@filelist.txt' 从文件读取路径。可指定多个文件：file1 file2 file3"
+
+msgid ""
+"Specify custom download filename (default: original filename for files, "
+"folder.zip for folders, stdin-YYYYMMDD-HHMMSS.bin for stdin)"
+msgstr "指定自定义下载文件名（默认：文件使用原始文件名，文件夹使用 folder.zip，标准输入使用 stdin-YYYYMMDD-HHMMSS.bin）"
+
+msgid ""
+"Comma-separated patterns to exclude files/folders by name (e.g. "
+"'*.log,.svn,__pycache__'). Prefix with 're:' for regex (e.g. "
+"'re:\\.tmp$'). Applies at any depth."
+msgstr ""
+"以逗号分隔的排除模式，按名称排除文件/文件夹（例如 '*.log,.svn,__pycache__'）。使用 're:' 前缀表示正则表达式（例如"
+" 're:\\.tmp$'）。适用于任意深度。"
+
+msgid "Output link and settings to a JSON file"
+msgstr "将连结和设定输出到 JSON 档案"
+
+#, python-brace-format
+msgid ""
+"Upload file to FastFileLink server to share it (Share duration after "
+"upload). Default: {default}"
+msgstr "上传档案到 快档连结 云端以分享（上传后的分享期限）。预设：{default}"
+
+msgid ""
+"Resume a previously interrupted upload (requires previous upload session "
+"to exist)"
+msgstr "继续先前中断的上传（需要先前的上传工作阶段存在）"
+
+msgid "Pause upload at specified percentage (1-99, requires --upload)"
+msgstr "在指定百分比时暂停上传（1-99，需要 --upload）"
+
+msgid "Automatically answer yes to upload confirmation prompts"
+msgstr "自动对上传确认提示回答是"
+
+msgid "Legacy P2P share link to recover after this server upload completes"
+msgstr ""
+
+msgid ""
+"Maximum number of downloads before the server automatically shuts down "
+"(P2P mode only). 0 means unlimited."
+msgstr "伺服器自动关闭前的最大下载次数（仅限 P2P 模式）。0 表示无限制。"
+
+msgid ""
+"Timeout in seconds before the server automatically shuts down (P2P mode "
+"only). 0 means no timeout."
+msgstr "伺服器自动关闭前的逾时秒数（仅限 P2P 模式）。0 表示无逾时。"
+
+msgid ""
+"Port number for local server (1024-65535, default: auto-detect available "
+"port)"
+msgstr "本地伺服器的连接埠号码（1024-65535，预设：自动侦测可用连接埠）"
+
+msgid "Password for HTTP Basic Authentication (enables auth protection)"
+msgstr "HTTP 基本验证的密码（启用验证保护）"
+
+msgid "Enable recipient verification before download"
+msgstr ""
+
+msgid "Custom 6-digit pickup code for recipient verification"
+msgstr ""
+
+msgid "Recipient public key (.fflpub) file path for pubkey verification"
+msgstr ""
+
+msgid "Recipient email address(es) for email verification (comma-separated)"
+msgstr ""
+
+msgid ""
+"Base URL for OTP email API (e.g. https://myserver.com/api). Required for "
+"--recipient-auth email"
+msgstr ""
+"OTP 邮箱 API 的基础 URL（例如 https://myserver.com/api）。使用 --recipient-auth email"
+" 时必填"
+
+msgid ""
+"Force relayed P2P mode, disable direct WebRTC connections (can be "
+"overridden by ?webrtc=on URL parameter)"
+msgstr "强制中继 P2P 模式，停用直接 WebRTC 连线（可由 ?webrtc=on URL 参数覆写）"
+
+msgid "Enable end-to-end encryption for file sharing (both HTTP and WebRTC)"
+msgstr "启用档案分享的端对端加密（HTTP 和 WebRTC）"
+
+msgid "Open invite page in browser with the sharing link"
+msgstr "在浏览器中开启包含分享连结的邀请页面"
+
+msgid "Display QR code in terminal (default) or save to FILE (e.g., qr.png)"
+msgstr "在终端中显示二维码（默认）或保存到文件（例如 qr.png）"
+
+msgid ""
+"Disable automatically copying the share link to the clipboard (default: "
+"enabled in CLI mode, disabled in GUI mode)"
+msgstr ""
+
+msgid ""
+"Start VFS server and provide vfs:// URI instead of HTTPS link (P2P mode "
+"only, works with --port)"
+msgstr "启动 VFS 伺服器并提供 vfs:// URI 而不是 HTTPS 连结（仅限 P2P 模式，与 --port 一起使用）"
+
+msgid ""
+"Enable or disable stdin caching ('off' means a second read raises an "
+"error)"
+msgstr ""
+
+msgid "Submit share to background daemon (auto-starts daemon if needed)"
+msgstr ""
+
+msgid "Run share in foreground even if a daemon is running"
+msgstr ""
+
+msgid "Please try again or try later."
+msgstr "请稍后再试或稍后重试。"
+
+#, python-brace-format
+msgid ""
+"\n"
+"If you still get the same problem, please contact us at {supportURL}."
+msgstr ""
+"\n"
+"如果您仍然遇到相同的问题，请透过 {supportURL} 联络我们。"
+
+msgid "We will fix the problem as soon as possible.\n"
+msgstr "我们会尽快修复问题。\n"
+
+msgid "Scanning folder"
+msgstr "正在扫描文件夹"
+
+msgid "Scanning folder. Calculating size may take some time..."
+msgstr "正在扫描文件夹，计算大小可能需要一些时间…"
+
+#, python-brace-format
+msgid "Scanned {size}"
+msgstr "已扫描 {size}"
+
+msgid "Opening invite page in browser..."
+msgstr "正在浏览器中开启邀请页面..."
+
+#, python-brace-format
+msgid "QR code saved to: {filePath}"
+msgstr "二维码已保存到：{filePath}"
+
+msgid ""
+"\n"
+"QR Code:\n"
+msgstr ""
+"\n"
+"二维码：\n"
+
+#, python-brace-format
+msgid "Error generating QR code: {error}"
+msgstr "生成二维码时出错：{error}"
+
+#, python-brace-format
+msgid "Sharing information saved to {jsonFile}"
+msgstr "分享资讯已储存至 {jsonFile}"
+
+#, python-brace-format
+msgid "Failed to write JSON file: {error}"
+msgstr "无法写入 JSON 档案：{error}"
+
+msgid "Error: Please select a file or folder to share"
+msgstr "错误：请选择要分享的文件或文件夹"
+
+msgid "Error: Upload functionality requires Upload addon (addons/Upload.py)"
+msgstr "错误：上传功能需要 Upload 附加元件 (addons/Upload.py)"
+
+msgid "User email address has been lost"
+msgstr "使用者电子邮件地址已遗失"
+
+msgid ""
+"If a firewall notification appears, please allow the application to "
+"connect.\n"
+msgstr "如果出现防火墙通知，请允许应用程式连线。\n"
+
+msgid ""
+"📁 Sharing folder as ZIP - please keep folder contents unchanged during "
+"transfer\n"
+msgstr "📁 以 ZIP 格式分享资料夹 - 请在传输过程中保持资料夹内容不变\n"
+
+msgid "🔐 End-to-end encryption enabled\n"
+msgstr "🔐 已启用端对端加密\n"
+
+msgid "🧅 Tor Privacy Mode Active"
+msgstr "🧅 Tor 隐私模式已启用"
 
 #, python-brace-format
 msgid "Downloading {description} from: {url}"
@@ -1253,19 +1165,36 @@ msgstr "✓ 成功升级到 {version}！"
 msgid "The link has been copied to the clipboard."
 msgstr "连结已复制到剪贴簿。"
 
-msgid "Please try again or try later."
-msgstr "请稍后再试或稍后重试。"
+msgid "Error: VFS mode requires a file or folder path"
+msgstr "错误：VFS 模式需要文件或文件夹路径"
+
+msgid "VFS server started successfully!\n"
+msgstr "VFS 伺服器已成功启动！\n"
 
 #, python-brace-format
+msgid "Please share the URI below to access the {type} remotely:\n"
+msgstr "请分享以下 URI 以远程访问{type}：\n"
+
+msgid ""
+"VFS server is running on loopback (127.0.0.1) - only accessible from this"
+" machine."
+msgstr "VFS 伺服器正在环回地址（127.0.0.1）上运行 - 仅可从本机访问。"
+
+msgid "Please keep the application running for remote access."
+msgstr "请保持应用程序运行以进行远程访问。"
+
+msgid "Press Ctrl+C to stop the server.\n"
+msgstr "按 Ctrl+C 停止伺服器。\n"
+
 msgid ""
 "\n"
-"If you still get the same problem, please contact us at {supportURL}."
+"Shutting down VFS server..."
 msgstr ""
 "\n"
-"如果您仍然遇到相同的问题，请透过 {supportURL} 联络我们。"
+"正在关闭 VFS 伺服器..."
 
-msgid "We will fix the problem as soon as possible.\n"
-msgstr "我们会尽快修复问题。\n"
+msgid "VFS server stopped."
+msgstr "VFS 伺服器已停止。"
 
 msgid "WebRTC connections are disabled by server policy"
 msgstr "伺服器策略已禁用 WebRTC 连接"
@@ -1351,4 +1280,116 @@ msgstr "正在尝试 WebRTC 下载..."
 #~ "Example: FFL_UPGRADE_VARIANT=ffl.com python Core.py"
 #~ " --cli upgrade {path}"
 #~ msgstr "范例：FFL_UPGRADE_VARIANT=ffl.com python Core.py --cli upgrade {path}"
+
+#~ msgid "You can stop the upload at any time and resume it later.\n"
+#~ msgstr "您可以随时停止上传并稍后继续。\n"
+
+#~ msgid ""
+#~ "Upload paused at {percentage:.1f}% "
+#~ "({completedChunks}/{totalChunks} chunks completed)"
+#~ msgstr "上传已暂停于 {percentage:.1f}%（已完成 {completedChunks}/{totalChunks} 个区块）"
+
+#~ msgid "Use --resume to continue upload"
+#~ msgstr "使用 --resume 继续上传"
+
+#~ msgid ""
+#~ "Resume is only available for direct "
+#~ "upload mode (without external tunnels).\n"
+#~ ""
+#~ "Please restart the upload without --resume to upload the file normally."
+#~ msgstr ""
+#~ "继续上传仅适用于直接上传模式（不使用外部通道）。\n"
+#~ "请在不使用 --resume 的情况下重新启动上传以正常上传档案。"
+
+#~ msgid ""
+#~ "Pause functionality is only available "
+#~ "for direct upload mode (without external"
+#~ " tunnels).\n"
+#~ "Please restart the upload without --pause to upload the file normally."
+#~ msgstr ""
+#~ "暂停功能仅适用于直接上传模式（不使用外部通道）。\n"
+#~ "请在不使用 --pause 的情况下重新启动上传以正常上传档案。"
+
+#~ msgid ""
+#~ "End-to-end encryption is only "
+#~ "available for direct upload mode "
+#~ "(without external tunnels).\n"
+#~ "Please restart the upload without --e2ee to upload the file normally."
+#~ msgstr ""
+#~ "端对端加密仅适用于直接上传模式（不使用外部通道）。\n"
+#~ "请在不使用 --e2ee 的情况下重新启动上传以正常上传档案。"
+
+#~ msgid ""
+#~ "Cannot resume: {parameter} mismatch.\n"
+#~ "Original upload used \"{originalValue}\" but"
+#~ " \"{requestedValue}\" was requested.\n"
+#~ "Please use the same parameters as the original upload."
+#~ msgstr ""
+#~ "无法继续：{parameter} 不匹配。\n"
+#~ "原始上传使用 \"{originalValue}\"，但要求使用 \"{requestedValue}\"。\n"
+#~ "请使用与原始上传相同的参数。"
+
+#~ msgid "Unknown error"
+#~ msgstr "未知错误"
+
+#~ msgid ""
+#~ "Your user points are not enough. "
+#~ "Please top up on our website "
+#~ "(https://fastfilelink.com/)."
+#~ msgstr "您的使用者点数不足。请在我们的网站上储值 (https://fastfilelink.com/)。"
+
+#~ msgid "Upload not allowed."
+#~ msgstr "不允许上传。"
+
+#~ msgid "Upload cancelled before transfer started."
+#~ msgstr "上传在传输开始前已取消。"
+
+#~ msgid "Retrying...\n"
+#~ msgstr "正在重试...\n"
+
+#~ msgid ""
+#~ "Recipient verification mode. 'pickup': 6-digit"
+#~ " code required to download; 'pubkey': "
+#~ "RSA public-key challenge required; "
+#~ "'pubkey+pickup': both required; 'email': "
+#~ "one-time code sent to recipient's "
+#~ "email"
+#~ msgstr ""
+#~ "收件人验证模式。'pickup'：下载需要 6 位数取件码；'pubkey'：需要 RSA "
+#~ "公钥验证；'pubkey+pickup'：两者皆需要；'email'：发送一次性验证码到收件人邮箱"
+
+#~ msgid ""
+#~ "Custom {n}-digit pickup code (use with"
+#~ " --recipient-auth pickup or pubkey+pickup)"
+#~ msgstr "自定义 {n} 位数取件码（与 --recipient-auth pickup 或 pubkey+pickup 搭配使用）"
+
+#~ msgid ""
+#~ "Path to recipient RSA public key "
+#~ "file ({ext}), or a comma-separated "
+#~ "list of paths (implies --recipient-auth"
+#~ " pubkey; with --pickup-code, implies "
+#~ "pubkey+pickup)"
+#~ msgstr ""
+#~ "收件人 RSA 公钥文件路径（{ext}），或以逗号分隔的多个路径（隐含 --recipient-"
+#~ "auth pubkey；与 --pickup-code 结合使用时，隐含 "
+#~ "pubkey+pickup）"
+
+#~ msgid ""
+#~ "Recipient email address, or a comma-"
+#~ "separated list of email addresses, for"
+#~ " OTP verification (implies --recipient-auth"
+#~ " email)"
+#~ msgstr "收件人电子邮件地址，或以逗号分隔的多个地址，用于 OTP 验证（隐含 --recipient-auth email）"
+
+#~ msgid "Warning: Failed to write JSON output: {error}"
+#~ msgstr ""
+
+#~ msgid "Error: Failed to build daemon start command: {error}"
+#~ msgstr ""
+
+#~ msgid "Error: Daemon failed to start within {timeout} seconds"
+#~ msgstr ""
+
+#~ msgid "Error: Failed to send stop command to daemon"
+#~ msgstr ""
 

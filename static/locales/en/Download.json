@@ -269,6 +269,11 @@
         "sortName": "Name",
         "sortSize": "Size",
         "sortType": "Type",
+        "view": "View",
+        "viewMasonry": "Masonry",
+        "viewMasonryHint": "Masonry view (variable size)",
+        "viewGrid": "Grid",
+        "viewGridHint": "Grid view (uniform size)",
         "filter": "Filter",
         "mediaOnly": "Media only (images & videos)"
     }

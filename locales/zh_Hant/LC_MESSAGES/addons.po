@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-07-12 21:09+0800\n"
+"POT-Creation-Date: 2026-07-20 17:12+0800\n"
 "PO-Revision-Date: 2025-12-21 14:22+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -16,7 +16,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.17.0\n"
+"Generated-By: Babel 2.18.0\n"
 
 msgid ""
 "The sender has requested a download receipt. Do you want to send a "
@@ -134,6 +134,23 @@ msgstr "是"
 msgid "No"
 msgstr "否"
 
+msgid ""
+"Use custom alias as UID for sharing link (e.g., --alias cool creates link"
+" with 'cool' as UID)"
+msgstr "使用自訂別名作為分享連結的 UID（例如：--alias cool 會建立以 'cool' 為 UID 的連結）"
+
+msgid ""
+"Send email receipt notification when download completes. Omit value to "
+"use your account email (requires non-free account). Accepts one or more "
+"addresses separated by commas."
+msgstr "下載完成時發送電子郵件收據通知。省略值則使用帳號電子郵件（需要非免費帳號）。支援以逗號分隔的多個地址。"
+
+msgid ""
+"Show a confirmation dialog to the receiver after download, asking them to"
+" acknowledge receipt. Confirmation reply is sent to --receipt email(s) or"
+" your account email (requires non-free account)."
+msgstr ""
+
 msgid "Enable error reporting to FastFileLink server for exception diagnostics"
 msgstr "啟用錯誤回報至快檔連結伺服器以進行例外診斷"
 
@@ -152,24 +169,6 @@ msgstr "顯示驗證狀態"
 #, python-brace-format
 msgid "Unknown auth command: {command}"
 msgstr "未知的驗證命令：{command}"
-
-msgid ""
-"Use custom alias as UID for sharing link (e.g., --alias cool creates link"
-" with 'cool' as UID)"
-msgstr "使用自訂別名作為分享連結的 UID（例如：--alias cool 會建立以 'cool' 為 UID 的連結）"
-
-msgid ""
-"Send email receipt notification when download completes. Omit value to "
-"use your account email (requires non-free account). Accepts one or more "
-"addresses separated by commas."
-msgstr "下載完成時發送電子郵件收據通知。省略值則使用帳號電子郵件（需要非免費帳號）。支援以逗號分隔的多個地址。"
-
-msgid ""
-"Show a confirmation dialog to the receiver after download, asking them to"
-" acknowledge receipt. Omit value to use a default message. Confirmation "
-"reply is sent to --receipt email(s) or your account email (requires non-"
-"free account)."
-msgstr "下載後向接收者顯示確認對話框，請其確認收到。省略值則使用預設訊息。確認回覆發送至 --receipt 郵件地址或帳號電子郵件（需要非免費帳號）。"
 
 msgid "Error: --receipt without email requires a registered (non-free) account"
 msgstr "錯誤：不帶電子郵件的 --receipt 需要已註冊（非免費）帳號"
@@ -305,11 +304,6 @@ msgstr "設定未來執行時的首選通道。可用：{tunnels}"
 msgid "Upload requires {cost} points for {fileName} ({size})."
 msgstr "上傳 {fileName}（{size}）需要 {cost} 點數。"
 
-msgid ""
-"Cannot prompt for confirmation in non-interactive mode. Use --yes or set "
-"FFL_YES=True."
-msgstr "無法在非互動模式下提示確認。請使用 --yes 或設定 FFL_YES=True。"
-
 #, python-brace-format
 msgid "Your current points: {points}. Remaining after upload: {remaining}."
 msgstr "您當前的點數：{points}。上傳後剩餘：{remaining}。"
@@ -317,6 +311,9 @@ msgstr "您當前的點數：{points}。上傳後剩餘：{remaining}。"
 #, python-brace-format
 msgid "Retention period: {retention}."
 msgstr "保留期：{retention}。"
+
+msgid "Cannot prompt for confirmation in non-interactive mode. Use --yes."
+msgstr ""
 
 msgid "Continue with upload? [y/N]: "
 msgstr "繼續上傳？[y/N]："
@@ -327,222 +324,68 @@ msgstr "未收到確認輸入。上傳已取消。"
 msgid "Please type \"yes\" or \"no\"."
 msgstr "請輸入「yes」或「no」。"
 
-#, python-brace-format
-msgid "Server validation for UID {uid} failed explicitly."
-msgstr "UID {uid} 的伺服器驗證明確失敗。"
-
-#, python-brace-format
 msgid ""
-"Server validation for UID {uid} returned success=false. Response: "
-"{message}"
-msgstr "UID {uid} 的伺服器驗證返回 success=false。回應：{message}"
-
-msgid "No message"
-msgstr "無訊息"
-
-#, python-brace-format
-msgid "Retrying server ready check for UID {uid} due to request error: {error}"
-msgstr "由於請求錯誤，正在重試 UID {uid} 的伺服器就緒檢查：{error}"
-
-#, python-brace-format
-msgid "Retrying server ready check for UID {uid} due to unexpected error: {error}"
-msgstr "由於意外錯誤，正在重試 UID {uid} 的伺服器就緒檢查：{error}"
-
-#, python-brace-format
-msgid "Server for UID {uid} did not become ready after {retries} retries."
-msgstr "UID {uid} 的伺服器在 {retries} 次重試後仍未就緒。"
-
-#, python-brace-format
-msgid "API call failed (attempt {current}/{total}): {error}"
-msgstr "API 呼叫失敗（嘗試 {current}/{total}）：{error}"
-
-#, python-brace-format
-msgid "Retrying in {delay:.1f} seconds..."
-msgstr "將在 {delay:.1f} 秒後重試..."
-
-#, python-brace-format
-msgid "API call failed permanently after {total} attempts: {error}"
-msgstr "API 呼叫在 {total} 次嘗試後永久失敗：{error}"
-
-msgid ""
-"Please share the link below with the person you'd like to share the file "
-"with.\n"
-msgstr "請將以下連結分享給您想要分享檔案的人。\n"
-
-#, python-brace-format
-msgid "Your file will be stored on our servers until {end}"
-msgstr "您的檔案將儲存在我們的伺服器上直到 {end}"
-
-msgid ""
-"Once the sharing duration ends, your files will be permanently removed "
-"from our servers."
-msgstr "分享期限結束後，您的檔案將從我們的雲端上永久移除。"
-
-msgid ""
-"\n"
-"You can adjust the point limit and other settings for this link below: "
+"Your user points are not enough. Please top up on our website "
+"(https://fastfilelink.com/)."
 msgstr ""
-"\n"
-"您可以在下方調整此連結的點數限制和其他設定： "
 
-#, python-brace-format
-msgid "Upload commit is still in progress, retrying in {delay:.1f} seconds..."
-msgstr "上傳提交仍在進行中，將在 {delay:.1f} 秒後重試..."
-
-#, python-brace-format
-msgid "Resuming upload: {completed}/{total} chunks already completed"
-msgstr "繼續上傳：已完成 {completed}/{total} 個區塊"
-
-msgid "Starting upload..."
-msgstr "正在開始上傳..."
-
-msgid "Uploading..."
-msgstr "上傳中..."
-
-#, python-brace-format
-msgid "Preparing your {size:.1f} GB file..."
-msgstr "正在準備您的 {size:.1f} GB 檔案..."
-
-msgid "Initializing transfer... Progress will be shown momentarily."
-msgstr "正在初始化傳輸...進度即將顯示。"
-
-#, python-brace-format
-msgid ""
-"Processing {size:.1f} GB file. The transfer will be handled in chunks for"
-" stability and speed."
-msgstr "正在處理 {size:.1f} GB 檔案。為了穩定性和速度，將以區塊方式處理傳輸。"
-
-msgid "Reading initial data chunks and starting concurrent uploads..."
-msgstr "正在讀取初始資料區塊並開始並行上傳..."
-
-msgid ""
-"\n"
-"Upload was cancelled due to chunk failure!"
+msgid "Upload not allowed."
 msgstr ""
-"\n"
-"由於區塊失敗，上傳已取消！"
 
-msgid "Upload cancelled due to chunk failure"
-msgstr "由於區塊失敗，上傳已取消"
-
-msgid "Upload cancelled by user"
-msgstr "使用者已取消上傳"
-
-msgid "Upload timed out"
-msgstr "上傳逾時"
-
-msgid "Upload failed due to error"
-msgstr "上傳因錯誤而失敗"
-
-msgid "All chunks uploaded successfully, waiting for server verification..."
-msgstr "所有分塊已成功上傳，正在等待伺服器驗證..."
-
-#, python-brace-format
-msgid "[{timestamp}] Uploading empty file: {filename}"
-msgstr "[{timestamp}] 正在上傳空檔案：{filename}"
-
-#, python-brace-format
-msgid "Upload timed out after {timeout} seconds. Cancelling remaining operations."
-msgstr "上傳在 {timeout} 秒後逾時。正在取消剩餘操作。"
-
-msgid "Upload cancelled by user."
-msgstr "使用者已取消上傳。"
-
-#, python-brace-format
-msgid "Error during upload: {error}"
-msgstr "上傳期間發生錯誤：{error}"
-
-msgid "Cleanup timeout, forcing cleanup"
-msgstr "清理逾時，強制清理"
-
-#, python-brace-format
-msgid ""
-"\n"
-"Upload cancelled due to chunk {chunk} failure: {error}"
+msgid "Upload cancelled before transfer started."
 msgstr ""
-"\n"
-"由於區塊 {chunk} 失敗，上傳已取消：{error}"
 
 #, python-brace-format
-msgid "Cancellation detected, stopping at chunk {chunk}"
-msgstr "偵測到取消，正在區塊 {chunk} 停止"
-
-msgid "Chunk producer cancelled."
-msgstr "區塊產生器已取消。"
-
-#, python-brace-format
-msgid "Error in chunk producer: {error}"
-msgstr "區塊產生器錯誤：{error}"
-
-#, python-brace-format
-msgid ""
-"Progress: {successfulChunks}/{totalChunks} chunks. "
-"{uploadedSize}/{totalSize} ({percentage:.2f}%), {speed}/sec"
+msgid "Authentication enabled - Username: {authUser}\n"
 msgstr ""
-"進度：{successfulChunks}/{totalChunks} 個分塊。{uploadedSize}/{totalSize} "
-"({percentage:.2f}%)，{speed}/秒"
-
-msgid "Progress monitoring cancelled."
-msgstr "進度監控已取消。"
 
 #, python-brace-format
-msgid "Chunk #{chunk}: Upload cancelled before attempt {attempt}"
-msgstr "區塊 #{chunk}：在嘗試 {attempt} 之前上傳已取消"
-
-#, python-brace-format
-msgid "Chunk #{chunk} cancelled before attempt {attempt}"
-msgstr "區塊 #{chunk} 在嘗試 {attempt} 之前已取消"
-
-#, python-brace-format
-msgid "Retrying chunk #{chunk} (attempt {current}/{total}) in {delay:.2f}s..."
-msgstr "正在重試區塊 #{chunk}（嘗試 {current}/{total}），{delay:.2f} 秒後..."
-
-#, python-brace-format
-msgid "Chunk #{chunk} attempt {attempt} failed: {message}"
-msgstr "區塊 #{chunk} 嘗試 {attempt} 失敗：{message}"
-
-#, python-brace-format
-msgid "Chunk #{chunk} attempt {attempt} failed (FINAL): {message}"
-msgstr "區塊 #{chunk} 嘗試 {attempt} 失敗（最終）：{message}"
-
-#, python-brace-format
-msgid "Server error reported: {message}"
-msgstr "伺服器回報錯誤：{message}"
-
-#, python-brace-format
-msgid "Error handling shutdown request: {error}"
-msgstr "處理關閉請求時發生錯誤：{error}"
-
-#, python-brace-format
-msgid "[{timestamp}] Uploading to server"
-msgstr "[{timestamp}] 正在上傳到雲端"
-
-msgid ""
-"Finish uploading, please still wait a moment because the FastFileLink "
-"server is processing your file.\n"
-msgstr "上傳完成，請稍候片刻，因為 快檔連結 雲端正在處理您的檔案。\n"
-
-msgid "Server verification completed successfully!"
-msgstr "伺服器驗證成功完成！"
-
-msgid "Server verification failed."
-msgstr "伺服器驗證失敗。"
-
-msgid "Server verification failed"
-msgstr "伺服器驗證失敗"
-
-msgid ""
-"\n"
-"Server closes the connection, please try again.\n"
+msgid "Pickup code: {code}\n"
 msgstr ""
-"\n"
-"伺服器關閉連線，請重試。\n"
+
+msgid "You can stop the upload at any time and resume it later.\n"
+msgstr ""
 
 #, python-brace-format
 msgid ""
-"UPLOAD_METHOD environment variable detected, using {mode} method to "
-"upload."
-msgstr "偵測到 UPLOAD_METHOD 環境變數，使用 {mode} 方法上傳。"
+"Upload paused at {percentage:.1f}% ({completedChunks}/{totalChunks} "
+"chunks completed)"
+msgstr ""
+
+msgid "Use --resume to continue upload"
+msgstr ""
+
+msgid ""
+"Resume is only available for direct upload mode (without external "
+"tunnels).\n"
+"Please restart the upload without --resume to upload the file normally."
+msgstr ""
+
+msgid ""
+"Pause functionality is only available for direct upload mode (without "
+"external tunnels).\n"
+"Please restart the upload without --pause to upload the file normally."
+msgstr ""
+
+msgid ""
+"End-to-end encryption is only available for direct upload mode (without "
+"external tunnels).\n"
+"Please restart the upload without --e2ee to upload the file normally."
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Cannot resume: {parameter} mismatch.\n"
+"Original upload used \"{originalValue}\" but \"{requestedValue}\" was "
+"requested.\n"
+"Please use the same parameters as the original upload."
+msgstr ""
+
+msgid "Unknown error"
+msgstr ""
+
+msgid "Retrying...\n"
+msgstr ""
 
 msgid "💡 No account? Register at https://fastfilelink.com/#pricing"
 msgstr "💡 沒有帳號？請至 https://fastfilelink.com/#pricing 註冊"
@@ -1434,4 +1277,219 @@ msgstr "   請再試一次..."
 
 #~ msgid "Unable to locate Core.py for shell integration."
 #~ msgstr "找不到 Shell 整合所需的 Core.py。"
+
+#~ msgid ""
+#~ "Show a confirmation dialog to the "
+#~ "receiver after download, asking them to"
+#~ " acknowledge receipt. Omit value to "
+#~ "use a default message. Confirmation "
+#~ "reply is sent to --receipt email(s) "
+#~ "or your account email (requires non-"
+#~ "free account)."
+#~ msgstr ""
+#~ "下載後向接收者顯示確認對話框，請其確認收到。省略值則使用預設訊息。確認回覆發送至 --receipt "
+#~ "郵件地址或帳號電子郵件（需要非免費帳號）。"
+
+#~ msgid ""
+#~ "Cannot prompt for confirmation in "
+#~ "non-interactive mode. Use --yes or "
+#~ "set FFL_YES=True."
+#~ msgstr "無法在非互動模式下提示確認。請使用 --yes 或設定 FFL_YES=True。"
+
+#~ msgid "Server validation for UID {uid} failed explicitly."
+#~ msgstr "UID {uid} 的伺服器驗證明確失敗。"
+
+#~ msgid ""
+#~ "Server validation for UID {uid} returned"
+#~ " success=false. Response: {message}"
+#~ msgstr "UID {uid} 的伺服器驗證返回 success=false。回應：{message}"
+
+#~ msgid "No message"
+#~ msgstr "無訊息"
+
+#~ msgid "Retrying server ready check for UID {uid} due to request error: {error}"
+#~ msgstr "由於請求錯誤，正在重試 UID {uid} 的伺服器就緒檢查：{error}"
+
+#~ msgid ""
+#~ "Retrying server ready check for UID "
+#~ "{uid} due to unexpected error: {error}"
+#~ msgstr "由於意外錯誤，正在重試 UID {uid} 的伺服器就緒檢查：{error}"
+
+#~ msgid "Server for UID {uid} did not become ready after {retries} retries."
+#~ msgstr "UID {uid} 的伺服器在 {retries} 次重試後仍未就緒。"
+
+#~ msgid "API call failed (attempt {current}/{total}): {error}"
+#~ msgstr "API 呼叫失敗（嘗試 {current}/{total}）：{error}"
+
+#~ msgid "Retrying in {delay:.1f} seconds..."
+#~ msgstr "將在 {delay:.1f} 秒後重試..."
+
+#~ msgid "API call failed permanently after {total} attempts: {error}"
+#~ msgstr "API 呼叫在 {total} 次嘗試後永久失敗：{error}"
+
+#~ msgid ""
+#~ "Please share the link below with "
+#~ "the person you'd like to share the"
+#~ " file with.\n"
+#~ msgstr "請將以下連結分享給您想要分享檔案的人。\n"
+
+#~ msgid "Your file will be stored on our servers until {end}"
+#~ msgstr "您的檔案將儲存在我們的伺服器上直到 {end}"
+
+#~ msgid ""
+#~ "Once the sharing duration ends, your "
+#~ "files will be permanently removed from"
+#~ " our servers."
+#~ msgstr "分享期限結束後，您的檔案將從我們的雲端上永久移除。"
+
+#~ msgid ""
+#~ "\n"
+#~ "You can adjust the point limit and other settings for this link below: "
+#~ msgstr ""
+#~ "\n"
+#~ "您可以在下方調整此連結的點數限制和其他設定： "
+
+#~ msgid "Upload commit is still in progress, retrying in {delay:.1f} seconds..."
+#~ msgstr "上傳提交仍在進行中，將在 {delay:.1f} 秒後重試..."
+
+#~ msgid "Resuming upload: {completed}/{total} chunks already completed"
+#~ msgstr "繼續上傳：已完成 {completed}/{total} 個區塊"
+
+#~ msgid "Starting upload..."
+#~ msgstr "正在開始上傳..."
+
+#~ msgid "Uploading..."
+#~ msgstr "上傳中..."
+
+#~ msgid "Preparing your {size:.1f} GB file..."
+#~ msgstr "正在準備您的 {size:.1f} GB 檔案..."
+
+#~ msgid "Initializing transfer... Progress will be shown momentarily."
+#~ msgstr "正在初始化傳輸...進度即將顯示。"
+
+#~ msgid ""
+#~ "Processing {size:.1f} GB file. The "
+#~ "transfer will be handled in chunks "
+#~ "for stability and speed."
+#~ msgstr "正在處理 {size:.1f} GB 檔案。為了穩定性和速度，將以區塊方式處理傳輸。"
+
+#~ msgid "Reading initial data chunks and starting concurrent uploads..."
+#~ msgstr "正在讀取初始資料區塊並開始並行上傳..."
+
+#~ msgid ""
+#~ "\n"
+#~ "Upload was cancelled due to chunk failure!"
+#~ msgstr ""
+#~ "\n"
+#~ "由於區塊失敗，上傳已取消！"
+
+#~ msgid "Upload cancelled due to chunk failure"
+#~ msgstr "由於區塊失敗，上傳已取消"
+
+#~ msgid "Upload cancelled by user"
+#~ msgstr "使用者已取消上傳"
+
+#~ msgid "Upload timed out"
+#~ msgstr "上傳逾時"
+
+#~ msgid "Upload failed due to error"
+#~ msgstr "上傳因錯誤而失敗"
+
+#~ msgid "All chunks uploaded successfully, waiting for server verification..."
+#~ msgstr "所有分塊已成功上傳，正在等待伺服器驗證..."
+
+#~ msgid "[{timestamp}] Uploading empty file: {filename}"
+#~ msgstr "[{timestamp}] 正在上傳空檔案：{filename}"
+
+#~ msgid ""
+#~ "Upload timed out after {timeout} "
+#~ "seconds. Cancelling remaining operations."
+#~ msgstr "上傳在 {timeout} 秒後逾時。正在取消剩餘操作。"
+
+#~ msgid "Upload cancelled by user."
+#~ msgstr "使用者已取消上傳。"
+
+#~ msgid "Error during upload: {error}"
+#~ msgstr "上傳期間發生錯誤：{error}"
+
+#~ msgid "Cleanup timeout, forcing cleanup"
+#~ msgstr "清理逾時，強制清理"
+
+#~ msgid ""
+#~ "\n"
+#~ "Upload cancelled due to chunk {chunk} failure: {error}"
+#~ msgstr ""
+#~ "\n"
+#~ "由於區塊 {chunk} 失敗，上傳已取消：{error}"
+
+#~ msgid "Cancellation detected, stopping at chunk {chunk}"
+#~ msgstr "偵測到取消，正在區塊 {chunk} 停止"
+
+#~ msgid "Chunk producer cancelled."
+#~ msgstr "區塊產生器已取消。"
+
+#~ msgid "Error in chunk producer: {error}"
+#~ msgstr "區塊產生器錯誤：{error}"
+
+#~ msgid ""
+#~ "Progress: {successfulChunks}/{totalChunks} chunks. "
+#~ "{uploadedSize}/{totalSize} ({percentage:.2f}%), "
+#~ "{speed}/sec"
+#~ msgstr ""
+#~ "進度：{successfulChunks}/{totalChunks} "
+#~ "個分塊。{uploadedSize}/{totalSize} ({percentage:.2f}%)，{speed}/秒"
+
+#~ msgid "Progress monitoring cancelled."
+#~ msgstr "進度監控已取消。"
+
+#~ msgid "Chunk #{chunk}: Upload cancelled before attempt {attempt}"
+#~ msgstr "區塊 #{chunk}：在嘗試 {attempt} 之前上傳已取消"
+
+#~ msgid "Chunk #{chunk} cancelled before attempt {attempt}"
+#~ msgstr "區塊 #{chunk} 在嘗試 {attempt} 之前已取消"
+
+#~ msgid "Retrying chunk #{chunk} (attempt {current}/{total}) in {delay:.2f}s..."
+#~ msgstr "正在重試區塊 #{chunk}（嘗試 {current}/{total}），{delay:.2f} 秒後..."
+
+#~ msgid "Chunk #{chunk} attempt {attempt} failed: {message}"
+#~ msgstr "區塊 #{chunk} 嘗試 {attempt} 失敗：{message}"
+
+#~ msgid "Chunk #{chunk} attempt {attempt} failed (FINAL): {message}"
+#~ msgstr "區塊 #{chunk} 嘗試 {attempt} 失敗（最終）：{message}"
+
+#~ msgid "Server error reported: {message}"
+#~ msgstr "伺服器回報錯誤：{message}"
+
+#~ msgid "Error handling shutdown request: {error}"
+#~ msgstr "處理關閉請求時發生錯誤：{error}"
+
+#~ msgid "[{timestamp}] Uploading to server"
+#~ msgstr "[{timestamp}] 正在上傳到雲端"
+
+#~ msgid ""
+#~ "Finish uploading, please still wait a"
+#~ " moment because the FastFileLink server "
+#~ "is processing your file.\n"
+#~ msgstr "上傳完成，請稍候片刻，因為 快檔連結 雲端正在處理您的檔案。\n"
+
+#~ msgid "Server verification completed successfully!"
+#~ msgstr "伺服器驗證成功完成！"
+
+#~ msgid "Server verification failed."
+#~ msgstr "伺服器驗證失敗。"
+
+#~ msgid "Server verification failed"
+#~ msgstr "伺服器驗證失敗"
+
+#~ msgid ""
+#~ "\n"
+#~ "Server closes the connection, please try again.\n"
+#~ msgstr ""
+#~ "\n"
+#~ "伺服器關閉連線，請重試。\n"
+
+#~ msgid ""
+#~ "UPLOAD_METHOD environment variable detected, "
+#~ "using {mode} method to upload."
+#~ msgstr "偵測到 UPLOAD_METHOD 環境變數，使用 {mode} 方法上傳。"
 

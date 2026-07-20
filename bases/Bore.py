@@ -208,6 +208,11 @@ class BoreClient:
         self.authenticator = None
         self.controlConnection = None
         self.running = False
+        # Last exception (or synthesized one) that caused connect() to return False.
+        # connect() logs-and-swallows every failure so its retry loop stays simple;
+        # this lets callers that need to raise (e.g. AsyncTunnelThread) report the
+        # real cause instead of a bare "failed" boolean.
+        self.lastConnectError = None
         self.bufferSize = bufferSize
         self.connectionLock = asyncio.Lock() # Add a lock for connection handling
         self.runningTasks = set() # Task management per instance
@@ -558,6 +563,7 @@ class BoreClient:
         For security, all connections use HTTPS/TLS encryption.
         Optionally uses SOCKS5 proxy if FFL_TUNNEL_SOCKS5 is configured.
         """
+        self.lastConnectError = None
         try:
             try:
                 self._refreshSecret()
@@ -565,6 +571,7 @@ class BoreClient:
                 if not self.secret:
                     logger.error(f"Failed to refresh tunnel token before connect: {e}")
                     logger.error(traceback.format_exc())
+                    self.lastConnectError = e
                     return False
 
                 logger.warning(f"Failed to refresh tunnel token, reusing existing token: {e}")
@@ -595,12 +602,14 @@ class BoreClient:
                         serverHostname=self.controlHost,
                         timeout=NETWORK_TIMEOUT,
                     )
-            except asyncio.TimeoutError:
+            except asyncio.TimeoutError as e:
                 logger.error(f"Connect timed-out after {NETWORK_TIMEOUT}s")
+                self.lastConnectError = e
                 return False
             except Exception as e:
                 logger.error(f"Failed to establish control TLS connection: {type(e).__name__}: {e}")
                 logger.error(traceback.format_exc())
+                self.lastConnectError = e
                 return False
 
             # 2. Wrap as DelimitedStream
@@ -619,6 +628,7 @@ class BoreClient:
                 resp = await self.controlConnection.recvWithTimeout()
                 if not resp:
                     logger.error("Server closed connection unexpectedly")
+                    self.lastConnectError = ConnectionError("Server closed connection unexpectedly")
                     return False
 
                 if "Hello" in resp:
@@ -629,11 +639,13 @@ class BoreClient:
 
                 if "Error" in resp:
                     logger.error(f"Server error: {resp['Error']}")
+                    self.lastConnectError = ConnectionError(f"Server error: {resp['Error']}")
                     return False
 
         except Exception as e:
             logger.error(f"connect() fatal error: {e}")
             logger.error(traceback.format_exc())
+            self.lastConnectError = e
             return False
 
     async def _authenticate(self, stream, role="ctrl", port=None):

@@ -420,7 +420,6 @@ class UploadInstabilityTest(FastFileLinkTestBase):
         print(f"[Test] Expected outcome: {'FAILURE' if expectFailure else 'SUCCESS'}")
         self.setUp() # This will regenerate the file with new size
 
-        testServerProcess = None
         try:
             # Prepare extra environment variables to disable retry fallback
             extraEnvVars = {
@@ -428,7 +427,7 @@ class UploadInstabilityTest(FastFileLinkTestBase):
             }
 
             # Start upload with network instability simulation using test server
-            result = self._startFastFileLink(
+            shareLink = self._startFastFileLink(
                 p2p=False,  # Server upload only
                 networkFailureRate=failureRate,
                 maxConsecutiveFailures=maxConsecutiveFailures,
@@ -442,12 +441,6 @@ class UploadInstabilityTest(FastFileLinkTestBase):
             if expectFailure:
                 print("[Test] WARNING: Expected failure but upload succeeded - this is unexpected!")
                 return
-
-            # Unpack result based on whether test server was used
-            if isinstance(result, tuple):
-                shareLink, testServerProcess = result
-            else:
-                shareLink = result
 
             # Verify we can download the uploaded file
             downloadedFilePath = self._getDownloadedFilePath()
@@ -476,9 +469,6 @@ class UploadInstabilityTest(FastFileLinkTestBase):
                 raise
         finally:
             self._terminateProcess()
-            # Stop test server after all operations are complete
-            if testServerProcess:
-                self._stopTestServer(testServerProcess)
 
     # Test methods for predefined scenarios
     def testStableUpload(self):

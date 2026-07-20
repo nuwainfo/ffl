@@ -269,6 +269,11 @@
         "sortName": "名称",
         "sortSize": "大小",
         "sortType": "类型",
+        "view": "显示方式",
+        "viewMasonry": "瀑布流",
+        "viewMasonryHint": "瀑布流检视（不同尺寸）",
+        "viewGrid": "网格",
+        "viewGridHint": "网格检视（统一尺寸）",
         "filter": "筛选",
         "mediaOnly": "仅显示媒体（图片与视频）"
     }

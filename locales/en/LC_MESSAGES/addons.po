@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-07-12 21:09+0800\n"
+"POT-Creation-Date: 2026-07-20 17:12+0800\n"
 "PO-Revision-Date: 2025-12-18 10:23+0800\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -16,7 +16,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.17.0\n"
+"Generated-By: Babel 2.18.0\n"
 
 msgid ""
 "The sender has requested a download receipt. Do you want to send a "
@@ -127,6 +127,23 @@ msgstr ""
 msgid "No"
 msgstr ""
 
+msgid ""
+"Use custom alias as UID for sharing link (e.g., --alias cool creates link"
+" with 'cool' as UID)"
+msgstr ""
+
+msgid ""
+"Send email receipt notification when download completes. Omit value to "
+"use your account email (requires non-free account). Accepts one or more "
+"addresses separated by commas."
+msgstr ""
+
+msgid ""
+"Show a confirmation dialog to the receiver after download, asking them to"
+" acknowledge receipt. Confirmation reply is sent to --receipt email(s) or"
+" your account email (requires non-free account)."
+msgstr ""
+
 msgid "Enable error reporting to FastFileLink server for exception diagnostics"
 msgstr ""
 
@@ -144,24 +161,6 @@ msgstr ""
 
 #, python-brace-format
 msgid "Unknown auth command: {command}"
-msgstr ""
-
-msgid ""
-"Use custom alias as UID for sharing link (e.g., --alias cool creates link"
-" with 'cool' as UID)"
-msgstr ""
-
-msgid ""
-"Send email receipt notification when download completes. Omit value to "
-"use your account email (requires non-free account). Accepts one or more "
-"addresses separated by commas."
-msgstr ""
-
-msgid ""
-"Show a confirmation dialog to the receiver after download, asking them to"
-" acknowledge receipt. Omit value to use a default message. Confirmation "
-"reply is sent to --receipt email(s) or your account email (requires non-"
-"free account)."
 msgstr ""
 
 msgid "Error: --receipt without email requires a registered (non-free) account"
@@ -298,17 +297,15 @@ msgstr ""
 msgid "Upload requires {cost} points for {fileName} ({size})."
 msgstr ""
 
-msgid ""
-"Cannot prompt for confirmation in non-interactive mode. Use --yes or set "
-"FFL_YES=True."
-msgstr ""
-
 #, python-brace-format
 msgid "Your current points: {points}. Remaining after upload: {remaining}."
 msgstr ""
 
 #, python-brace-format
 msgid "Retention period: {retention}."
+msgstr ""
+
+msgid "Cannot prompt for confirmation in non-interactive mode. Use --yes."
 msgstr ""
 
 msgid "Continue with upload? [y/N]: "
@@ -320,211 +317,67 @@ msgstr ""
 msgid "Please type \"yes\" or \"no\"."
 msgstr ""
 
+msgid ""
+"Your user points are not enough. Please top up on our website "
+"(https://fastfilelink.com/)."
+msgstr ""
+
+msgid "Upload not allowed."
+msgstr ""
+
+msgid "Upload cancelled before transfer started."
+msgstr ""
+
 #, python-brace-format
-msgid "Server validation for UID {uid} failed explicitly."
+msgid "Authentication enabled - Username: {authUser}\n"
+msgstr ""
+
+#, python-brace-format
+msgid "Pickup code: {code}\n"
+msgstr ""
+
+msgid "You can stop the upload at any time and resume it later.\n"
 msgstr ""
 
 #, python-brace-format
 msgid ""
-"Server validation for UID {uid} returned success=false. Response: "
-"{message}"
+"Upload paused at {percentage:.1f}% ({completedChunks}/{totalChunks} "
+"chunks completed)"
 msgstr ""
 
-msgid "No message"
-msgstr ""
-
-#, python-brace-format
-msgid "Retrying server ready check for UID {uid} due to request error: {error}"
-msgstr ""
-
-#, python-brace-format
-msgid "Retrying server ready check for UID {uid} due to unexpected error: {error}"
-msgstr ""
-
-#, python-brace-format
-msgid "Server for UID {uid} did not become ready after {retries} retries."
-msgstr ""
-
-#, python-brace-format
-msgid "API call failed (attempt {current}/{total}): {error}"
-msgstr ""
-
-#, python-brace-format
-msgid "Retrying in {delay:.1f} seconds..."
-msgstr ""
-
-#, python-brace-format
-msgid "API call failed permanently after {total} attempts: {error}"
+msgid "Use --resume to continue upload"
 msgstr ""
 
 msgid ""
-"Please share the link below with the person you'd like to share the file "
-"with.\n"
-msgstr ""
-
-#, python-brace-format
-msgid "Your file will be stored on our servers until {end}"
+"Resume is only available for direct upload mode (without external "
+"tunnels).\n"
+"Please restart the upload without --resume to upload the file normally."
 msgstr ""
 
 msgid ""
-"Once the sharing duration ends, your files will be permanently removed "
-"from our servers."
+"Pause functionality is only available for direct upload mode (without "
+"external tunnels).\n"
+"Please restart the upload without --pause to upload the file normally."
 msgstr ""
 
 msgid ""
-"\n"
-"You can adjust the point limit and other settings for this link below: "
-msgstr ""
-
-#, python-brace-format
-msgid "Upload commit is still in progress, retrying in {delay:.1f} seconds..."
-msgstr ""
-
-#, python-brace-format
-msgid "Resuming upload: {completed}/{total} chunks already completed"
-msgstr ""
-
-msgid "Starting upload..."
-msgstr ""
-
-msgid "Uploading..."
-msgstr ""
-
-#, python-brace-format
-msgid "Preparing your {size:.1f} GB file..."
-msgstr ""
-
-msgid "Initializing transfer... Progress will be shown momentarily."
+"End-to-end encryption is only available for direct upload mode (without "
+"external tunnels).\n"
+"Please restart the upload without --e2ee to upload the file normally."
 msgstr ""
 
 #, python-brace-format
 msgid ""
-"Processing {size:.1f} GB file. The transfer will be handled in chunks for"
-" stability and speed."
+"Cannot resume: {parameter} mismatch.\n"
+"Original upload used \"{originalValue}\" but \"{requestedValue}\" was "
+"requested.\n"
+"Please use the same parameters as the original upload."
 msgstr ""
 
-msgid "Reading initial data chunks and starting concurrent uploads..."
+msgid "Unknown error"
 msgstr ""
 
-msgid ""
-"\n"
-"Upload was cancelled due to chunk failure!"
-msgstr ""
-
-msgid "Upload cancelled due to chunk failure"
-msgstr ""
-
-msgid "Upload cancelled by user"
-msgstr ""
-
-msgid "Upload timed out"
-msgstr ""
-
-msgid "Upload failed due to error"
-msgstr ""
-
-msgid "All chunks uploaded successfully, waiting for server verification..."
-msgstr ""
-
-#, python-brace-format
-msgid "[{timestamp}] Uploading empty file: {filename}"
-msgstr ""
-
-#, python-brace-format
-msgid "Upload timed out after {timeout} seconds. Cancelling remaining operations."
-msgstr ""
-
-msgid "Upload cancelled by user."
-msgstr ""
-
-#, python-brace-format
-msgid "Error during upload: {error}"
-msgstr ""
-
-msgid "Cleanup timeout, forcing cleanup"
-msgstr ""
-
-#, python-brace-format
-msgid ""
-"\n"
-"Upload cancelled due to chunk {chunk} failure: {error}"
-msgstr ""
-
-#, python-brace-format
-msgid "Cancellation detected, stopping at chunk {chunk}"
-msgstr ""
-
-msgid "Chunk producer cancelled."
-msgstr ""
-
-#, python-brace-format
-msgid "Error in chunk producer: {error}"
-msgstr ""
-
-#, python-brace-format
-msgid ""
-"Progress: {successfulChunks}/{totalChunks} chunks. "
-"{uploadedSize}/{totalSize} ({percentage:.2f}%), {speed}/sec"
-msgstr ""
-
-msgid "Progress monitoring cancelled."
-msgstr ""
-
-#, python-brace-format
-msgid "Chunk #{chunk}: Upload cancelled before attempt {attempt}"
-msgstr ""
-
-#, python-brace-format
-msgid "Chunk #{chunk} cancelled before attempt {attempt}"
-msgstr ""
-
-#, python-brace-format
-msgid "Retrying chunk #{chunk} (attempt {current}/{total}) in {delay:.2f}s..."
-msgstr ""
-
-#, python-brace-format
-msgid "Chunk #{chunk} attempt {attempt} failed: {message}"
-msgstr ""
-
-#, python-brace-format
-msgid "Chunk #{chunk} attempt {attempt} failed (FINAL): {message}"
-msgstr ""
-
-#, python-brace-format
-msgid "Server error reported: {message}"
-msgstr ""
-
-#, python-brace-format
-msgid "Error handling shutdown request: {error}"
-msgstr ""
-
-#, python-brace-format
-msgid "[{timestamp}] Uploading to server"
-msgstr ""
-
-msgid ""
-"Finish uploading, please still wait a moment because the FastFileLink "
-"server is processing your file.\n"
-msgstr ""
-
-msgid "Server verification completed successfully!"
-msgstr ""
-
-msgid "Server verification failed."
-msgstr ""
-
-msgid "Server verification failed"
-msgstr ""
-
-msgid ""
-"\n"
-"Server closes the connection, please try again.\n"
-msgstr ""
-
-#, python-brace-format
-msgid ""
-"UPLOAD_METHOD environment variable detected, using {mode} method to "
-"upload."
+msgid "Retrying...\n"
 msgstr ""
 
 msgid "💡 No account? Register at https://fastfilelink.com/#pricing"
@@ -1310,5 +1163,208 @@ msgstr ""
 #~ msgstr ""
 
 #~ msgid "Unable to locate Core.py for shell integration."
+#~ msgstr ""
+
+#~ msgid ""
+#~ "Show a confirmation dialog to the "
+#~ "receiver after download, asking them to"
+#~ " acknowledge receipt. Omit value to "
+#~ "use a default message. Confirmation "
+#~ "reply is sent to --receipt email(s) "
+#~ "or your account email (requires non-"
+#~ "free account)."
+#~ msgstr ""
+
+#~ msgid ""
+#~ "Cannot prompt for confirmation in "
+#~ "non-interactive mode. Use --yes or "
+#~ "set FFL_YES=True."
+#~ msgstr ""
+
+#~ msgid "Server validation for UID {uid} failed explicitly."
+#~ msgstr ""
+
+#~ msgid ""
+#~ "Server validation for UID {uid} returned"
+#~ " success=false. Response: {message}"
+#~ msgstr ""
+
+#~ msgid "No message"
+#~ msgstr ""
+
+#~ msgid "Retrying server ready check for UID {uid} due to request error: {error}"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "Retrying server ready check for UID "
+#~ "{uid} due to unexpected error: {error}"
+#~ msgstr ""
+
+#~ msgid "Server for UID {uid} did not become ready after {retries} retries."
+#~ msgstr ""
+
+#~ msgid "API call failed (attempt {current}/{total}): {error}"
+#~ msgstr ""
+
+#~ msgid "Retrying in {delay:.1f} seconds..."
+#~ msgstr ""
+
+#~ msgid "API call failed permanently after {total} attempts: {error}"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "Please share the link below with "
+#~ "the person you'd like to share the"
+#~ " file with.\n"
+#~ msgstr ""
+
+#~ msgid "Your file will be stored on our servers until {end}"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "Once the sharing duration ends, your "
+#~ "files will be permanently removed from"
+#~ " our servers."
+#~ msgstr ""
+
+#~ msgid ""
+#~ "\n"
+#~ "You can adjust the point limit and other settings for this link below: "
+#~ msgstr ""
+
+#~ msgid "Upload commit is still in progress, retrying in {delay:.1f} seconds..."
+#~ msgstr ""
+
+#~ msgid "Resuming upload: {completed}/{total} chunks already completed"
+#~ msgstr ""
+
+#~ msgid "Starting upload..."
+#~ msgstr ""
+
+#~ msgid "Uploading..."
+#~ msgstr ""
+
+#~ msgid "Preparing your {size:.1f} GB file..."
+#~ msgstr ""
+
+#~ msgid "Initializing transfer... Progress will be shown momentarily."
+#~ msgstr ""
+
+#~ msgid ""
+#~ "Processing {size:.1f} GB file. The "
+#~ "transfer will be handled in chunks "
+#~ "for stability and speed."
+#~ msgstr ""
+
+#~ msgid "Reading initial data chunks and starting concurrent uploads..."
+#~ msgstr ""
+
+#~ msgid ""
+#~ "\n"
+#~ "Upload was cancelled due to chunk failure!"
+#~ msgstr ""
+
+#~ msgid "Upload cancelled due to chunk failure"
+#~ msgstr ""
+
+#~ msgid "Upload cancelled by user"
+#~ msgstr ""
+
+#~ msgid "Upload timed out"
+#~ msgstr ""
+
+#~ msgid "Upload failed due to error"
+#~ msgstr ""
+
+#~ msgid "All chunks uploaded successfully, waiting for server verification..."
+#~ msgstr ""
+
+#~ msgid "[{timestamp}] Uploading empty file: {filename}"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "Upload timed out after {timeout} "
+#~ "seconds. Cancelling remaining operations."
+#~ msgstr ""
+
+#~ msgid "Upload cancelled by user."
+#~ msgstr ""
+
+#~ msgid "Error during upload: {error}"
+#~ msgstr ""
+
+#~ msgid "Cleanup timeout, forcing cleanup"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "\n"
+#~ "Upload cancelled due to chunk {chunk} failure: {error}"
+#~ msgstr ""
+
+#~ msgid "Cancellation detected, stopping at chunk {chunk}"
+#~ msgstr ""
+
+#~ msgid "Chunk producer cancelled."
+#~ msgstr ""
+
+#~ msgid "Error in chunk producer: {error}"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "Progress: {successfulChunks}/{totalChunks} chunks. "
+#~ "{uploadedSize}/{totalSize} ({percentage:.2f}%), "
+#~ "{speed}/sec"
+#~ msgstr ""
+
+#~ msgid "Progress monitoring cancelled."
+#~ msgstr ""
+
+#~ msgid "Chunk #{chunk}: Upload cancelled before attempt {attempt}"
+#~ msgstr ""
+
+#~ msgid "Chunk #{chunk} cancelled before attempt {attempt}"
+#~ msgstr ""
+
+#~ msgid "Retrying chunk #{chunk} (attempt {current}/{total}) in {delay:.2f}s..."
+#~ msgstr ""
+
+#~ msgid "Chunk #{chunk} attempt {attempt} failed: {message}"
+#~ msgstr ""
+
+#~ msgid "Chunk #{chunk} attempt {attempt} failed (FINAL): {message}"
+#~ msgstr ""
+
+#~ msgid "Server error reported: {message}"
+#~ msgstr ""
+
+#~ msgid "Error handling shutdown request: {error}"
+#~ msgstr ""
+
+#~ msgid "[{timestamp}] Uploading to server"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "Finish uploading, please still wait a"
+#~ " moment because the FastFileLink server "
+#~ "is processing your file.\n"
+#~ msgstr ""
+
+#~ msgid "Server verification completed successfully!"
+#~ msgstr ""
+
+#~ msgid "Server verification failed."
+#~ msgstr ""
+
+#~ msgid "Server verification failed"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "\n"
+#~ "Server closes the connection, please try again.\n"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "UPLOAD_METHOD environment variable detected, "
+#~ "using {mode} method to upload."
 #~ msgstr ""
 

@@ -31,6 +31,8 @@ import zlib
 from pathlib import Path
 from typing import Optional, Tuple
 
+import wx
+
 rootPath = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, rootPath)
 
@@ -46,8 +48,10 @@ if sys.platform == 'win32':
 
 hiddenImports = [
     'bases.crypto.Cryptography',
-    'addons.Preview',
 ]
+
+import addons
+hiddenImports.extend([f'addons.{addon}' for addon in addons.addons])
 
 if sys.platform == 'darwin':
     hiddenImports.extend(['Foundation', 'AppKit'])
@@ -64,6 +68,9 @@ packageData = [
     ('../locales', 'locales'), # i18n translation files
     ('../addons/impl/assets', 'addons/impl/assets'), # addons assets
 ]
+
+if sys.platform == 'win32':
+    packageData.append((os.path.join(os.path.dirname(wx.__file__), 'WebView2Loader.dll'), 'wx'))
 
 featuresSupported = True
 

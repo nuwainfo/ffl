@@ -1683,7 +1683,7 @@ class WebRTCManager {
 
         // E2EE Setup
         try {
-            this.e2eeManager = new E2EEManager(this.log);
+            this.e2eeManager = new E2EEManager(this.log, { uid: this.uid });
             const e2eeEnabled = await this.e2eeManager.checkE2EEStatus();
             if (e2eeEnabled) {
                 this.log("E2EE", "🔒 End-to-End encryption enabled");
@@ -1733,6 +1733,7 @@ class WebRTCManager {
         this.previewUI = new PreviewUI({
             log: this.log,
             debug: this.debug || false,
+            uid: this.uid,
             metadataURL: this.endpoints.manifest,
             thumbnailURLTemplate: this.endpoints.thumbnailTemplate,
             fileURLTemplate: this.endpoints.fileTemplate,

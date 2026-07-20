@@ -27,7 +27,8 @@ import ssl
 import sys
 import webbrowser
 
-from dataclasses import asdict, fields
+from dataclasses import fields, is_dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Optional, TypedDict
 
@@ -56,6 +57,10 @@ logger = getLogger(__name__)
 class DataclassDictMixin:
 
     @classmethod
+    def getSerializableFields(cls):
+        return fields(cls)
+
+    @classmethod
     def fromDict(cls, data, extraField=None, **overrides):
         fieldNames = {fieldInfo.name for fieldInfo in fields(cls)}
         stateData = {name: data[name] for name in fieldNames if name in data}
@@ -81,12 +86,60 @@ class DataclassDictMixin:
 
         return cls.fromDict(data, extraField=extraField, **overrides)
 
-    def toDict(self):
-        return asdict(self)
+    def toDict(self, snakeKey=False):
+        def formatKey(name):
+            if not snakeKey:
+                return name
 
-    def updateFromDict(self, data=None, **overrides):
-        nextState = type(self).fromDict(data or {}, **overrides)
-        self.__dict__.update(nextState.__dict__)
+            return re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
+
+        def serialize(value):
+            if isinstance(value, Enum):
+                return value.name.lower()
+
+            if is_dataclass(value):
+                if isinstance(value, DataclassDictMixin):
+                    return value.toDict(snakeKey=snakeKey)
+
+                return {
+                    formatKey(fieldInfo.name): serialize(getattr(value, fieldInfo.name))
+                    for fieldInfo in fields(value)
+                    if fieldInfo.metadata.get('serialize', True)
+                }
+
+            if isinstance(value, dict):
+                return {
+                    formatKey(key) if isinstance(key, str) else key: serialize(item)
+                    for key, item in value.items()
+                }
+
+            if isinstance(value, list):
+                return [serialize(item) for item in value]
+
+            if isinstance(value, tuple):
+                return tuple(serialize(item) for item in value)
+
+            return value
+
+        return {
+            formatKey(fieldInfo.name): serialize(getattr(self, fieldInfo.name))
+            for fieldInfo in self.getSerializableFields()
+            if fieldInfo.metadata.get('serialize', True)
+        }
+
+    def updateFromDict(self, data=None, replace=True, **overrides):
+        if replace:
+            nextState = type(self).fromDict(data or {}, **overrides)
+            self.__dict__.update(nextState.__dict__)
+            return
+
+        fieldNames = {fieldInfo.name for fieldInfo in fields(self)}
+        updates = {
+            name: value
+            for name, value in {**(data or {}), **overrides}.items()
+            if name in fieldNames
+        }
+        self.__dict__.update(updates)
 
     def reset(self, preserveFields=()):
         preserveFields = set(preserveFields)
@@ -927,27 +980,3 @@ except ImportError:
             os.kill(pid, getattr(signal, 'SIGKILL', signal.SIGTERM))
 
 ProcessHelper = _ProcessHelper
-
-def writeShareJsonOutput(jsonPath, *, filePath, contentName, fileSize, uploadMode,
-                         tunnelType, link, e2ee, pickupCode, pubkeyEnabled,
-                         userName, email, level, points, serialNumber):
-    outputData = {
-        "file": filePath,
-        "content_name": contentName,
-        "file_size": fileSize if fileSize is not None else -1,
-        "upload_mode": uploadMode,
-        "tunnel_type": tunnelType or "default",
-        "link": link,
-        "e2ee": e2ee,
-        "pickup_code": pickupCode,
-        "pubkey_enabled": pubkeyEnabled,
-        "user": {
-            "user": userName,
-            "email": email,
-            "level": level,
-            "points": points,
-            "serial_number": serialNumber,
-        },
-    }
-    with open(jsonPath, 'w', encoding='utf-8') as f:
-        json.dump(outputData, f, indent=2)

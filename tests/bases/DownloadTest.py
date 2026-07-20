@@ -158,8 +158,7 @@ class DownloadTest(FastFileLinkTestBase):
 
         outputCapture = {}
         try:
-            # Unpack tuple since useTestServer=True returns (shareLink, testServerProcess)
-            shareLink, _ = self._startFastFileLink(
+            shareLink = self._startFastFileLink(
                 p2p=useWebRTC,
                 timeout=60,
                 useTestServer=True, # Use local test server

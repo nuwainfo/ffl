@@ -25,6 +25,9 @@ class ZipPreviewExtractor {
         // URL template for fetching individual files (e.g., '/uid=****/file?hash={hash}')
         this.fileURLTemplate = opts.fileURLTemplate || '/uid=****/file?hash={hash}';
         this.metadataURL = opts.metadataURL || '/uid=****/manifest';
+        // Share UID, needed so HTTPDecryptor instances built here route their
+        // own /e2ee/tags fetches to the right session (see E2EEManager._prefixPath).
+        this.uid = opts.uid || '';
         this._fetchInflight = new Map();
         this._e2eePlanCache = new Map();
 
@@ -209,7 +212,8 @@ class ZipPreviewExtractor {
             this.e2eeContext.embeddedTags || null,
             this.log,
             'global',
-            plan.globalChunkStart || 0
+            plan.globalChunkStart || 0,
+            this.uid
         );
 
         const decryptedChunk = await decryptor.decryptChunk(ciphertextBuffer);
@@ -290,7 +294,9 @@ class ZipPreviewExtractor {
             this.e2eeContext.chunkSize,
             this.e2eeContext.embeddedTags || null,
             this.log,
-            actualStreamId
+            actualStreamId,
+            0,
+            this.uid
         );
 
         const decryptedChunk = await decryptor.decryptChunk(data);

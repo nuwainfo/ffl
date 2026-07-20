@@ -32,7 +32,7 @@ from bases.Kernel import (
 from bases.Settings import DEFAULT_AUTH_USER_NAME, DEFAULT_UPLOAD_DURATION, SettingsGetter
 from bases.Utils import flushPrint, checkVersionCompatibility, getEnv, parseProxyString, setupProxyEnvironment
 from bases.Hook import HookEventForwarder
-from bases.Daemon import DaemonManager
+from bases.Daemon import ProcessDaemonManager
 from bases.Upgrade import performUpgrade
 from bases.Auth import PICKUP_CODE_LENGTH, PUBKEY_PUBLIC_EXT, PUBKEY_PRIVATE_EXT, RecipientAuth
 from bases.Share import ShareRequest
@@ -372,6 +372,58 @@ class ShareCLIArgumentAdapter:
             
         return config
 
+    @classmethod
+    def serializeShareRequest(cls, shareRequest):
+        argv = []
+
+        for dataclassField, cliMetadata in cls._iterShareFields(type(shareRequest)):
+            value = getattr(shareRequest, dataclassField.name)
+            argv.extend(cls._serializeFieldValue(dataclassField, cliMetadata, value))
+
+        return argv
+
+    @classmethod
+    def _serializeFieldValue(cls, dataclassField, cliMetadata, value):
+        flags = cliMetadata['flags']
+        options = cliMetadata['options']
+
+        if not flags:
+            return []
+
+        if not flags[0].startswith('-'):
+            if value is None:
+                return []
+
+            if isinstance(value, (list, tuple)):
+                return [str(item) for item in value]
+
+            return [str(value)]
+
+        if options.get('action') == 'store_true':
+            return [flags[0]] if value else []
+
+        if value is None:
+            return []
+
+        defaultValue = cls._getDefaultValue(dataclassField)
+        if defaultValue is not MISSING and value == defaultValue:
+            return []
+
+        if 'const' in options and value == options['const']:
+            return [flags[0]]
+
+        return [flags[0], str(value)]
+
+    @staticmethod
+    def _getDefaultValue(dataclassField):
+        if dataclassField.default is not MISSING:
+            return dataclassField.default
+
+        if dataclassField.default_factory is not MISSING:
+            return dataclassField.default_factory()
+
+        return MISSING
+
 
 def configureCLIParser():
     """Configure the parser for CLI mode with multi-phase command support using global parent approach
@@ -607,7 +659,7 @@ def configureCLIParser():
         help=_('Force stop the daemon (use with --stop)'),
         dest='force'
     )
-    # Internal flag: DaemonManager._startDaemon() passes --start when spawning the background
+    # Internal flag: ProcessDaemonManager._startDaemon() passes --start when spawning the background
     # daemon subprocess so that subprocess enters the server loop (DaemonServer().start()).
     # Hidden from --help because users should never call this directly.
     daemonSubparser.add_argument(
@@ -760,6 +812,12 @@ def _handleKeygenCommand(args, shareSubparser):
     shareArgs = shareSubparser.parse_args([privPath])
     args.__dict__.update(vars(shareArgs))
 
+    # parse_args() called directly on the child subparser (above) never sets
+    # 'command' -- that dest is populated by the parent parser's subparsers
+    # action during normal dispatch, which this bypasses. Without this, the
+    # caller's `if args.command == 'share'` check never fires and the process
+    # exits after printing the banner without ever starting the share.
+    args.command = 'share'
     args.maxDownloads = 1  # forced: private key is one-time use
     args.json = keypairJson
     args.recipientAuth = keypairRecipientAuth
@@ -837,10 +895,10 @@ def processArgumentsAndCommands(args, shareSubparser=None, proxyConfig=None):
         return argPolicy['exitCode']
 
     if command == 'daemon':
-        return DaemonManager.handleCLICommand(args)
+        return ProcessDaemonManager.handleCLICommand(args)
 
     if command == 'shares':
-        return DaemonManager.handleSharesCLICommand(args)
+        return ProcessDaemonManager.handleSharesCLICommand(args)
 
     # Validate share arguments for:
     # - CLI mode: when command is 'share'

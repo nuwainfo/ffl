@@ -38,7 +38,7 @@ from bases.I18n import _
 from bases.HTTP import HTTPRequestHandlerHelper, PathResolverMixin
 from bases.Kernel import FFLEvent, getLogger
 from bases.Auth import AuthMixin, HTTPAuth
-from bases.Settings import SettingsGetter
+from bases.Settings import SettingsGetter, ShareMode
 from bases.Utils import copy2Clipboard
 
 logger = getLogger(__name__)
@@ -413,7 +413,9 @@ class VFSServer(ThreadingHTTPServer):
         return VFSHandler
 
 
-def processVFS(args, reporter):
+def processVFS(args, context):
+
+    reporter = context.reporter
     output = reporter.output
 
     # VFS mode requires file or folder (already validated in CLI.py)
@@ -433,7 +435,7 @@ def processVFS(args, reporter):
 
     vfsUri = vfsServer.clientUri
     
-    reporter.vfsServerCreated(vfsServer, link=vfsUri, uid=args.uid)
+    reporter.notifyVFSServerCreated(vfsServer, link=vfsUri, uid=args.uid)
     output(_("VFS server started successfully!\n"))
 
     shareType = 'file' if os.path.isfile(args.file) else 'folder'
@@ -455,19 +457,16 @@ def processVFS(args, reporter):
     else:
         output('')
 
-    shareLinkData = {
-        'uid': args.uid,
-        'link': vfsUri,
-        'filePath': args.file,
-        'contentName': os.path.basename(args.file),
-        'fileSize': None, # VFS TAR size unknown
-        'tunnelType': "vfs",
-        'e2ee': False, # VFS doesn't support E2EE yet
-        'reader': None,
-    }
-    FFLEvent.shareLinkCreate.trigger(**shareLinkData)
-    
-    reporter.shareLinkCreated(**shareLinkData)
+    shareResult = context.createShareResult(
+        file=args.file,
+        contentName=os.path.basename(args.file),
+        fileSize=None, # VFS TAR size unknown
+        uploadMode=ShareMode.P2P,
+        tunnelType='vfs',
+        link=vfsUri,
+        e2ee=False, # VFS doesn't support E2EE yet
+    )
+    reporter.notifyShareLinkCreated(shareResult, uid=args.uid)
 
     try:
         # Keep server running until interrupted

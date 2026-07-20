@@ -23,22 +23,22 @@ import secrets
 import threading
 import time
 
-from dataclasses import dataclass
-from enum import IntEnum
-from typing import Optional
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from http.server import BaseHTTPRequestHandler
+from typing import Any, Optional
 
 from bases.Auth import RecipientAuth
+from bases.Checksum import TransferChecksumStore
+from bases.E2EE import E2EEManager
 from bases.Kernel import getLogger
+from bases.Readers import SourceReader
+from bases.Share import ShareSession, ShareStatus
+from bases.SSE import EventHub
+from bases.Utils import DataclassDictMixin
+from bases.WebRTC import DummyWebRTCManager, WebRTCManager
 
 logger = getLogger(__name__)
-
-
-class ShareStatus(IntEnum):
-    CREATING = 1
-    ONLINE = 2
-    COMPLETED = 3
-    STOPPED = 4
-    CRASHED = 5
 
 
 class AuthRateLimiter:
@@ -318,7 +318,7 @@ class SupersededDownloadError(ConnectionAbortedError):
 
 
 @dataclass
-class ServerConfig:
+class ServerConfig(DataclassDictMixin):
     """Configuration for Server instance"""
 
     maxDownloads: int = 0 # Maximum number of downloads (0 = unlimited)
@@ -333,52 +333,31 @@ class ServerConfig:
     receiptConfirm: Optional[str] = None # Receipt confirm message; '' means default message
 
 
-class ShareSession:
-    """All state for one file-sharing session inside a MultiShareServer.
+@dataclass
+class UploadSession(ShareSession):
+    pass
 
-    The server and tunnel are shared across sessions; each session owns its
-    reader, config, WebRTC manager, E2EE manager, and all download stores.
-    """
 
-    def __init__(self, uid, filePaths, createdAt, domain=None, reader=None,
-                 config=None, status=None, link=None):
-        self.uid = uid
-        self.filePaths = filePaths
-        self.createdAt = createdAt
-        self.status = status or ShareStatus.CREATING
-        self.link = link
-        self.error = None
-        self.shareData = None
-        self.domain = domain
-        self.reader = reader
-        self.config = config
-        
-        # Initialized by MultiShareServer.addSession()
-        self.webRTC = None
-        self.e2eeManager = None
-        self.checksumStore = None
-        self.downloadSessionStore = None
-        self.authRateLimiter = None
-        self.downloadProgressStore = None
-        self.logicalDownloadRequestStore = None
-        self.httpDownloadCompletionStore = None
-        self.eventHub = None
-        self.downloadCount = 0
-        self.startTime = time.time()
-        self.lastError = None
-        self._debugUserAgentSessions = set()
+@dataclass
+class ServerSession(ShareSession):
+    domain: Optional[str] = None
+    reader: Optional[SourceReader] = None
+    config: Optional[ServerConfig] = None
+    handlerClass: Optional[type[BaseHTTPRequestHandler]] = None
+    webRTCManagerClass: Optional[type[WebRTCManager] | type[DummyWebRTCManager]] = None
 
-    def asDict(self):
-        return {
-            'id': self.uid,
-            'filePaths': self.filePaths,
-            'status': self.status.name.lower(),
-            'link': self.link,
-            'createdAt': self.createdAt,
-            'downloads': self.downloadCount,
-            'error': self.error,
-            'workerData': self.shareData,
-        }
+    # Initialized by MultiShareServer.addSession()
+    webRTC: Optional[WebRTCManager | DummyWebRTCManager] = None
+    e2eeManager: Optional[E2EEManager] = None
+    checksumStore: Optional[TransferChecksumStore] = None
+    downloadSessionStore: Optional[DownloadSessionStore] = None
+    authRateLimiter: Optional[AuthRateLimiter] = None
+    downloadProgressStore: Optional[DownloadProgressStore] = None
+    logicalDownloadRequestStore: Optional[LogicalDownloadRequestStore] = None
+    httpDownloadCompletionStore: Optional[HTTPDownloadCompletionStore] = None
+    eventHub: Optional[EventHub] = None
+    lastError: Optional[dict[str, Optional[str]]] = None
+    _debugUserAgentSessions: set[str] = field(default_factory=set)
 
     def stop(self):
         if self.webRTC:
@@ -386,23 +365,25 @@ class ShareSession:
                 self.webRTC.closeWebRTC()
             except Exception as e:
                 logger.debug(f"Error closing WebRTC for {self.uid}: {e}")
-                
-        if self.status not in (ShareStatus.COMPLETED, ShareStatus.CRASHED):
-            self.status = ShareStatus.STOPPED
 
+        super().stop()
 
-class ShareManager:
+class ShareManager(ABC):
     """Abstract base class for managing multiple concurrent ShareSessions."""
 
+    @abstractmethod
     def addShare(self, filePaths, config=None):
         raise NotImplementedError
 
+    @abstractmethod
     def stopShare(self, uid):
         raise NotImplementedError
 
+    @abstractmethod
     def listShares(self):
         raise NotImplementedError
 
+    @abstractmethod
     def getShare(self, uid):
         raise NotImplementedError
 
@@ -410,6 +391,7 @@ class ShareManager:
         """Periodic status update hook called by the daemon monitor thread."""
         pass
 
+    @abstractmethod
     def shutdown(self):
         raise NotImplementedError
 

@@ -19,6 +19,7 @@
 
 import email as email_lib
 import hashlib
+import importlib
 import imaplib
 import json
 import os
@@ -36,6 +37,11 @@ import shutil
 from urllib.parse import urlsplit, urlunsplit
 
 import psutil
+
+import addons.API as apiModule
+import addons.Features as featuresModule
+from bases.Kernel import Singleton
+from bases.Settings import SettingsGetter
 
 
 # ---------------------------
@@ -64,6 +70,7 @@ class FastFileLinkTestBase(unittest.TestCase):
         self.fileSizeBytes = fileSizeBytes # Store the file size
         self.procLogPath = os.path.join(self.tempDir, "ffl_proc.log")
         self._procLogFile = None
+        self._managedTestServerProcesses = []
 
         # Test config management - always enabled
         self.testConfigVars = testConfigVars or {}
@@ -71,8 +78,16 @@ class FastFileLinkTestBase(unittest.TestCase):
         self._originalEnvVars = None
         self._downloadChecksumByPath = {}
 
+    @classmethod
+    def getBuiltinTunnels(cls):
+        response = requests.get("https://fastfilelink.com/api/tunnels", timeout=5)
+        response.raise_for_status()
+        return response.json()
+
     def setUp(self):
         """Set up the test environment"""
+        print(f"\n[Test] Running: {self.id()}")
+
         assert isinstance(self.tempDir, str), "tempDir must be a path string"
 
         # Always setup test config
@@ -96,6 +111,7 @@ class FastFileLinkTestBase(unittest.TestCase):
     def tearDown(self):
         """Clean up after the test"""
         self._terminateProcess()
+        self._stopManagedTestServers()
 
         # Clean up process log file
         if self._procLogFile:
@@ -135,10 +151,45 @@ class FastFileLinkTestBase(unittest.TestCase):
         captureOutputIn['output'] = outputText
         return outputText
 
+    def _registerManagedTestServer(self, testServerProcess):
+        if testServerProcess:
+            self._managedTestServerProcesses.append(testServerProcess)
+
+    def _unregisterManagedTestServer(self, testServerProcess):
+        if not testServerProcess:
+            return
+
+        try:
+            self._managedTestServerProcesses.remove(testServerProcess)
+        except ValueError:
+            pass
+
+    def _stopManagedTestServers(self):
+        while self._managedTestServerProcesses:
+            testServerProcess = self._managedTestServerProcesses.pop()
+            try:
+                self._stopTestServer(testServerProcess)
+            except Exception as e:
+                print(f"[Test] Warning: failed to stop managed test server: {e}")
+
     def _getConsoleSafeText(self, value):
         if isinstance(value, bytes):
             value = value.decode(errors='replace')
         return str(value).encode('unicode_escape').decode('ascii')
+
+    def reloadFeatureRuntime(self):
+        """Reload import-time API configuration after a test changes its environment."""
+        self._resetSingletonsByModulePrefix('addons.Features', 'addons.auth')
+        importlib.reload(apiModule)
+        importlib.reload(featuresModule)
+        self._resetSingletonsByModulePrefix('addons.Features', 'addons.auth')
+        SettingsGetter.getInstance()._featureManager = None
+
+    def _resetSingletonsByModulePrefix(self, *modulePrefixes):
+        for singletonClass in list(Singleton._instances):
+            moduleName = singletonClass.__module__
+            if any(moduleName == prefix or moduleName.startswith(prefix + '.') for prefix in modulePrefixes):
+                Singleton._instances.pop(singletonClass)
 
     @staticmethod
     def generateRandomFile(path, sizeBytes):
@@ -960,7 +1011,7 @@ class FastFileLinkTestBase(unittest.TestCase):
             return outputText
         return ""
 
-    def _startTestServer(self):
+    def _startTestServer(self, extraEnvVars=None, captureOutput=False):
         """Start the test server for upload testing"""
         try:
             testServerScript = "TestServer.py"
@@ -993,23 +1044,42 @@ class FastFileLinkTestBase(unittest.TestCase):
             # Prepare environment with UTF-8 encoding
             env = os.environ.copy()
             env['PYTHONIOENCODING'] = 'utf-8' # Force UTF-8 encoding for Python I/O
+            env['PYTHONUNBUFFERED'] = '1'
             if sys.platform.startswith('win'):
                 env['PYTHONUTF8'] = '1' # Enable UTF-8 mode on Windows (Python 3.7+)
+                
+            if extraEnvVars:
+                for key, value in extraEnvVars.items():
+                    env[key] = str(value)
 
             # Get the directory where TestServer.py is located
             testServerDir = os.path.dirname(testServerPath)
 
+            testServerLogFile = None
+            testServerLogPath = None
+            popenStdout = subprocess.PIPE if captureOutput else None
+            popenStderr = subprocess.PIPE if captureOutput else None
+
+            if not captureOutput:
+                testServerLogPath = os.path.join(self.tempDir, "test_server.log")
+                testServerLogFile = open(testServerLogPath, "w+", encoding="utf-8", buffering=1)
+                popenStdout = testServerLogFile
+                popenStderr = testServerLogFile
+
             # Start test server process with UTF-8 environment and correct working directory
             testServerProcess = subprocess.Popen(
                 [sys.executable, testServerScript, "--host", "localhost", "--port", str(LOCAL_TEST_SERVER_PORT)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=popenStdout,
+                stderr=popenStderr,
                 text=True,
+                bufsize=1,
                 encoding='utf-8',
                 errors='replace',
                 env=env, # Use UTF-8 environment
                 cwd=testServerDir # Set working directory to TestServer.py location
             )
+            testServerProcess._logFile = testServerLogFile
+            testServerProcess._logPath = testServerLogPath
 
             # Wait for server to start (check if port is available)
             startTime = time.time()
@@ -1018,7 +1088,15 @@ class FastFileLinkTestBase(unittest.TestCase):
             while time.time() - startTime < 15: # Increase timeout to 15 seconds
                 # Check if process has terminated
                 if testServerProcess.poll() is not None:
-                    stdout, stderr = testServerProcess.communicate()
+                    if captureOutput:
+                        stdout, stderr = testServerProcess.communicate()
+                    else:
+                        stdout = stderr = ""
+                        if testServerLogFile:
+                            testServerLogFile.flush()
+                        if testServerLogPath and os.path.exists(testServerLogPath):
+                            with open(testServerLogPath, "r", encoding="utf-8", errors="replace") as f:
+                                stdout = f.read()
                     print(f"[Test] Test server process terminated early")
                     print(f"[Test] Exit code: {testServerProcess.returncode}")
                     if stdout:
@@ -1044,9 +1122,25 @@ class FastFileLinkTestBase(unittest.TestCase):
                 # Get server output for debugging
                 if testServerProcess.poll() is None:
                     testServerProcess.terminate()
-                    stdout, stderr = testServerProcess.communicate(timeout=5)
+                    if captureOutput:
+                        stdout, stderr = testServerProcess.communicate(timeout=5)
+                    else:
+                        stdout = stderr = ""
+                        if testServerLogFile:
+                            testServerLogFile.flush()
+                        if testServerLogPath and os.path.exists(testServerLogPath):
+                            with open(testServerLogPath, "r", encoding="utf-8", errors="replace") as f:
+                                stdout = f.read()
                 else:
-                    stdout, stderr = testServerProcess.communicate()
+                    if captureOutput:
+                        stdout, stderr = testServerProcess.communicate()
+                    else:
+                        stdout = stderr = ""
+                        if testServerLogFile:
+                            testServerLogFile.flush()
+                        if testServerLogPath and os.path.exists(testServerLogPath):
+                            with open(testServerLogPath, "r", encoding="utf-8", errors="replace") as f:
+                                stdout = f.read()
 
                 print(f"[Test] Test server failed to start within 15 seconds")
                 if stdout:
@@ -1061,6 +1155,27 @@ class FastFileLinkTestBase(unittest.TestCase):
         except Exception as e:
             print(f"[Test] Failed to start test server: {e}")
             raise
+
+    def _canReuseRunningTestServer(self):
+        try:
+            from bases.Kernel import PUBLIC_VERSION
+
+            response = requests.get(f'{LOCAL_TEST_SERVER_URL}/version', params={'format': 'json'}, timeout=3)
+            response.raise_for_status()
+            data = response.json()
+            version = data.get('version')
+            if version == PUBLIC_VERSION:
+                print(f"[Test] Reusing existing test server at {LOCAL_TEST_SERVER_URL} (version {version})")
+                return True
+
+            print(
+                f"[Test] Existing server at {LOCAL_TEST_SERVER_URL} has version {version}, "
+                f"expected {PUBLIC_VERSION}; starting managed test server instead"
+            )
+            return False
+        except Exception as e:
+            print(f"[Test] Existing server at {LOCAL_TEST_SERVER_URL} is not reusable: {e}")
+            return False
 
     def _stopTestServer(self, testServerProcess):
         """Stop the test server"""
@@ -1092,6 +1207,9 @@ class FastFileLinkTestBase(unittest.TestCase):
                     testServerProcess.stdout.close()
                 if testServerProcess.stderr:
                     testServerProcess.stderr.close()
+                logFile = getattr(testServerProcess, '_logFile', None)
+                if logFile:
+                    logFile.close()
 
     def _normalizeCommandSpec(self, commandSpec):
         """Normalize command spec into argv list."""
@@ -1142,7 +1260,9 @@ class FastFileLinkTestBase(unittest.TestCase):
         stdinFileName=None,
         preferredTunnel='default',
         workingDirectory=None,
-        serverTimeout=None
+        serverTimeout=None,
+        inputData=None,
+        autoConfirmUpload=True,
     ):
         """
         Start the FastFileLink process and wait for the share link to be ready
@@ -1166,15 +1286,19 @@ class FastFileLinkTestBase(unittest.TestCase):
             workingDirectory (str): Optional working directory for the launched sharing process
             serverTimeout (int): Optional `share --timeout` guard. When omitted, tests
                 get a finite timeout so abandoned share processes cannot live forever.
+            inputData (str): Optional interactive input passed to the share process.
+            autoConfirmUpload (bool): Add `--yes` automatically for upload-mode shares.
 
         Returns:
-            tuple: (share_link, test_server_process) if useTestServer=True, otherwise just share_link
+            str | None: share link when waiting for completion; otherwise None
         """
         # Start test server if requested
         testServerProcess = None
         if useTestServer:
             self._provisionLocalTestServerCredential()
-            testServerProcess = self._startTestServer()
+            if not self._canReuseRunningTestServer():
+                testServerProcess = self._startTestServer()
+                self._registerManagedTestServer(testServerProcess)
 
         try:
             if self._procLogFile:
@@ -1241,7 +1365,9 @@ class FastFileLinkTestBase(unittest.TestCase):
 
             # Add mode-specific parameters
             if not p2p:
-                coreArgs.extend(["--upload", "3 hours", "--yes"])
+                coreArgs.extend(["--upload", "3 hours"])
+                if autoConfirmUpload:
+                    coreArgs.append("--yes")
 
             if extraArgs and '--preferred-tunnel' in extraArgs and preferredTunnel is not None:
                 raise AssertionError("Use preferredTunnel=... instead of passing --preferred-tunnel in extraArgs")
@@ -1295,7 +1421,8 @@ class FastFileLinkTestBase(unittest.TestCase):
             # wait=False: this is a long-running server process, polled below for the JSON
             # marker file rather than waited on for completion.
             creationFlags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
-            stdinHandle = open(stdinInputPath, 'rb') if stdinInputPath else None
+            stdinFileHandle = open(stdinInputPath, 'rb') if stdinInputPath else None
+            stdinHandle = subprocess.PIPE if inputData is not None else stdinFileHandle
             try:
                 self.coreProcess = self._runCoreCommand(
                     coreArgs,
@@ -1304,14 +1431,15 @@ class FastFileLinkTestBase(unittest.TestCase):
                     disableGuiAddon=True,
                     cwd=workingDirectory,
                     stdin=stdinHandle,
+                    inputData=inputData,
                     outputTarget=None if showOutput else self._procLogFile,
                     passthrough=showOutput,
                     wait=False,
                     creationFlags=creationFlags,
                 )
             finally:
-                if stdinHandle:
-                    stdinHandle.close()
+                if stdinFileHandle:
+                    stdinFileHandle.close()
 
             # Determine appropriate timeout
             if timeout is None:
@@ -1332,6 +1460,11 @@ class FastFileLinkTestBase(unittest.TestCase):
 
             print(f"[Test] Process PID: {self.coreProcess.pid}")
 
+            if inputData is not None and self.coreProcess.stdin:
+                self.coreProcess.stdin.write(inputData)
+                self.coreProcess.stdin.flush()
+                self.coreProcess.stdin.close()
+
             # Setup output capture context immediately after process start
             # This ensures captureOutputIn is populated even if JSON wait fails
             if captureOutputIn is not None:
@@ -1342,7 +1475,7 @@ class FastFileLinkTestBase(unittest.TestCase):
             # Early return if not waiting for completion
             if not waitForCompletion:
                 print("[Test] Process started, not waiting for completion")
-                return testServerProcess if useTestServer else None
+                return None
 
             print(f"[Test] Waiting up to {timeout} seconds for completion...")
 
@@ -1515,15 +1648,11 @@ class FastFileLinkTestBase(unittest.TestCase):
                         print(f"[Test] Failed to read initial process log: {e}")
                 captureOutputIn['output'] = outputText
 
-            # Return test server process along with share link if using test server
-            if useTestServer:
-                return shareLink, testServerProcess
-            else:
-                return shareLink
+            return shareLink
 
         except Exception as e:
-            # Only stop test server on error, not on success
             if testServerProcess:
+                self._unregisterManagedTestServer(testServerProcess)
                 self._stopTestServer(testServerProcess)
             raise
 

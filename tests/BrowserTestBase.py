@@ -168,13 +168,16 @@ class BrowserTestBase(FastFileLinkTestBase):
 
         try:
             root = psutil.Process(servicePid)
+            processTree = root.children(recursive=True)
         except psutil.NoSuchProcess:
+            # Process already exited on its own (e.g. chromedriver shutting down
+            # between our liveness check and enumerating its children) -- nothing
+            # left to kill.
             return
         except Exception as e:
             print(f"[Test] Warning: Failed to inspect driver service {servicePid}: {e}")
             return
 
-        processTree = root.children(recursive=True)
         processTree.append(root)
 
         for proc in reversed(processTree):

@@ -23,7 +23,17 @@ import re
 import tempfile
 import unittest
 
-from bases.HTTP import ByteRange, HTTPRequestHandlerHelper, PathResolverMixin, RangeResolver, ResolvedRange
+from dataclasses import dataclass, field
+from functools import partial
+
+from bases.HTTP import (
+    ByteRange,
+    FormDataMixin,
+    HTTPRequestHandlerHelper,
+    PathResolverMixin,
+    RangeResolver,
+    ResolvedRange,
+)
 
 
 class RangeResolverTest(unittest.TestCase):
@@ -106,6 +116,151 @@ class RangeResolverTest(unittest.TestCase):
 
         resolvedHuge = RangeResolver.resolve(ByteRange(start=999999999, end=None), None)
         self.assertTrue(resolvedHuge.satisfiable)
+
+
+class _TestValueResolver(FormDataMixin.ValueResolver):
+    pass
+
+
+@dataclass
+class _TestFormState(FormDataMixin):
+    name: str = field(default='', metadata={'formStrip': True})
+    nickname: str | None = field(default=None, metadata={'formStrip': True, 'formEmptyAsNone': True})
+    enabled: bool = False
+    count: int = field(default=0, metadata={
+        'formParser': partial(_TestValueResolver.parseOptionalCount, fieldName='Count'),
+    })
+    aliases: str | None = field(default=None, metadata={
+        'formKeys': ('aliases', 'alias'),
+        'formParser': _TestValueResolver.buildSerializedDelimitedValue,
+        'formEmptyAsNone': True,
+    })
+    upperName: str | None = field(default=None, metadata={
+        'formValueFactory': lambda formData: str(formData['name']).strip().upper(),
+    })
+
+
+class ValueResolverTest(unittest.TestCase):
+
+    def testParseOptionalCountAcceptsBlankAsZero(self):
+        self.assertEqual(_TestValueResolver.parseOptionalCount('', 'Count'), 0)
+
+    def testParseOptionalCountRejectsInvalidText(self):
+        with self.assertRaisesRegex(ValueError, 'Count'):
+            _TestValueResolver.parseOptionalCount('abc', 'Count')
+
+    def testParseOptionalCountRejectsNegativeValue(self):
+        with self.assertRaisesRegex(ValueError, 'Count'):
+            _TestValueResolver.parseOptionalCount('-1', 'Count')
+
+    def testParseDelimitedValuesNormalizesDeduplicatesAndSkipsBlank(self):
+        values = _TestValueResolver.parseDelimitedValues(
+            ' Alpha@example.com,\nalpha@example.com,,Beta@example.com ',
+            normalizer=str.lower,
+        )
+
+        self.assertEqual(values, ('alpha@example.com', 'beta@example.com'))
+
+    def testParseDelimitedValuesAcceptsSequenceInput(self):
+        values = _TestValueResolver.parseDelimitedValues([' one ', 'two', 'one'])
+        self.assertEqual(values, ('one', 'two'))
+
+    def testBuildSerializedDelimitedValueUsesCommaJoinByDefault(self):
+        value = _TestValueResolver.buildSerializedDelimitedValue('one, two, one')
+        self.assertEqual(value, 'one,two')
+
+    def testBuildSerializedDelimitedValueSupportsCustomSerializer(self):
+        value = _TestValueResolver.buildSerializedDelimitedValue(
+            'One, two',
+            normalizer=str.lower,
+            serializer='|'.join,
+        )
+        self.assertEqual(value, 'one|two')
+
+    def testBuildSerializedDelimitedValueReturnsConfiguredEmptyValue(self):
+        value = _TestValueResolver.buildSerializedDelimitedValue('', emptyValue='EMPTY')
+        self.assertEqual(value, 'EMPTY')
+
+    def testIsLikelyValidEmailAcceptsReasonableAddress(self):
+        self.assertTrue(_TestValueResolver.isLikelyValidEmail('user.name+tag@example.com'))
+
+    def testIsLikelyValidEmailRejectsMalformedAddress(self):
+        self.assertFalse(_TestValueResolver.isLikelyValidEmail('bad..email@example.com'))
+        self.assertFalse(_TestValueResolver.isLikelyValidEmail('missing-domain@'))
+
+    def testValidateEmailValuesAllowsEmptyWithoutMessage(self):
+        _TestValueResolver.validateEmailValues(())
+
+    def testValidateEmailValuesRaisesEmptyMessage(self):
+        with self.assertRaisesRegex(ValueError, 'Email is required'):
+            _TestValueResolver.validateEmailValues((), emptyMessage='Email is required')
+
+    def testValidateEmailValuesRaisesInvalidMessage(self):
+        with self.assertRaisesRegex(ValueError, 'Bad email'):
+            _TestValueResolver.validateEmailValues(('bad-email',), invalidMessage='Bad email')
+
+
+class FormDataMixinTest(unittest.TestCase):
+
+    def testBuildFormDataUpdateParsesConfiguredFields(self):
+        updates = _TestFormState.buildFormDataUpdate({
+            'name': '  Alice  ',
+            'nickname': '   ',
+            'enabled': '1',
+            'count': '3',
+            'aliases': 'one, two, one',
+        })
+
+        self.assertEqual(updates['name'], 'Alice')
+        self.assertIsNone(updates['nickname'])
+        self.assertTrue(updates['enabled'])
+        self.assertEqual(updates['count'], 3)
+        self.assertEqual(updates['aliases'], 'one,two')
+        self.assertEqual(updates['upperName'], 'ALICE')
+
+    def testBuildFormDataUpdateUsesFallbackFormKey(self):
+        updates = _TestFormState.buildFormDataUpdate({
+            'name': 'Bob',
+            'alias': 'solo',
+        })
+
+        self.assertEqual(updates['aliases'], 'solo')
+
+    def testBuildFormDataUpdateSkipsMissingFields(self):
+        updates = _TestFormState.buildFormDataUpdate({'name': 'Carol'})
+
+        self.assertEqual(updates, {
+            'name': 'Carol',
+            'upperName': 'CAROL',
+        })
+
+    def testApplyFormUpdatesStateInPlace(self):
+        state = _TestFormState()
+        state.applyForm({
+            'name': '  Delta  ',
+            'enabled': '1',
+            'count': '5',
+            'aliases': 'x,y',
+        })
+
+        self.assertEqual(state.name, 'Delta')
+        self.assertTrue(state.enabled)
+        self.assertEqual(state.count, 5)
+        self.assertEqual(state.aliases, 'x,y')
+        self.assertEqual(state.upperName, 'DELTA')
+
+    def testBuildFormDataUpdateCanRestrictParsedFields(self):
+        updates = _TestFormState.buildFormDataUpdate({
+            'name': 'After',
+            'count': '9',
+        }, fieldNames=('count',))
+
+        self.assertEqual(updates, {'count': 9})
+
+    def testGetFieldRefsExposesDataclassFields(self):
+        refs = FormDataMixin.getFieldRefs(_TestFormState)
+        self.assertEqual(refs.name.name, 'name')
+        self.assertEqual(refs.aliases.name, 'aliases')
 
 
 class _RouterHost(PathResolverMixin):

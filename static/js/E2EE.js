@@ -346,6 +346,17 @@ class E2EEManager {
 
         // Allow disabling /e2ee/manifest fallback (useful when using embedded-only mode)
         this.disableManifestFallback = options.disableManifestFallback || false;
+
+        // Share UID this manager belongs to. A daemon can serve several shares
+        // behind one origin, each with its own ServerSession -- root-relative
+        // API paths like /e2ee/manifest can't be routed to the right session
+        // there, so every E2EE endpoint must be prefixed with the share's UID.
+        this.uid = options.uid || '';
+    }
+
+    // Prefixes an API path with this manager's share UID, e.g. "/abc123/e2ee/manifest".
+    _prefixPath(path) {
+        return (this.uid ? '/' + this.uid : '') + path;
     }
 
     // Server's advertised E2EE protocol version (1 = legacy / not advertised).
@@ -400,7 +411,7 @@ class E2EEManager {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-            const response = await fetch('/e2ee/manifest', { signal: controller.signal });
+            const response = await fetch(this._prefixPath('/e2ee/manifest'), { signal: controller.signal });
             clearTimeout(timeoutId);
 
             if (response.status === 404) {
@@ -448,7 +459,7 @@ class E2EEManager {
             this.log('E2EE', '✓ RSA key pair (Ki) generated');
 
             // POST /e2e/init with public key to get wrapped content key
-            const initResp = await fetch('/e2ee/init', {
+            const initResp = await fetch(this._prefixPath('/e2ee/init'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ publicKey: publicKeyPEM })
@@ -559,7 +570,10 @@ class E2EEManager {
             fileSize,
             this.manifest.chunkSize,
             embeddedTags,
-            this.log
+            this.log,
+            'global',
+            0,
+            this.uid
         );
 
         // Stamp the negotiated protocol version into the context so both the
@@ -641,7 +655,8 @@ class HTTPDecryptor {
         embeddedTags = null,
         log = null,
         streamId = 'global',
-        startChunkIndex = 0
+        startChunkIndex = 0,
+        uid = ''
     ) {
         this.contentKey = contentKey;
         this.nonceBase = nonceBase;
@@ -650,6 +665,9 @@ class HTTPDecryptor {
         this.chunkSize = chunkSize;
         this.streamId = streamId;
         this.log = log || console.log;
+        // Same reasoning as E2EEManager._prefixPath: daemon mode serves multiple
+        // shares behind one origin, so tag fetches must be routed by UID.
+        this.uid = uid;
 
         // Service Worker decryption state
         this.chunkBuffer = new Uint8Array(0);
@@ -703,9 +721,10 @@ class HTTPDecryptor {
      * @param {number} e2eeContext.chunkSize - Encryption chunk size (e.g., 262144)
      * @param {Array} [e2eeContext.tags] - Optional array of embedded tags [{chunkIndex, tag}]
      * @param {Function} [log] - Optional logging function
+     * @param {string} [uid] - Share UID, needed to route /e2ee/tags to the right session
      * @returns {HTTPDecryptor} - Configured HTTPDecryptor instance
      */
-    static fromContext(e2eeContext, log = null) {
+    static fromContext(e2eeContext, log = null, uid = '') {
         // Helper to decode base64 to Uint8Array
         const base64ToBytes = (base64) => {
             const binString = atob(base64);
@@ -739,7 +758,10 @@ class HTTPDecryptor {
             e2eeContext.fileSize,
             e2eeContext.chunkSize,
             embeddedTags,
-            log
+            log,
+            'global',
+            0,
+            uid
         );
     }
 
@@ -846,7 +868,7 @@ class HTTPDecryptor {
             // Fetch batch of tags directly from server
             // Use streamId for per-file tag storage 
             const streamIdParam = this.streamId !== 'global' ? `&streamId=${encodeURIComponent(this.streamId)}` : '';
-            const tagsURL = `/e2ee/tags?start=${chunkIndex}&count=${this.tagBatchSize}${streamIdParam}`;
+            const tagsURL = `${this.uid ? '/' + this.uid : ''}/e2ee/tags?start=${chunkIndex}&count=${this.tagBatchSize}${streamIdParam}`;
 
             try {
                 this.log('E2EE', `Fetching tags from ${tagsURL}`);

@@ -71,7 +71,7 @@ class E2EEUploadTestBase:
         return None
 
     def _uploadWithE2EE(self, extraArgs=None, useTestServer=False, captureOutputIn=None):
-        """Upload file with E2EE and return share link, encryption key, and optional test server process
+        """Upload file with E2EE and return share link plus encryption key
 
         Args:
             extraArgs: Additional arguments to pass to upload
@@ -79,22 +79,15 @@ class E2EEUploadTestBase:
             captureOutputIn: Dict to capture output
 
         Returns:
-            tuple: (shareLink, encryptionKey, testServerProcess or None)
+            tuple: (shareLink, encryptionKey)
         """
         uploadArgs = ['--e2ee', '--upload', '1 day']
         if extraArgs:
             uploadArgs.extend(extraArgs)
 
-        result = self._startFastFileLink(
+        shareLink = self._startFastFileLink(
             p2p=False, extraArgs=uploadArgs, captureOutputIn=captureOutputIn, useTestServer=useTestServer
         )
-
-        # Extract share link and test server process from tuple
-        testServerProcess = None
-        if isinstance(result, tuple):
-            shareLink, testServerProcess = result
-        else:
-            shareLink = result
 
         # Extract encryption key from upload output
         uploadLog = self._updateCapturedOutput(captureOutputIn)
@@ -103,7 +96,7 @@ class E2EEUploadTestBase:
             print(f"[Test] Upload log:\n{uploadLog[-2000:]}")
             raise AssertionError("Encryption key not found in upload logs")
 
-        return shareLink, encryptionKey, testServerProcess
+        return shareLink, encryptionKey
 
 
 class E2EEDownloadTest(ResumeTestBase):
@@ -877,12 +870,11 @@ class E2EEUploadResumeBrowserTest(E2EEUploadTestBase, ResumeBrowserTestBase):
 
         pauseOutput = {}
         resumeOutput = {}
-        testServerProcess = None
 
         try:
             loggingArgs = ['--log-level', LOG_CONFIG_UPLOAD]
 
-            testServerProcess, pauseLog = self._pauseUpload(
+            _, pauseLog = self._pauseUpload(
                 pausePercentage=40, outputCapture=pauseOutput, extraArgs=['--e2ee', *loggingArgs], useTestServer=True
             )
             print(f"[Test] Pause log: {self._getConsoleSafeText(pauseLog.strip())}")
@@ -913,8 +905,6 @@ class E2EEUploadResumeBrowserTest(E2EEUploadTestBase, ResumeBrowserTestBase):
 
         finally:
             self._terminateProcess()
-            if testServerProcess:
-                self._stopTestServer(testServerProcess)
 
 
 class E2EEUploadDownloadTest(E2EEUploadTestBase, ResumeTestBase):
@@ -946,11 +936,10 @@ class E2EEUploadDownloadTest(E2EEUploadTestBase, ResumeTestBase):
         print("\n[TEST] E2E upload to test server and download with FFL.py")
 
         uploadOutput = {}
-        testServerProcess = None
 
         try:
             # Upload file with E2EE to test server using common helper
-            shareLink, encryptionKey, testServerProcess = self._uploadWithE2EE(
+            shareLink, encryptionKey = self._uploadWithE2EE(
                 useTestServer=True, captureOutputIn=uploadOutput
             )
 
@@ -985,8 +974,6 @@ class E2EEUploadDownloadTest(E2EEUploadTestBase, ResumeTestBase):
 
         finally:
             self._terminateProcess()
-            if testServerProcess:
-                self._stopTestServer(testServerProcess)
 
 
 if __name__ == '__main__':

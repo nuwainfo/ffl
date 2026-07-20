@@ -840,7 +840,7 @@ async function handleDownloadWithTransform(event, url, downloadId, resumeConfig,
             }
 
             // Use factory method to create HTTPDecryptor from context
-            httpDecryptor = HTTPDecryptor.fromContext(e2eeContext, log);
+            httpDecryptor = HTTPDecryptor.fromContext(e2eeContext, log, uid);
 
             // Set resume position if needed
             if (resumeConfig && typeof resumeConfig.rangeStart === 'number') {

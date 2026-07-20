@@ -47,7 +47,7 @@ class ResumeTestBase(FastFileLinkTestBase):
         args = list(extraArgs or [])
         args.extend(['--pause', str(pausePercentage)])
 
-        serverHandle = self._startFastFileLink(
+        self._startFastFileLink(
             p2p=False,
             extraArgs=args,
             captureOutputIn=capture,
@@ -59,13 +59,6 @@ class ResumeTestBase(FastFileLinkTestBase):
         capture.setdefault('_process', self.coreProcess)
         capture.setdefault('_logPath', getattr(self, 'procLogPath', None))
         capture.setdefault('_logFile', getattr(self, '_procLogFile', None))
-
-        testServerProcess = None
-        if useTestServer:
-            if isinstance(serverHandle, tuple):
-                _, testServerProcess = serverHandle
-            else:
-                testServerProcess = serverHandle
 
         fileSizeMB = self.fileSizeBytes / (1024 * 1024)
         pauseTimeout = max(60, int(fileSizeMB * 3))
@@ -82,7 +75,7 @@ class ResumeTestBase(FastFileLinkTestBase):
                 self._procLogFile.close()
             finally:
                 self._procLogFile = None
-        return testServerProcess, pauseLog
+        return None, pauseLog
 
     def _resumeUpload(
         self,
@@ -98,7 +91,7 @@ class ResumeTestBase(FastFileLinkTestBase):
         if '--resume' not in args:
             args.append('--resume')
 
-        resumeResult = self._startFastFileLink(
+        resumeShareLink = self._startFastFileLink(
             p2p=False,
             extraArgs=args,
             captureOutputIn=capture,
@@ -106,11 +99,6 @@ class ResumeTestBase(FastFileLinkTestBase):
             useTestServer=useTestServer,
             timeout=timeout,
         )
-
-        if isinstance(resumeResult, tuple):
-            resumeShareLink = resumeResult[0]
-        else:
-            resumeShareLink = resumeResult
 
         resumeLog = self._updateCapturedOutput(capture)
         resumeIndicators = ["Resuming upload:", "--resume", "http://", "https://"]

@@ -23,8 +23,6 @@ import os
 import argparse
 import signal
 import atexit
-import time
-import threading
 
 if 'Cosmopolitan' in platform.version():
     if sys.prefix not in sys.path:
@@ -40,24 +38,22 @@ import bases.Stub # isort:skip
 
 import requests
 import certifi
-import segno
 
 from functools import partial
-from bases.crypto import CryptoInterface 
 
-from bases.Kernel import FFLEvent 
-from bases.Settings import DEFAULT_STATIC_ROOT, ExecutionMode, SettingsGetter 
-from bases.Auth import PUBKEY_PRIVATE_EXT, PUBKEY_PUBLIC_EXT, RecipientAuth 
-from bases.Download import processDownload
+from bases.Kernel import FFLEvent
+from bases.Settings import DEFAULT_STATIC_ROOT, ExecutionMode, SettingsGetter
 from bases.FileSystems import ExcludeFilter
 from bases.Readers import SourceReader
 from bases.Tunnel import TunnelUnavailableError
+from bases.Runtime import SingleShareRuntime, removeSplash
 from bases.Share import ShareExecutionContext, ShareReporter, createShareRequest, processSharing
-from bases.Daemon import DaemonClient, DaemonManager
-from bases.CLI import (  
+from bases.Download import processDownload
+from bases.Daemon import DaemonClient, ProcessDaemonManager
+from bases.CLI import (
     ShareCLIArgumentAdapter, configureCLIParser, loadEnvFile, preprocessArguments, processArgumentsAndCommands,
     processGlobalArguments
-) 
+)
 from bases.Utils import flushPrint, getLogger, sendException, validateCompatibleWithServer
 from bases.I18n import _ # isort:skip
 
@@ -165,6 +161,7 @@ setupGracefulShutdown()
 # CLI mode implementation
 def runCLIMain():
     """Run the program in CLI mode using two-phase parsing"""
+    removeSplash()
     parser, globalsParent, commandNames, shareSubparser = configureCLIParser()
 
     argv = sys.argv[1:]
@@ -211,7 +208,7 @@ def runCLIMain():
         unrecognizedFlags = [a for a in unknownArgs if a.startswith('-')]
         if unrecognizedFlags:
             parser.error(f"unrecognized arguments: {' '.join(unrecognizedFlags)}")
-            
+
         if extraFiles and args.command == 'share':
             existingFiles = args.file if isinstance(args.file, list) else ([args.file] if args.file else [])
             args.file = existingFiles + extraFiles
@@ -242,7 +239,7 @@ def runCLIMain():
 
     if not validateCompatibleWithServer():
         return 1
-    
+
     if args.command == 'share':
         shareRequest = createShareRequest(args)
         shareReporter = ShareReporter(
@@ -251,6 +248,7 @@ def runCLIMain():
         )
         shareContext = ShareExecutionContext(
             reporter=shareReporter,
+            runtime=SingleShareRuntime(),
             proxyConfig=proxyConfig,
         )
 
@@ -273,7 +271,7 @@ def runCLIMain():
                 args.uploadConfirmed = True
 
             shareConfig = ShareCLIArgumentAdapter.createDaemonShareConfig(args, shareSubparser)
-            return DaemonManager.handleBackgroundShare(args, shareConfig, proxyConfig=proxyConfig)
+            return ProcessDaemonManager.handleBackgroundShare(args, shareConfig, proxyConfig=proxyConfig)
         else:
             return processSharing(shareRequest, shareContext)
 

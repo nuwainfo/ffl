@@ -24,17 +24,14 @@ import tempfile
 import threading
 import unittest
 
-import requests
-
 from bases.Tunnel import fetchTunnelToken # isort:skip
+from tests.CoreTestBase import FastFileLinkTestBase
 
 
 class TunnelsIntegrationTest(unittest.TestCase):
 
     def testAllTunnelServers(self):
-        resp = requests.get("https://fastfilelink.com/api/tunnels", timeout=5)
-        resp.raise_for_status()
-        servers = resp.json()
+        servers = FastFileLinkTestBase.getBuiltinTunnels()
 
         print(f"\n[Test] Total servers to test: {len(servers)}\n")
 

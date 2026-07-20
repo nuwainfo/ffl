@@ -393,42 +393,37 @@ class FolderTransferTest(FastFileLinkTestBase):
             print(f"[Test] Deflate mode: size is unknown (set to 0)")
 
             # Start FastFileLink with folder and deflate compression
-            shareLink, testServerProcess = self._startFastFileLink(
+            shareLink = self._startFastFileLink(
                 p2p=True, extraEnvVars=extraEnvVars, useTestServer=True
             )
 
-            try:
-                # Download the ZIP file - use longer timeout for deflate compression
-                downloadedZipPath = self._getDownloadedFilePath("test_folder.zip")
+            # Download the ZIP file - use longer timeout for deflate compression
+            downloadedZipPath = self._getDownloadedFilePath("test_folder.zip")
 
-                # Download with streaming and longer timeout for deflate
-                print("[Test] Attempting to download deflate-compressed ZIP (may take longer)...")
-                import requests
-                response = requests.get(shareLink, stream=True, timeout=120)
-                if response.status_code == 200:
-                    with open(downloadedZipPath, 'wb') as f:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            if chunk:
-                                f.write(chunk)
-                    print(f"[Test] File downloaded successfully to {downloadedZipPath}")
-                else:
-                    raise AssertionError(f"Download failed with status code: {response.status_code}")
+            # Download with streaming and longer timeout for deflate
+            print("[Test] Attempting to download deflate-compressed ZIP (may take longer)...")
+            import requests
+            response = requests.get(shareLink, stream=True, timeout=120)
+            if response.status_code == 200:
+                with open(downloadedZipPath, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                print(f"[Test] File downloaded successfully to {downloadedZipPath}")
+            else:
+                raise AssertionError(f"Download failed with status code: {response.status_code}")
 
-                # Verify the downloaded ZIP
-                self._verifyDownloadedZipFile(downloadedZipPath)
+            # Verify the downloaded ZIP
+            self._verifyDownloadedZipFile(downloadedZipPath)
 
-                # Verify the ZIP actually uses deflate compression
-                with zipfile.ZipFile(downloadedZipPath, 'r') as zipf:
-                    for info in zipf.infolist():
-                        if not info.is_dir():
-                            if info.compress_type == zipfile.ZIP_STORED:
-                                print(f"[Test] Warning: {info.filename} uses STORE compression (expected DEFLATE)")
-                            elif info.compress_type == zipfile.ZIP_DEFLATED:
-                                print(f"[Test] {info.filename} uses DEFLATE compression ✓")
-            finally:
-                # Stop test server
-                self._stopTestServer(testServerProcess)
-
+            # Verify the ZIP actually uses deflate compression
+            with zipfile.ZipFile(downloadedZipPath, 'r') as zipf:
+                for info in zipf.infolist():
+                    if not info.is_dir():
+                        if info.compress_type == zipfile.ZIP_STORED:
+                            print(f"[Test] Warning: {info.filename} uses STORE compression (expected DEFLATE)")
+                        elif info.compress_type == zipfile.ZIP_DEFLATED:
+                            print(f"[Test] {info.filename} uses DEFLATE compression ✓")
         finally:
             self._terminateProcess()
 
@@ -874,7 +869,10 @@ class FolderChangeDetectionTest(unittest.TestCase):
         def mockOpenWithIOError(path, mode='r', *args, **kwargs):
             nonlocal openCallCount
             # Now fail on file data streaming (CRCs are already cached)
-            if 'rb' in mode and str(path) == self.file1:
+            # Compare via the access path (LocalFileSystem.open() routes through
+            # the platform path-access adapter, which on Windows prefixes paths
+            # with \\?\ before calling the real open()).
+            if 'rb' in mode and str(path) == LOCAL_PATH_ACCESS.toAccessPath(self.file1):
                 openCallCount += 1
                 # Fail immediately since CRC is already cached
                 raise OSError("Permission denied during streaming (simulated)")
@@ -903,7 +901,7 @@ class FolderChangeDetectionTest(unittest.TestCase):
 
         def mockOpenWithIOError(path, mode='r', *args, **kwargs):
             # Fail only on first open for file2 (CRC phase, before streaming)
-            if 'rb' in mode and str(path) == self.file2:
+            if 'rb' in mode and str(path) == LOCAL_PATH_ACCESS.toAccessPath(self.file2):
                 openPhase['file2_opens'] += 1
                 if openPhase['file2_opens'] == 1:
                     # First open is for CRC computation
@@ -936,7 +934,7 @@ class FolderChangeDetectionTest(unittest.TestCase):
 
         def mockOpenWithIOError(path, mode='r', *args, **kwargs):
             nonlocal openCallCount
-            if 'rb' in mode and str(path) == self.file1:
+            if 'rb' in mode and str(path) == LOCAL_PATH_ACCESS.toAccessPath(self.file1):
                 openCallCount += 1
                 # Fail on second open (first is for CRC, second is for streaming)
                 if openCallCount >= 2:

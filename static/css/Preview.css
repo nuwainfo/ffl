@@ -253,6 +253,18 @@
     }
 }
 
+/* Near-fullscreen variant: used when the page was loaded with ?preview=true (the user
+   explicitly asked to see the full preview, e.g. via the "Preview only" option). Keeps
+   the floating glass card look (margin, rounded corners) but drops the 1400x900 cap so
+   it actually grows close to the viewport size, including on large monitors. */
+.zip-preview-overlay.zip-preview-fullscreen .zip-preview-container {
+    width: 98vw;
+    max-width: none;
+    height: 96vh;
+    max-height: none;
+    border-radius: 16px;
+}
+
 /* ============================================================================
    Header with Download Progress
    ============================================================================ */
@@ -469,6 +481,51 @@
 }
 
 /* ============================================================================
+   View Toggle (quick access, next to the download button - WeTransfer style)
+   ============================================================================ */
+
+.zip-preview-view-btn-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px;
+    margin-right: 6px;
+    background: rgba(255, 255, 255, 0.25);
+    border-radius: 20px;
+    border: 1px solid rgba(200, 200, 200, 0.4);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    flex-shrink: 0;
+}
+
+.zip-preview-view-btn {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: #666;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.zip-preview-view-btn:hover {
+    background: rgba(91, 104, 235, 0.15);
+    color: #5b68eb;
+}
+
+.zip-preview-view-btn.active {
+    background: #5b68eb;
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(91, 104, 235, 0.4);
+}
+
+/* ============================================================================
    Content Area
    ============================================================================ */
 
@@ -681,6 +738,51 @@
     flex-shrink: 0;
 }
 
+.zip-preview-settings-view-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #333;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    width: 100%;
+    text-align: left;
+}
+
+.zip-preview-settings-view-btn i {
+    font-size: 12px;
+    flex-shrink: 0;
+    width: 14px;
+    text-align: center;
+    color: #aaa;
+}
+
+.zip-preview-settings-view-btn:hover {
+    background: rgba(91, 104, 235, 0.08);
+    color: #5b68eb;
+}
+
+.zip-preview-settings-view-btn:hover i {
+    color: #5b68eb;
+}
+
+.zip-preview-settings-view-btn.active {
+    background: rgba(91, 104, 235, 0.12);
+    border-color: rgba(91, 104, 235, 0.3);
+    color: #5b68eb;
+    font-weight: 600;
+}
+
+.zip-preview-settings-view-btn.active i {
+    color: #5b68eb;
+}
+
 /* ============================================================================
    Gallery Grid
    ============================================================================ */
@@ -690,6 +792,46 @@
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: 16px;
     width: 100%;
+}
+
+.zip-preview-grid.zip-grid-hidden {
+    display: none;
+}
+
+/* Masonry view: photos keep their natural aspect ratio and pack into columns
+   (WeTransfer-style variable-size gallery), instead of uniform fixed-ratio cards. */
+.zip-preview-grid.view-masonry {
+    display: block;
+    column-width: 260px;
+    column-gap: 16px;
+}
+
+.zip-preview-grid.view-masonry .zip-preview-card {
+    display: inline-block;
+    width: 100%;
+    vertical-align: top;
+    break-inside: avoid;
+    -webkit-column-break-inside: avoid;
+    margin: 0 0 16px;
+}
+
+/* Photos: let the thumbnail render at its natural aspect ratio */
+.zip-preview-grid.view-masonry .zip-preview-thumb-wrap.is-photo {
+    padding-top: 0;
+    height: auto;
+    min-height: 80px;
+}
+
+.zip-preview-grid.view-masonry .zip-preview-thumb-wrap.is-photo .zip-preview-thumb {
+    position: static;
+    display: block;
+    width: 100%;
+    height: auto;
+}
+
+/* Non-photo files keep the fixed-ratio box (generic icon/thumbnail) */
+.zip-preview-grid.view-masonry .zip-preview-thumb-wrap.is-file {
+    padding-top: 75%;
 }
 
 .zip-preview-card {
@@ -1213,6 +1355,15 @@
         gap: 12px;
     }
 
+    .zip-preview-grid.view-masonry {
+        column-width: 180px;
+        column-gap: 12px;
+    }
+
+    .zip-preview-grid.view-masonry .zip-preview-card {
+        margin-bottom: 12px;
+    }
+
     .zip-preview-title-main {
         font-size: 16px;
     }
@@ -1251,6 +1402,15 @@
     .zip-preview-grid {
         grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
         gap: 10px;
+    }
+
+    .zip-preview-grid.view-masonry {
+        column-width: 130px;
+        column-gap: 10px;
+    }
+
+    .zip-preview-grid.view-masonry .zip-preview-card {
+        margin-bottom: 10px;
     }
 
     .zip-preview-card {

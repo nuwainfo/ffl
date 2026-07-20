@@ -1,27 +1,47 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import contextlib
 import json
 import os
+import queue
 import subprocess
 import sys
+import threading
 import time
 import unittest
 
-import psutil
+from bases.Daemon import DaemonClient, InProcessDaemonManager, ProcessDaemonManager
+from bases.Kernel import FFLEvent
 
-from bases.Daemon import DaemonClient
-
+from ..BrowserTestBase import BrowserTestBase
 from ..CoreTestBase import FastFileLinkTestBase, LOCAL_TEST_SERVER_URL
 
+try:
+    # tests/addons is not part of the open-source CLI-only release, so this
+    # (and DaemonPreviewBrowserTest below, which needs it) must degrade to
+    # "not available" rather than fail to import the whole module there.
+    from ..addons.PreviewTest import PreviewBrowserE2EETest, SKIP_GUI_TEST
+except ImportError:
+    PreviewBrowserE2EETest = None
+    SKIP_GUI_TEST = True
 
-class DaemonTest(FastFileLinkTestBase):
-    """Functional tests for the background daemon and multi-session share management."""
+
+class DaemonLifecycleMixin:
+    """Daemon start/stop and shares-management helpers, shared by any test class
+    that needs a running background daemon (e.g. DaemonTest, DaemonBrowserTest,
+    DaemonPreviewBrowserTest).
+
+    Expects to be combined with FastFileLinkTestBase (uses self._testConfigDir,
+    self._runCoreCommand, self._procLogFile, self.procLogPath, self._stopTestServer)."""
+
+    daemonManagerClass = ProcessDaemonManager
 
     def setUp(self):
         super().setUp()
-        self._daemonPid = None
         self._daemonEnvOverrides = {}
+        self._daemonEnvironmentOriginalValues = None
+        self._daemonManager = self.daemonManagerClass()
         self._testServerProcesses = []
         self._startDaemon()
 
@@ -56,48 +76,47 @@ class DaemonTest(FastFileLinkTestBase):
         )
 
     def _startDaemon(self):
-        """Run `ffl daemon` and wait until daemon.json appears in FFL_STORAGE_LOCATION."""
-        daemonJsonPath = os.path.join(self._testConfigDir, 'daemon.json')
-
-        output, returnCode = self._runPatchedCoreCommand(['--cli', 'daemon'], timeout=30)
-        self.assertEqual(returnCode, 0, f"Daemon start failed:\n{output}")
-        print(f"[Test] daemon start output: {output.strip()}")
-
-        # Wait for daemon.json to appear
-        deadline = time.time() + 15
-        while time.time() < deadline:
-            if os.path.exists(daemonJsonPath):
-                with open(daemonJsonPath, 'r', encoding='utf-8') as f:
-                    state = json.load(f)
-                self._daemonPid = state.get('pid')
-                print(f"[Test] Daemon running: PID={self._daemonPid}, port={state.get('port')}")
-                return
-            time.sleep(0.3)
-
-        raise AssertionError("Daemon did not write daemon.json within 15 seconds")
+        """Start the selected daemon host and verify its shared REST API is ready."""
+        self._applyDaemonEnvironmentOverrides()
+        if self._daemonEnvOverrides and isinstance(self._daemonManager, InProcessDaemonManager):
+            self.reloadFeatureRuntime()
+            
+        self._daemonManager.start()
+        self._assertDaemonRunning()
 
     def _stopDaemon(self):
-        """Send `ffl daemon --stop` then kill forcefully if needed."""
-        if not self._daemonPid:
+        try:
+            if self._daemonManager.ownsDaemon:
+                self._daemonManager.stop()
+            else:
+                ProcessDaemonManager.stopRunningDaemon(force=True)
+        finally:
+            self._restoreDaemonEnvironmentOverrides()
+
+    def _applyDaemonEnvironmentOverrides(self):
+        environmentKeys = set(self._daemonEnvOverrides)
+        if 'FILESHARE_TEST' in environmentKeys and isinstance(self._daemonManager, InProcessDaemonManager):
+            environmentKeys.add('TUNNEL_TOKEN_SERVER_URL')
+
+        self._daemonEnvironmentOriginalValues = {
+            key: os.environ.get(key)
+            for key in environmentKeys
+        }
+        os.environ.update(self._daemonEnvOverrides)
+
+    def _restoreDaemonEnvironmentOverrides(self):
+        if self._daemonEnvironmentOriginalValues is None:
             return
 
-        try:
-            self._runPatchedCoreCommand(['--cli', 'daemon', '--stop'], timeout=15)
-        except Exception as e:
-            print(f"[Test] Error sending daemon --stop: {e}")
+        for key, value in self._daemonEnvironmentOriginalValues.items():
+            if value is None:
+                os.environ.pop(key)
+            else:
+                os.environ[key] = value
 
-        # Forcefully kill if still running
-        try:
-            proc = psutil.Process(self._daemonPid)
-            if proc.is_running():
-                proc.kill()
-                proc.wait(timeout=5)
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
-            pass
-        except Exception as e:
-            print(f"[Test] Error killing daemon: {e}")
-
-        self._daemonPid = None
+        self._daemonEnvironmentOriginalValues = None
+        if self._daemonEnvOverrides and isinstance(self._daemonManager, InProcessDaemonManager):
+            self.reloadFeatureRuntime()
 
     def _assertDaemonRunning(self):
         daemonJsonPath = os.path.join(self._testConfigDir, 'daemon.json')
@@ -106,11 +125,7 @@ class DaemonTest(FastFileLinkTestBase):
             state = json.load(f)
         pid = state.get('pid')
         self.assertIsNotNone(pid, "daemon.json should have pid")
-        try:
-            proc = psutil.Process(pid)
-            self.assertTrue(proc.is_running(), f"Daemon process {pid} should be running")
-        except psutil.NoSuchProcess:
-            self.fail(f"Daemon process {pid} is not running")
+        self.assertTrue(DaemonClient.isRunning(), f"Daemon API for PID {pid} should be running")
 
     def _assertDaemonNotRunning(self):
         daemonJsonPath = os.path.join(self._testConfigDir, 'daemon.json')
@@ -139,6 +154,138 @@ class DaemonTest(FastFileLinkTestBase):
 
         raise AssertionError("Timed out waiting for daemon-managed share to appear")
 
+    def _waitForUploadTransferStart(self, testServerProcess, shareId, timeout=30):
+        collectedLines = []
+        logPath = getattr(testServerProcess, '_logPath', None)
+        if logPath:
+            deadline = time.time() + timeout
+            offset = 0
+            while time.time() < deadline:
+                logFileHandle = getattr(testServerProcess, '_logFile', None)
+                if logFileHandle:
+                    logFileHandle.flush()
+
+                if os.path.exists(logPath):
+                    with open(logPath, 'r', encoding='utf-8', errors='replace') as logFile:
+                        logFile.seek(offset)
+                        newText = logFile.read()
+                        offset = logFile.tell()
+
+                    for line in newText.splitlines():
+                        collectedLines.append(line)
+                        print(f"[Test] test server output: {line}")
+                        if 'Delaying upload chunk response' in line and f'for {shareId}' in line:
+                            return
+
+                if testServerProcess.poll() is not None:
+                    break
+
+                time.sleep(0.5)
+
+            raise AssertionError(
+                f"Timed out waiting for upload transfer to start for share {shareId}. "
+                f"Recent test server output: {collectedLines[-10:]}"
+            )
+
+        outputQueue = queue.Queue()
+        matchedEvent = threading.Event()
+
+        def readTestServerOutput():
+            streams = [stream for stream in (testServerProcess.stdout, testServerProcess.stderr) if stream is not None]
+            while not matchedEvent.is_set():
+                readAny = False
+                for stream in streams:
+                    line = stream.readline()
+                    if not line:
+                        continue
+
+                    readAny = True
+                    outputQueue.put(line.rstrip())
+
+                if not readAny and testServerProcess.poll() is not None:
+                    break
+
+        readerThread = threading.Thread(target=readTestServerOutput, daemon=True, name='test-server-upload-watch')
+        readerThread.start()
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if testServerProcess.poll() is not None:
+                break
+
+            try:
+                line = outputQueue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            collectedLines.append(line)
+            print(f"[Test] test server output: {line}")
+
+            if 'Delaying upload chunk response' in line and f'for {shareId}' in line:
+                matchedEvent.set()
+                return
+
+        matchedEvent.set()
+        raise AssertionError(
+            f"Timed out waiting for upload transfer to start for share {shareId}. "
+            f"Recent test server output: {collectedLines[-10:]}"
+        )
+
+    def _waitForManagedShareCount(self, expectedCount, timeout=20):
+        client = DaemonClient()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            shares = client.listShares()
+            if len(shares) >= expectedCount:
+                return shares
+
+            time.sleep(0.3)
+
+        raise AssertionError(f"Timed out waiting for {expectedCount} daemon-managed shares")
+
+    def _readLatestOutputText(self):
+        if self._procLogFile:
+            self._procLogFile.flush()
+
+        with open(self.procLogPath, 'r', encoding='utf-8', errors='replace') as logFile:
+            return logFile.read()
+
+    def _waitForCoreProcessExit(self, timeout=120):
+        self.assertIsNotNone(self.coreProcess, "Core process should have been started")
+        self.coreProcess.wait(timeout=timeout)
+        return self.coreProcess.returncode
+
+    @contextlib.contextmanager
+    def _usingTestFile(self, filePath, jsonPath=None):
+        """Temporarily point self.testFilePath/jsonOutputPath/originalFileHash/
+        originalFileSize at filePath for the duration of the `with` block,
+        restoring the previous values afterward (even on exception). Lets a
+        test start an additional daemon share -- and, while still inside the
+        block, verify its download against the right hash/size -- without
+        losing track of whichever file self.testFilePath pointed at before."""
+        originalFilePath = self.testFilePath
+        originalJsonPath = self.jsonOutputPath
+        originalFileHash = self.originalFileHash
+        originalFileSize = self.originalFileSize
+
+        self.testFilePath = filePath
+        self.jsonOutputPath = jsonPath or os.path.join(
+            self.tempDir, f'{os.path.splitext(os.path.basename(filePath))[0]}_share_info.json'
+        )
+        self.originalFileHash = self.getFileHash(filePath)
+        self.originalFileSize = os.path.getsize(filePath)
+        try:
+            yield
+        finally:
+            self.testFilePath = originalFilePath
+            self.jsonOutputPath = originalJsonPath
+            self.originalFileHash = originalFileHash
+            self.originalFileSize = originalFileSize
+
+
+class DaemonTest(DaemonLifecycleMixin, FastFileLinkTestBase):
+    """Functional tests for the background daemon and multi-session share management."""
+
     # ------------------------------------------------------------------
     # Tests
     # ------------------------------------------------------------------
@@ -166,7 +313,28 @@ class DaemonTest(FastFileLinkTestBase):
             time.sleep(0.3)
 
         self._assertDaemonNotRunning()
-        self._daemonPid = None  # already stopped, skip _stopDaemon cleanup
+
+    def testDaemonStartForwardsShareEventsToHook(self):
+        """Both daemon hosts configure the hook supplied to start()."""
+        self._stopDaemon()
+        hookPath = os.path.join(self.tempDir, 'daemon-events.jsonl')
+        self._daemonManager.start(hookPath)
+        shareLink = self._startFastFileLink(p2p=True, extraArgs=['--background'])
+
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            if os.path.exists(hookPath):
+                with open(hookPath, 'r', encoding='utf-8') as hookFile:
+                    events = [json.loads(line) for line in hookFile if line.strip()]
+                if any(
+                    event['event'] == FFLEvent.shareLinkCreate.key and event['data']['link'] == shareLink
+                    for event in events
+                ):
+                    return
+
+            time.sleep(0.5)
+
+        self.fail('Daemon did not forward the share link event to its configured hook')
 
     def testDaemonStatus(self):
         """Test `ffl daemon --status` reports running correctly."""
@@ -212,16 +380,92 @@ class DaemonTest(FastFileLinkTestBase):
         self.downloadFileWithRequests(shareLink, downloadedFilePath)
         self._verifyDownloadedFile(downloadedFilePath, shareLink=shareLink)
 
-    def testDaemonUploadShareStop(self):
-        """Test stopping an in-flight daemon upload cancels it and removes it from active shares."""
+    def testDaemonUploadShareByPull(self):
+        """Test daemon-managed background upload works when UPLOAD_METHOD=Pull."""
         self._stopDaemon()
         self._provisionLocalTestServerCredential()
         testServerProcess = self._startTestServer()
         self._testServerProcesses.append(testServerProcess)
         self._daemonEnvOverrides = {
             'FILESHARE_TEST': LOCAL_TEST_SERVER_URL,
-            'UPLOAD_CHUNK_SIZE': '1',
+            'UPLOAD_METHOD': 'Pull',
+        }
+        self._startDaemon()
+
+        shareLink = self._startFastFileLink(p2p=False, extraArgs=['--background'])
+        print(f"[Test] Daemon pull upload link: {shareLink}")
+
+        with open(self.jsonOutputPath, 'r', encoding='utf-8') as fileHandle:
+            shareInfo = json.load(fileHandle)
+        self.assertEqual(shareInfo.get('upload_mode'), 'server', f"Expected server upload JSON output: {shareInfo}")
+
+        downloadedFilePath = self._getDownloadedFilePath('daemon_pull_upload_share_test.bin')
+        self.downloadFileWithRequests(shareLink, downloadedFilePath)
+        self._verifyDownloadedFile(downloadedFilePath)
+
+    def testDaemonMultiShareReusesTunnelAndPort(self):
+        """Test daemon P2P shares reuse the same tunnel base URL and local server port."""
+        firstLink = self._startFastFileLink(p2p=True, extraArgs=['--background'])
+        self._terminateProcess()
+
+        secondFilePath = os.path.join(self.tempDir, 'second_testfile.bin')
+        self.generateRandomFile(secondFilePath, 512 * 1024)
+        with self._usingTestFile(secondFilePath):
+            secondLink = self._startFastFileLink(p2p=True, extraArgs=['--background'])
+
+        shares = self._waitForManagedShareCount(2)
+        shareByLink = {share['link']: share for share in shares}
+        firstShare = shareByLink[firstLink]
+        secondShare = shareByLink[secondLink]
+
+        self.assertNotEqual(firstShare['id'], secondShare['id'])
+        self.assertEqual(firstShare['port'], secondShare['port'])
+        self.assertEqual(firstLink.rsplit('/', 1)[0], secondLink.rsplit('/', 1)[0])
+
+    def testDaemonSequentialSharesPlainThenE2EE(self):
+        """Test a plain share followed by an E2EE share on the same daemon-shared
+        server: each ServerSession must serve only its own file, with no size or
+        content mixed in from another session sharing the same server/tunnel."""
+        firstLink = self._startFastFileLink(p2p=True, extraArgs=['--background'])
+        self._terminateProcess()
+
+        firstDownloadPath = self._getDownloadedFilePath('daemon_sequential_first.bin')
+        self.downloadFileWithRequests(firstLink, firstDownloadPath)
+        self._verifyDownloadedFile(firstDownloadPath, shareLink=firstLink)
+
+        secondFilePath = os.path.join(self.tempDir, 'second_e2ee_testfile.bin')
+        self.generateRandomFile(secondFilePath, 512 * 1024)
+        with self._usingTestFile(secondFilePath):
+            secondLink = self._startFastFileLink(p2p=True, extraArgs=['--background', '--e2ee'])
+
+        secondDownloadPath = self._getDownloadedFilePath('daemon_sequential_second_e2ee.bin')
+        transferChecksum = self.downloadFileWithRequests(secondLink, secondDownloadPath)
+        # verifyOriginalContent=False: a plain requests download of an E2EE share
+        # receives ciphertext, not plaintext, so it won't hash-match the source
+        # file -- but it still cross-checks downloaded size/checksum against the
+        # /checksum endpoint, which is enough to catch a size-mismatch regression.
+        self._verifyDownloadedFile(
+            secondDownloadPath,
+            shareLink=secondLink,
+            transferChecksum=transferChecksum,
+            verifyOriginalContent=False,
+        )
+
+    def testDaemonUploadShareStop(self):
+        """Test stopping an in-flight daemon upload cancels it and removes it from active shares."""
+        self._stopDaemon()
+        self._provisionLocalTestServerCredential()
+        testServerProcess = self._startTestServer(
+            extraEnvVars={'TEST_UPLOAD_CHUNK_DELAY_MS': '1000'},
+            captureOutput=False,
+        )
+        self._testServerProcesses.append(testServerProcess)
+        self._daemonEnvOverrides = {
+            'FILESHARE_TEST': LOCAL_TEST_SERVER_URL,
+            'UPLOAD_METHOD': 'Push',
+            'UPLOAD_CHUNK_SIZE': str(8 * 1024 * 1024),
             'UPLOAD_CONCURRENCY': '1',
+            'UPLOAD_NO_RETRY': 'True',
         }
         self._startDaemon()
 
@@ -238,6 +482,7 @@ class DaemonTest(FastFileLinkTestBase):
         )
 
         shareId = self._waitForFirstManagedShareId()
+        self._waitForUploadTransferStart(testServerProcess, shareId)
         print(f"[Test] Stopping daemon upload share: {shareId}")
 
         output, returnCode = self._runPatchedCoreCommand(['--cli', 'shares', 'stop', shareId], timeout=10)
@@ -272,23 +517,17 @@ class DaemonTest(FastFileLinkTestBase):
         testServerProcess = self._startTestServer()
         self._testServerProcesses.append(testServerProcess)
 
-        output, returnCode = self._runCoreCommand(
-            [
-                '--cli', 'share', self.testFilePath,
-                '--json', self.jsonOutputPath,
-                '--upload', '3 hours',
-                '--background',
-            ],
-            commandPrefix=[sys.executable, self._coreScriptPath()],
-            extraEnvVars={
-                'PYTHONUNBUFFERED': '1',
-                'FILESHARE_TEST': LOCAL_TEST_SERVER_URL,
-            },
-            cwd=self._projectRoot(),
-            stdin=subprocess.PIPE,
+        self._startFastFileLink(
+            p2p=False,
+            extraEnvVars={'FILESHARE_TEST': LOCAL_TEST_SERVER_URL},
+            extraArgs=['--background'],
             inputData='yes\n',
-            timeout=120,
+            autoConfirmUpload=False,
         )
+        self._assertDaemonRunning()
+
+        returnCode = self._waitForCoreProcessExit()
+        output = self._readLatestOutputText()
 
         self.assertEqual(returnCode, 0, f"Expected background daemon upload to succeed after confirmation: {output}")
         self.assertIn('Upload requires', output)
@@ -311,22 +550,16 @@ class DaemonTest(FastFileLinkTestBase):
         self._daemonEnvOverrides = {'FILESHARE_TEST': LOCAL_TEST_SERVER_URL}
         self._startDaemon()
 
-        output, returnCode = self._runCoreCommand(
-            [
-                '--cli', 'share', self.testFilePath,
-                '--json', self.jsonOutputPath,
-                '--upload', '3 hours',
-            ],
-            commandPrefix=[sys.executable, self._coreScriptPath()],
-            extraEnvVars={
-                'PYTHONUNBUFFERED': '1',
-                'FILESHARE_TEST': LOCAL_TEST_SERVER_URL,
-            },
-            cwd=self._projectRoot(),
-            stdin=subprocess.PIPE,
+        self._startFastFileLink(
+            p2p=False,
+            extraEnvVars={'FILESHARE_TEST': LOCAL_TEST_SERVER_URL},
             inputData='yes\n',
-            timeout=120,
+            autoConfirmUpload=False,
         )
+        self._assertDaemonRunning()
+
+        returnCode = self._waitForCoreProcessExit()
+        output = self._readLatestOutputText()
 
         self.assertEqual(returnCode, 0, f"Expected daemon upload to succeed after confirmation: {output}")
         self.assertIn('Upload requires', output)
@@ -368,6 +601,11 @@ class DaemonTest(FastFileLinkTestBase):
             extraArgs=['--background', '--recipient-auth', 'pickup', '--pickup-code', pickupCode]
         )
         print(f"[Test] Daemon pickup-auth share link: {shareLink}")
+
+        shareId = self._getFirstManagedShareId()
+        shareData = DaemonClient().getShare(shareId)
+        self.assertEqual(shareData['shareRequest']['recipientAuth'], 'pickup')
+        self.assertEqual(shareData['shareRequest']['pickupCode'], pickupCode)
 
         downloadedFilePath = self._getDownloadedFilePath('daemon_pickup_share_test.bin')
         self.downloadFileWithRequests(
@@ -421,6 +659,129 @@ class DaemonTest(FastFileLinkTestBase):
         downloadedFilePath = self._getDownloadedFilePath('foreground_share_test.bin')
         self.downloadFileWithRequests(shareLink, downloadedFilePath)
         self._verifyDownloadedFile(downloadedFilePath)
+
+
+class DaemonBrowserTest(DaemonLifecycleMixin, BrowserTestBase):
+    """Real-browser tests against the daemon-shared server (multiple ServerSessions
+    behind one origin), to catch bugs that only show up in the browser's own
+    download/decryption path -- not reproducible with a plain requests.get()."""
+
+    def testDaemonSequentialSharesPlainThenE2EEBrowserDownload(self):
+        """Share a plain file, download+verify it in a browser, then -- in that
+        SAME browser session/tab -- share a second file with --e2ee and
+        download+verify it too. Both shares live on the same daemon-shared
+        origin (one server, one tunnel, two UIDs), so any state the page/Service
+        Worker/DownloadManager keeps that isn't properly scoped per-UID would
+        leak from the first download into the second."""
+        firstLink = self._startFastFileLink(p2p=True, extraArgs=['--background'])
+        self._terminateProcess()
+
+        downloadDir = self._getBrowserDownloadDir('chrome', 0)
+        driver = self._setupChromeDriver(downloadDir)
+
+        firstDownloadedFile = self._downloadWithBrowser(
+            driver, firstLink, downloadDir, 'testfile.bin', disableFallback=False
+        )
+        self._verifyDownloadedFile(firstDownloadedFile)
+        print("[Test] First (plain) share downloaded and verified via browser")
+
+        secondFilePath = os.path.join(self.tempDir, 'second_e2ee_testfile.bin')
+        self.generateRandomFile(secondFilePath, 512 * 1024)
+        # _verifyDownloadedFile compares against self.originalFileHash/originalFileSize,
+        # so it must run inside this block, before _usingTestFile restores them.
+        with self._usingTestFile(secondFilePath):
+            secondLink = self._startFastFileLink(p2p=True, extraArgs=['--background', '--e2ee'])
+
+            secondDownloadedFile = self._downloadWithBrowser(
+                driver, secondLink, downloadDir, 'second_e2ee_testfile.bin', disableFallback=False
+            )
+            self._verifyDownloadedFile(secondDownloadedFile)
+            print("[Test] Second (E2EE) share downloaded and verified via browser")
+
+
+class InProcessDaemonTest(DaemonTest):
+    """Run the daemon functional suite against a daemon hosted by this test process."""
+
+    daemonManagerClass = InProcessDaemonManager
+
+
+class InProcessDaemonBrowserTest(DaemonBrowserTest):
+    """Run the browser daemon suite against a daemon hosted by this test process."""
+
+    daemonManagerClass = InProcessDaemonManager
+
+
+if PreviewBrowserE2EETest is not None:
+
+    class DaemonPreviewBrowserTest(DaemonLifecycleMixin, PreviewBrowserE2EETest):
+        """Real-browser ZIP-preview test against the daemon-shared server. Reuses
+        PreviewBrowserE2EETest's folder fixture and preview helpers, but shares it
+        as the daemon's SECOND session (after a first, unrelated plain share) to
+        reproduce bugs that only show up once a share is not the sole/most-recent
+        session on the shared origin -- e.g. root-relative API calls that resolve
+        via getDefaultSession() instead of the request's own UID."""
+
+        @unittest.skipIf(SKIP_GUI_TEST, "Preview browser tests disabled because no GUI")
+        def testDaemonSecondShareE2EEFolderPreview(self):
+            """Second share on a daemon-shared origin: an E2EE folder share whose
+            ZIP preview modal must load real (decrypted) manifest entries, not get
+            stuck on 'Establishing connection...'."""
+            firstFilePath = os.path.join(self.tempDir, 'daemon_preview_first.bin')
+            self.generateRandomFile(firstFilePath, 64 * 1024)
+            with self._usingTestFile(firstFilePath):
+                self._startFastFileLink(p2p=True, extraArgs=['--background'])
+                self._terminateProcess()
+            print("[Test] First (plain) share started on daemon")
+
+            # _usingTestFile above restored self.testFilePath/jsonOutputPath to the
+            # E2EE folder fixture PreviewBrowserE2EETest.setUp() already set up.
+            shareLink = self._startFastFileLink(p2p=True, extraArgs=['--background', '--e2ee'])
+            print(f"[Test] Second (folder, E2EE) share link: {shareLink}")
+
+            downloadDir = self._getBrowserDownloadDir('chrome', 0)
+            driver = self._setupChromeDriver(downloadDir)
+
+            previewUrl = self._withQueryParams(shareLink, {'preview': 'true', 'debug': '1'})
+            print(f"[Test] Preview URL: {previewUrl}")
+            driver.get(previewUrl)
+
+            self._waitForPreviewMetadataReady(driver)
+
+            fileResult, expectedPath = self._fetchPreviewEntryBlob(driver)
+
+            isPreviewableZip = driver.execute_script(
+                "return window.previewUI ? window.previewUI.isPreviewableZip : null;"
+            )
+            metadataInitError = driver.execute_script(
+                "return window.previewUI && window.previewUI.extractor "
+                "? window.previewUI.extractor.__testMetaInitError : null;"
+            )
+            entryCount = driver.execute_script(
+                "return window.previewUI && window.previewUI.extractor && window.previewUI.extractor.meta "
+                "? (window.previewUI.extractor.meta.entries || []).length : 0;"
+            )
+
+            self.assertEqual(
+                isPreviewableZip, True,
+                f"Expected daemon second-share E2EE ZIP to be recognized as previewable, got {isPreviewableZip}"
+            )
+            self.assertIsNone(
+                metadataInitError,
+                f"Extractor metadata init failed on daemon-shared server: {metadataInitError}"
+            )
+            self.assertGreater(
+                entryCount, 0,
+                f"Expected decrypted manifest entries > 0, got {entryCount}; metadataInitError={metadataInitError}"
+            )
+
+            self._assertPreviewEntryMatchesSource(fileResult, expectedPath)
+
+
+    class InProcessDaemonPreviewBrowserTest(DaemonPreviewBrowserTest):
+        """Run the preview daemon suite against a daemon hosted by this test process."""
+
+        daemonManagerClass = InProcessDaemonManager
+
 
 if __name__ == '__main__':
     unittest.main()

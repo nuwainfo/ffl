@@ -117,8 +117,15 @@ class AsyncTunnelThread(threading.Thread):
         while not self.stopRequested:
             if not await self.client.connect():
                 if not announcedSuccess:
-                    logger.error("Failed to connect to the server. Exiting.")
-                    raise TunnelUnavailableError('Failed to connect to tunnel server')
+                    originalError = self.client.lastConnectError
+                    
+                    message = f'Failed to connect to tunnel server ({self.client.remoteHost})'                    
+                    if originalError is not None:
+                        message = f'{message}: {originalError}'
+                        
+                    logger.error(f"{message}. Exiting.")
+                    
+                    raise TunnelUnavailableError(message) from originalError
 
                 logger.warning(
                     "Tunnel control connection failed after initial success; retrying in %ss",
