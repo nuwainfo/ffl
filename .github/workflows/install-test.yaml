@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  FFL_VERSION: "v4.0.0"
+  FFL_VERSION: "v4.0.1"
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
@@ -46,20 +46,37 @@ jobs:
           FFL_TARGET: ${{ matrix.target && '/tmp/ffl_target_test' || '' }}
         run: |
           set -eux
+          check_version() {
+            local bin="$1"
+            local out
+            out=$("$bin" --version)
+            printf '%s\n' "$out"
+            local actual
+            actual=$(printf '%s\n' "$out" | head -n1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
+            if [ -z "$actual" ]; then
+              echo "::error::Could not parse version from '$bin --version' output"
+              exit 1
+            fi
+            if [ "$actual" != "$FFL_VERSION" ]; then
+              echo "::error::Version mismatch for $bin: expected $FFL_VERSION, got $actual"
+              exit 1
+            fi
+          }
+
           if [ -n "${FFL_TARGET:-}" ]; then
-            "${FFL_TARGET}" --version || true
+            check_version "${FFL_TARGET}"
             exit 0
           fi
           which ffl || true
           if [ "${FFL_VARIANT}" = "com" ] && [ -n "${FFL_APE:-}" ]; then
             if command -v "${FFL_APE}.com" >/dev/null 2>&1; then
-              "${FFL_APE}.com" --version || true
+              check_version "${FFL_APE}.com"
             else
               # if installer created `ffl` symlink, still allow `ffl --version`
-              ffl --version || true
+              check_version "ffl"
             fi
           else
-            ffl --version || true
+            check_version "ffl"
           fi
 
   macos:
@@ -93,18 +110,35 @@ jobs:
           FFL_TARGET: ${{ matrix.target && '/tmp/ffl_target_test' || '' }}
         run: |
           set -eux
+          check_version() {
+            local bin="$1"
+            local out
+            out=$("$bin" --version)
+            printf '%s\n' "$out"
+            local actual
+            actual=$(printf '%s\n' "$out" | head -n1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
+            if [ -z "$actual" ]; then
+              echo "::error::Could not parse version from '$bin --version' output"
+              exit 1
+            fi
+            if [ "$actual" != "$FFL_VERSION" ]; then
+              echo "::error::Version mismatch for $bin: expected $FFL_VERSION, got $actual"
+              exit 1
+            fi
+          }
+
           if [ -n "${FFL_TARGET:-}" ]; then
-            "${FFL_TARGET}" --version || true
+            check_version "${FFL_TARGET}"
             exit 0
           fi
           if [ "${FFL_VARIANT}" = "com" ] && [ -n "${FFL_APE:-}" ]; then
             if command -v "${FFL_APE}.com" >/dev/null 2>&1; then
-              "${FFL_APE}.com" --version || true
+              check_version "${FFL_APE}.com"
             else
-              ffl --version || true
+              check_version "ffl"
             fi
           else
-            ffl --version || true
+            check_version "ffl"
           fi
 
   windows:
@@ -140,9 +174,24 @@ jobs:
           FFL_TARGET: ${{ matrix.target && format('{0}\ffl_target_test.com', env.TEMP) || '' }}
         run: |
           $ErrorActionPreference = "Stop"
+
+          function Assert-Version($binPath) {
+            $out = & $binPath --version
+            $out | ForEach-Object { Write-Host $_ }
+            $firstLine = $out | Select-Object -First 1
+            if ($firstLine -match 'v[0-9]+\.[0-9]+\.[0-9]+') {
+              $actual = $Matches[0]
+            } else {
+              throw "Could not parse version from '$binPath --version' output"
+            }
+            if ($actual -ne $env:FFL_VERSION) {
+              throw "Version mismatch for $binPath : expected $($env:FFL_VERSION), got $actual"
+            }
+          }
+
           if (-not [string]::IsNullOrWhiteSpace($env:FFL_TARGET)) {
             if (Test-Path $env:FFL_TARGET) {
-              & $env:FFL_TARGET --version
+              Assert-Version $env:FFL_TARGET
             } else {
               throw "FFL_TARGET not found: $($env:FFL_TARGET)"
             }
@@ -153,13 +202,13 @@ jobs:
           Write-Host "Dest: $dest"
           if ("${{ matrix.variant }}" -eq "com") {
             if (Test-Path (Join-Path $dest "ffl.com")) {
-              & (Join-Path $dest "ffl.com") --version
+              Assert-Version (Join-Path $dest "ffl.com")
             } else {
               throw "ffl.com not found under $dest"
             }
           } else {
             if (Test-Path (Join-Path $dest "ffl.exe")) {
-              & (Join-Path $dest "ffl.exe") --version
+              Assert-Version (Join-Path $dest "ffl.exe")
             } else {
               throw "ffl.exe not found under $dest"
             }
