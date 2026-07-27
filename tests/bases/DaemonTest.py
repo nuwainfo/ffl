@@ -11,8 +11,12 @@ import threading
 import time
 import unittest
 
-from bases.Daemon import DaemonClient, InProcessDaemonManager, ProcessDaemonManager
+from unittest import mock
+
+from bases.Daemon import DaemonClient, InProcessDaemonManager, InProcessShareManager, ProcessDaemonManager
 from bases.Kernel import FFLEvent
+from bases.Session import createSession
+from bases.Share import ShareExecutionContext, ShareReporter, ShareStatus, createShareRequest
 
 from ..BrowserTestBase import BrowserTestBase
 from ..CoreTestBase import FastFileLinkTestBase, LOCAL_TEST_SERVER_URL
@@ -25,6 +29,50 @@ try:
 except ImportError:
     PreviewBrowserE2EETest = None
     SKIP_GUI_TEST = True
+
+
+class DaemonPauseResumeTest(unittest.TestCase):
+
+    @staticmethod
+    def _createWorker(manager):
+        shareRequest = createShareRequest({'file': [__file__], 'upload': '3 hours'})
+        session = createSession(shareRequest)
+        context = ShareExecutionContext(
+            reporter=ShareReporter(outputCallback=lambda text: None),
+            session=session,
+            runtime=manager._runtime,
+        )
+        worker = manager.ShareWorker(session=session, shareRequest=shareRequest, context=context)
+        manager._workers[session.uid] = worker
+        return worker
+
+    def testPauseMarksRequestOnlyWhenWorkerCanPause(self):
+        manager = InProcessShareManager()
+        worker = self._createWorker(manager)
+
+        self.assertFalse(manager.pauseShare(worker.session.uid))
+
+        worker.session.pauseSupported = True
+        self.assertTrue(manager.pauseShare(worker.session.uid))
+        self.assertTrue(worker.context.isPauseRequested())
+
+    def testResumeRestartsSamePausedWorkerWithoutDialogState(self):
+        manager = InProcessShareManager()
+        worker = self._createWorker(manager)
+        worker.session.status = ShareStatus.PAUSED
+        worker.context.paused = True
+        worker.context.pauseEvent.set()
+        worker.encryptionKey = 'existing-encryption-key'
+
+        with mock.patch.object(manager, '_startWorker') as startWorker:
+            self.assertTrue(manager.resumeShare(worker.session.uid))
+
+        self.assertEqual(worker.session.status, ShareStatus.CREATING)
+        self.assertTrue(worker.shareRequest.resume)
+        self.assertFalse(worker.context.paused)
+        self.assertFalse(worker.context.isPauseRequested())
+        self.assertEqual(worker.encryptionKey, 'existing-encryption-key')
+        startWorker.assert_called_once_with(worker)
 
 
 class DaemonLifecycleMixin:
@@ -80,7 +128,30 @@ class DaemonLifecycleMixin:
         self._applyDaemonEnvironmentOverrides()
         if self._daemonEnvOverrides and isinstance(self._daemonManager, InProcessDaemonManager):
             self.reloadFeatureRuntime()
-            
+
+        if isinstance(self._daemonManager, InProcessDaemonManager):
+            # InProcessDaemonManager hosts the daemon -- including the built-in
+            # tunnel's AsyncTunnelThread -- as a thread in this same process. Real
+            # GUI usage of this mode is mostly idle while the daemon runs, but this
+            # test process also drives Selenium and spawns/polls CLI subprocesses
+            # on the same GIL, which can starve the tunnel thread's scheduling badly
+            # enough to cause spurious tunnel-relay 404s/reconnects under load
+            # (confirmed: default 5ms switch interval let scheduling delays reach
+            # 677ms and a test take 3.5x longer under synthetic contention; 1ms
+            # eliminated the delays and roughly halved the slowdown). Not a
+            # production fix -- production in-process hosting doesn't create this
+            # contention -- so it's scoped to test setup only.
+            #
+            # Registered via addCleanup(), not a plain restore in _stopDaemon(),
+            # because tearDown() (and thus _stopDaemon()) is never called by
+            # unittest if anything below this point in setUp() raises -- that
+            # would otherwise leak the lowered switch interval, at full 5x
+            # context-switch overhead, into every later test in the whole suite
+            # process for the rest of the run. addCleanup() runs regardless.
+            originalSwitchInterval = sys.getswitchinterval()
+            sys.setswitchinterval(0.001)
+            self.addCleanup(sys.setswitchinterval, originalSwitchInterval)
+
         self._daemonManager.start()
         self._assertDaemonRunning()
 
@@ -137,7 +208,14 @@ class DaemonLifecycleMixin:
         output = output.strip()
         print(f"[Test] shares list: {output}")
 
-        lines = [line.strip() for line in output.split('\n') if line.strip() and line.strip() != 'Active shares:']
+        # Skip blank lines, the header, and any unrelated log noise (e.g. wx's
+        # "HH:MM:SS: Debug: ..." image-handler chatter) that can land on stdout
+        # ahead of the real share line and would otherwise be mistaken for it.
+        lines = [
+            line.strip()
+            for line in output.split('\n')
+            if line.strip() and line.strip() != 'Active shares:' and 'Debug:' not in line
+        ]
         self.assertTrue(lines, "Should have at least one share listed")
         return lines[0].split()[0]
 

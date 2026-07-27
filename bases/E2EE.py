@@ -811,7 +811,7 @@ class E2EEClient:
 
         # For P2P mode, use /e2ee/manifest endpoint
         try:
-            manifestURL = self.buildURL(baseURL, "/e2ee/manifest", excludeUID=True)
+            manifestURL = self.buildURL(baseURL, "/e2ee/manifest")
             logger.debug(f"[E2EE] Checking manifest at: {manifestURL}")
 
             response = requests.get(manifestURL, headers=self.makeHeaders(None), timeout=5)
@@ -854,7 +854,7 @@ class E2EEClient:
         publicKeyPem = self.crypto.serializeRSAPublicKey(publicKey)
 
         # Send public key to server and receive wrapped content key
-        initURL = self.buildURL(baseURL, "/e2ee/init", excludeUID=True)
+        initURL = self.buildURL(baseURL, "/e2ee/init")
         headers = self.makeHeaders(None)
         headers["Content-Type"] = "application/json"
 
@@ -1092,7 +1092,7 @@ class E2EEClient:
         Raises:
             RuntimeError: If tag fetching fails
         """
-        tagsURL = self.buildURL(baseURL, "/e2ee/tags", excludeUID=True)
+        tagsURL = self.buildURL(baseURL, "/e2ee/tags")
         params = {'start': startChunk, 'count': count}
 
         logger.debug(f"[E2EE] fetchTags: startChunk={startChunk}, count={count}, tagsURL={tagsURL}")

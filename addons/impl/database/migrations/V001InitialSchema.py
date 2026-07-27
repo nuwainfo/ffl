@@ -16,21 +16,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""Initial schema for local share persistence."""
 
-import os
-import platform
-import sys
+from addons.impl.database.Models import SchemaMigration, Share, ShareEvent
 
-# Initialize SettingsGetter. Must match tests/bases/__init__.py's call exactly:
-# whichever of the two package __init__.py files Python imports first during
-# test discovery (alphabetically, this one) wins -- Singleton.initialize() only
-# runs once, so a bare SettingsGetter() here would permanently leave baseDir=None
-# for the rest of the process, breaking anything that renders templates
-# (e.g. bases/Server.py's index.html) from an in-process daemon later in the run.
-from bases.Settings import SettingsGetter
 
-settingsGetter = SettingsGetter(
-    baseDir=os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..')),
-    platform=platform.system(),
-    exePath=sys.executable,
-)
+class V001InitialSchema:
+    version = 1
+
+    def apply(self, database):
+        database.create_tables((SchemaMigration, Share, ShareEvent), safe=True)

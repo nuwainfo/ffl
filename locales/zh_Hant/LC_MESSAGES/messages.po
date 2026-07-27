@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-07-20 17:12+0800\n"
+"POT-Creation-Date: 2026-07-26 17:39+0800\n"
 "PO-Revision-Date: 2025-12-21 08:43+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -413,24 +413,34 @@ msgid "Please specify a file or folder path instead of \"-\""
 msgstr "請指定檔案或資料夾路徑，而不是 \"-\""
 
 #, python-brace-format
+msgid "Daemon worker is missing for delivery {uid}."
+msgstr "傳送 {uid} 缺少 Daemon worker。"
+
+#, python-brace-format
 msgid "Share worker exited with code {exitCode}"
 msgstr ""
+
+#, python-brace-format
+msgid "Daemon server did not create a ServerSession for delivery {uid}."
+msgstr "Daemon server 未為傳送 {uid} 建立 ServerSession。"
+
+#, python-brace-format
+msgid "Daemon server session does not match delivery {uid}."
+msgstr "Daemon server session 與傳送 {uid} 不相符。"
 
 #, python-brace-format
 msgid "Daemon started (PID: {pid}, port: {port})"
 msgstr ""
 
-msgid "Daemon is not running"
+#, python-brace-format
+msgid "Daemon API request failed ({statusCode}): {errorMessage}"
 msgstr ""
 
-msgid "Failed to configure daemon event hook"
+msgid "Daemon is not running"
 msgstr ""
 
 #, python-brace-format
 msgid "Daemon failed to start within {timeout} seconds"
-msgstr ""
-
-msgid "Failed to send stop command to daemon"
 msgstr ""
 
 msgid "Daemon may not have stopped cleanly"
@@ -669,6 +679,9 @@ msgstr "進度：{sizeDisplay}/{totalDisplay}（{percentage:.2f}%），{speedDis
 msgid "Upload failed: {error}"
 msgstr "上傳失敗：{error}"
 
+msgid "Cannot prepare a server without a ServerSession."
+msgstr "沒有 ServerSession 時無法準備 server。"
+
 msgid ""
 "Please share the link below with the person you'd like to share the file "
 "with."
@@ -703,6 +716,9 @@ msgstr "正在透過代理 {proxyInfo} 建立通道連線...\n"
 
 msgid "Establishing tunnel connection...\n"
 msgstr "正在建立通道連線...\n"
+
+msgid "Server encountered an error during file sharing."
+msgstr "Server 在檔案分享期間發生錯誤。"
 
 msgid "Unable to get uploaded link"
 msgstr "無法取得上傳連結"
@@ -1393,5 +1409,11 @@ msgstr "正在嘗試 WebRTC 下載..."
 #~ msgstr ""
 
 #~ msgid "Error: Failed to send stop command to daemon"
+#~ msgstr ""
+
+#~ msgid "Failed to configure daemon event hook"
+#~ msgstr ""
+
+#~ msgid "Failed to send stop command to daemon"
 #~ msgstr ""
 

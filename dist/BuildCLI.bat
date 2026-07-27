@@ -6,7 +6,6 @@ set PYTHONIOENCODING=utf-8
 set currentDir=%CD%\..
 set parentDir=%CD%\..\..
 
-
 echo "Download, unzip and rename pyapp folder"
 
 powershell -Command ^
@@ -144,4 +143,5 @@ if exist "%currentDir%\dist\CLI\windows\ffl.exe" del /f /q "%currentDir%\dist\CL
 ren "%currentDir%\dist\CLI\windows\ffl_tmp.exe" "ffl.exe"
 
 echo "Delete pyapp folder"
+rd /s /q "%currentDir%\pyapp"
 

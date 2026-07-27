@@ -41,8 +41,7 @@ from bases.Kernel import PUBLIC_VERSION
 # Create logger for this module
 logger = logging.getLogger(__name__)
 
-#excludedPackages = ['numpy.libs', "av", "av.lib", 'mbedtls']
-excludedPackages = ['numpy.libs', 'mbedtls']
+excludedPackages = ['numpy.libs', "av", "av.lib", 'mbedtls']
 if sys.platform == 'win32':
     excludedPackages.append('lief')
 
@@ -51,22 +50,23 @@ hiddenImports = [
 ]
 
 import addons
+
 hiddenImports.extend([f'addons.{addon}' for addon in addons.addons])
 
 if sys.platform == 'darwin':
     hiddenImports.extend(['Foundation', 'AppKit'])
 
 packageData = [
-    ('../static/Logo.ico', 'static'),
-    ('../static/Logo.png', 'static'),
-    ('../static/assets/thumbnails/Thumb.png', 'static/assets/thumbnails'),
-    ('../static/assets/thumbnails/Video.png', 'static/assets/thumbnails'),
-    ('../static/assets/mitm.html', 'static/assets'),
-    ('../static/assets/sw.js', 'static/assets'),
-    ('../static/index.html', 'static'),
-    ('../static/js/WebRTC.js', 'static/js'),
-    ('../locales', 'locales'), # i18n translation files
-    ('../addons/impl/assets', 'addons/impl/assets'), # addons assets
+    (os.path.join(rootPath, 'static', 'Logo.ico'), 'static'),
+    (os.path.join(rootPath, 'static', 'Logo.png'), 'static'),
+    (os.path.join(rootPath, 'static', 'assets', 'thumbnails', 'Thumb.png'), 'static/assets/thumbnails'),
+    (os.path.join(rootPath, 'static', 'assets', 'thumbnails', 'Video.png'), 'static/assets/thumbnails'),
+    (os.path.join(rootPath, 'static', 'assets', 'mitm.html'), 'static/assets'),
+    (os.path.join(rootPath, 'static', 'assets', 'sw.js'), 'static/assets'),
+    (os.path.join(rootPath, 'static', 'index.html'), 'static'),
+    (os.path.join(rootPath, 'static', 'js', 'WebRTC.js'), 'static/js'),
+    (os.path.join(rootPath, 'locales'), 'locales'), # i18n translation files
+    (os.path.join(rootPath, 'addons', 'impl', 'assets'), 'addons/impl/assets'), # addons assets
 ]
 
 if sys.platform == 'win32':
@@ -446,11 +446,11 @@ def cleanPyappEnv(targetDir: str = None):
         print("Copy finish.")
 
     if system == "Windows":
-        deleteFiles = Path(__file__).parent / "dist" / "CLI" / "windows" / "DeleteFiles.txt"
+        deleteFiles = Path(__file__).parent.parent / "dist" / "CLI" / "windows" / "DeleteFiles.txt"
     elif system == "Linux":
-        deleteFiles = Path(__file__).parent / "dist" / "CLI" / "linux" / "DeleteFiles.txt"
+        deleteFiles = Path(__file__).parent.parent / "dist" / "CLI" / "linux" / "DeleteFiles.txt"
     elif system == "Darwin":
-        deleteFiles = Path(__file__).parent / "dist" / "CLI" / "darwin" / "DeleteFiles.txt"
+        deleteFiles = Path(__file__).parent.parent / "dist" / "CLI" / "darwin" / "DeleteFiles.txt"
     else:
         print(f"Unsupported system: {system}")
         deleteFiles = None

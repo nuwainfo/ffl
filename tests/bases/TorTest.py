@@ -510,9 +510,17 @@ class TestTorIntegration(unittest.TestCase):
         proxyConfig = parseProxyString(torProxy)
         proxies = makeRequestsProxies(proxyConfig['url'])
 
-        # Check via official Tor check page
+        # Check via official Tor check page. checkViaCheckPage() documents None as a real,
+        # expected outcome (page unreachable/ambiguous over Tor's own occasionally-flaky
+        # exit-node network), not a hard failure - retry a couple of times before giving up.
         print("Checking via check.torproject.org...")
-        result = checkViaCheckPage(proxies)
+        result = None
+        for attemptIndex in range(3):
+            result = checkViaCheckPage(proxies)
+            if result is not None:
+                break
+            print(f"check.torproject.org returned no verdict (attempt {attemptIndex + 1}/3), retrying...")
+            time.sleep(2)
 
         # Should return True if Tor is working correctly
         self.assertTrue(result, "check.torproject.org should confirm Tor usage")

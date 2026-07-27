@@ -45,7 +45,7 @@ from signalslot import Signal
 from sentry_sdk.integrations.logging import SentryHandler, LoggingIntegration
 from sentry_sdk.integrations import atexit as sentryAtexit
 
-PUBLIC_VERSION = '4.0.1'
+PUBLIC_VERSION = '4.0.2'
 
 # Map string levels to logging constants for standard level names
 LOG_LEVEL_MAPPING = {'DEBUG': logging.DEBUG, 'INFO': logging.INFO, 'WARNING': logging.WARNING, 'ERROR': logging.ERROR}
@@ -1201,13 +1201,19 @@ class FFLEvent:
     cliArgumentsGlobalOptionsRegister = Event('/cli/arguments/global/options/create')
     cliArgumentsGlobalOptionsStore = Event('/cli/arguments/global/options/get')
     cliArgumentsCommandsRegister = Event('/cli/arguments/commands/create')
+    cliArgumentsSharesActionsRegister = Event('/cli/arguments/shares/actions/create')
     cliArgumentsShareOptionsRegister = Event('/cli/arguments/share/options/create')
     cliArgumentsStore = Event('/cli/arguments/get')
 
     # Application lifecycle events
     applicationStarted = Event('/application/start')
+    shareCreated = Event('/share/create')
+    shareStarted = Event('/share/start')
+    shareAvailable = Event('/share/available')
     shareLinkCreate = Event('/share/link/create')
+    shareCompleted = Event('/share/complete')
     shareStopped = Event('/share/stop')
+    shareFailed = Event('/share/fail')
     applicationShutdown = Event('/application/shutdown')
     applicationInterrupted = Event('/application/interrupt')
 
@@ -1220,6 +1226,8 @@ class FFLEvent:
     # Server lifecycle events
     serverStarting = Event('/server/create')  # fires in createServer() (FFL.py mode); hook compat
     serverEndpointsRegister = Event('/server/endpoints/create')
+    daemonEndpointsRegister = Event('/daemon/endpoints/create')
+    daemonStopped = Event('/daemon/stop')
     serverShutdown = Event('/server/shutdown')
 
     # Session lifecycle events

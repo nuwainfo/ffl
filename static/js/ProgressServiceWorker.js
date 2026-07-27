@@ -459,6 +459,17 @@ self.addEventListener('fetch', (event) => {
         log = silentLog;
     }
 
+    // direct_native_link (branches B2/F): DownloadManager deliberately triggers
+    // a plain <a> download with no SW involvement -- cookie-only auth for F
+    // (forceNativeLink), or no SW/writer available for B2. The SW must stay out
+    // of the way unconditionally here; it must never fall through to
+    // handleDownloadWithTransform, which only sends 'Accept' + credentials:'omit'
+    // and drops both cookies and any postMessage-injected auth headers.
+    if (extractDownloadPathFromUrl(url) === 'direct_native_link') {
+        log('[ProgressSW] direct_native_link: passthrough, no SW interception');
+        return;
+    }
+
     const downloadId = url.searchParams.get('dl') || url.pathname;
     const hasDlId = !!url.searchParams.get('dl');
     const ffPass = url.searchParams.get('ff_pass') === '1';

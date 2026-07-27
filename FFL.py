@@ -46,7 +46,8 @@ from bases.Settings import DEFAULT_STATIC_ROOT, ExecutionMode, SettingsGetter
 from bases.FileSystems import ExcludeFilter
 from bases.Readers import SourceReader
 from bases.Tunnel import TunnelUnavailableError
-from bases.Runtime import SingleShareRuntime, removeSplash
+from bases.Runtime import SingleShareRuntime
+from bases.Session import createSession
 from bases.Share import ShareExecutionContext, ShareReporter, createShareRequest, processSharing
 from bases.Download import processDownload
 from bases.Daemon import DaemonClient, ProcessDaemonManager
@@ -161,7 +162,6 @@ setupGracefulShutdown()
 # CLI mode implementation
 def runCLIMain():
     """Run the program in CLI mode using two-phase parsing"""
-    removeSplash()
     parser, globalsParent, commandNames, shareSubparser = configureCLIParser()
 
     argv = sys.argv[1:]
@@ -242,12 +242,16 @@ def runCLIMain():
 
     if args.command == 'share':
         shareRequest = createShareRequest(args)
+        session = createSession(shareRequest)
+        
         shareReporter = ShareReporter(
             outputCallback=flushPrint,
             exceptionCallback=partial(sendException, logger),
         )
+    
         shareContext = ShareExecutionContext(
             reporter=shareReporter,
+            session=session,
             runtime=SingleShareRuntime(),
             proxyConfig=proxyConfig,
         )

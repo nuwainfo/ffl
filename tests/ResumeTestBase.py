@@ -280,10 +280,17 @@ class ResumeBrowserTestBase(BrowserTestBase, ResumeTestBase):
             useStdinSource: If True, share the test file via stdin instead of a direct file path
             stdinFileName: Download filename to expose when useStdinSource=True
         """        
-        # Wait for download to complete with reasonable timeout
-        # Reduced for debugging: 60s base + 1s per MB
-        # Usually every 1-2 seconds should have progress
-        downloadTimeoutSeconds = 60 + int(largeFileSize / (1024 * 1024))
+        # Wait for download to complete with reasonable timeout.
+        # 1.3x margin on top of the old "60s base + 1s/MB" (~1MB/s minimum
+        # throughput) budget: a chained run of this test after the other two
+        # BrowserResumeTest cases has been observed getting a genuine (non-stalled)
+        # 600MB transfer to ~700s under real tunnel/network load, which the old
+        # 660s budget didn't leave any room for. The per-transfer stall detector
+        # inside _waitForDownload still catches an actually-hung download well
+        # before this outer budget is reached, so the extra margin here doesn't
+        # mask a real hang -- it just stops a slow-but-healthy transfer from
+        # getting cut off.
+        downloadTimeoutSeconds = int(1.3 * (60 + largeFileSize / (1024 * 1024)))
         print(f"[Test] Download timeout: {downloadTimeoutSeconds} seconds")        
         
         # Set up hard timeout for entire test (to prevent infinite hangs)
@@ -348,6 +355,14 @@ class ResumeBrowserTestBase(BrowserTestBase, ResumeTestBase):
                     output=False,
                     captureOutputIn=outputCapture,
                     timeout=600,
+                    # Without this, the share process falls back to its own default
+                    # `--timeout 180` and self-shuts-down mid-transfer for any file
+                    # large enough that downloadTimeoutSeconds (60s + 1s/MB, below)
+                    # exceeds 180s -- e.g. the 600MB Firefox-passthrough variant
+                    # (downloadTimeoutSeconds=660) reliably got its server pulled out
+                    # from under it around the 3-minute mark. Give the server at least
+                    # as long as we're willing to wait for the download, plus margin.
+                    serverTimeout=max(180, downloadTimeoutSeconds + 60),
                     extraEnvVars=envVars,
                     extraArgs=extraArgs or [],
                     **startKwargs

@@ -143,11 +143,13 @@ class UpgradeTest(unittest.TestCase):
                     f'"{binaryPath}" --version',
                     capture_output=True,
                     text=True,
+                    encoding='utf-8',
+                    errors='replace',
                     timeout=10,
                     cwd=str(binaryPath.parent),
                     shell=True # THIS IS REQUIRED FOR APE.
                 )
-                output = result.stdout + result.stderr
+                output = (result.stdout or '') + (result.stderr or '')
 
                 # Check if Tunnels addon is loaded (required for both variants)
                 hasTunnelsAddon = 'Tunnels' in output and '[OK] Loaded' in output.split('Tunnels')[1].split('\n')[

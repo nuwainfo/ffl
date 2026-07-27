@@ -36,7 +36,7 @@ from urllib.parse import urlparse, parse_qs, urlencode
 
 from bases.I18n import _
 from bases.HTTP import HTTPRequestHandlerHelper, PathResolverMixin
-from bases.Kernel import FFLEvent, getLogger
+from bases.Kernel import getLogger
 from bases.Auth import AuthMixin, HTTPAuth
 from bases.Settings import SettingsGetter, ShareMode
 from bases.Utils import copy2Clipboard
@@ -423,60 +423,81 @@ def processVFS(args, context):
         output(_('Error: VFS mode requires a file or folder path'))
         return 1
 
-    # Get port (VFS server uses specified port or random)
-    vfsPort = args.port if args.port else 0
+    session = context.session
+    uid = session.uid
     
-    authPassword = args.authPassword or os.getenv('FFL_AUTH_PASSWORD')
-    authUser = args.authUser if authPassword else None
-
-     # Start VFS server (supports both files and folders)
-    vfsServer = VFSServer(args.file, host="127.0.0.1", port=vfsPort, authUser=authUser, authPassword=authPassword)
-    vfsServer.start()
-
-    vfsUri = vfsServer.clientUri
-    
-    reporter.notifyVFSServerCreated(vfsServer, link=vfsUri, uid=args.uid)
-    output(_("VFS server started successfully!\n"))
-
-    shareType = 'file' if os.path.isfile(args.file) else 'folder'
-    output(_("Please share the URI below to access the {type} remotely:\n").format(type=shareType))
-
-    # Show auth info if enabled (password enables auth)
-    if authPassword:
-        output(_('Authentication enabled - Username: {authUser}\n').format(authUser=authUser))
-    
-    # Never include password in URI (security issue)
-    output(f"{vfsUri}\n")
-    if not args.disableClipboard:
-        copy2Clipboard(vfsUri)
-
-    output(_('VFS server is running on loopback (127.0.0.1) - only accessible from this machine.'))
-    output(_('Please keep the application running for remote access.'))
-    if SettingsGetter.getInstance().isCLIMode():
-        output(_('Press Ctrl+C to stop the server.\n'))
-    else:
-        output('')
-
-    shareResult = context.createShareResult(
-        file=args.file,
-        contentName=os.path.basename(args.file),
-        fileSize=None, # VFS TAR size unknown
-        uploadMode=ShareMode.P2P,
-        tunnelType='vfs',
-        link=vfsUri,
-        e2ee=False, # VFS doesn't support E2EE yet
+    reporter.notifyShareCreated(
+        uid,
+        os.path.basename(args.file),
+        os.path.getsize(args.file) if os.path.isfile(args.file) else 0,
+        ShareMode.P2P,
     )
-    reporter.notifyShareLinkCreated(shareResult, uid=args.uid)
+
+    vfsServer = None
 
     try:
+        # Get port (VFS server uses specified port or random)
+        vfsPort = args.port if args.port else 0
+        
+        authPassword = args.authPassword or os.getenv('FFL_AUTH_PASSWORD')
+        authUser = args.authUser if authPassword else None
+
+        # Start VFS server (supports both files and folders)
+        vfsServer = VFSServer(args.file, host="127.0.0.1", port=vfsPort, authUser=authUser, authPassword=authPassword)
+        vfsServer.start()
+        
+        vfsUri = vfsServer.clientUri
+
+        reporter.notifyShareStarted(uid)
+        reporter.notifyVFSServerCreated(vfsServer, link=vfsUri, uid=uid)
+        
+        output(_("VFS server started successfully!\n"))
+
+        shareType = 'file' if os.path.isfile(args.file) else 'folder'
+        output(_("Please share the URI below to access the {type} remotely:\n").format(type=shareType))
+
+        # Show auth info if enabled (password enables auth)
+        if authPassword:
+            output(_('Authentication enabled - Username: {authUser}\n').format(authUser=authUser))
+
+        # Never include password in URI (security issue)
+        output(f"{vfsUri}\n")
+        if not args.disableClipboard:
+            copy2Clipboard(vfsUri)
+
+        output(_('VFS server is running on loopback (127.0.0.1) - only accessible from this machine.'))
+        output(_('Please keep the application running for remote access.'))
+        if SettingsGetter.getInstance().isCLIMode():
+            output(_('Press Ctrl+C to stop the server.\n'))
+        else:
+            output('')
+
+        shareResult = context.createShareResult(
+            file=args.file,
+            contentName=os.path.basename(args.file),
+            fileSize=None, # VFS TAR size unknown
+            uploadMode=ShareMode.P2P,
+            tunnelType='vfs',
+            link=vfsUri,
+            e2ee=False, # VFS doesn't support E2EE yet
+        )
+    
+        reporter.notifyShareLinkCreated(shareResult, uid=uid)
+        reporter.notifyShareAvailable(uid, shareResult)
+
         # Keep server running until interrupted
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         output(_('\nShutting down VFS server...'))
-        FFLEvent.applicationInterrupted.trigger(reason='user-interrupt')
+        reporter.notifyShareStopped(uid)
+        raise
+    except Exception as e:
+        reporter.notifyShareFailed(uid, str(e))
+        raise
     finally:
-        vfsServer.stop()
-        output(_('VFS server stopped.'))
+        if vfsServer:
+            vfsServer.stop()
+            output(_('VFS server stopped.'))
 
     return 0

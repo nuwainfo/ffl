@@ -1915,7 +1915,7 @@ class DownloadManager {
         this.retryLink = options.retryLink || '#retry-link';
         this.completeStatusHeading = options.completeStatusHeading || null;
         this.downloadLink = options.downloadLink || '#download-link';
-        this.filenameInput = options.filenameInput || '#filename';
+        this.fileNameElement = options.fileNameElement || '#fileName';
         
         // Configurable timing options
         this.stallTimeoutMs = options.stallTimeoutMs || 60000; // 60 seconds for pass-through mode monitoring
@@ -2238,10 +2238,10 @@ class DownloadManager {
 
     /**
      * Get the planned download mode based on browser and file size
-     * @param {Object} options - Options object with uid and filename
+     * @param {Object} options - Options object with uid and fileName
      * @returns {Object} Plan object with browser, size, and mode
      */
-    getPlannedMode({ uid, filename } = {}) {
+    getPlannedMode({ uid, fileName } = {}) {
         const size = this.getFileSizeFromMetadata();
 
         const sizeDesc = this.isUnknownSize(size) ? 'unknown' : this.formatBytes(size);
@@ -3065,9 +3065,9 @@ class DownloadManager {
     
     /**
      * Show starting UI based on download plan
-     * @param {Object} options - Options with filename, size, and indeterminate flag
+     * @param {Object} options - Options with fileName, size, and indeterminate flag
      */
-    showStartingUI({ filename, size, indeterminate }) {
+    showStartingUI({ fileName, size, indeterminate }) {
         // Determine if progress is indeterminate (unified logic)
         const isIndeterminate = indeterminate || this.isUnknownSize(size);
         const sizeStr = this.isValidSize(size) ? this.formatBytes(size) : 'unknown size';
@@ -3098,7 +3098,7 @@ class DownloadManager {
             this.updateProgressInfo(this.t('Download:progress.preparing', 'Preparing download...'));
         }
 
-        this.log('DownloadManager', `Starting UI shown for ${filename} (${sizeStr}), indeterminate: ${isIndeterminate}`);
+        this.log('DownloadManager', `Starting UI shown for ${fileName} (${sizeStr}), indeterminate: ${isIndeterminate}`);
     }
     
     /**
@@ -3576,13 +3576,16 @@ class DownloadManager {
             }
 
             const baseBytes = activeResume?.baseBytes || 0;
+            
             let totalSizeFromServer = 0;
             let expectedTotal = this.resolveWriterTransferTotal(0, activeResume, activeUrlPath);
             let reader = null;
             let totalWritten = 0;
             let firstChunk = true;
             let bytesToDiscard = (activeResume?.skipBytes ? Math.max(0, activeResume.skipBytes) : 0) + e2eeAlignmentDiscard;
+            
             const abortController = new AbortController();
+            
             const transferState = this.writerResumeController.beginTransfer({
                 urlPath: activeUrlPath,
                 downloadPath: this.activeDownloadPath,
@@ -3591,6 +3594,48 @@ class DownloadManager {
                 expectedSize: expectedTotal,
                 getReceivedBytes: () => baseBytes + totalWritten
             });
+            
+            const discardInitialChunk = (chunk, label) => {
+                if (!firstChunk || bytesToDiscard <= 0) {
+                    return chunk;
+                }
+                if (chunk.byteLength <= bytesToDiscard) {
+                    this.log(
+                        'DownloadManager',
+                        `Discarding ${label} (${chunk.byteLength} bytes), remaining=${bytesToDiscard - chunk.byteLength}`
+                    );
+                    bytesToDiscard -= chunk.byteLength;
+                    return null;
+                }
+
+                this.log(
+                    'DownloadManager',
+                    `Discarding ${bytesToDiscard} bytes from ${label}, keeping ${chunk.byteLength - bytesToDiscard}`
+                );
+                chunk = chunk.subarray(bytesToDiscard);
+                bytesToDiscard = 0;
+                return chunk;
+            };
+            
+            const writeChunk = async (chunk, label) => {
+                try {
+                    await this.writerResumeController.writeWithGuard(writer, chunk, transferState);
+                } catch (writeError) {
+                    const error = new Error(`Writer failed while writing ${label}: ${writeError.message || writeError}`);
+                    error.code = 'FFL_WRITER_WRITE_ERROR';
+                    error.phase = 'writer.write';
+                    error.cause = writeError;
+                    error.receivedBytes = baseBytes + totalWritten;
+                    error.expectedSize = expectedTotal;
+                    throw error;
+                }
+                totalWritten += chunk.byteLength;
+                fetchResponseRetryIndex = 0;
+
+                if (activeProgressCallback) {
+                    activeProgressCallback(baseBytes + totalWritten, expectedTotal || totalSizeFromServer);
+                }
+            };
 
             try {
                 const response = await this.writerResumeController.fetchResponseWithGuard(
@@ -3644,6 +3689,38 @@ class DownloadManager {
 
                     const { done, value } = readResult;
                     if (done) {
+                        // HTTPDecryptor buffers a final encrypted fragment smaller than its
+                        // normal chunk size.  Flush it before checking the plaintext byte
+                        // count; otherwise a valid final partial chunk looks like a premature
+                        // EOF and the writer-resume loop retries the same tail indefinitely.
+                        if (needsDecryption) {
+                            let finalChunk;
+                            try {
+                                finalChunk = await this.httpDecryptor.flush();
+                                this.log(
+                                    'DownloadManager',
+                                    `E2EE resume: Flushed final buffered chunk, decrypted size: ${finalChunk.byteLength}`
+                                );
+                            } catch (decryptError) {
+                                this.log('DownloadManager', 'ERROR: E2EE final-chunk decryption failed during resume:', decryptError);
+                                
+                                const error = new Error('E2EE final-chunk decryption failed: ' + decryptError.message);
+                                error.code = 'FFL_E2EE_DECRYPT_ERROR';
+                                error.phase = 'decrypt.flush';
+                                error.cause = decryptError;
+                                error.receivedBytes = baseBytes + totalWritten;
+                                error.expectedSize = expectedTotal;
+                                throw error;
+                            }
+
+                            finalChunk = discardInitialChunk(finalChunk, 'final chunk');
+                            firstChunk = false;
+
+                            if (finalChunk && finalChunk.byteLength > 0) {
+                                await writeChunk(finalChunk, 'final download chunk');
+                            }
+                        }
+
                         const receivedBytes = baseBytes + totalWritten;
                         if (expectedTotal > 0 && receivedBytes < expectedTotal) {
                             throw this.createPrematureEOFError(receivedBytes, expectedTotal);
@@ -3678,42 +3755,12 @@ class DownloadManager {
                         }
                     }
 
-                    if (firstChunk && bytesToDiscard > 0) {
-                        if (chunk.byteLength <= bytesToDiscard) {
-                            this.log(
-                                'DownloadManager',
-                                `Discarding entire chunk (${chunk.byteLength} bytes), remaining=${bytesToDiscard - chunk.byteLength}`
-                            );
-                            bytesToDiscard -= chunk.byteLength;
-                            continue;
-                        }
-
-                        this.log(
-                            'DownloadManager',
-                            `Discarding ${bytesToDiscard} bytes from first chunk, keeping ${chunk.byteLength - bytesToDiscard}`
-                        );
-                        chunk = chunk.subarray(bytesToDiscard);
-                        bytesToDiscard = 0;
+                    chunk = discardInitialChunk(chunk, 'chunk');
+                    if (!chunk) {
+                        continue;
                     }
                     firstChunk = false;
-
-                    try {
-                        await this.writerResumeController.writeWithGuard(writer, chunk, transferState);
-                    } catch (writeError) {
-                        const error = new Error(`Writer failed while writing download chunk: ${writeError.message || writeError}`);
-                        error.code = 'FFL_WRITER_WRITE_ERROR';
-                        error.phase = 'writer.write';
-                        error.cause = writeError;
-                        error.receivedBytes = baseBytes + totalWritten;
-                        error.expectedSize = expectedTotal;
-                        throw error;
-                    }
-                    totalWritten += chunk.byteLength;
-                    fetchResponseRetryIndex = 0;
-
-                    if (activeProgressCallback) {
-                        activeProgressCallback(baseBytes + totalWritten, expectedTotal || totalSizeFromServer);
-                    }
+                    await writeChunk(chunk, 'download chunk');
                 }
             } catch (transferError) {
                 const pendingResumeError = this.writerResumeController.consumePendingResumeRequest(
@@ -3815,7 +3862,7 @@ class DownloadManager {
         document.body.removeChild(a);
     }
 
-    async startNativeDownload(url, filename, {
+    async startNativeDownload(url, fileName, {
         writer = null,
         progressSwSupported = false,
         resumeConfig = null,
@@ -4254,10 +4301,11 @@ class DownloadManager {
         }
 
         let url = $(this.downloadLink).attr('href') || `/${this.uid}/download`;
-        const filename = $(this.filenameInput).val() || 'download';
+        const $fileNameEl = $(this.fileNameElement);
+        const fileName = ($fileNameEl.val() || $fileNameEl.text()).trim() || 'download';
 
         // Get the planned download mode based on browser and file size
-        const plan = this.getPlannedMode({ uid: this.uid, filename });
+        const plan = this.getPlannedMode({ uid: this.uid, fileName });
         if (resumeConfig && resumeConfig.expectedSize && (!plan.size || plan.size < resumeConfig.expectedSize)) {
             plan.size = resumeConfig.expectedSize;
         }
@@ -4280,7 +4328,7 @@ class DownloadManager {
         url = this.addSwConfigToUrl(url, plan, resumeConfig);
 
         // UI: Show starting message based on plan
-        this.showStartingUI({ filename, size: plan.size, indeterminate: plan.mode !== 'sw' });
+        this.showStartingUI({ fileName, size: plan.size, indeterminate: plan.mode !== 'sw' });
 
         // Firefox large file watchdog: show "started" UI after delay
         if (plan.browser === 'firefox' && plan.mode === 'pass') {
@@ -4294,7 +4342,7 @@ class DownloadManager {
         // if ff_pass=1, we still use ProgressServiceWorker.js to handle fetch request, but pass-through browser directly.
 
         // Unified download entry point - all branches handled in startNativeDownload
-        return this.startNativeDownload(url, filename, {
+        return this.startNativeDownload(url, fileName, {
             writer,
             progressSwSupported,
             resumeConfig,

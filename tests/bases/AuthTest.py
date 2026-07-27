@@ -1222,7 +1222,10 @@ class EmailAuthBrowserTest(IMAPTestMixin, _EmailBrowserMixin, _GateBrowserMixin,
     def testBrowserEmailGateWrongOTPRejected(self):
         """Email auth: wrong OTP → error message shown, gate remains."""
         self._deleteTestEmails()
-        shareLink = self._startEmailShare(timeout='60')
+        # 60s was too tight: gate-open (~15s) + _fetchOTPFromEmail (up to 60s) + OTP
+        # submit already exceeds it, risking the server's own --timeout self-shutdown
+        # firing mid-test. Match the other tests in this class (120s).
+        shareLink = self._startEmailShare(timeout='120')
         driver = self._setupChromeDriver(self.chromeDownloadDir)
         self.activeDrivers.append(driver)
         try:

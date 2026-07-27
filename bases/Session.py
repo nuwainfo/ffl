@@ -368,6 +368,12 @@ class ServerSession(ShareSession):
 
         super().stop()
 
+
+def createSession(shareRequest):
+    sessionClass = UploadSession if shareRequest.upload else ServerSession
+    return ShareSession.create(shareRequest.file, sessionClass=sessionClass)
+
+
 class ShareManager(ABC):
     """Abstract base class for managing multiple concurrent ShareSessions."""
 
@@ -377,6 +383,14 @@ class ShareManager(ABC):
 
     @abstractmethod
     def stopShare(self, uid):
+        raise NotImplementedError
+
+    @abstractmethod
+    def pauseShare(self, uid):
+        raise NotImplementedError
+
+    @abstractmethod
+    def resumeShare(self, uid):
         raise NotImplementedError
 
     @abstractmethod

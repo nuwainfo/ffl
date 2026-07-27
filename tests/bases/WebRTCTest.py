@@ -88,6 +88,13 @@ class WebRTCTest(BrowserTestBase):
         self._runBrowserDownloadTest('firefox', p2p=False)
 
     # Cross-browser tests
+    @unittest.skipIf(
+        os.environ.get('STATIC_SERVER', '').startswith('http://'),
+        "Firefox stalls document readyState at 'loading' forever when the share page (HTTPS) "
+        "loads its JS from an insecure http:// STATIC_SERVER (mixed active content) - same root "
+        "cause as tests.bases.E2EETest's Firefox tests. Not an app bug - only run this locally "
+        "with STATIC_SERVER unset or https://."
+    )
     def testCrossBrowserCompatibility(self):
         """Test that the same share link works in both Chrome and Firefox simultaneously"""
         try:

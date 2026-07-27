@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-07-20 17:12+0800\n"
+"POT-Creation-Date: 2026-07-26 17:39+0800\n"
 "PO-Revision-Date: 2025-12-21 08:43+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -74,7 +74,7 @@ msgstr "退回到预设日志层级配置"
 
 #, python-brace-format
 msgid "FastFileLink v{version}"
-msgstr "快档连结 v{version}"
+msgstr "快文链接 v{version}"
 
 msgid "🔄 Update available!"
 msgstr "🔄 有可用更新！"
@@ -158,7 +158,7 @@ msgstr ""
 "URL。格式：http://[user:pass@]host:port/path（例如：http://app:token@127.0.0.1:12345/events）。认证凭据是可选的，但建议使用。"
 
 msgid "FastFileLink makes file sharing fast, simple, and secure."
-msgstr "快档连结 让档案分享快速、简单且安全。"
+msgstr "快文链接 让档案分享快速、简单且安全。"
 
 msgid "Available commands"
 msgstr "可用命令"
@@ -167,10 +167,10 @@ msgid "Share a file (default command)"
 msgstr "分享档案（预设命令）"
 
 msgid "Download a file from FastFileLink URL"
-msgstr "从 快档连结 URL 下载档案"
+msgstr "从 快文链接 URL 下载档案"
 
 msgid "FastFileLink URL to download from"
-msgstr "要下载的 快档连结 URL"
+msgstr "要下载的 快文链接 URL"
 
 msgid "Output file path (default: use filename from server)"
 msgstr "输出档案路径（预设：使用来自伺服器的档案名称）"
@@ -413,24 +413,34 @@ msgid "Please specify a file or folder path instead of \"-\""
 msgstr "请指定文件或文件夹路径，而不是 \"-\""
 
 #, python-brace-format
+msgid "Daemon worker is missing for delivery {uid}."
+msgstr "传送 {uid} 缺少 Daemon worker。"
+
+#, python-brace-format
 msgid "Share worker exited with code {exitCode}"
 msgstr ""
+
+#, python-brace-format
+msgid "Daemon server did not create a ServerSession for delivery {uid}."
+msgstr "Daemon server 未为传送 {uid} 建立 ServerSession。"
+
+#, python-brace-format
+msgid "Daemon server session does not match delivery {uid}."
+msgstr "Daemon server session 与传送 {uid} 不相符。"
 
 #, python-brace-format
 msgid "Daemon started (PID: {pid}, port: {port})"
 msgstr ""
 
-msgid "Daemon is not running"
+#, python-brace-format
+msgid "Daemon API request failed ({statusCode}): {errorMessage}"
 msgstr ""
 
-msgid "Failed to configure daemon event hook"
+msgid "Daemon is not running"
 msgstr ""
 
 #, python-brace-format
 msgid "Daemon failed to start within {timeout} seconds"
-msgstr ""
-
-msgid "Failed to send stop command to daemon"
 msgstr ""
 
 msgid "Daemon may not have stopped cleanly"
@@ -598,7 +608,7 @@ msgstr "从 {resumePos} / {totalSize} 继续下载"
 msgid ""
 "⚠️  This is not a FastFileLink URL, downloading directly via HTTP (like "
 "wget)..."
-msgstr "⚠️  这不是 快档连结 网址，正在直接透过 HTTP 下载（类似 wget）..."
+msgstr "⚠️  这不是 快文链接 网址，正在直接透过 HTTP 下载（类似 wget）..."
 
 msgid "Download complete"
 msgstr ""
@@ -669,6 +679,9 @@ msgstr "进度：{sizeDisplay}/{totalDisplay}（{percentage:.2f}%），{speedDis
 msgid "Upload failed: {error}"
 msgstr "上传失败：{error}"
 
+msgid "Cannot prepare a server without a ServerSession."
+msgstr "没有 ServerSession 时无法准备 server。"
+
 msgid ""
 "Please share the link below with the person you'd like to share the file "
 "with."
@@ -703,6 +716,9 @@ msgstr "正在透过代理 {proxyInfo} 建立通道连线...\n"
 
 msgid "Establishing tunnel connection...\n"
 msgstr "正在建立通道连线...\n"
+
+msgid "Server encountered an error during file sharing."
+msgstr "Server 在文件分享期间发生错误。"
 
 msgid "Unable to get uploaded link"
 msgstr "无法获取上传链接"
@@ -817,7 +833,7 @@ msgstr "将连结和设定输出到 JSON 档案"
 msgid ""
 "Upload file to FastFileLink server to share it (Share duration after "
 "upload). Default: {default}"
-msgstr "上传档案到 快档连结 云端以分享（上传后的分享期限）。预设：{default}"
+msgstr "上传档案到 快文链接 云端以分享（上传后的分享期限）。预设：{default}"
 
 msgid ""
 "Resume a previously interrupted upload (requires previous upload session "
@@ -1391,5 +1407,11 @@ msgstr "正在尝试 WebRTC 下载..."
 #~ msgstr ""
 
 #~ msgid "Error: Failed to send stop command to daemon"
+#~ msgstr ""
+
+#~ msgid "Failed to configure daemon event hook"
+#~ msgstr ""
+
+#~ msgid "Failed to send stop command to daemon"
 #~ msgstr ""
 

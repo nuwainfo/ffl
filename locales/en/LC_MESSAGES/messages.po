@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-07-20 17:12+0800\n"
+"POT-Creation-Date: 2026-07-26 17:39+0800\n"
 "PO-Revision-Date: 2025-12-17 09:22+0800\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -404,24 +404,34 @@ msgid "Please specify a file or folder path instead of \"-\""
 msgstr ""
 
 #, python-brace-format
+msgid "Daemon worker is missing for delivery {uid}."
+msgstr ""
+
+#, python-brace-format
 msgid "Share worker exited with code {exitCode}"
+msgstr ""
+
+#, python-brace-format
+msgid "Daemon server did not create a ServerSession for delivery {uid}."
+msgstr ""
+
+#, python-brace-format
+msgid "Daemon server session does not match delivery {uid}."
 msgstr ""
 
 #, python-brace-format
 msgid "Daemon started (PID: {pid}, port: {port})"
 msgstr ""
 
-msgid "Daemon is not running"
+#, python-brace-format
+msgid "Daemon API request failed ({statusCode}): {errorMessage}"
 msgstr ""
 
-msgid "Failed to configure daemon event hook"
+msgid "Daemon is not running"
 msgstr ""
 
 #, python-brace-format
 msgid "Daemon failed to start within {timeout} seconds"
-msgstr ""
-
-msgid "Failed to send stop command to daemon"
 msgstr ""
 
 msgid "Daemon may not have stopped cleanly"
@@ -654,6 +664,9 @@ msgstr ""
 msgid "Upload failed: {error}"
 msgstr ""
 
+msgid "Cannot prepare a server without a ServerSession."
+msgstr ""
+
 msgid ""
 "Please share the link below with the person you'd like to share the file "
 "with."
@@ -687,6 +700,9 @@ msgid "Establishing tunnel connection via proxy {proxyInfo}...\n"
 msgstr ""
 
 msgid "Establishing tunnel connection...\n"
+msgstr ""
+
+msgid "Server encountered an error during file sharing."
 msgstr ""
 
 msgid "Unable to get uploaded link"
@@ -1346,5 +1362,11 @@ msgstr ""
 #~ msgstr ""
 
 #~ msgid "Error: Failed to send stop command to daemon"
+#~ msgstr ""
+
+#~ msgid "Failed to configure daemon event hook"
+#~ msgstr ""
+
+#~ msgid "Failed to send stop command to daemon"
 #~ msgstr ""
 

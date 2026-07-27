@@ -44,10 +44,12 @@ import threading
 import time
 import webbrowser
 
+from urllib.parse import urlsplit
+
 from abc import ABC, abstractmethod
 from functools import partial
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional
 
@@ -62,7 +64,7 @@ from bases.Kernel import StorageLocator, getLogger
 from bases.Kernel import FFLEvent
 from bases.Runtime import MultiShareServerRuntime, SingleShareRuntime
 from bases.Server import createServer
-from bases.Session import ServerSession, ShareManager, UploadSession
+from bases.Session import ServerSession, ShareManager, UploadSession, createSession
 from bases.Share import (
     ShareExecutionContext,
     ShareReporter,
@@ -71,7 +73,6 @@ from bases.Share import (
     ShareSession,
     ShareStatus,
     createShareRequest,
-    generateUID,
     processSharing,
 )
 from bases.Settings import SettingsGetter, ShareMode
@@ -207,8 +208,8 @@ class DaemonSharedRuntime(MultiShareServerRuntime):
 
         if uploadProcessor:
             # Pull upload needs its own local server. SingleShareRuntime replaces
-            # context.session with ServerSession while this daemon keeps its
-            # UploadSession lifecycle record in _sessions.
+            # context.session with ServerSession while the worker keeps its
+            # UploadSession lifecycle record in worker.session.
             return self._fallbackRuntime.runServerShare(
                 args,
                 context,
@@ -221,11 +222,21 @@ class DaemonSharedRuntime(MultiShareServerRuntime):
 
         reporter = context.reporter
         output = reporter.output
-        exitCode, session = self.prepareServerSession(
-            args, context, reader=reader, uid=uid, link='', torDetected=torDetected, uploadProcessor=uploadProcessor
+        exitCode = self.prepareServerSession(
+            args,
+            context,
+            reader=reader,
+            uid=uid,
+            link='',
+            port=self._port,
+            domain=self._domain,
+            torDetected=torDetected,
+            uploadProcessor=uploadProcessor,
         )
-        if session is None:
+        if exitCode:
             return exitCode
+
+        session = context.session
 
         recipientAuth = session.config.recipientAuth
         authUser = session.config.authUser
@@ -241,7 +252,6 @@ class DaemonSharedRuntime(MultiShareServerRuntime):
 
             server = self._server
             tunnelLink = self._tunnelLink
-            context.session = session
 
         reporter.notifyServerCreated(server, uid=uid)
         self.outputAuthenticationInfo(reporter, authPassword, authUser, recipientAuth)
@@ -259,6 +269,8 @@ class DaemonSharedRuntime(MultiShareServerRuntime):
         )
         session.link = link
         session.status = ShareStatus.ONLINE
+        
+        reporter.notifyShareAvailable(uid, shareResult)
 
         if output and self._serverThread and not self._serverThread.is_alive():
             raise RuntimeError('Daemon shared server thread is not running')
@@ -304,6 +316,8 @@ class InProcessShareManager(ShareManager):
         session: ShareSession
         shareRequest: ShareRequest
         context: ShareExecutionContext
+        # Pull upload retains an UploadSession as the logical share while its local HTTP server uses ServerSession.
+        serverSession: Optional[ServerSession] = None
         result: Optional[ShareResult] = None
         encryptionKey: Optional[str] = None
         server: Any = None
@@ -314,26 +328,41 @@ class InProcessShareManager(ShareManager):
         messages: list = field(default_factory=list)
 
     def __init__(self):
-        self._settingsGetter = SettingsGetter.getInstance()
-        self._featureManager = self._settingsGetter.getFeatureManager()
         self._runtime = DaemonSharedRuntime()
-        self._sessions = {}
         self._workers = {}
         self._lock = threading.Lock()
 
+    def _requireWorker(self, uid):
+        worker = self._workers.get(uid)
+        if worker is None:
+            raise RuntimeError(_('Daemon worker is missing for delivery {uid}.').format(uid=uid))
+
+        return worker
+
+    def _startWorker(self, worker):
+        worker.doneEvent.clear()
+        worker.thread = threading.Thread(
+            target=self._runShareWorker,
+            args=(worker,),
+            daemon=True,
+            name=f'daemon-share-{worker.session.uid}',
+        )
+        worker.thread.start()
+
     def addShare(self, filePaths, config, proxyConfig=None):
         normalizedFile = filePaths[0] if len(filePaths) == 1 else filePaths
-        uid = config.get('uid') or generateUID(self._featureManager)
 
-        shareRequest = createShareRequest(config, file=normalizedFile, uid=uid)
-        sessionClass = UploadSession if shareRequest.upload else ServerSession
-        session = sessionClass(id=uid, filePaths=filePaths, createdAt=datetime.datetime.now().isoformat())
+        shareRequest = createShareRequest(config, file=normalizedFile)
+        session = createSession(shareRequest)
 
         reporter = ShareReporter(
-            outputCallback=partial(self._handleOutput, uid),
-            exceptionCallback=partial(self._handleException, uid),
-            shareLinkCallback=self._handleShareLinkCreated,
-            encryptionKeyCallback=partial(self._handleEncryptionKeyAvailable, uid),
+            outputCallback=partial(self._handleOutput, session.uid),
+            exceptionCallback=partial(self._handleException, session.uid),
+            shareLinkCallback=lambda shareResult, uid=None, **kwargs: self._handleShareLinkCreated(
+                uid=session.uid,
+                shareResult=shareResult,
+            ),
+            encryptionKeyCallback=partial(self._handleEncryptionKeyAvailable, session.uid),
             serverCreatedCallback=lambda server,
             uid=None: self._handleServerCreated(uid or session.uid, server),
             vfsServerCreatedCallback=lambda vfsServer,
@@ -350,13 +379,9 @@ class InProcessShareManager(ShareManager):
         worker = self.ShareWorker(session=session, shareRequest=shareRequest, context=context)
 
         with self._lock:
-            self._sessions[uid] = session
-            self._workers[uid] = worker
+            self._workers[session.uid] = worker
 
-        worker.thread = threading.Thread(
-            target=self._runShareWorker, args=(worker,), daemon=True, name=f'daemon-share-{uid}'
-        )
-        worker.thread.start()
+        self._startWorker(worker)
 
         return session
 
@@ -369,13 +394,15 @@ class InProcessShareManager(ShareManager):
 
             with self._lock:
                 session = worker.session
-                if session.status not in (ShareStatus.STOPPED, ShareStatus.COMPLETED):
+                if session.status not in (ShareStatus.STOPPED, ShareStatus.COMPLETED, ShareStatus.PAUSED):
                     session.status = ShareStatus.CRASHED
                     session.error = str(e)
         finally:
             with self._lock:
                 session = worker.session
-                if session.status not in (ShareStatus.STOPPED, ShareStatus.CRASHED):
+                if worker.context.paused:
+                    session.status = ShareStatus.PAUSED
+                elif session.status not in (ShareStatus.STOPPED, ShareStatus.CRASHED, ShareStatus.PAUSED):
                     if worker.exitCode == 0:
                         if (
                             session.status == ShareStatus.ONLINE and worker.result and
@@ -400,13 +427,11 @@ class InProcessShareManager(ShareManager):
 
         logger.info(f"[daemon share {uid}] {message}")
         with self._lock:
-            worker = self._workers.get(uid)
-            if worker:
-                worker.messages.append(message)
+            self._requireWorker(uid).messages.append(message)
 
     def _handleEncryptionKeyAvailable(self, uid, encryptionKey):
         with self._lock:
-            self._workers[uid].encryptionKey = encryptionKey
+            self._requireWorker(uid).encryptionKey = encryptionKey
 
     def _handleException(self, uid, e, action=None, errorPrefix="Oops, something went wrong"):
         parts = []
@@ -426,12 +451,12 @@ class InProcessShareManager(ShareManager):
         message = '\n'.join(parts) if parts else None
 
         with self._lock:
-            session = self._sessions.get(uid)
-            worker = self._workers.get(uid)
-            if session and message and not session.error:
+            worker = self._requireWorker(uid)
+            session = worker.session
+            if message and not session.error:
                 session.error = message
 
-            if worker and message:
+            if message:
                 worker.messages.append(message)
 
         if e:
@@ -443,46 +468,41 @@ class InProcessShareManager(ShareManager):
 
     def _handleServerCreated(self, uid, server):
         with self._lock:
-            worker = self._workers.get(uid)
-            session = self._sessions.get(uid)
-            serverSession = server.getSession(uid)
+            worker = self._requireWorker(uid)
+            session = worker.session
+            serverSession = worker.context.session
 
-            if serverSession and session:
-                if isinstance(session, UploadSession):
-                    session.port = session.port or serverSession.port
-                else:
-                    serverSession.createdAt = session.createdAt
-                    serverSession.status = session.status
-                    serverSession.link = session.link
-                    serverSession.port = session.port or serverSession.port
-                    serverSession.downloads = session.downloads
-                    serverSession.error = session.error
+            if not isinstance(serverSession, ServerSession):
+                raise RuntimeError(
+                    _('Daemon server did not create a ServerSession for delivery {uid}.').format(uid=uid)
+                )
 
-                    self._sessions[uid] = serverSession
-                    session = serverSession
+            if serverSession is not session:
+                if not isinstance(session, UploadSession):
+                    raise RuntimeError(
+                        _('Daemon server session does not match delivery {uid}.').format(uid=uid)
+                    )
 
-            if worker:
-                worker.server = server
-                if serverSession:
-                    worker.session = serverSession
-                    worker.context.session = serverSession
+                session.port = session.port or serverSession.port
 
-            stopRequested = session.status == ShareStatus.STOPPED if session else False
+            worker.server = server
+            worker.serverSession = serverSession
+
+            stopRequested = session.status == ShareStatus.STOPPED
 
         if stopRequested:
             try:
-                server.removeSession(uid)
+                server.removeSession(serverSession.uid)
             except Exception as e:
                 logger.debug(f"Failed to stop server for {uid}: {e}")
 
     def _handleVFSCreated(self, uid, vfsServer, link):
         with self._lock:
-            worker = self._workers.get(uid)
-            session = self._sessions.get(uid)
-            if worker:
-                worker.vfsServer = vfsServer
+            worker = self._requireWorker(uid)
+            session = worker.session
+            worker.vfsServer = vfsServer
 
-            stopRequested = session.status == ShareStatus.STOPPED if session else False
+            stopRequested = session.status == ShareStatus.STOPPED
 
         if stopRequested:
             try:
@@ -490,17 +510,15 @@ class InProcessShareManager(ShareManager):
             except Exception as e:
                 logger.debug(f"Failed to stop VFS server for {uid}: {e}")
 
-    def _handleShareLinkCreated(self, shareResult, uid=None, reader=None):
+    def _handleShareLinkCreated(self, uid, shareResult, **kwargs):
         with self._lock:
-            session = self._sessions.get(uid)
-            worker = self._workers.get(uid)
-            if session is None:
-                return
+            worker = self._requireWorker(uid)
+            session = worker.session
 
             session.link = shareResult.link
             worker.result = shareResult
 
-            if not worker or not worker.context.isStopRequested():
+            if not worker.context.isStopRequested():
                 session.status = ShareStatus.ONLINE
 
         logger.info(f"Share {uid} link ready: {shareResult.link}")
@@ -510,27 +528,26 @@ class InProcessShareManager(ShareManager):
 
     def stopShare(self, uid):
         with self._lock:
-            session = self._sessions.get(uid)
             worker = self._workers.get(uid)
-
-            if session is None:
+            if worker is None:
                 return False
 
+            session = worker.session
             session.status = ShareStatus.STOPPED
-            if worker:
-                worker.context.stopEvent.set()
+            worker.context.stopEvent.set()
 
             link = session.link
             downloads = session.downloadCount
             filePaths = list(session.filePaths)
             shareResult = worker.result
 
-        if worker and worker.server:
+        if worker.server:
             try:
-                worker.server.removeSession(uid)
+                serverUID = worker.serverSession.uid if worker.serverSession else uid
+                worker.server.removeSession(serverUID)
             except Exception as e:
                 logger.debug(f"Error stopping share server {uid}: {e}")
-        elif worker and worker.vfsServer:
+        elif worker.vfsServer:
             try:
                 worker.vfsServer.stop()
             except Exception as e:
@@ -538,49 +555,68 @@ class InProcessShareManager(ShareManager):
         else:
             session.stop()
 
-        FFLEvent.shareStopped.trigger(
-            uid=uid,
-            status=ShareStatus.STOPPED,
-            link=link,
-            downloads=downloads,
-            filePaths=filePaths,
-            shareResult=shareResult,
-        )
+        worker.context.reporter.notifyShareStopped(uid, downloads=downloads)
         return True
+
+    def pauseShare(self, uid):
+        with self._lock:
+            worker = self._workers.get(uid)
+            if worker is None or worker.session.status != ShareStatus.CREATING or not worker.session.pauseSupported:
+                return False
+
+            worker.context.requestPause()
+            return True
+
+    def resumeShare(self, uid):
+        with self._lock:
+            worker = self._workers.get(uid)
+            if worker is None or worker.session.status != ShareStatus.PAUSED:
+                return False
+
+            worker.shareRequest = replace(worker.shareRequest, resume=True)
+            worker.context.resetForResume()
+            worker.exitCode = None
+            worker.session.error = None
+            worker.session.status = ShareStatus.CREATING
+            
+            self._startWorker(worker)
+            
+            return True
 
     def listShares(self):
         with self._lock:
-            return [session for session in self._sessions.values() if self._shouldExposeSession(session)]
+            return [worker.session for worker in self._workers.values() if self._shouldExposeWorker(worker)]
 
     def getShare(self, uid):
         with self._lock:
-            return self._sessions.get(uid)
+            worker = self._workers.get(uid)
+            return worker.session if worker else None
 
-    def _shouldExposeSession(self, session):
+    def _shouldExposeWorker(self, worker):
+        session = worker.session
         if session.status in (ShareStatus.STOPPED, ShareStatus.CRASHED):
             return False
 
         if session.status != ShareStatus.COMPLETED:
             return True
 
-        worker = self._workers[session.uid]
         return worker.result and worker.result.uploadMode == ShareMode.SERVER and bool(session.link)
 
     def getShareResult(self, uid):
         with self._lock:
-            return self._workers[uid].result
+            return self._requireWorker(uid).result
 
     def getEncryptionKey(self, uid):
         with self._lock:
-            return self._workers[uid].encryptionKey
+            return self._requireWorker(uid).encryptionKey
 
     def getShareRequest(self, uid):
         with self._lock:
-            return self._workers[uid].shareRequest
+            return self._requireWorker(uid).shareRequest
 
     def shutdown(self):
         with self._lock:
-            shareIds = list(self._sessions.keys())
+            shareIds = list(self._workers.keys())
 
         for uid in shareIds:
             self.stopShare(uid)
@@ -599,6 +635,10 @@ class DaemonAPIHandler(PathResolverMixin, HTTPRequestHandlerHelper, BaseHTTPRequ
         self.mapPOSTRoute('/shares', self._handleCreateShare)
         self.mapPOSTRoute('/shutdown', self._handleShutdown)
         self.mapPOSTRoute(re.compile(r'^/shares/(?P<shareId>.+)/stop$'), self._handleStopShare)
+        self.mapPOSTRoute(re.compile(r'^/shares/(?P<shareId>.+)/pause$'), self._handlePauseShare)
+        self.mapPOSTRoute(re.compile(r'^/shares/(?P<shareId>.+)/resume$'), self._handleResumeShare)
+
+        FFLEvent.daemonEndpointsRegister.trigger(handler=self)
 
         super().__init__(*args, **kwargs)
 
@@ -612,9 +652,16 @@ class DaemonAPIHandler(PathResolverMixin, HTTPRequestHandlerHelper, BaseHTTPRequ
             return False
 
         return True
+        
+    def _runRequestHandler(self, handler):
+        try:
+            handler()
+        except Exception as e:
+            logger.exception('Daemon API request failed')
+            self._sendJSON(500, {'error': str(e)})        
 
     def do_GET(self):
-        path = self.path.rstrip('/')
+        path = urlsplit(self.path).path.rstrip('/')
 
         if path == '/health':
             self._handleHealth()
@@ -625,20 +672,20 @@ class DaemonAPIHandler(PathResolverMixin, HTTPRequestHandlerHelper, BaseHTTPRequ
 
         handler = self._resolveGETHandler(path)
         if handler:
-            handler()
+            self._runRequestHandler(handler)
             return
 
         self._sendJSON(404, {'error': 'not found'})
 
     def do_POST(self):
-        path = self.path.rstrip('/')
+        path = urlsplit(self.path).path.rstrip('/')
 
         if not self._requireAuth():
             return
 
         handler = self._resolvePOSTHandler(path)
         if handler:
-            handler()
+            self._runRequestHandler(handler)
             return
 
         self._sendJSON(404, {'error': 'not found'})
@@ -693,13 +740,21 @@ class DaemonAPIHandler(PathResolverMixin, HTTPRequestHandlerHelper, BaseHTTPRequ
         self.server.setHook(hookURL.strip())
         self._sendJSON(200, {'ok': True})
 
-    def _handleStopShare(self, shareId):
-        success = self.server.shareManager.stopShare(shareId)
-        if not success:
-            self._sendJSON(404, {'error': 'not found'})
+    def _handleShareAction(self, shareId, action, errorStatus, errorMessage):
+        if not action(shareId):
+            self._sendJSON(errorStatus, {'error': errorMessage})
             return
 
         self._sendJSON(200, {'ok': True})
+
+    def _handleStopShare(self, shareId):
+        self._handleShareAction(shareId, self.server.shareManager.stopShare, 404, 'not found')
+
+    def _handlePauseShare(self, shareId):
+        self._handleShareAction(shareId, self.server.shareManager.pauseShare, 409, 'share cannot be paused')
+
+    def _handleResumeShare(self, shareId):
+        self._handleShareAction(shareId, self.server.shareManager.resumeShare, 409, 'share cannot be resumed')
 
     def _handleShutdown(self):
         self._sendJSON(200, {'ok': True})
@@ -766,7 +821,23 @@ class DaemonServer(ThreadingHTTPServer):
             hookEventForwarder = HookEventForwarder.getInstance()
             hookEventForwarder.clear()
 
+        FFLEvent.daemonStopped.trigger()
+        
         self._stateFile.clear()
+
+
+class DaemonAPIError(RuntimeError):
+    """Daemon REST API returned an error response."""
+
+    def __init__(self, statusCode, errorMessage):
+        self.statusCode = statusCode
+        self.errorMessage = errorMessage
+        super().__init__(
+            _('Daemon API request failed ({statusCode}): {errorMessage}').format(
+                statusCode=statusCode,
+                errorMessage=errorMessage,
+            )
+        )
 
 
 class DaemonClient:
@@ -776,6 +847,31 @@ class DaemonClient:
     API_TIMEOUT = 10
     STATUS_POLL_INTERVAL = 0.5
     CREATE_SHARE_TIMEOUT = 120
+
+    @staticmethod
+    def _getResponseData(response, expectedStatusCodes):
+        if response.status_code in expectedStatusCodes:
+            return response.json()
+
+        errorData = response.json()
+        raise DaemonAPIError(response.status_code, errorData['error'])        
+
+    @classmethod
+    def isRunning(cls) -> bool:
+        stateFile = DaemonStateFile()
+        if not stateFile.isRunning():
+            return False
+
+        state = stateFile.load()
+        if not state:
+            return False
+
+        try:
+            response = requests.get(f"http://127.0.0.1:{state['port']}/health", timeout=cls.HEALTH_TIMEOUT)
+            return response.status_code == 200
+        except Exception as e:
+            logger.debug(f"Daemon health check failed: {e}")
+            return False
 
     def __init__(self):
         self._stateFile = DaemonStateFile()
@@ -795,29 +891,10 @@ class DaemonClient:
     def _headers(self) -> dict:
         return {'X-Daemon-Token': self._state['token'], 'Content-Type': 'application/json'}
 
-    @classmethod
-    def isRunning(cls) -> bool:
-        stateFile = DaemonStateFile()
-        if not stateFile.isRunning():
-            return False
-
-        state = stateFile.load()
-        if not state:
-            return False
-
-        try:
-            response = requests.get(f"http://127.0.0.1:{state['port']}/health", timeout=cls.HEALTH_TIMEOUT)
-            return response.status_code == 200
-        except Exception as e:
-            logger.debug(f"Daemon health check failed: {e}")
-            return False
-
     def createShare(self, filePaths, config, proxyConfig=None) -> ShareRecord:
         data = {'filePaths': filePaths, 'config': config, 'proxyConfig': proxyConfig}
         response = requests.post(self.buildURL('/shares'), json=data, headers=self._headers, timeout=self.API_TIMEOUT)
-        response.raise_for_status()
-
-        return self._parseRecord(response.json())
+        return self._parseRecord(self._getResponseData(response, expectedStatusCodes={201}))
 
     def waitForLink(self, shareId: str, timeout: float = CREATE_SHARE_TIMEOUT) -> Optional[dict]:
         """Poll GET /shares/{id} until link is available, then return the full share dict."""
@@ -828,10 +905,10 @@ class DaemonClient:
                 headers=self._headers,
                 timeout=self.API_TIMEOUT,
             )
-            if response.status_code != 200:
+            if response.status_code == 404:
                 return None
 
-            shareData = response.json()
+            shareData = self._getResponseData(response, expectedStatusCodes={200})
             status = DaemonClient._parseShareStatus(shareData['status'])
             if shareData['link'] and status in (ShareStatus.ONLINE, ShareStatus.COMPLETED):
                 return shareData
@@ -845,9 +922,7 @@ class DaemonClient:
 
     def listShares(self) -> list:
         response = requests.get(self.buildURL('/shares'), headers=self._headers, timeout=self.API_TIMEOUT)
-        response.raise_for_status()
-
-        return response.json()['shares']
+        return self._getResponseData(response, expectedStatusCodes={200})['shares']
 
     def getShare(self, shareId: str) -> Optional[dict]:
         response = requests.get(
@@ -859,28 +934,42 @@ class DaemonClient:
         if response.status_code == 404:
             return None
 
-        response.raise_for_status()
-        return response.json()
+        return self._getResponseData(response, expectedStatusCodes={200})
+
+    def _postShareAction(self, shareId: str, action: str) -> bool:
+        response = requests.post(
+            self.buildURL(f'/shares/{shareId}/{action}'), headers=self._headers, timeout=self.API_TIMEOUT
+        )
+        if response.status_code in (404, 409):
+            return False
+
+        self._getResponseData(response, expectedStatusCodes={200})
+        return True
 
     def stopShare(self, shareId: str) -> bool:
-        response = requests.post(
-            self.buildURL(f'/shares/{shareId}/stop'), headers=self._headers, timeout=self.API_TIMEOUT
-        )
-        return response.status_code == 200
+        return self._postShareAction(shareId, 'stop')
+
+    def pauseShare(self, shareId: str) -> bool:
+        return self._postShareAction(shareId, 'pause')
+
+    def resumeShare(self, shareId: str) -> bool:
+        return self._postShareAction(shareId, 'resume')
 
     def stopDaemon(self) -> bool:
-        try:
-            response = requests.post(self.buildURL('/shutdown'), headers=self._headers, timeout=self.API_TIMEOUT)
-            return response.status_code == 200
-        except Exception as e:
-            logger.debug(f"Daemon shutdown request failed: {e}")
-            return False
+        response = requests.post(self.buildURL('/shutdown'), headers=self._headers, timeout=self.API_TIMEOUT)
+        self._getResponseData(response, expectedStatusCodes={200})
+        return True
 
     def setHook(self, hookURL: str) -> bool:
         response = requests.post(
             self.buildURL('/hook'), json={'hook': hookURL}, headers=self._headers, timeout=self.API_TIMEOUT
         )
-        return response.status_code == 200
+        self._getResponseData(response, expectedStatusCodes={200})
+        return True
+
+    def getJSON(self, path: str) -> dict:
+        response = requests.get(self.buildURL(path), headers=self._headers, timeout=self.API_TIMEOUT)
+        return self._getResponseData(response, expectedStatusCodes={200})
 
     def _parseRecord(self, data: dict) -> ShareRecord:
         return ShareRecord(
@@ -942,8 +1031,7 @@ class DaemonManager(ABC):
         if not hookURL:
             return
 
-        if not DaemonClient().setHook(hookURL):
-            raise RuntimeError(_('Failed to configure daemon event hook'))
+        DaemonClient().setHook(hookURL)
 
 
 class InProcessDaemonManager(DaemonManager):
@@ -1022,8 +1110,7 @@ class ProcessDaemonManager(DaemonManager):
         if not self.ownsDaemon:
             return
 
-        if not DaemonClient().stopDaemon():
-            raise RuntimeError(_('Failed to send stop command to daemon'))
+        DaemonClient().stopDaemon()
 
         if not self._waitForDaemonStopped():
             raise RuntimeError(_('Daemon may not have stopped cleanly'))
@@ -1040,8 +1127,13 @@ class ProcessDaemonManager(DaemonManager):
             return True
 
         client = DaemonClient()
-        if client.stopDaemon() and cls._waitForDaemonStopped():
-            return True
+        try:
+            client.stopDaemon()
+        except DaemonAPIError as e:
+            logger.warning(f'Failed to stop running daemon: {e}')
+        else:
+            if cls._waitForDaemonStopped():
+                return True
 
         if force:
             cls._forceKillDaemon()

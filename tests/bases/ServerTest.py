@@ -789,6 +789,20 @@ class OverlappingDownloadReproTest(FastFileLinkTestBase):
             time.sleep(0.2)
         return False
 
+    def _waitForFirstRequestStatus(self, firstRequestStatus, timeoutSeconds=10):
+        """Wait for the background request thread to append its status code.
+
+        '[Test] Stall injection' in the captured server log only proves the
+        *server* has written past the stall point into its own socket buffer --
+        it says nothing about whether the response has actually reached this
+        process's `requests` client yet (real tunnel/network hop in between), so
+        asserting on firstRequestStatus immediately after seeing that log is a
+        race. Give the client a further, bounded window to catch up.
+        """
+        deadline = time.time() + timeoutSeconds
+        while not firstRequestStatus and time.time() < deadline:
+            time.sleep(0.1)
+
     def testSameDlOverlappingRangeSupersedesOlderRequest(self):
         """A newer overlapping same-dl request should supersede the older one.
 
@@ -835,6 +849,7 @@ class OverlappingDownloadReproTest(FastFileLinkTestBase):
                 f"First request finished before stall injection was confirmed: {firstRequestError}",
             )
 
+        self._waitForFirstRequestStatus(firstRequestStatus)
         self.assertEqual(firstRequestStatus, [200], f"Expected initial full download to return 200, got {firstRequestStatus}")
         self.assertFalse(firstRequestFinished.is_set(), "First same-dl request should still be blocked at stall point")
 
@@ -913,6 +928,7 @@ class OverlappingDownloadReproTest(FastFileLinkTestBase):
                 f"First request finished before stall injection was confirmed: {firstRequestError}",
             )
 
+        self._waitForFirstRequestStatus(firstRequestStatus)
         self.assertEqual(firstRequestStatus, [200], f"Expected initial full download to return 200, got {firstRequestStatus}")
         self.assertFalse(firstRequestFinished.is_set(), "First request should still be stalled")
 
@@ -978,6 +994,7 @@ class OverlappingDownloadReproTest(FastFileLinkTestBase):
                 f"First request finished before stall injection was confirmed: {firstRequestError}",
             )
 
+        self._waitForFirstRequestStatus(firstRequestStatus)
         self.assertEqual(firstRequestStatus, [206], f"Expected initial range download to return 206, got {firstRequestStatus}")
         self.assertFalse(firstRequestFinished.is_set(), "First non-overlapping range request should still be stalled")
 

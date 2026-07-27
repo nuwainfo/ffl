@@ -21,6 +21,7 @@ import json
 import locale
 import os
 import re
+from datetime import datetime
 import signal
 import socket
 import ssl
@@ -96,6 +97,9 @@ class DataclassDictMixin:
         def serialize(value):
             if isinstance(value, Enum):
                 return value.name.lower()
+
+            if isinstance(value, datetime):
+                return value.isoformat()
 
             if is_dataclass(value):
                 if isinstance(value, DataclassDictMixin):

@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-07-20 17:12+0800\n"
+"POT-Creation-Date: 2026-07-26 17:39+0800\n"
 "PO-Revision-Date: 2025-12-21 14:22+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -17,6 +17,15 @@ msgstr ""
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
+
+msgid "No share history yet."
+msgstr "尚无分享记录。"
+
+msgid "Ended\tName\tShare ID\tSize\tDownloads"
+msgstr "结束时间\t名称\t分享 ID\t大小\t下载次数"
+
+msgid "List local share history"
+msgstr "列出本机分享记录"
 
 msgid ""
 "The sender has requested a download receipt. Do you want to send a "
@@ -152,13 +161,13 @@ msgid ""
 msgstr ""
 
 msgid "Enable error reporting to FastFileLink server for exception diagnostics"
-msgstr "启用错误回报至快档连结伺服器以进行例外诊断"
+msgstr "启用错误回报至快文链接伺服器以进行例外诊断"
 
 msgid "Login to FastFileLink account"
-msgstr "登入快档连结帐号"
+msgstr "登入快文链接帐号"
 
 msgid "Register/Login to FastFileLink account (alias for login)"
-msgstr "注册/登入快档连结帐号（login 的别名）"
+msgstr "注册/登入快文链接帐号（login 的别名）"
 
 msgid "Logout and clear credentials"
 msgstr "登出并清除凭证"
@@ -179,7 +188,7 @@ msgid ""
 msgstr "错误：不带 --receipt 邮箱的 --receipt-confirm 需要已注册（非免费）账号"
 
 msgid "Share with FastFileLink"
-msgstr "使用快档连结分享"
+msgstr "使用快文链接分享"
 
 msgid "Share"
 msgstr "分享"
@@ -194,22 +203,22 @@ msgid "Share Encrypted  —  One Download Only"
 msgstr "加密分享 — 仅限一次下载"
 
 msgid "FastFileLink Share"
-msgstr "快档连结分享"
+msgstr "快文链接分享"
 
 msgid "FastFileLink Share Once"
-msgstr "快档连结分享（一次）"
+msgstr "快文链接分享（一次）"
 
 msgid "FastFileLink Share Encrypted"
-msgstr "快档连结加密分享"
+msgstr "快文链接加密分享"
 
 msgid "FastFileLink Share Encrypted Once"
-msgstr "快档连结加密分享（一次）"
+msgstr "快文链接加密分享（一次）"
 
 msgid "OS context menu integration is not available on this platform."
 msgstr "此平台不支持系统右键菜单集成。"
 
 msgid "FastFileLink could not verify OS context menu registration."
-msgstr "快档连结无法验证系统右键菜单的注册。"
+msgstr "快文链接无法验证系统右键菜单的注册。"
 
 msgid "Windows registry support is unavailable in this runtime."
 msgstr "此运行环境不支持 Windows 注册表访问。"
@@ -218,10 +227,10 @@ msgid "OS context menu integration is unavailable in Windows Store builds."
 msgstr "Windows Store 版本不支持系统右键菜单集成。"
 
 msgid "Unable to locate the FastFileLink executable."
-msgstr "找不到快档连结可执行文件。"
+msgstr "找不到快文链接可执行文件。"
 
 msgid "FastFileLink could not read the Windows context menu registration."
-msgstr "快档连结无法读取 Windows 右键菜单的注册。"
+msgstr "快文链接无法读取 Windows 右键菜单的注册。"
 
 msgid "OS context menu integration is unavailable in sandboxed macOS builds."
 msgstr "沙盒化的 macOS 版本不支持系统右键菜单集成。"
@@ -233,10 +242,10 @@ msgid "Unable to locate FFL.py for shell integration."
 msgstr ""
 
 msgid "FastFileLink could not read the macOS Services registration."
-msgstr "快档连结无法读取 macOS 服务的注册。"
+msgstr "快文链接无法读取 macOS 服务的注册。"
 
 msgid "Open the selected file or folder in FastFileLink"
-msgstr "在快档连结中打开选取的文件或文件夹"
+msgstr "在快文链接中打开选取的文件或文件夹"
 
 msgid "Windows Explorer (Context Menu)"
 msgstr "Windows 文件资源管理器（右键菜单）"
@@ -271,7 +280,7 @@ msgid "  Status:   Not installed"
 msgstr "  状态：   未安装"
 
 msgid "Run 'ffl shell --install' to add FastFileLink to your OS context menu."
-msgstr "执行 'ffl shell --install' 将快档连结加入系统右键菜单。"
+msgstr "执行 'ffl shell --install' 将快文链接加入系统右键菜单。"
 
 #, python-brace-format
 msgid "Error: {reason}"
@@ -560,7 +569,7 @@ msgstr "   请重试..."
 #~ msgstr "Email 邮箱验证（OTP）"
 
 #~ msgid "Leave pickup code blank to let FastFileLink generate one."
-#~ msgstr "留空取件码栏位，让 快档连结 自动生成。"
+#~ msgstr "留空取件码栏位，让 快文链接 自动生成。"
 
 #~ msgid "Pickup code:"
 #~ msgstr "取件码："
@@ -623,7 +632,7 @@ msgstr "   请重试..."
 #~ msgstr "选择收件人密钥文件"
 
 #~ msgid "FastFileLink public key (*{ext})|*{ext}|All files (*.*)|*.*"
-#~ msgstr "快档连结 公钥 (*{ext})|*{ext}|所有文件 (*.*)|*.*"
+#~ msgstr "快文链接 公钥 (*{ext})|*{ext}|所有文件 (*.*)|*.*"
 
 #~ msgid "Pickup code must be exactly {n} digits."
 #~ msgstr "取件码必须恰好为 {n} 位数字。"
@@ -724,7 +733,7 @@ msgstr "   请重试..."
 #~ "\n"
 #~ "接收者可使用以下方式下载：\n"
 #~ "  • 任何网页浏览器（推荐）\n"
-#~ "  • 快档连结 CLI\n"
+#~ "  • 快文链接 CLI\n"
 #~ "\n"
 #~ "注意：curl/wget 等基本工具无法处理加密档案。"
 
@@ -746,7 +755,7 @@ msgstr "   请重试..."
 #~ "\n"
 #~ "You can disable this anytime in Preferences."
 #~ msgstr ""
-#~ "错误回报透过传送当机报告和错误来协助改善快档连结。\n"
+#~ "错误回报透过传送当机报告和错误来协助改善快文链接。\n"
 #~ "\n"
 #~ "会传送的内容：\n"
 #~ "  • 错误讯息和堆叠追踪\n"
@@ -768,7 +777,7 @@ msgstr "   请重试..."
 #~ msgstr ""
 #~ "错误回报已停用。\n"
 #~ "\n"
-#~ "此变更将在您重新启动快档连结后生效。"
+#~ "此变更将在您重新启动快文链接后生效。"
 
 #~ msgid "Error Reporting Disabled"
 #~ msgstr "错误回报已停用"
@@ -916,7 +925,7 @@ msgstr "   请重试..."
 #~ msgstr ""
 #~ "语言已变更为 {language}。\n"
 #~ "\n"
-#~ "请重新启动快档连结以使变更生效。"
+#~ "请重新启动快文链接以使变更生效。"
 
 #~ msgid "Language Changed"
 #~ msgstr "语言已变更"
@@ -1115,7 +1124,7 @@ msgstr "   请重试..."
 #~ msgstr "直接分享档案（P2P，需持续执行以供他人下载）"
 
 #~ msgid "Upload file to FastFileLink server to share it"
-#~ msgstr "上传档案至快档连结云端进行分享"
+#~ msgstr "上传档案至快文链接云端进行分享"
 
 #~ msgid "Share duration after upload"
 #~ msgstr "上传后的分享期限"
@@ -1260,10 +1269,10 @@ msgstr "   请重试..."
 #~ msgstr "继续以正常模式运行..."
 
 #~ msgid "FastFileLink"
-#~ msgstr "快档连结"
+#~ msgstr "快文链接"
 
 #~ msgid "FastFileLink makes file sharing fast, simple, and secure."
-#~ msgstr "快档连结让档案分享变得快速、简单又安全。"
+#~ msgstr "快文链接让档案分享变得快速、简单又安全。"
 
 #~ msgid "Unable to locate Core.py for shell integration."
 #~ msgstr "找不到 Shell 集成所需的 Core.py。"
@@ -1460,7 +1469,7 @@ msgstr "   请重试..."
 #~ "Finish uploading, please still wait a"
 #~ " moment because the FastFileLink server "
 #~ "is processing your file.\n"
-#~ msgstr "上传完成，请稍候片刻，因为 快档连结 伺服器正在处理您的档案。\n"
+#~ msgstr "上传完成，请稍候片刻，因为 快文链接 伺服器正在处理您的档案。\n"
 
 #~ msgid "Server verification completed successfully!"
 #~ msgstr "伺服器验证成功完成！"

@@ -26,6 +26,7 @@ import segno
 from dataclasses import InitVar, dataclass, field, fields
 from enum import IntEnum
 from typing import Any, Callable, Optional, Protocol
+from datetime import datetime, timezone
 
 from bases.FileSystems import ExcludeFilter
 from bases.Kernel import FFLEvent, UIDGenerator, getLogger
@@ -383,7 +384,6 @@ class ShareRequest(DataclassDictMixin):
 
     uploadConfirmed: bool = False
 
-    uid: Optional[str] = None
     extraOptions: dict = field(default_factory=dict)
 
     @classmethod
@@ -414,6 +414,7 @@ class ShareStatus(IntEnum):
     COMPLETED = 3
     STOPPED = 4
     CRASHED = 5
+    PAUSED = 6
 
 
 @dataclass
@@ -428,10 +429,30 @@ class ShareSession(DataclassDictMixin):
     port: Optional[int] = None
     downloads: int = 0
     error: Optional[str] = None
+    pauseSupported: bool = False
 
     @classmethod
     def getSerializableFields(cls):
         return fields(ShareSession)
+
+    @classmethod
+    def generateUID(cls):
+        # Get UIDGenerator from FeatureManager
+        uidGeneratorClass = UIDGenerator
+        settingsGetter = SettingsGetter.getInstance()
+        if settingsGetter.hasFeaturesSupport():
+            uidGeneratorClass = settingsGetter.getFeatureManager().getUIDGeneratorClass(uidGeneratorClass)
+
+        return uidGeneratorClass().generate()
+        
+    @classmethod
+    def create(cls, filePaths, sessionClass=None):
+        sessionClass = sessionClass or cls
+        return sessionClass(
+            id=sessionClass.generateUID(),
+            filePaths=filePaths if isinstance(filePaths, list) else [filePaths],
+            createdAt=datetime.now().isoformat(),
+        )
 
     @property
     def uid(self):
@@ -465,6 +486,45 @@ class ShareReporter:
 
     def output(self, text: str):
         self.outputCallback(text)
+
+    def notifyShareCreated(self, uid, name, fileSize, shareMode):
+        FFLEvent.shareCreated.trigger(
+            uid=uid,
+            name=name,
+            fileSize=fileSize or 0,
+            shareMode=shareMode,
+            occurredAt=datetime.now(timezone.utc),
+        )
+
+    def notifyShareStarted(self, uid):
+        FFLEvent.shareStarted.trigger(uid=uid, occurredAt=datetime.now(timezone.utc))
+
+    def notifyShareAvailable(self, uid, shareResult):
+        FFLEvent.shareAvailable.trigger(
+            uid=uid,
+            name=shareResult.contentName,
+            fileSize=shareResult.fileSize or 0,
+            shareMode=shareResult.uploadMode,
+            link=shareResult.link,
+            occurredAt=datetime.now(timezone.utc),
+        )
+
+    def notifyShareCompleted(self, uid):
+        FFLEvent.shareCompleted.trigger(uid=uid, occurredAt=datetime.now(timezone.utc))
+
+    def notifyShareStopped(self, uid, downloads=0):
+        FFLEvent.shareStopped.trigger(
+            uid=uid,
+            downloads=downloads,
+            occurredAt=datetime.now(timezone.utc),
+        )
+
+    def notifyShareFailed(self, uid, error):
+        FFLEvent.shareFailed.trigger(
+            uid=uid,
+            error=str(error),
+            occurredAt=datetime.now(timezone.utc),
+        )
 
     def notifyEncryptionKeyAvailable(self, encryptionKey):
         if not self.encryptionKeyCallback:
@@ -500,7 +560,7 @@ class ShareReporter:
         )
 
         if self.serverCreatedCallback:
-            self.serverCreatedCallback(server=server, uid=uid)
+            self.serverCreatedCallback(server=server)
 
     def notifyVFSServerCreated(self, vfsServer, link=None, uid=None):
         FFLEvent.serverStarting.trigger(
@@ -584,16 +644,33 @@ class RuntimeProtocol(Protocol):
 @dataclass
 class ShareExecutionContext:
     reporter: ShareReporter
+    session: ShareSession
     runtime: Optional[RuntimeProtocol] = None
     interactionHandler: Any = None
-    session: Optional[ShareSession] = None
     result: Optional[ShareResult] = None
     allowUserInteraction: bool = True
     proxyConfig: Optional[ProxyConfig] = None
     stopEvent: threading.Event = field(default_factory=threading.Event)
+    pauseEvent: threading.Event = field(default_factory=threading.Event)
+    paused: bool = False
 
     def isStopRequested(self):
         return self.stopEvent.is_set()
+
+    def requestPause(self):
+        self.pauseEvent.set()
+
+    def isPauseRequested(self):
+        return self.pauseEvent.is_set()
+
+    def markPaused(self):
+        self.paused = True
+
+    def resetForResume(self):
+        self.stopEvent.clear()
+        self.pauseEvent.clear()
+        self.paused = False
+        self.result = None
 
     def createShareResult(self, *args, **kwargs):
         self.result = ShareResult(*args, **kwargs)
@@ -659,17 +736,6 @@ class ScanFolderProgressReporter(SourceReaderProgressReporter):
             self._progress.finishBar(complete=False)
 
 
-def generateUID(featureManager):
-    # Get UIDGenerator from FeatureManager
-    uidGeneratorClass = UIDGenerator
-    settingsGetter = SettingsGetter.getInstance()
-    if settingsGetter.hasFeaturesSupport():
-        uidGeneratorClass = featureManager.getUIDGeneratorClass(uidGeneratorClass)
-
-    uidGenerator = uidGeneratorClass()
-    return uidGenerator.generate()
-
-
 def createShareRequest(source, settingsGetter=None, **overrides):
     settingsGetter = settingsGetter or SettingsGetter.getInstance()
     featureManager = settingsGetter.getFeatureManager()
@@ -698,7 +764,7 @@ def processSharing(shareRequest: ShareRequest, context: ShareExecutionContext):
     cliMode = settingsGetter.isCLIMode()
 
     def handleShareLinkCreated(**eventData):
-        if args.uid and eventData.get('uid') != args.uid:
+        if context.session and eventData.get('uid') != context.session.uid:
             return
 
         shareResult = context.result

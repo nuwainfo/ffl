@@ -17,7 +17,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import datetime
 import os
 import threading
 
@@ -34,7 +33,8 @@ from bases.Share import (
     RuntimeProtocol,
     ShareExecutionContext,
     ShareRequest,
-    generateUID,
+    ShareSession,
+    ShareStatus,
 )
 from bases.Tunnel import createTunnelRunner
 from bases.Utils import copy2Clipboard, getAvailablePort
@@ -43,35 +43,17 @@ from bases.WebRTC import DummyWebRTCManager, WebRTCManager
 logger = getLogger(__name__)
 
 
-def removeSplash():
-    try:
-        if '_PYI_SPLASH_IPC' in os.environ:
-            import pyi_splash # type: ignore # pylint: disable=import-error
-
-            pyi_splash.close()
-            os.environ.pop('_PYI_SPLASH_IPC', None)
-    except Exception as e:
-        logger.warning(f'Unable to close splash: {e}')
-
-
 class AbstractRuntime(RuntimeProtocol, ABC):
 
-    def run(self, shareRequest: ShareRequest, context: ShareExecutionContext, *, reader, size, torDetected: bool):
+    @abstractmethod
+    def runServerShare(self, args, context, *, reader, size, uid, torDetected, uploadProcessor):
+        raise NotImplementedError
+
+    def _run(self, shareRequest: ShareRequest, context: ShareExecutionContext, *, reader, size, torDetected: bool):
         args = shareRequest
-        settingsGetter = SettingsGetter.getInstance()
-        featureManager = settingsGetter.getFeatureManager()
+        uid = context.session.uid
 
-        uid = args.uid
-        if uid is None:
-            uid = generateUID(featureManager)
-
-        if context.session is None:
-            sessionClass = UploadSession if args.upload else ServerSession
-            context.session = sessionClass(
-                id=uid,
-                filePaths=args.file if isinstance(args.file, list) else [args.file],
-                createdAt=datetime.datetime.now().isoformat(),
-            )
+        context.reporter.notifyShareStarted(uid)
 
         uploadProcessor = None
         if args.upload:
@@ -88,18 +70,48 @@ class AbstractRuntime(RuntimeProtocol, ABC):
 
         # If we reach here, we need to start local server (either P2P or Pull upload)
         if not uid:
-            uid = generateUID(featureManager)
-            context.session.uid = uid
+            uid = ShareSession.generateUID()
 
         return self.runServerShare(
             args, context, reader=reader, size=size, uid=uid, torDetected=torDetected, uploadProcessor=uploadProcessor
         )
 
-    @abstractmethod
-    def runServerShare(self, args, context, *, reader, size, uid, torDetected, uploadProcessor):
-        raise NotImplementedError
+    def run(self, shareRequest: ShareRequest, context: ShareExecutionContext, *, reader, size, torDetected: bool):
+        args = shareRequest
+        reporter = context.reporter
+        session = context.session
+        uid = session.uid
 
-    def prepareServerSession(self, args, context, *, reader, uid, link, torDetected, uploadProcessor):
+        reporter.notifyShareCreated(
+            uid,
+            reader.contentName,
+            size or 0,
+            ShareMode.SERVER if args.upload else ShareMode.P2P,
+        )
+
+        try:
+            exitCode = self._run(shareRequest, context, reader=reader, size=size, torDetected=torDetected)
+        except KeyboardInterrupt:
+            reporter.notifyShareStopped(
+                session.uid,
+                downloads=session.downloadCount,
+            )
+            raise
+        except Exception as e:
+            reporter.notifyShareFailed(session.uid, str(e))
+            raise
+
+        if exitCode != 0:
+            reporter.notifyShareFailed(session.uid, f'Share exited with code {exitCode}')
+        elif not context.isStopRequested() and not context.paused and context.result and (
+            context.result.uploadMode == ShareMode.SERVER or context.session is None or
+            context.session.status != ShareStatus.ONLINE
+        ):
+            reporter.notifyShareCompleted(session.uid)
+
+        return exitCode
+
+    def prepareServerSession(self, args, context, *, reader, uid, link, port, domain, torDetected, uploadProcessor):
         reporter = context.reporter
         output = reporter.output
 
@@ -153,15 +165,25 @@ class AbstractRuntime(RuntimeProtocol, ABC):
             recipientAuth=recipientAuth,
         )
 
-        return 0, ServerSession(
-            id=uid,
-            filePaths=list(context.session.filePaths),
-            createdAt=context.session.createdAt,
-            reader=reader,
-            config=serverConfig,
-            handlerClass=handlerClass,
-            webRTCManagerClass=webRTCManagerClass,
-        )
+        if isinstance(context.session, UploadSession):
+            # Pull upload keeps UploadSession as its logical lifecycle record, but needs a separate
+            # ServerSession for the temporary local HTTP server that the server pulls from.
+            context.session = ServerSession(
+                id=uid,
+                filePaths=list(context.session.filePaths),
+                createdAt=context.session.createdAt,
+            )
+
+        if not isinstance(context.session, ServerSession):
+            raise RuntimeError(_('Cannot prepare a server without a ServerSession.'))
+
+        context.session.reader = reader
+        context.session.config = serverConfig
+        context.session.handlerClass = handlerClass
+        context.session.webRTCManagerClass = webRTCManagerClass
+        context.session.port = port
+        context.session.domain = domain
+        return 0
 
     def prepareBaseHandlerClass(self, context, *, uploadProcessor, link, uid):
         if not uploadProcessor:
@@ -282,22 +304,21 @@ class SingleShareRuntime(MultiShareServerRuntime):
             if context.isStopRequested():
                 return 0
 
-            exitCode, serverSession = self.prepareServerSession(
+            exitCode = self.prepareServerSession(
                 args,
                 context,
                 reader=reader,
                 uid=uid,
                 link=link,
+                port=port,
+                domain=domain,
                 torDetected=torDetected,
                 uploadProcessor=uploadProcessor
             )
-            if serverSession is None:
+            if exitCode:
                 return exitCode
 
-            serverSession.port = port
-            serverSession.domain = domain
-
-            context.session = serverSession
+            serverSession = context.session
 
             recipientAuth = serverSession.config.recipientAuth
             authUser = serverSession.config.authUser
@@ -327,6 +348,8 @@ class SingleShareRuntime(MultiShareServerRuntime):
             reporter.notifyServerCreated(server, uid=uid)
 
             threading.Thread(target=server.serve_forever, daemon=True, name='http-server').start()
+            if not uploadProcessor:
+                reporter.notifyShareAvailable(uid, context.result)
             try:
                 while not server._doneEvent.wait(timeout=0.5):
                     if context.isStopRequested():
@@ -338,8 +361,7 @@ class SingleShareRuntime(MultiShareServerRuntime):
                 return 0
 
             if server.error:
-                logger.error("Server encountered an error during file sharing")
-                raise ChildProcessError()
+                raise ChildProcessError(_('Server encountered an error during file sharing.'))
 
             # If we used pull upload, publish the link after server ends
             if uploadProcessor:
@@ -361,6 +383,7 @@ class SingleShareRuntime(MultiShareServerRuntime):
                     tunnelType=tunnelType,
                     recipientAuth=recipientAuth
                 )
+                reporter.notifyShareAvailable(uid, context.result)
 
             # Default success return for normal P2P completion
             return 0

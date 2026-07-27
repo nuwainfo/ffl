@@ -16,14 +16,11 @@ step() {
     echo "=============================="
 }
 
-currentDir="$(pwd)"
-parentDir="$(dirname "$currentDir")"
+currentDir="$(pwd)" # dist
+parentDir="$(dirname "$currentDir")" # FileShare
 export PATH="$HOME/.cargo/bin:$PATH"
 
 downloadPyapp() {
-
-    currentDir="$(dirname "$(pwd)")"
-    parentDir="$(dirname "$currentDir")"
 
     echo "Download, unzip and rename pyapp folder"
 
@@ -40,9 +37,10 @@ downloadPyapp() {
 
 createWheel() {
     echo "Copy Setup.py"
-    cp "$currentDir/dist/CLI/Setup.py" "$parentDir/"
+    cp "$currentDir/CLI/Setup.py" "$parentDir/../"
 
     cd "$parentDir"
+    cd ..
 
     echo "Build wheel"
     python3 Setup.py bdist_wheel
@@ -68,7 +66,7 @@ createWheel() {
     cd ../FileShare
 
     echo "Copy wheel file to pyapp folder"
-    cp "../dist/$wheelFile" "$currentDir/pyapp_$OS/"
+    cp "../dist/$wheelFile" "$parentDir/pyapp_$OS/"
     export wheelFile
     
     cd ..
@@ -120,7 +118,7 @@ createPythonTarGz() {
         mv ../REQUIREMENTS.txt.bak ../REQUIREMENTS.txt
     fi
 
-    createWheel
+    createWheel # FileShare
 
     rm -f "$envName.tar.gz"
     conda pack -n "$envName" -o "$envName.tar.gz" --ignore-missing-files
@@ -137,7 +135,7 @@ createPythonTarGz() {
         python3 -m compileall --invalidation-mode=unchecked-hash -b -q lib  || true
     elif [ "$TARGET" = "manyLinux" ]; then
         cd ..
-        cp "$currentDir/dist/CLI/linux/RemoveSym.py" "$currentDir/"
+        cp "$currentDir/CLI/linux/RemoveSym.py" "$parentDir/"
         python RemoveSym.py "$envName"
         cd "$envName"
         python3 -m compileall --invalidation-mode=unchecked-hash -b -q lib
@@ -157,7 +155,7 @@ createPythonTarGz() {
     tar -czf "../$tarGzName" . 
 
     cd ..
-    cp "$tarGzName" "$currentDir/pyapp_$OS/"
+    cp "$tarGzName" "$parentDir/pyapp_$OS/"
 
     unset CONDA_SUBDIR
 }
@@ -165,8 +163,8 @@ createPythonTarGz() {
 copyServerStatic() {
 
     echo "Copy server static folders (js, client, css, locales) to FileShare/static"
-    serverStaticDir="$parentDir/FileShareServer/static"
-    targetStaticDir="$currentDir/static"
+    serverStaticDir="$parentDir/../FileShareServer/static"
+    targetStaticDir="$parentDir/static"
 
     if [ -d "$serverStaticDir" ]; then
         for folder in js client css locales; do
@@ -235,7 +233,6 @@ cleanEnvironment() {
     rm -f ffl_python_x86_64.tar.gz
 
     conda deactivate
-    conda remove -n ffl_python_temp --all -y
 
     echo "✅ Build complete: dist/CLI/$OS/ffl"
 }
@@ -254,17 +251,13 @@ if [ "$OS" = "darwin" ]; then
     step "Create Python env (darwin native)"
     createPythonTarGz "aarch"
 
-    step "Create Python env (darwin x86_64)"
-    createPythonTarGz "x86_64"
 
     step "Build app (darwin aarch64)"
     createApp "aarch"
 
-    step "Build app (darwin x86_64)"
-    createApp "x86_64"
 
     step "Cleanup"
-    #cleanEnvironment
+    cleanEnvironment
 
 elif [ "$OS" = "linux" ]; then
 
@@ -278,7 +271,7 @@ elif [ "$OS" = "linux" ]; then
     createApp "x86_64"
 
     step "Cleanup"
-    #cleanEnvironment
+    cleanEnvironment
 
 else
     echo "❌ Unknown OS: $OS"

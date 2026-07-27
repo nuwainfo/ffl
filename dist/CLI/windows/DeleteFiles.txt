@@ -186,6 +186,16 @@ Lib\test
 Lib\tkinter
 Lib\tomllib
 Lib\turtledemo
+Lib\site-packages\adodbapi
+Lib\site-packages\comtypes
+Lib\site-packages\hPyT
+Lib\site-packages\isapi
+Lib\site-packages\pythonwin
+Lib\site-packages\pywin32_system32
+Lib\site-packages\pywinstyles
+Lib\site-packages\win32
+Lib\site-packages\win32com
+Lib\site-packages\win32comext
 Lib\site-packages\av.libs
 Lib\site-packages\_distutils_hack
 Lib\site-packages\_pyinstaller_hooks_contrib

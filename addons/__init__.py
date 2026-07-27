@@ -29,6 +29,7 @@ addons = [
     'Upload', # Core upload functionality
     'Tunnels', # Network tunneling capabilities
     'ShellIntegration', # OS context menu (right-click) integration
+    'Database', # Local share history persistence
     'GUI', # GUI interface - loaded last as it may depend on other addons
     'Preview', # ZIP file browsing and preview
 ]

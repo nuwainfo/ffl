@@ -698,6 +698,12 @@ def configureCLIParser():
     )
     sharesQrParser.add_argument('id', metavar='ID', help=_('Share ID to render as QR'))
 
+    FFLEvent.cliArgumentsSharesActionsRegister.trigger(
+        parser=sharesSubparser,
+        subparsers=sharesActions,
+        globalsParent=globalsParent,
+    )
+
     # Let addons create their command parsers (same pattern - inherit globalsParent)
     for cmdName, cmdConfig in commandRegistry.items():
         cmdParser = subparsers.add_parser(cmdName, help=cmdConfig['help'], parents=[globalsParent], exit_on_error=False)
