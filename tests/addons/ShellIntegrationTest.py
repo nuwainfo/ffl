@@ -50,14 +50,18 @@ import unittest
 from unittest import mock
 
 import requests
+import psutil
 
-from addons.ShellIntegration import _WINDOWS_REG_PATH
+from addons.ShellIntegration import ShellIntegration, WindowsIntegration, _WINDOWS_REG_PATH
+from bases.Daemon import DaemonClient, DaemonStateFile
 from ..CoreTestBase import FastFileLinkTestBase
 
 _FIXTURES_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'fixtures'))
 _CONTEXT_MENU_IMAGE = os.path.join(_FIXTURES_DIR, 'ContextMenu.png')
+_GUI_EXECUTABLE_FIXTURE = os.path.join(_FIXTURES_DIR, 'FFL.exe')
 
 _IS_WINDOWS = sys.platform == 'win32'
+_IS_WINDOWS_11 = _IS_WINDOWS and sys.getwindowsversion().build >= 22000
 _IS_JENKINS = 'JENKINS_HOME' in os.environ
 
 
@@ -125,6 +129,31 @@ def _killFFLProcesses():
 # ---------------------------------------------------------------------------
 # CLI tests — subprocess, tests the full `ffl shell` command pipeline
 # ---------------------------------------------------------------------------
+
+@unittest.skipUnless(_IS_WINDOWS, 'Windows-only test')
+class ShellIntegrationWindowsStoreTest(unittest.TestCase):
+
+    def testUsesPackagedExecutable(self):
+        class Settings:
+
+            def isCLIMode(self):
+                return False
+
+            def isRunOnDevelopment(self):
+                return False
+
+            exePath = r'C:\Program Files\WindowsApps\NuwaInformation.FastFileLink_4.0.3.0_x64__gzmdmehqhdsge\VFS\Local AppData\FastFileLink\FastFileLink.exe'
+
+        with mock.patch('addons.ShellIntegration.StoreHelper.isWindowsStore', return_value=True), \
+             mock.patch('os.path.isfile', return_value=True):
+            integration = WindowsIntegration.create(Settings())
+
+        self.assertEqual(integration.identity['target'], os.path.normcase(Settings.exePath))
+        self.assertEqual(
+            integration._commandValue,
+            f'"{os.path.normcase(Settings.exePath)}" "--cli" "--background-gui" "%1"',
+        )
+
 
 class ShellIntegrationCLITest(FastFileLinkTestBase):
     """
@@ -338,7 +367,120 @@ class ShellIntegrationDirectTest(_ShellIntegrationOSBase):
         )
 
 
+# ---------------------------------------------------------------------------
+# GUI shell integration end-to-end tests (Windows only)
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(_IS_WINDOWS, 'Windows-only tests')
+class _ShellIntegrationGUIBase(FastFileLinkTestBase):
+    """Exercises the GUI registration command exactly as Explorer invokes it."""
+
+    def setUp(self):
+        super().setUp()
+        self.guiProcess = None
+        self._integration = ShellIntegration.build()
+        self._integration.setEnabled(True)
+
+    def tearDown(self):
+        try:
+            daemonState = DaemonStateFile().load()
+            if DaemonClient.isRunning():
+                DaemonClient().stopDaemon()
+            if daemonState:
+                daemonProcess = psutil.Process(daemonState['pid'])
+                daemonProcess.terminate()
+                daemonProcess.wait(timeout=5)
+            if self.guiProcess and self.guiProcess.poll() is None:
+                self.guiProcess.terminate()
+                self.guiProcess.wait(timeout=5)
+        finally:
+            self._integration.setEnabled(False)
+            super().tearDown()
+
+    def _waitForDaemon(self, timeout=30):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if DaemonClient.isRunning():
+                return
+            time.sleep(0.2)
+        self.fail('GUI shell command did not start an in-process daemon')
+
+    def _waitForShare(self, filePath, timeout=30):
+        expectedPath = os.path.normcase(os.path.abspath(filePath))
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            for share in DaemonClient().listShares():
+                sharePaths = [os.path.normcase(os.path.abspath(path)) for path in share['filePaths']]
+                if expectedPath in sharePaths:
+                    return share
+            time.sleep(0.2)
+        self.fail(f'GUI daemon did not create a share for {filePath}')
+
+    def _readShareCommand(self):
+        import winreg
+        path = _WINDOWS_REG_PATH + r'\shell\01_Share\command'
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+            return winreg.QueryValueEx(key, None)[0]
+
+    def _invokeCommand(self, commandTemplate, filePath):
+        commandLine = commandTemplate.replace('"%1"', f'"{filePath}"')
+        return self._startSubprocess(
+            commandLine,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationFlags=subprocess.CREATE_NEW_PROCESS_GROUP,
+            disableGuiAddon=False,
+        )
+
+
+class ShellIntegrationGUIDirectTest(_ShellIntegrationGUIBase):
+    """Python-source GUI registration launches/uses the GUI-owned daemon."""
+
+    def testContextMenuShareStartsGUIAndRoutesLaterRequestsToItsDaemon(self):
+        commandTemplate = self._readShareCommand()
+        self.assertIn('--cli', commandTemplate)
+        self.assertIn('--background-gui', commandTemplate)
+
+        self.guiProcess = self._invokeCommand(commandTemplate, self.testFilePath)
+        self._waitForDaemon()
+        firstShare = self._waitForShare(self.testFilePath)
+
+        state = DaemonStateFile().load()
+        self.assertEqual(state['pid'], self.guiProcess.pid)
+
+        secondFilePath = os.path.join(self.tempDir, 'second_share.bin')
+        with open(secondFilePath, 'wb') as fileHandle:
+            fileHandle.write(os.urandom(4096))
+
+        secondProcess = self._invokeCommand(commandTemplate, secondFilePath)
+        self.assertEqual(secondProcess.wait(timeout=30), 0)
+        secondShare = self._waitForShare(secondFilePath)
+
+        self.assertNotEqual(firstShare['id'], secondShare['id'])
+        self.assertEqual(DaemonStateFile().load()['pid'], self.guiProcess.pid)
+
+
+@unittest.skipUnless(_IS_WINDOWS, 'Windows-only tests')
+@unittest.skipUnless(os.path.isfile(_GUI_EXECUTABLE_FIXTURE), 'GUI executable fixture is not available')
+class ShellIntegrationGUIExecutableTest(_ShellIntegrationGUIBase):
+    """The packaged GUI executable accepts the same shell request contract."""
+
+    def testPackagedExecutableStartsGUIManagedShellShare(self):
+        self.guiProcess = self._startSubprocess(
+            [_GUI_EXECUTABLE_FIXTURE, '--cli', '--background-gui', self.testFilePath],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationFlags=subprocess.CREATE_NEW_PROCESS_GROUP,
+            disableGuiAddon=False,
+        )
+
+        self._waitForDaemon()
+        self._waitForShare(self.testFilePath)
+        self.assertTrue(DaemonStateFile().load()['pid'])
+
+
 @unittest.skipIf(_IS_JENKINS, 'JENKINS_HOME set — headless environment')
+@unittest.skipIf(_IS_WINDOWS_11, 'Windows 11 requires a Show more options UI fixture before this visual test can run')
 @unittest.skipUnless(_PYAUTOGUI_AVAILABLE, 'pyautogui/pyperclip not installed')
 @unittest.skipUnless(os.path.exists(_CONTEXT_MENU_IMAGE), f'ContextMenu.png not found at {_CONTEXT_MENU_IMAGE}')
 class ShellIntegrationExplorerTest(_ShellIntegrationOSBase):

@@ -112,7 +112,7 @@ createPythonTarGz() {
 
     python3 -m pip install -r ../REQUIREMENTS.txt 
     # Used only for DistUtil.py not bundled in final executable.
-    python3 -m pip install pefile conda-pack setuptools wheel pip
+    python3 -m pip install conda-pack setuptools wheel pip
 
     if [ "$OS" = "linux" ]; then
         mv ../REQUIREMENTS.txt.bak ../REQUIREMENTS.txt

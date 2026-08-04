@@ -32,7 +32,7 @@ import requests
 from types import SimpleNamespace
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote, unquote
 from io import BytesIO
 
 from functools import partial
@@ -47,6 +47,60 @@ try:
     SKIP_GUI_TEST = False
 except ImportError:
     SKIP_GUI_TEST = True
+
+
+class _JSONHookEventHandlerMixin:
+    """Shared request/response helpers for BaseHTTPRequestHandler subclasses that
+    simulate a local hook server in these tests: JSON {"event", "data"} POST
+    bodies, JSON/binary responses, and optional Basic auth.
+
+    Subclasses may set the class attribute AUTH_HEADER to the expected
+    'Authorization' header value to require Basic auth on every request; leave
+    it None (the default) to skip auth checks entirely. AUTH_REALM controls the
+    WWW-Authenticate realm sent on a failed challenge.
+    """
+    AUTH_HEADER = None
+    AUTH_REALM = 'Hook Test'
+
+    def log_message(self, format, *args):
+        return
+
+    def _checkAuth(self):
+        return self.AUTH_HEADER is None or self.headers.get('Authorization') == self.AUTH_HEADER
+
+    def _sendAuthChallenge(self):
+        self.send_response(HTTPStatus.UNAUTHORIZED)
+        self.send_header('WWW-Authenticate', f'Basic realm="{self.AUTH_REALM}"')
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
+    def _requireAuth(self):
+        """Returns True if authorized; otherwise sends a 401 challenge and returns False."""
+        if self._checkAuth():
+            return True
+        self._sendAuthChallenge()
+        return False
+
+    def _sendEmptyStatus(self, status):
+        self.send_response(status)
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
+    def _sendBytes(self, body, contentType, status=HTTPStatus.OK):
+        self.send_response(status)
+        self.send_header('Content-Type', contentType)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _sendJSON(self, payload, status=HTTPStatus.OK):
+        self._sendBytes(json.dumps(payload).encode('utf-8'), 'application/json', status)
+
+    def _readEventPayload(self):
+        """Parse a POST body of the form {"event": ..., "data": ...}."""
+        contentLength = int(self.headers.get('Content-Length', 0))
+        requestData = json.loads(self.rfile.read(contentLength)) if contentLength else {}
+        return requestData.get('event'), requestData.get('data', {})
 
 
 class HookTest(unittest.TestCase):
@@ -421,58 +475,31 @@ class HookTest(unittest.TestCase):
         authPassword = 'test-hook-token'
         authHeader = f"Basic {base64.b64encode(f'{authUser}:{authPassword}'.encode()).decode()}"
 
-        class HookEndpointHandler(BaseHTTPRequestHandler):
-            def log_message(self, format, *args):
-                return
-
-            def _checkAuth(self):
-                return self.headers.get('Authorization') == authHeader
+        class HookEndpointHandler(_JSONHookEventHandlerMixin, BaseHTTPRequestHandler):
+            AUTH_HEADER = authHeader
 
             def do_GET(self):
-                if not self._checkAuth():
-                    self.send_response(HTTPStatus.UNAUTHORIZED)
-                    self.send_header('Content-Length', '0')
-                    self.end_headers()
+                if not self._requireAuth():
                     return
 
                 state['requestUids'].append(self.headers.get('X-FFL-UID'))
-                body = b'ok'
-                self.send_response(HTTPStatus.OK)
-                self.send_header('Content-Type', 'text/plain; charset=utf-8')
-                self.send_header('Content-Length', str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                self._sendBytes(b'ok', 'text/plain; charset=utf-8')
 
             def do_POST(self):
-                if not self._checkAuth():
-                    self.send_response(HTTPStatus.UNAUTHORIZED)
-                    self.send_header('Content-Length', '0')
-                    self.end_headers()
+                if not self._requireAuth():
                     return
 
                 parsed = urlparse(self.path)
                 if parsed.path != '/events':
-                    self.send_response(HTTPStatus.NOT_FOUND)
-                    self.send_header('Content-Length', '0')
-                    self.end_headers()
+                    self._sendEmptyStatus(HTTPStatus.NOT_FOUND)
                     return
 
-                contentLength = int(self.headers.get('Content-Length', 0))
-                requestData = json.loads(self.rfile.read(contentLength)) if contentLength else {}
-                eventName = requestData.get('event')
-                eventData = requestData.get('data', {})
+                eventName, eventData = self._readEventPayload()
                 if eventName == '/hook/server/endpoints/register':
                     state['registerContexts'].append(dict(eventData))
-                    responseData = {'routes': [{'method': 'GET', 'path': '/hello'}]}
+                    self._sendJSON({'routes': [{'method': 'GET', 'path': '/hello'}]})
                 else:
-                    responseData = {'status': 'ok'}
-
-                responseBody = json.dumps(responseData).encode('utf-8')
-                self.send_response(HTTPStatus.OK)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Content-Length', str(len(responseBody)))
-                self.end_headers()
-                self.wfile.write(responseBody)
+                    self._sendJSON({'status': 'ok'})
 
         hookServer = ThreadingHTTPServer(('127.0.0.1', 0), HookEndpointHandler)
         hookThread = threading.Thread(target=hookServer.serve_forever, daemon=True)
@@ -664,63 +691,37 @@ class HookEventSerializerTest(unittest.TestCase):
 class HookFunctionalTest(FastFileLinkTestBase):
     """Functional tests for hook endpoint integration with real Core process."""
 
-    def testHookRegisteredEndpointHello(self):
-        """Verify hook-registered /hello endpoint is served at [share link]/hello."""
-        registerEvents = []
-        endpointRequests = []
-        outputCapture = {}
+    def _startHelloHookServer(self, registerEvents, endpointRequests, authUser='ffl', authPassword='test-hook-token'):
+        """Local hook server that registers a single GET /hello route and records
+        every request's query args and headers. Shared by tests that only need a
+        minimal registered endpoint to probe proxying behavior (basic dispatch,
+        non-ASCII file names, ...).
 
-        authUser = 'ffl'
-        authPassword = 'test-hook-token'
+        Returns (hookServer, hookThread, hookUrl).
+        """
         authHeader = f"Basic {base64.b64encode(f'{authUser}:{authPassword}'.encode()).decode()}"
 
-        class LocalHookServerHandler(BaseHTTPRequestHandler):
-            def log_message(self, format, *args):
-                return
-
-            def _checkAuth(self):
-                return self.headers.get('Authorization') == authHeader
-
-            def _sendAuthChallenge(self):
-                self.send_response(HTTPStatus.UNAUTHORIZED)
-                self.send_header('WWW-Authenticate', 'Basic realm="Hook Test"')
-                self.send_header('Content-Length', '0')
-                self.end_headers()
+        class LocalHookServerHandler(_JSONHookEventHandlerMixin, BaseHTTPRequestHandler):
+            AUTH_HEADER = authHeader
 
             def do_POST(self):
-                if not self._checkAuth():
-                    self._sendAuthChallenge()
+                if not self._requireAuth():
                     return
 
                 parsed = urlparse(self.path)
                 if parsed.path != '/events':
-                    self.send_response(HTTPStatus.NOT_FOUND)
-                    self.send_header('Content-Length', '0')
-                    self.end_headers()
+                    self._sendEmptyStatus(HTTPStatus.NOT_FOUND)
                     return
 
-                contentLength = int(self.headers.get('Content-Length', 0))
-                requestData = json.loads(self.rfile.read(contentLength)) if contentLength else {}
-
-                eventName = requestData.get('event')
-                eventData = requestData.get('data', {})
-
+                eventName, eventData = self._readEventPayload()
                 if eventName == '/hook/server/endpoints/register':
                     registerEvents.append(eventData)
-                    responseData = {'routes': [{'method': 'GET', 'path': '/hello'}]}
+                    self._sendJSON({'routes': [{'method': 'GET', 'path': '/hello'}]})
                 else:
-                    responseData = {'status': 'ok'}
-
-                responseBody = json.dumps(responseData).encode('utf-8')
-                self.send_response(HTTPStatus.OK)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Content-Length', str(len(responseBody)))
-                self.end_headers()
-                self.wfile.write(responseBody)
+                    self._sendJSON({'status': 'ok'})
 
             def do_GET(self):
-                if not self._checkAuth():
-                    self._sendAuthChallenge()
+                if not self._requireAuth():
                     return
 
                 parsed = urlparse(self.path)
@@ -728,23 +729,26 @@ class HookFunctionalTest(FastFileLinkTestBase):
                     endpointRequests.append({
                         'path': parsed.path,
                         'query': parse_qs(parsed.query),
+                        'fileNameHeader': self.headers.get('X-FFL-FileName'),
                     })
-                    responseBody = b'hello from hook server'
-                    self.send_response(HTTPStatus.OK)
-                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
-                    self.send_header('Content-Length', str(len(responseBody)))
-                    self.end_headers()
-                    self.wfile.write(responseBody)
+                    self._sendBytes(b'hello from hook server', 'text/plain; charset=utf-8')
                     return
 
-                self.send_response(HTTPStatus.NOT_FOUND)
-                self.send_header('Content-Length', '0')
-                self.end_headers()
+                self._sendEmptyStatus(HTTPStatus.NOT_FOUND)
 
         hookServer = ThreadingHTTPServer(('127.0.0.1', 0), LocalHookServerHandler)
         hookThread = threading.Thread(target=hookServer.serve_forever, daemon=True)
         hookThread.start()
         hookUrl = f"http://{authUser}:{authPassword}@127.0.0.1:{hookServer.server_address[1]}/events"
+        return hookServer, hookThread, hookUrl
+
+    def testHookRegisteredEndpointHello(self):
+        """Verify hook-registered /hello endpoint is served at [share link]/hello."""
+        registerEvents = []
+        endpointRequests = []
+        outputCapture = {}
+
+        hookServer, hookThread, hookUrl = self._startHelloHookServer(registerEvents, endpointRequests)
 
         try:
             self._startFastFileLink(
@@ -757,7 +761,6 @@ class HookFunctionalTest(FastFileLinkTestBase):
                 shareInfo = json.load(jsonFile)
 
             shareLink = shareInfo["link"]
-            uid = urlparse(shareLink).path.strip('/').split('/')[0]
             helloUrl = f"{shareLink.rstrip('/')}/hello?source=test"
 
             response = None
@@ -797,6 +800,88 @@ class HookFunctionalTest(FastFileLinkTestBase):
             hookServer.server_close()
             hookThread.join(timeout=5)
 
+    def testHookProxyWithChineseFileName(self):
+        """Verify hook-proxied endpoints (e.g. /hello) work when the shared file name
+        contains non-ASCII characters.
+
+        Regression test: X-FFL-FileName is forwarded on every hook-proxied request
+        (bases/Hook.py _addSessionForwardHeaders). HTTP header values are latin-1
+        encoded by the underlying `requests` library, so a raw Chinese file name
+        raises UnicodeEncodeError before the request is even sent, and the proxy
+        falls back to a bare 502 for every hook endpoint (not just /manifest, /thumb).
+        """
+        registerEvents = []
+        endpointRequests = []
+        outputCapture = {}
+
+        hookServer, hookThread, hookUrl = self._startHelloHookServer(registerEvents, endpointRequests)
+
+        originalTestFilePath = self.testFilePath
+        originalFileSize = self.originalFileSize
+        chineseFileName = "中文檔名測試.txt"
+        chineseFilePath = os.path.join(self.tempDir, chineseFileName)
+        with open(chineseFilePath, "wb") as fileHandle:
+            fileHandle.write(b"hello from chinese filename test\n")
+        self.testFilePath = chineseFilePath
+        self.originalFileSize = os.path.getsize(chineseFilePath)
+
+        try:
+            self._startFastFileLink(
+                p2p=True,
+                captureOutputIn=outputCapture,
+                extraArgs=["--hook", hookUrl, "--timeout", "30", "--log-level", "DEBUG"]
+            )
+
+            with open(self.jsonOutputPath, 'r', encoding='utf-8') as jsonFile:
+                shareInfo = json.load(jsonFile)
+
+            shareLink = shareInfo["link"]
+            helloUrl = f"{shareLink.rstrip('/')}/hello"
+
+            response = None
+            lastError = None
+            for _ in range(5):
+                try:
+                    response = requests.get(helloUrl, timeout=30)
+                    break
+                except Exception as e:
+                    lastError = e
+                time.sleep(1)
+
+            if response is None:
+                raise AssertionError(f"Failed to request {helloUrl}: {lastError}")
+
+            if response.status_code != 200:
+                processOutput = self._updateCapturedOutput(outputCapture)
+                self.fail(
+                    f"Expected 200 for {helloUrl} when the shared file name contains "
+                    f"non-ASCII characters, got {response.status_code}. This reproduces the "
+                    f"X-FFL-FileName header UnicodeEncodeError bug in bases/Hook.py.\n"
+                    f"registerEvents={registerEvents}\n"
+                    f"endpointRequests={endpointRequests}\n"
+                    f"processOutput={processOutput}"
+                )
+
+            self.assertEqual(response.text, "hello from hook server")
+            self.assertGreaterEqual(len(registerEvents), 1, "Hook server should receive endpoint registration event")
+            self.assertGreaterEqual(len(endpointRequests), 1, "Hook server should receive proxied /hello request")
+
+            fileNameHeader = endpointRequests[-1].get('fileNameHeader')
+            self.assertIsNotNone(fileNameHeader, "X-FFL-FileName header should be forwarded")
+            fileNameHeader.encode('ascii') # header value itself must be ASCII-safe on the wire
+            self.assertEqual(
+                unquote(fileNameHeader),
+                chineseFileName,
+                "X-FFL-FileName should be percent-encoded so the hook server can unquote() the original name",
+            )
+
+        finally:
+            hookServer.shutdown()
+            hookServer.server_close()
+            hookThread.join(timeout=5)
+            self.testFilePath = originalTestFilePath
+            self.originalFileSize = originalFileSize
+
     def _startPreviewHookServer(self, state, encryptResponse=False, includeFileEndpoint=False):
         """Create and start a local HTTP server for preview-style hook endpoint tests.
 
@@ -824,56 +909,32 @@ class HookFunctionalTest(FastFileLinkTestBase):
             routePaths.append('/file')
         routes = [{'method': 'GET', 'path': p, 'encryptResponse': encryptResponse} for p in routePaths]
 
-        class LocalHookServerHandler(BaseHTTPRequestHandler):
-            def log_message(self, format, *args):
-                return
-
-            def _checkAuth(self):
-                return self.headers.get('Authorization') == authHeader
-
-            def _sendAuthChallenge(self):
-                self.send_response(HTTPStatus.UNAUTHORIZED)
-                self.send_header('WWW-Authenticate', 'Basic realm="Hook Test"')
-                self.send_header('Content-Length', '0')
-                self.end_headers()
+        class LocalHookServerHandler(_JSONHookEventHandlerMixin, BaseHTTPRequestHandler):
+            AUTH_HEADER = authHeader
 
             def do_POST(self):
-                if not self._checkAuth():
-                    self._sendAuthChallenge()
+                if not self._requireAuth():
                     return
 
                 parsed = urlparse(self.path)
                 if parsed.path != '/events':
-                    self.send_response(HTTPStatus.NOT_FOUND)
-                    self.send_header('Content-Length', '0')
-                    self.end_headers()
+                    self._sendEmptyStatus(HTTPStatus.NOT_FOUND)
                     return
 
-                contentLength = int(self.headers.get('Content-Length', 0))
-                requestData = json.loads(self.rfile.read(contentLength)) if contentLength else {}
-                eventName = requestData.get('event')
-                eventData = requestData.get('data', {})
+                eventName, eventData = self._readEventPayload()
 
                 if eventName == '/hook/server/endpoints/register':
                     state['registerEvents'].append(eventData)
-                    responseData = {'routes': routes}
+                    self._sendJSON({'routes': routes})
                 else:
                     if eventName == '/share/link/create':
                         state['shareManifest'] = eventData.get('manifest', [])
                         state['shareLink'] = eventData.get('link', '')
                         state['sharedRoot'] = eventData.get('filePath')
-                    responseData = {'status': 'ok'}
-
-                responseBody = json.dumps(responseData).encode('utf-8')
-                self.send_response(HTTPStatus.OK)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Content-Length', str(len(responseBody)))
-                self.end_headers()
-                self.wfile.write(responseBody)
+                    self._sendJSON({'status': 'ok'})
 
             def do_GET(self):
-                if not self._checkAuth():
-                    self._sendAuthChallenge()
+                if not self._requireAuth():
                     return
 
                 parsed = urlparse(self.path)
@@ -915,36 +976,24 @@ class HookFunctionalTest(FastFileLinkTestBase):
                 if parsed.path == '/manifest':
                     state['endpointRequests'].append({'path': '/manifest'})
                     body = json.dumps(previewManifest).encode('utf-8')
-                    self.send_response(HTTPStatus.OK)
-                    self.send_header('Content-Type', 'application/json; charset=utf-8')
-                    self.send_header('Content-Length', str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
+                    self._sendBytes(body, 'application/json; charset=utf-8')
                     return
 
                 if parsed.path == '/thumb':
                     state['endpointRequests'].append({'path': '/thumb', 'args': args})
-                    self.send_response(HTTPStatus.OK)
-                    self.send_header('Content-Type', 'image/png')
-                    self.send_header('Content-Length', str(len(fakeThumbBytes)))
-                    self.end_headers()
-                    self.wfile.write(fakeThumbBytes)
+                    self._sendBytes(fakeThumbBytes, 'image/png')
                     return
 
                 if includeFileEndpoint and parsed.path == '/file':
                     state['endpointRequests'].append({'path': '/file', 'args': args})
                     hashValue = args.get('hash', [None])[0]
                     if not hashValue:
-                        self.send_response(HTTPStatus.BAD_REQUEST)
-                        self.send_header('Content-Length', '0')
-                        self.end_headers()
+                        self._sendEmptyStatus(HTTPStatus.BAD_REQUEST)
                         return
 
                     selectedEntry = next((e for e in previewManifest['entries'] if e.get('hash') == hashValue), None)
                     if not selectedEntry or not sharedRoot:
-                        self.send_response(HTTPStatus.NOT_FOUND)
-                        self.send_header('Content-Length', '0')
-                        self.end_headers()
+                        self._sendEmptyStatus(HTTPStatus.NOT_FOUND)
                         return
 
                     relativeName = selectedEntry['name']
@@ -953,23 +1002,15 @@ class HookFunctionalTest(FastFileLinkTestBase):
                         relativeName = relativeName[len(sharedRootName) + 1:]
                     filePath = os.path.join(sharedRoot, relativeName.replace('/', os.sep))
                     if not os.path.exists(filePath):
-                        self.send_response(HTTPStatus.NOT_FOUND)
-                        self.send_header('Content-Length', '0')
-                        self.end_headers()
+                        self._sendEmptyStatus(HTTPStatus.NOT_FOUND)
                         return
 
                     with open(filePath, 'rb') as fileHandle:
                         fileBody = fileHandle.read()
-                    self.send_response(HTTPStatus.OK)
-                    self.send_header('Content-Type', selectedEntry.get('mime', 'application/octet-stream'))
-                    self.send_header('Content-Length', str(len(fileBody)))
-                    self.end_headers()
-                    self.wfile.write(fileBody)
+                    self._sendBytes(fileBody, selectedEntry.get('mime', 'application/octet-stream'))
                     return
 
-                self.send_response(HTTPStatus.NOT_FOUND)
-                self.send_header('Content-Length', '0')
-                self.end_headers()
+                self._sendEmptyStatus(HTTPStatus.NOT_FOUND)
 
         hookServer = ThreadingHTTPServer(('127.0.0.1', 0), LocalHookServerHandler)
         hookThread = threading.Thread(target=hookServer.serve_forever, daemon=True)
@@ -1263,26 +1304,9 @@ class HookFunctionalTest(FastFileLinkTestBase):
         photoFileSize = folderInfo['photoFileSize']
         readmeFileSize = folderInfo['readmeFileSize']
 
-        class AndroidHookHandler(BaseHTTPRequestHandler):
-            def log_message(self, format, *args):
-                return
-
-            def _checkAuth(self):
-                return self.headers.get('Authorization') == authHeader
-
-            def _sendAuthChallenge(self):
-                self.send_response(HTTPStatus.UNAUTHORIZED)
-                self.send_header('WWW-Authenticate', 'Basic realm="Android Sim"')
-                self.send_header('Content-Length', '0')
-                self.end_headers()
-
-            def _sendJson(self, payload):
-                body = json.dumps(payload).encode('utf-8')
-                self.send_response(HTTPStatus.OK)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Content-Length', str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+        class AndroidHookHandler(_JSONHookEventHandlerMixin, BaseHTTPRequestHandler):
+            AUTH_HEADER = authHeader
+            AUTH_REALM = 'Android Sim'
 
             def _buildInnerManifest(self, uid):
                 manifest = {
@@ -1308,14 +1332,10 @@ class HookFunctionalTest(FastFileLinkTestBase):
                 return json.dumps(manifest, separators=(',', ':')).encode('utf-8')
 
             def do_POST(self):
-                if not self._checkAuth():
-                    self._sendAuthChallenge()
+                if not self._requireAuth():
                     return
 
-                contentLength = int(self.headers.get('Content-Length', 0))
-                requestData = json.loads(self.rfile.read(contentLength)) if contentLength else {}
-                eventName = requestData.get('event', '')
-                eventData = requestData.get('data', {})
+                eventName, eventData = self._readEventPayload()
 
                 if eventName == '/upload/tell':
                     tellEvents.append(eventData)
@@ -1343,7 +1363,7 @@ class HookFunctionalTest(FastFileLinkTestBase):
                     uid = eventData.get('uid', '')
                     innerManifest = self._buildInnerManifest(uid)
                     estimatedSize = len(innerManifest) + 2 * 20 * 1024
-                    self._sendJson({'sidecar': {'size': estimatedSize}})
+                    self._sendJSON({'sidecar': {'size': estimatedSize}})
 
                 elif eventName == '/upload/sidecar/fetch':
                     fetchEvents.append(eventData)
@@ -1360,7 +1380,7 @@ class HookFunctionalTest(FastFileLinkTestBase):
                         sidecarData += thumbBytes
                         offset += len(thumbBytes)
 
-                    self._sendJson({
+                    self._sendJSON({
                         'data': base64.b64encode(sidecarData).decode('ascii'),
                         'manifest': {
                             'manifest': [0, len(innerManifest)],
@@ -1369,7 +1389,7 @@ class HookFunctionalTest(FastFileLinkTestBase):
                     })
 
                 else:
-                    self._sendJson({'status': 'ok'})
+                    self._sendJSON({'status': 'ok'})
 
         server = ThreadingHTTPServer(('127.0.0.1', 0), AndroidHookHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1496,6 +1516,315 @@ class HookFunctionalTest(FastFileLinkTestBase):
         affected by the e2ee flag.
         """
         self._runSidecarUploadTest(extraUploadArgs=['--e2ee'])
+
+    def _startEventControlledHookServer(self, state, failStatusFor):
+        """Local hook server for HookEventForwarder failure-handling tests.
+
+        POST /hook/server/endpoints/register is answered per failStatusFor like
+        any other event (it is not special-cased here); the test itself decides
+        when registration should succeed. On success it mounts a single GET
+        /hello route so registration health is independently observable from
+        HTTP requests, on top of the raw per-event counts below.
+
+        failStatusFor(eventName, occurrence) -> Optional[int]: called for every
+        posted event with a 1-based per-eventName occurrence count; return an
+        HTTP status to answer with (e.g. 401, 500), or None for a normal 200.
+
+        state['eventCounts']: {eventName: occurrence count}, updated for every
+        posted event, including ones the forwarder itself never sends (so a
+        count that stops advancing is proof forwarding was skipped, not just
+        that this test didn't check).
+
+        Returns (hookServer, hookThread, hookUrl).
+        """
+        state.setdefault('eventCounts', {})
+
+        class LocalHookServerHandler(_JSONHookEventHandlerMixin, BaseHTTPRequestHandler):
+            def do_POST(self):
+                parsed = urlparse(self.path)
+                if parsed.path != '/events':
+                    self._sendEmptyStatus(HTTPStatus.NOT_FOUND)
+                    return
+
+                eventName, _eventData = self._readEventPayload()
+
+                occurrence = state['eventCounts'].get(eventName, 0) + 1
+                state['eventCounts'][eventName] = occurrence
+                failStatus = failStatusFor(eventName, occurrence)
+
+                if failStatus:
+                    self._sendEmptyStatus(failStatus)
+                    return
+
+                if eventName == '/hook/server/endpoints/register':
+                    self._sendJSON({'routes': [{'method': 'GET', 'path': '/hello'}]})
+                else:
+                    self._sendJSON({'status': 'ok'})
+
+            def do_GET(self):
+                parsed = urlparse(self.path)
+                if parsed.path == '/hello':
+                    self._sendBytes(b'hello from hook server', 'text/plain; charset=utf-8')
+                    return
+
+                self._sendEmptyStatus(HTTPStatus.NOT_FOUND)
+
+        hookServer = ThreadingHTTPServer(('127.0.0.1', 0), LocalHookServerHandler)
+        hookThread = threading.Thread(target=hookServer.serve_forever, daemon=True)
+        hookThread.start()
+        hookUrl = f"http://127.0.0.1:{hookServer.server_address[1]}/events"
+        return hookServer, hookThread, hookUrl
+
+    def testHookForwarderCooldownSkipsFailingEventButKeepsRetryingRegistration(self):
+        """A burst of consecutive failures on an unrelated event (downloadStarted)
+        must not disable hook endpoint registration for this session.
+
+        Reproduces the FFL core regression: pre-fix, HookEventForwarder called
+        self.clear() on the very first HookError from ANY forwarded event --
+        since it is subscribed to the wildcard FFLEvent.all, an unrelated event
+        failure (e.g. a progress notification) permanently killed the sender,
+        and _mergeAdditionalEndpointMaps()'s serverEndpointsRegister trigger is
+        the *only* channel that mounts hook-registered routes like /manifest,
+        /thumb (or here, /hello) per request. Once cleared, no future request on
+        that connection -- or any later connection -- could register endpoints
+        again without an app restart, and the *old* route cache stored a failed
+        [] lookup as if it were a real (empty) success, keeping it 404 even
+        after the hook server recovered.
+
+        This test drives the real fix in bases/Hook.py:
+          - 3 consecutive downloadStarted failures enter cooldown (short window,
+            overridden via HOOK_FORWARDER_COOLDOWN_SECONDS for the test) -- during
+            which further downloadStarted attempts are skipped outright (proven
+            by the hook server's per-event occurrence count going flat).
+          - serverEndpointsRegister is exempt from that skip and keeps being
+            retried on every request regardless of cooldown state.
+          - A failed registration attempt is no longer cached (bases/Hook.py
+            HookEndpointRouter._fetchRoutes/_getRoutesForSession), so once the
+            hook server starts answering it successfully again, the very next
+            request mounts /hello -- no restart, no reconfigure needed.
+        """
+        # A Range download turns out to fire more than one non-registration
+        # event per request (downloadStarted, downloadProgress, ...), and
+        # _consecutiveFailures is a single counter shared across ALL forwarded
+        # event names -- a success on any one of them (there is no per-name
+        # bucketing) resets it. So rather than assume a fixed "N requests == 3
+        # failures" mapping, fail every non-registration event unconditionally
+        # via state['failNonReg'] and detect the threshold being crossed by
+        # watching state['nonRegAttempts'] (count of non-registration events
+        # that actually reached the hook server) stop advancing.
+        state = {'nonRegAttempts': 0, 'failNonReg': True, 'failReg': True}
+
+        def failStatusFor(eventName, occurrence):
+            if eventName == '/hook/server/endpoints/register':
+                return HTTPStatus.INTERNAL_SERVER_ERROR if state['failReg'] else None
+            state['nonRegAttempts'] += 1
+            return HTTPStatus.INTERNAL_SERVER_ERROR if state['failNonReg'] else None
+
+        hookServer, hookThread, hookUrl = self._startEventControlledHookServer(state, failStatusFor)
+        outputCapture = {}
+        cooldownSeconds = 3
+
+        try:
+            self._startFastFileLink(
+                p2p=True,
+                captureOutputIn=outputCapture,
+                extraArgs=["--hook", hookUrl, "--timeout", "60", "--log-level", "DEBUG"],
+                extraEnvVars={"HOOK_FORWARDER_COOLDOWN_SECONDS": str(cooldownSeconds)},
+            )
+
+            with open(self.jsonOutputPath, 'r', encoding='utf-8') as jsonFile:
+                shareInfo = json.load(jsonFile)
+            shareLink = shareInfo["link"]
+            downloadUrl = shareLink.rstrip('/') + '/download'
+            helloUrl = shareLink.rstrip('/') + '/hello'
+
+            # Bounded Range requests are cheap, don't count toward maxDownloads,
+            # and don't mark a single-use reader consumed -- each one still
+            # independently triggers downloadStarted/downloadProgress (bases/
+            # Server.py _handleStartDownloadActions), which is exactly what we
+            # need: a controllable, repeatable, non-registration event to fail.
+            def hitDownload():
+                response = requests.get(downloadUrl, headers={'Range': 'bytes=0-0'}, timeout=15)
+                self.assertIn(
+                    response.status_code, (200, 206),
+                    f"Range download request should succeed regardless of hook forwarding failures; "
+                    f"got {response.status_code}"
+                )
+
+            # Keep hitting /download until a whole request goes by without
+            # state['nonRegAttempts'] advancing at all -- proof that cooldown
+            # is now suppressing every non-registration event outright, not
+            # just that this particular event happened to succeed.
+            registeredEndpointPath = '/hook/server/endpoints/register'
+            cooldownObserved = False
+            for _ in range(10):
+                before = state['nonRegAttempts']
+                hitDownload()
+                if state['nonRegAttempts'] == before:
+                    cooldownObserved = True
+                    break
+            self.assertTrue(
+                cooldownObserved,
+                f"Cooldown never appeared to engage after repeated failures (nonRegAttempts={state['nonRegAttempts']})"
+            )
+            self.assertGreater(
+                state['eventCounts'].get(registeredEndpointPath, 0), 0,
+                "Registration must have kept being retried throughout, exempt from the cooldown skip"
+            )
+
+            helloDuringCooldown = requests.get(helloUrl, timeout=15)
+            self.assertEqual(
+                helloDuringCooldown.status_code, HTTPStatus.NOT_FOUND,
+                "Registration is still failing by design at this point, so /hello legitimately isn't mounted yet "
+                "-- but critically the process is still alive and retrying, not permanently disabled"
+            )
+
+            registrationAttemptsSoFar = state['eventCounts'].get(registeredEndpointPath, 0)
+
+            # One more request while still (probably) in cooldown: registration
+            # -- exempt from the skip -- must still be attempted for real.
+            hitDownload()
+            self.assertGreater(
+                state['eventCounts'].get(registeredEndpointPath, 0), registrationAttemptsSoFar,
+                "Registration must keep being retried on every request regardless of cooldown state"
+            )
+
+            # Let both the hook server and the cooldown window recover, then
+            # make one more request: registration should now succeed and mount
+            # /hello, and downloadStarted/downloadProgress should reach the
+            # hook server again (cooldown expired) instead of being skipped.
+            state['failReg'] = False
+            state['failNonReg'] = False
+            time.sleep(cooldownSeconds + 1.5)
+
+            nonRegAttemptsBeforeRecovery = state['nonRegAttempts']
+            hitDownload()
+            self.assertGreater(
+                state['nonRegAttempts'], nonRegAttemptsBeforeRecovery,
+                "downloadStarted/downloadProgress should be forwarded again now that cooldown has elapsed"
+            )
+
+            helloAfterRecovery = requests.get(helloUrl, timeout=15)
+            self.assertEqual(
+                helloAfterRecovery.status_code, HTTPStatus.OK,
+                "/hello must be mounted automatically once registration succeeds again -- no app restart needed"
+            )
+            self.assertEqual(helloAfterRecovery.text, "hello from hook server")
+
+        finally:
+            processOutput = self._updateCapturedOutput(outputCapture)
+            print(f"[Test] eventCounts={state.get('eventCounts')}\nprocessOutput={processOutput}")
+            hookServer.shutdown()
+            hookServer.server_close()
+            hookThread.join(timeout=5)
+
+    def testHookForwarderAuthFailureDisablesWithoutRetry(self):
+        """A single HookAuthError (401) must disable forwarding immediately and
+        permanently -- unlike a plain HookError, it must NOT wait for
+        FAILURE_THRESHOLD consecutive failures, and must NOT auto-resume after
+        COOLDOWN_SECONDS.
+
+        Rationale: the credentials embedded in a hookURL are fixed for the life
+        of a share session (only a fresh HookEventForwarder.configure() call --
+        i.e. a new session -- ever changes them), so a 401 is deterministic: it
+        will fail exactly the same way on every retry. Treating it like a
+        transient network error and retrying it on a cooldown timer would just
+        repeat the same doomed request forever. A plain HookError (timeout,
+        connection refused, 5xx) has no such guarantee and IS expected to
+        recover on its own, which is why only HookAuthError takes this path --
+        see testHookForwarderCooldownSkipsFailingEventButKeepsRetryingRegistration
+        for the contrasting (auto-recovering) behavior.
+
+        Route registration is merged into each TCP connection's own handler
+        instance (bases/Server.py _mergeAdditionalEndpointMaps), so every new
+        connection needs the forwarder to be live *at the moment it connects* --
+        an earlier connection's successful /hello mount does not carry over to
+        a later one. That makes "the forwarder is now disabled" directly
+        observable as later connections 404 on /hello even though an earlier
+        connection, before the 401, mounted it successfully -- this is the
+        literal recipient-facing symptom (new page loads 404 on /manifest,
+        /thumb after the app hiccups) the fix addresses.
+        """
+        state = {}
+
+        def failStatusFor(eventName, occurrence):
+            if eventName == '/download/create':
+                return HTTPStatus.UNAUTHORIZED
+            return None
+
+        hookServer, hookThread, hookUrl = self._startEventControlledHookServer(state, failStatusFor)
+        outputCapture = {}
+        # Short cooldown so that, if the fix wrongly treated this as a plain
+        # HookError, waiting past it would (incorrectly) look like recovery.
+        cooldownSeconds = 2
+
+        try:
+            self._startFastFileLink(
+                p2p=True,
+                captureOutputIn=outputCapture,
+                extraArgs=["--hook", hookUrl, "--timeout", "60", "--log-level", "DEBUG"],
+                extraEnvVars={"HOOK_FORWARDER_COOLDOWN_SECONDS": str(cooldownSeconds)},
+            )
+
+            with open(self.jsonOutputPath, 'r', encoding='utf-8') as jsonFile:
+                shareInfo = json.load(jsonFile)
+            shareLink = shareInfo["link"]
+            downloadUrl = shareLink.rstrip('/') + '/download'
+            helloUrl = shareLink.rstrip('/') + '/hello'
+
+            def hitDownload():
+                response = requests.get(downloadUrl, headers={'Range': 'bytes=0-0'}, timeout=15)
+                self.assertIn(response.status_code, (200, 206))
+
+            # Connection 1: registration succeeds and mounts /hello for *this*
+            # connection -- proving the session was healthy beforehand -- while
+            # downloadStarted gets a 401 on its first and only occurrence,
+            # disabling the forwarder immediately (before this connection closes).
+            hitDownload()
+            self.assertEqual(state['eventCounts'].get('/download/create'), 1)
+
+            # Connection 2 (brand new TCP connection, opened after the 401):
+            # its own registration attempt is skipped outright because the
+            # forwarder is already disabled, so /hello 404s here even though it
+            # was reachable one connection ago. This is the actual recipient
+            # symptom: a fresh page load hitting a 404 right after the app hiccups.
+            self.assertEqual(
+                requests.get(helloUrl, timeout=15).status_code, HTTPStatus.NOT_FOUND,
+                "A new connection after the 401 must not be able to mount /hello -- the forwarder is disabled"
+            )
+
+            # Connections 3 and 4, issued immediately: with a plain HookError
+            # this would still be well within FAILURE_THRESHOLD (no cooldown
+            # yet), so if the fix mishandled HookAuthError as a plain HookError,
+            # these would still reach the hook server. They must not.
+            hitDownload()
+            hitDownload()
+            self.assertEqual(
+                state['eventCounts'].get('/download/create'), 1,
+                "No further downloadStarted attempts should reach the hook server after the 401 -- "
+                "the forwarder must be disabled outright, not merely counting toward a threshold"
+            )
+
+            # Wait past what would be the cooldown window for a plain HookError,
+            # then try again: a cooldown-based disable would auto-resume here;
+            # an auth-triggered clear() must not.
+            time.sleep(cooldownSeconds + 1.5)
+            hitDownload()
+            self.assertEqual(
+                state['eventCounts'].get('/download/create'), 1,
+                "The 401 disable must be permanent (until a fresh configure()), not time-limited like cooldown"
+            )
+            self.assertEqual(
+                requests.get(helloUrl, timeout=15).status_code, HTTPStatus.NOT_FOUND,
+                "/hello must still be unreachable on a new connection -- no auto-resume, unlike cooldown"
+            )
+
+        finally:
+            processOutput = self._updateCapturedOutput(outputCapture)
+            print(f"[Test] eventCounts={state.get('eventCounts')}\nprocessOutput={processOutput}")
+            hookServer.shutdown()
+            hookServer.server_close()
+            hookThread.join(timeout=5)
 
 
 if __name__ == '__main__':

@@ -2517,7 +2517,7 @@ class LargeFileTest(ResumeBrowserTestBase):
             "STATIC_SERVER",
             "BUILTIN_TUNNEL",
             "FFL_TUNNEL_DOMAIN",
-            "ONLY_BUILTIN_TUNNEL",
+            "FFL_NO_API_TUNNELS",
             "TUNNEL_TOKEN_SERVER_URL",
         ):
             value = os.getenv(key)
@@ -3119,7 +3119,7 @@ def applyDirectRunArgs(args):
     if args.tunnel:
         os.environ["BUILTIN_TUNNEL"] = args.tunnel
         os.environ["FFL_TUNNEL_DOMAIN"] = args.tunnel
-        os.environ["ONLY_BUILTIN_TUNNEL"] = "True"
+        os.environ["FFL_NO_API_TUNNELS"] = "True"
     if args.net_scope:
         os.environ["FFL_LARGE_FILE_NET_SCOPE"] = args.net_scope
     if args.net_interface:

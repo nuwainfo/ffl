@@ -27,7 +27,7 @@ import platform
 from dataclasses import MISSING, fields
 
 from bases.Kernel import (
-    LOG_LEVEL_MAPPING, PUBLIC_VERSION, getLogger, FFLEvent, configureGlobalLogLevel, AddonsManager, StorageLocator
+    LOG_LEVEL_MAPPING, PUBLIC_VERSION, getLogger, FFLEvent, configureGlobalLogLevel, AddonsManager
 )
 from bases.Settings import DEFAULT_AUTH_USER_NAME, DEFAULT_UPLOAD_DURATION, SettingsGetter
 from bases.Utils import flushPrint, checkVersionCompatibility, getEnv, parseProxyString, setupProxyEnvironment
@@ -40,64 +40,6 @@ from bases.crypto import CryptoInterface
 from bases.I18n import _
 
 logger = getLogger(__name__)
-
-
-def loadEnvFile():
-    """
-    Load environment variables from .env file using StorageLocator.
-    Searches for .env file in standard locations and sets variables in os.environ.
-    Only sets variables that are not already defined in os.environ.
-    """
-    storageLocator = StorageLocator.getInstance()
-    envFilePath = storageLocator.findConfig('.env')
-
-    if not os.path.exists(envFilePath):
-        return
-
-    try:
-        flushPrint(_('Loading .env file from: {envFilePath}').format(envFilePath=envFilePath))
-        loadedCount = 0
-
-        with open(envFilePath, 'r', encoding='utf-8') as f:
-            for lineNum, line in enumerate(f, 1):
-                line = line.strip()
-
-                # Skip empty lines and comments
-                if not line or line.startswith('#'):
-                    continue
-
-                # Parse KEY=VALUE format
-                if '=' not in line:
-                    flushPrint(_('Warning: .env line {lineNum}: Invalid format (missing =): {line}').format(
-                        lineNum=lineNum, line=line
-                    ))
-                    continue
-
-                key, _sep, value = line.partition('=')
-                key = key.strip()
-                value = value.strip()
-
-                if not key:
-                    flushPrint(_('Warning: .env line {lineNum}: Empty key').format(lineNum=lineNum))
-                    continue
-
-                # Remove quotes if present (both single and double)
-                if (value.startswith('"') and value.endswith('"')) or \
-                   (value.startswith("'") and value.endswith("'")):
-                    value = value[1:-1]
-
-                # Only set if not already in environment (environment takes precedence)
-                if key not in os.environ:
-                    os.environ[key] = value
-                    loadedCount += 1
-                else:
-                    logger.debug(f'.env: Skipped {key} (already set in environment)')
-
-        flushPrint(_('Loaded {loadedCount} environment variables from .env').format(loadedCount=loadedCount))
-
-    except Exception as e:
-        flushPrint(_('Error: Unexpected error loading .env file: {error}').format(error=e))
-        logger.error(f'Unexpected error loading .env file: {e}', exc_info=True)
 
 
 def configureLogging(logLevel):
@@ -895,7 +837,12 @@ def processArgumentsAndCommands(args, shareSubparser=None, proxyConfig=None):
 
     # Let addons store or handle their own arguments
     argPolicy = {'exitCode': None}
-    FFLEvent.cliArgumentsStore.trigger(args=args, argPolicy=argPolicy)
+    FFLEvent.cliArgumentsStore.trigger(
+        args=args,
+        argPolicy=argPolicy,
+        proxyConfig=proxyConfig,
+        shareSubparser=shareSubparser,
+    )
 
     if argPolicy['exitCode'] is not None:
         return argPolicy['exitCode']

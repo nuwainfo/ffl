@@ -48,6 +48,7 @@ import base64
 import json
 import secrets
 import threading
+import time
 import weakref
 
 from dataclasses import is_dataclass, asdict
@@ -56,7 +57,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional
 
-from urllib.parse import urlparse, urlunparse, urlencode
+from urllib.parse import urlparse, urlunparse, urlencode, quote
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 import requests
@@ -65,6 +66,7 @@ from http import HTTPStatus
 
 from bases.Kernel import getLogger, FFLEvent, Event, Singleton
 from bases.Auth import AuthMixin, HTTPAuth
+from bases.Utils import getEnv
 
 logger = getLogger(__name__)
 
@@ -676,11 +678,27 @@ class HookClient:
 
 class HookEventForwarder(Singleton):
 
+    # Consecutive transport/protocol failures (plain HookError) tolerated before
+    # forwarding pauses for COOLDOWN_SECONDS. HookAuthError (401) is deliberately
+    # NOT subject to this: a rejected credential is static for the life of a
+    # hookURL (only a fresh configure() ever changes it), so retrying it on a
+    # timer just burns network round-trips forever for zero chance of success.
+    # See _forwardEvent for the split.
+    # Overridable via env for tests -- production code should rely on the defaults.
+    FAILURE_THRESHOLD = getEnv('HOOK_FORWARDER_FAILURE_THRESHOLD', 3)
+    COOLDOWN_SECONDS = getEnv('HOOK_FORWARDER_COOLDOWN_SECONDS', 30.0)
+
     def initialize(self):
         self._lock = threading.Lock()
         self._sender = None
         self._subscribed = False
         self._shutdownSubscribed = False
+        self._resetFailureStateLocked()
+
+    def _resetFailureStateLocked(self):
+        """Clear consecutive-failure/cooldown bookkeeping. Caller must hold self._lock."""
+        self._consecutiveFailures = 0
+        self._cooldownUntil = 0.0
 
     def configure(self, hookURL: str):
         if not hookURL:
@@ -693,6 +711,9 @@ class HookEventForwarder(Singleton):
         with self._lock:
             previousSender = self._sender
             self._sender = sender
+            # A new hookURL means a clean slate: any cooldown/failure count
+            # accrued against the previous target no longer applies.
+            self._resetFailureStateLocked()
 
         self._closeSender(previousSender)
         logger.info(f"Hook client initialized: {hookURL}")
@@ -702,6 +723,7 @@ class HookEventForwarder(Singleton):
         with self._lock:
             previousSender = self._sender
             self._sender = None
+            self._resetFailureStateLocked()
 
         self._closeSender(previousSender)
 
@@ -723,15 +745,50 @@ class HookEventForwarder(Singleton):
     def _forwardEvent(self, eventName, **eventData):
         with self._lock:
             sender = self._sender
+            inCooldown = time.monotonic() < self._cooldownUntil
 
         if sender is None:
             return
 
+        # Endpoint registration is the request/response channel that mounts hook
+        # routes (/manifest, /thumb, ...) for every new connection, and fires on
+        # every single HTTP request (bases/Server.py _prepareRequestContext), so
+        # it is exempt from the cooldown skip below -- it always gets attempted.
+        isRegistration = eventName == FFLEvent.serverEndpointsRegister.key
+        if inCooldown and not isRegistration:
+            return
+
         try:
             forwardEventToHook(sender, eventName, **eventData)
+        except HookAuthError as e:
+            # Rejected credentials don't self-heal: the same hookURL will keep
+            # failing the same way until someone calls configure() again with a
+            # corrected one. Retrying on a cooldown timer would just repeat the
+            # same failed request forever, so stop outright instead.
+            logger.warning("Hook authentication rejected, disabling forwarding: %s", e)
+            self.clear()
         except HookError as e:
             logger.warning("Failed to forward hook event %s: %s", eventName, e)
-            self.clear()
+            # Registration failures/successes are deliberately excluded from this
+            # bookkeeping. forwardEventToHook's registration branch (below) never
+            # raises even when the underlying fetch fails -- HookEndpointRouter
+            # swallows that internally so a struggling hook target can't break the
+            # HTTP response currently being served -- so from here every
+            # registration attempt looks like a "success". Registration fires on
+            # every single HTTP request, so folding it into a shared counter would
+            # reset _consecutiveFailures on every request regardless of whether
+            # OTHER events (progress, etc.) are actually failing, making the
+            # threshold effectively unreachable under any real traffic.
+            if not isRegistration:
+                with self._lock:
+                    self._consecutiveFailures += 1
+                    if self._consecutiveFailures >= self.FAILURE_THRESHOLD:
+                        self._cooldownUntil = time.monotonic() + self.COOLDOWN_SECONDS
+                        self._consecutiveFailures = 0
+        else:
+            if not isRegistration:
+                with self._lock:
+                    self._resetFailureStateLocked()
 
     @staticmethod
     def _closeSender(sender):
@@ -795,20 +852,25 @@ class HookEndpointRouter:
         }
 
     @classmethod
-    def _fetchRoutes(cls, server, session, hookClient: HookClient) -> list:
+    def _fetchRoutes(cls, server, session, hookClient: HookClient) -> Optional[list]:
         context = cls._buildSessionContext(server, session)
 
         routes = []
         try:
             registered = hookClient.registerServerEndpoints(context)
-            for route in registered:
-                normalized = cls._normalizeRoute(route)
-                if normalized:
-                    routes.append(normalized)
-                else:
-                    logger.warning(f"Ignored invalid hook endpoint route: {route}")
         except Exception as e:
+            # None is distinct from "registration succeeded with zero routes" ([])
+            # -- it means the call itself failed, so the caller must not cache it
+            # as the session's permanent route list.
             logger.warning(f"Hook endpoint registration failed: {e}")
+            return None
+
+        for route in registered:
+            normalized = cls._normalizeRoute(route)
+            if normalized:
+                routes.append(normalized)
+            else:
+                logger.warning(f"Ignored invalid hook endpoint route: {route}")
 
         return routes
 
@@ -832,6 +894,11 @@ class HookEndpointRouter:
                 return existing
 
         routes = cls._fetchRoutes(server, session, hookClient)
+
+        if routes is None:
+            # Registration failed -- do not cache, so the next request for this
+            # session retries instead of being permanently stuck with no routes.
+            return []
 
         with cls._routesLock:
             cls._routesByServer[server][session.uid] = routes
@@ -920,7 +987,9 @@ class HookEndpointRouter:
         # the original registration payload alone.
         headers['X-FFL-UID'] = str(session.uid)
         headers['X-FFL-Domain'] = str(session.domain or '')
-        headers['X-FFL-FileName'] = str(session.reader.contentName)
+        # HTTP header values are latin-1 encoded by the underlying `requests` library, so
+        # percent-encode the name (matches FFL-FileName in Server.py) rather than sending it raw.
+        headers['X-FFL-FileName'] = quote(str(session.reader.contentName))
         headers['X-FFL-FileSize'] = str(session.reader.size)
         headers['X-FFL-AuthEnabled'] = str(bool(session.config.authPassword)).lower()
         headers['X-FFL-DefaultWebRTC'] = str(bool(session.config.defaultWebRTC)).lower()

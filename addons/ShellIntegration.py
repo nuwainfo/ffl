@@ -188,7 +188,13 @@ class _BaseIntegration(ShellIntegration):
         return os.path.normcase(os.path.abspath(path))
 
     @staticmethod
-    def _resolveCommandArgs(settingsGetter):
+    def _getShellModeArgs(settingsGetter):
+        if settingsGetter.isCLIMode() and '--background-gui' not in sys.argv:
+            return ['--cli']
+            
+        return ['--cli', '--background-gui']
+    @classmethod
+    def _resolveCommandArgs(cls, settingsGetter):
         """Return (execPath, commandArgs) for OS registration.
 
         Dev mode  → execPath = FFL.py,    commandArgs = [python, FFL.py, --cli]
@@ -199,13 +205,14 @@ class _BaseIntegration(ShellIntegration):
                 os.path.join(settingsGetter.baseDir, 'FFL.py')
             ))
             pythonExe = os.path.normcase(os.path.abspath(sys.executable))
-            return corePath, [pythonExe, corePath, '--cli']
+            return corePath, [pythonExe, corePath, *cls._getShellModeArgs(settingsGetter)]
 
         exePath = settingsGetter.exePath or sys.executable
         exePath = os.path.normcase(os.path.abspath(exePath))
         if not os.path.isfile(exePath):
             return None, None
-        return exePath, [exePath]
+            
+        return exePath, [exePath, *cls._getShellModeArgs(settingsGetter)]
 
     @staticmethod
     def _writeTextFile(path, content):
@@ -236,9 +243,6 @@ class WindowsIntegration(_BaseIntegration):
             import winreg  # noqa: F401
         except ImportError:
             return UnsupportedIntegration(_("Windows registry support is unavailable in this runtime."))
-
-        if StoreHelper.isWindowsStore():
-            return UnsupportedIntegration(_("OS context menu integration is unavailable in Windows Store builds."))
 
         execPath, commandArgs = cls._resolveCommandArgs(settingsGetter)
         if not execPath:
@@ -383,7 +387,11 @@ class MacIntegration(_BaseIntegration):
                     _("OS context menu integration on macOS requires the packaged .app bundle.")
                 )
             execPath = os.path.normcase(os.path.abspath(bundlePath))
-            return cls(execPath=execPath, commandArgs=[bundlePath], isAppBundle=True)
+            return cls(
+                execPath=execPath,
+                commandArgs=[bundlePath, *cls._getShellModeArgs(settingsGetter)],
+                isAppBundle=True,
+            )
 
         # Dev mode: direct Python invocation, no .app bundle needed
         execPath, commandArgs = cls._resolveCommandArgs(settingsGetter)
@@ -459,7 +467,8 @@ class MacIntegration(_BaseIntegration):
 
     def _enable(self):
         if self._isAppBundle:
-            baseCmd = f'/usr/bin/open -a "{self._commandArgs[0]}" --args'
+            launchArgs = ' '.join(f'"{arg}"' for arg in self._commandArgs[1:])
+            baseCmd = f'/usr/bin/open -a "{self._commandArgs[0]}" --args {launchArgs}'
         else:
             baseCmd = ' '.join(f'"{a}"' for a in self._commandArgs)
 

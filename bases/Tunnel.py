@@ -28,11 +28,10 @@ from functools import partial
 
 import requests
 
-from bases.Bore import BoreClient
 from bases.Kernel import getLogger, FFLEvent
 from bases.Settings import SettingsGetter
+from bases.tunnels import createTunnelClient, resolveTunnelCandidate
 
-# Set ONLY_BUILTIN_TUNNEL="True" if Features addon enabled if needed.
 BUILTIN_TUNNEL = os.getenv('BUILTIN_TUNNEL', '33.fastfilelink.com')
 TUNNEL_TOKEN_SERVER_URL = os.getenv('TUNNEL_TOKEN_SERVER_URL', f'https://{BUILTIN_TUNNEL}')
 #TUNNEL_TOKEN_SERVER_URL = os.getenv('TUNNEL_TOKEN_SERVER_URL', f'https://fastfilelink.com')
@@ -208,15 +207,42 @@ class TunnelRunner:
         self.proxyConfig = proxyConfig
         self.tunnelThread = None
         self.lock = threading.Lock()
+        self._resolved = None
+
+    def resolveTunnel(self):
+        """Decide which tunnel domain and transport type to use.
+
+        The server decides this (via the `type` field on candidates from
+        /api/tunnels, surfaced through addons that override this method);
+        this baseline implementation is only used when no such addon is
+        available, and defaults to bore.
+        """
+        return resolveTunnelCandidate()
+
+    def _getResolvedTunnel(self):
+        if self._resolved is None:
+            self._resolved = self.resolveTunnel()
+            
+        return self._resolved
 
     def getTunnelType(self):
         """
         Get the type/name of tunnel being used
 
+        "default" covers any of our own backends (bore or web) — it means
+        "nothing user-configured is in play, don't bother reporting a name".
+        Only a user-configured external tunnel (Cloudflare, ngrok, a fixed
+        URL, via addons.Tunnels) gets its own label here.
+
         Returns:
             str: Name of the tunnel type (e.g., "default", "Cloudflare", etc.)
         """
         return "default"
+
+    @property
+    def reusableAcrossShares(self):
+        """Whether one connected client can serve more than one share."""
+        return self._getResolvedTunnel().reusableAcrossShares
 
     def getProxyInfo(self):
         """
@@ -244,43 +270,38 @@ class TunnelRunner:
 
         return None
 
-    def createClient(self, port, **kwargs):
+    def createClient(self, port, uid=None, **kwargs):
         """
-        Create BoreClient instance with given parameters
+        Build the tunnel client for the resolved domain and transport type.
 
         Args:
             port: Local port to tunnel
 
         Returns:
-            BoreClient: Configured client instance
+            BoreClient or WebTunnelClient: Configured client instance
         """
+        resolved = self._getResolvedTunnel()
+        domain = resolved.domain
 
-        domain = BUILTIN_TUNNEL
-
-        # When token comes from fastfilelink.com (not the bore server itself), a
-        # successful token fetch does not imply the bore server is reachable.
-        # Guard with an explicit connectivity check in that case only.
+        # Every tunnel server (bore or web relay) can serve its own
+        # /api/tunnel/token. When the default token server differs from
+        # `domain`, a successful token fetch doesn't prove `domain` itself is
+        # reachable, so guard with an explicit connectivity check in that
+        # case only.
         serverURL = os.getenv('TUNNEL_TOKEN_SERVER_URL', TUNNEL_TOKEN_SERVER_URL)
-        tokenFromBoreServer = _isTokenServerTunnel(serverURL)
-        if not tokenFromBoreServer:
+        if not _isTokenServerTunnel(serverURL):
             try:
                 requests.get(f"https://{domain}/", timeout=5)
             except Exception as e:
                 logger.error(f"Failed to verify tunnel server reachability: {e}")
                 raise TunnelUnavailableError('Cannot connect to tunnel server')
 
-        secret = fetchTunnelToken(domain=domain)
+        if resolved.secret is None:
+            resolved.secret = fetchTunnelToken(domain=domain)
 
-        return BoreClient(
-            localhost='127.0.0.1',
-            localPort=port,
-            remoteHost=domain,
-            remotePort=0,
-            secret=secret,
+        return createTunnelClient(
+            resolved, port, uid,
             tokenProvider=partial(fetchTunnelToken, domain=domain),
-            verbose=False,
-            debug=False,
-            useHttps=True,
             proxyConfig=self.proxyConfig,
             **kwargs
         )
@@ -299,7 +320,7 @@ class TunnelRunner:
         tunnelThread = AsyncTunnelThread(resultQueue, client)
         return tunnelThread, resultQueue
 
-    def start(self, port):
+    def start(self, port, uid=None):
         """
         Start tunnel connection
 
@@ -323,7 +344,7 @@ class TunnelRunner:
 
         try:
             # Create client and tunnel thread
-            client = self.createClient(port)
+            client = self.createClient(port, uid=uid)
             self.tunnelThread, resultQueue = self.createTunnelThread(client)
             self.tunnelThread.start()
 

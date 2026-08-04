@@ -34,6 +34,8 @@ from unittest import mock
 
 from addons.Tunnels import TunnelRunnerProvider, StaticURLTunnelClient # isort:skip
 from bases.Tunnel import AsyncTunnelThread, TunnelRunner, TunnelUnavailableError # isort:skip
+from bases.tunnels import TunnelCandidate # isort:skip
+from bases.tunnels.Web import WebTunnelClient # isort:skip
 
 from tests.BrowserTestBase import BrowserTestBase # isort:skip
 
@@ -248,21 +250,78 @@ class _FakeReconnectingClient:
 
 
 class TunnelThreadTest(unittest.TestCase):
-    def testTunnelRunnerCreateClientPassesTokenProvider(self):
-        # TODO: This only verifies that a refresh provider is wired into BoreClient.
-        # Add an integration test for a real reconnect after token expiry when we have
-        # a controllable short-lived issuer/token fixture, instead of waiting for live
-        # production-style expiry in unittest.
+    def testWebTypeFlowsThroughWhenNoExternalTunnelPreferred(self):
+        """With no external tunnel configured, a server-resolved web candidate
+        must reach WebTunnelClient via the normal super().createClient() chain."""
+        with tempfile.TemporaryDirectory() as tempDir, \
+             mock.patch.object(TunnelRunner, 'resolveTunnel', return_value=TunnelCandidate(
+                 domain='10.fastfilelink.com', type='web',
+             )), \
+             mock.patch('bases.Tunnel.fetchTunnelToken', return_value='short-lived-token'):
+            configPath = os.path.join(tempDir, 'tunnels.json')
+            config = createTestConfig(preferredTunnel='default')
+            with open(configPath, 'w') as fileHandle:
+                json.dump(config, fileHandle)
+
+            provider = TunnelRunnerProvider(configPath)
+            EnhancedTunnelRunner = provider.getTunnelRunnerClass(TunnelRunner)
+            runner = EnhancedTunnelRunner(1024)
+
+            # "default" covers any of our own backends (bore or web) — the web
+            # transport is still invisible to the user, only reusableAcrossShares
+            # distinguishes it internally.
+            self.assertEqual('default', runner.getTunnelType())
+            self.assertFalse(runner.reusableAcrossShares)
+            self.assertIsInstance(runner.createClient(8000, uid='share-id'), WebTunnelClient)
+
+    def testExternalTunnelPreferenceWinsRegardlessOfResolvedType(self):
+        """An explicitly configured external tunnel (cloudflared/ngrok/static URL)
+        is a user choice orthogonal to bore-vs-web, and must win either way."""
+        with tempfile.TemporaryDirectory() as tempDir, \
+             mock.patch.object(TunnelRunner, 'resolveTunnel', return_value=TunnelCandidate(
+                 domain='10.fastfilelink.com', type='web',
+             )):
+            configPath = os.path.join(tempDir, 'tunnels.json')
+            config = createTestConfig(preferredTunnel='static-fixed', enableStaticUrl=True)
+            with open(configPath, 'w') as fileHandle:
+                json.dump(config, fileHandle)
+
+            provider = TunnelRunnerProvider(configPath)
+            EnhancedTunnelRunner = provider.getTunnelRunnerClass(TunnelRunner)
+            runner = EnhancedTunnelRunner(1024)
+
+            self.assertIsInstance(runner.createClient(8000, uid='share-id'), StaticURLTunnelClient)
+
+    def testTunnelRunnerCreateClientPassesTokenProviderForBore(self):
         runner = TunnelRunner(1024)
 
-        with mock.patch('bases.Tunnel.requests.get') as mockGet, \
+        with mock.patch.object(TunnelRunner, 'resolveTunnel', return_value=TunnelCandidate(
+                 domain='33.fastfilelink.com', type='bore',
+             )), \
+             mock.patch('bases.Tunnel.requests.get') as mockGet, \
              mock.patch('bases.Tunnel.fetchTunnelToken', return_value='token-1') as mockFetch:
             mockGet.return_value.text = "ok"
-            client = runner.createClient(8000)
+            client = runner.createClient(8000, uid='share-id')
 
         self.assertEqual('token-1', client.secret)
         self.assertIs(client.tokenProvider.func, mockFetch)
-        self.assertEqual(client.tokenProvider.keywords.get('domain'), '33.fastfilelink.com')
+        self.assertEqual('33.fastfilelink.com', client.tokenProvider.keywords.get('domain'))
+
+    def testTunnelRunnerCreateClientPassesTokenProviderForWeb(self):
+        runner = TunnelRunner(1024)
+
+        with mock.patch.object(TunnelRunner, 'resolveTunnel', return_value=TunnelCandidate(
+                 domain='10.fastfilelink.com', type='web',
+             )), \
+             mock.patch('bases.Tunnel.fetchTunnelToken', return_value='token-1') as mockFetch:
+            client = runner.createClient(8000, uid='share-id')
+
+        self.assertIsInstance(client, WebTunnelClient)
+        self.assertEqual('token-1', client.secret)
+        self.assertIs(client.tokenProvider.func, mockFetch)
+        # Every tunnel server (bore or web relay) self-serves /api/tunnel/token,
+        # so the resolved domain is passed through uniformly for both transports.
+        self.assertEqual('10.fastfilelink.com', client.tokenProvider.keywords.get('domain'))
 
     def testAsyncTunnelThreadReconnectsWithSamePort(self):
         resultQueue = queue.Queue()

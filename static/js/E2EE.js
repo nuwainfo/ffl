@@ -949,7 +949,7 @@ class TusEncryptedFileSource {
         }
 
         const safeEnd = Math.min(end, this.file.size);
-        const chunkIndex = Math.floor(start / this.encryptor.chunkSize);
+        const chunkIndex = this.encryptor.startChunkIndex + Math.floor(start / this.encryptor.chunkSize);
         const plaintextBytes = new Uint8Array(await this.file.slice(start, safeEnd).arrayBuffer());
         const encryptedChunk = await this.encryptor.encryptChunk(plaintextBytes, chunkIndex);
 
@@ -965,12 +965,13 @@ class TusEncryptedFileSource {
 }
 
 class TusUploadEncryptor {
-    constructor({ contentKey, nonceBase, fileName, fileSize, chunkSize, tags = [] }) {
+    constructor({ contentKey, nonceBase, fileName, fileSize, chunkSize, tags = [], startChunkIndex = 0 }) {
         this.contentKey = contentKey;
         this.nonceBase = nonceBase;
         this.fileName = fileName;
         this.fileSize = fileSize;
         this.chunkSize = chunkSize;
+        this.startChunkIndex = Number.isInteger(startChunkIndex) && startChunkIndex >= 0 ? startChunkIndex : 0;
         this._cryptoKeyPromise = TusUploadEncryptor.importAESGCMKey(contentKey, ['encrypt']);
         this._tagMap = new Map();
 
@@ -1112,10 +1113,11 @@ class TusUploadEncryptor {
         const encryptor = new TusUploadEncryptor({
             contentKey: options.contentKey,
             nonceBase: options.nonceBase,
-            fileName: file.name,
-            fileSize: file.size,
+            fileName: options.fileName || file.name,
+            fileSize: options.fileSize || file.size,
             chunkSize: options.chunkSize,
-            tags: options.tags || []
+            tags: options.tags || [],
+            startChunkIndex: options.startChunkIndex || 0,
         });
 
         return {

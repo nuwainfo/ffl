@@ -110,21 +110,32 @@ class DaemonStateFile:
 
         return StorageLocator.getInstance().findStorage(self.STATE_FILENAME)
 
-    def save(self, port: int, token: str, pid: int):
+    def save(self, port: int, token: str, pid: int, processHosted: bool = True):
         path = self.path
 
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as f:
+
+        # Write to a temp file then atomically rename into place, so a concurrent
+        # load() never observes a truncated-but-not-yet-written file (which raises
+        # json.JSONDecodeError: Expecting value: line 1 column 1).
+        tmp = f'{path}.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(
                 {
                     'pid': pid,
                     'port': port,
                     'token': token,
+                    # A daemon API can be hosted by the GUI/test process or by
+                    # its own CLI process.  Consumers need this distinction
+                    # when deciding whether an API shutdown must also wait for
+                    # an OS process to exit.
+                    'processHosted': processHosted,
                     'startedAt': datetime.datetime.now().isoformat()
                 },
                 f,
                 indent=2,
             )
+        os.replace(tmp, path)
 
     def load(self) -> Optional[dict]:
         path = self.path
@@ -169,6 +180,7 @@ class DaemonSharedRuntime(MultiShareServerRuntime):
         self._server = None
         self._serverThread = None
         self._tunnelRunner = None
+        self._perShareTunnelRunners = {}
         self._domain = None
         self._tunnelLink = None
         self._port = None
@@ -186,7 +198,7 @@ class DaemonSharedRuntime(MultiShareServerRuntime):
 
         port = getAvailablePort(None)
         tunnelRunner = self.createTunnel(size, context)
-        domain, tunnelLink = self.startTunnel(tunnelRunner, port, context)
+        domain, tunnelLink = self.startTunnel(tunnelRunner, port, context, uid=session.uid)
 
         session.port = port
         session.domain = domain
@@ -198,6 +210,8 @@ class DaemonSharedRuntime(MultiShareServerRuntime):
         self._server = server
         self._serverThread = serverThread
         self._tunnelRunner = tunnelRunner
+        if not tunnelRunner.reusableAcrossShares:
+            self._perShareTunnelRunners[session.uid] = tunnelRunner
 
         self._domain = domain
         self._tunnelLink = tunnelLink
@@ -245,13 +259,27 @@ class DaemonSharedRuntime(MultiShareServerRuntime):
         with self._lock:
             if not self._canReuseInfrastructure(context.proxyConfig):
                 self._startSharedInfrastructure(size=size, session=session, context=context)
+                tunnelRunner = self._tunnelRunner
+                shareTunnelLink = self._tunnelLink
             else:
                 session.port = self._port
                 session.domain = self._domain
                 self._server.addSession(session)
+                tunnelRunner = self._tunnelRunner
+                shareTunnelLink = self._tunnelLink
+                if not self._tunnelRunner.reusableAcrossShares:
+                    # Some transports (e.g. Web) bind an endpoint deterministically
+                    # to the share UID.  The local HTTP server can still be shared,
+                    # but each new session needs its own connection into its own
+                    # endpoint.
+                    tunnelRunner = self.createTunnel(size, context)
+                    _domain, shareTunnelLink = self.startTunnel(
+                        tunnelRunner, self._port, context, uid=uid
+                    )
+                    self._perShareTunnelRunners[uid] = tunnelRunner
 
             server = self._server
-            tunnelLink = self._tunnelLink
+            tunnelLink = shareTunnelLink
 
         reporter.notifyServerCreated(server, uid=uid)
         self.outputAuthenticationInfo(reporter, authPassword, authUser, recipientAuth)
@@ -264,7 +292,7 @@ class DaemonSharedRuntime(MultiShareServerRuntime):
             link=link,
             reader=reader,
             size=size,
-            tunnelType=self._tunnelRunner.getTunnelType(),
+            tunnelType=tunnelRunner.getTunnelType(),
             recipientAuth=recipientAuth
         )
         session.link = link
@@ -282,10 +310,12 @@ class DaemonSharedRuntime(MultiShareServerRuntime):
             server = self._server
             serverThread = self._serverThread
             tunnelRunner = self._tunnelRunner
+            perShareTunnelRunners = list(self._perShareTunnelRunners.values())
 
             self._server = None
             self._serverThread = None
             self._tunnelRunner = None
+            self._perShareTunnelRunners = {}
             self._domain = None
             self._tunnelLink = None
             self._port = None
@@ -301,7 +331,8 @@ class DaemonSharedRuntime(MultiShareServerRuntime):
         if serverThread and serverThread.is_alive():
             serverThread.join(timeout=5)
 
-        if tunnelRunner:
+        tunnelRunners = perShareTunnelRunners or ([tunnelRunner] if tunnelRunner else [])
+        for tunnelRunner in tunnelRunners:
             try:
                 tunnelRunner.stop()
             except Exception as e:
@@ -766,7 +797,7 @@ class DaemonServer(ThreadingHTTPServer):
 
     MONITOR_INTERVAL = 1.0
 
-    def __init__(self):
+    def __init__(self, processHosted: bool = True):
         super().__init__(('127.0.0.1', 0), DaemonAPIHandler)
         self.shareManager = InProcessShareManager()
         self.token = secrets.token_hex(16)
@@ -774,12 +805,18 @@ class DaemonServer(ThreadingHTTPServer):
         self._hookURL = None
         self._monitorThread = None
         self._running = False
+        self._processHosted = processHosted
 
     def start(self):
         self._running = True
         port = self.server_address[1]
 
-        self._stateFile.save(port, self.token, os.getpid())
+        self._stateFile.save(
+            port,
+            self.token,
+            os.getpid(),
+            processHosted=self._processHosted,
+        )
 
         self._monitorThread = threading.Thread(target=self._monitorLoop, daemon=True, name='daemon-monitor')
         self._monitorThread.start()
@@ -1050,7 +1087,7 @@ class InProcessDaemonManager(DaemonManager):
             self._setRunningDaemonHook(hookURL)
             return False
 
-        self._server = DaemonServer()
+        self._server = DaemonServer(processHosted=False)
         self._server.setHook(hookURL)
         
         self._serverThread = threading.Thread(
@@ -1126,6 +1163,15 @@ class ProcessDaemonManager(DaemonManager):
         if not DaemonClient.isRunning():
             return True
 
+        # Stopping the REST listener is not the same as the daemon process
+        # having exited.  On Windows the latter can still hold its SQLite
+        # database open for a short time, which makes a caller that owns a
+        # temporary FFL_STORAGE_LOCATION unable to clean it up reliably.
+        # Capture the PID before the daemon clears its state file, then wait
+        # for that process as well as the API endpoint.
+        state = DaemonStateFile().load()
+        daemonPID = state.get('pid') if state else None
+
         client = DaemonClient()
         try:
             client.stopDaemon()
@@ -1133,11 +1179,24 @@ class ProcessDaemonManager(DaemonManager):
             logger.warning(f'Failed to stop running daemon: {e}')
         else:
             if cls._waitForDaemonStopped():
-                return True
+                # In-process hosts deliberately publish this process's PID in
+                # daemon.json.  Their API has stopped at this point, but the
+                # host process must of course remain alive to continue using
+                # the application (or running the test suite).
+                if daemonPID is None or not state.get('processHosted', True):
+                    return True
+
+                return cls._waitUntil(
+                    lambda: not ProcessHelper.isAlive(daemonPID),
+                    cls.STARTUP_TIMEOUT,
+                )
 
         if force:
             cls._forceKillDaemon()
-            return True
+            return daemonPID is None or not state.get('processHosted', True) or cls._waitUntil(
+                lambda: not ProcessHelper.isAlive(daemonPID),
+                cls.STARTUP_TIMEOUT,
+            )
 
         return False
 

@@ -17,10 +17,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import subprocess
 import time
 import unittest
 import re
+
+import requests
 
 from .ResumeTestBase import ResumeTestBase, ResumeBrowserTestBase
 from .CoreTestBase import FastFileLinkTestBase
@@ -316,9 +319,42 @@ class UploadResumeTest(ResumeTestBase):
 class ResumeDownloadTest(FastFileLinkTestBase):
     """Test class specifically for testing resume download functionality"""
 
+    _CURL_IDLE_TIMEOUT_SECONDS = 30
+
     def __init__(self, methodName='runTest'):
         # Use larger file size for resume testing to make the test more meaningful
         super().__init__(methodName, fileSizeBytes=10 * 1024 * 1024) # 10MB
+
+    def _printCurlStallDiagnostics(self, shareLink, outputPath, curlStderr):
+        """Emit enough evidence to diagnose a curl stream that stops advancing."""
+        size = os.path.getsize(outputPath) if os.path.exists(outputPath) else 0
+        print(f"[Test] curl stalled at {size} bytes; URL: {shareLink}")
+        if curlStderr:
+            print(f"[Test] curl stderr before termination:\n{curlStderr}")
+        try:
+            response = requests.get(
+                shareLink,
+                headers={'Range': f'bytes={size}-'},
+                stream=True,
+                timeout=(5, 10),
+            )
+            print(
+                '[Test] Worker probe: '
+                f'status={response.status_code}, '
+                f'content-range={response.headers.get("Content-Range")}, '
+                f'content-length={response.headers.get("Content-Length")}'
+            )
+            response.close()
+        except Exception as error:
+            print(f"[Test] Worker probe failed: {type(error).__name__}: {error}")
+
+        capture = getattr(self, '_shareOutputCapture', None)
+        agentOutput = self._updateCapturedOutput(capture) if capture else ''
+        if agentOutput:
+            print('[Test] FastFileLink agent diagnostics (last 200 lines):')
+            print('\n'.join(agentOutput.splitlines()[-200:]))
+        else:
+            print('[Test] FastFileLink agent diagnostics: no captured output')
 
     def _downloadFileWithCurl(self, shareLink, outputPath, incomplete=False):
         """Download file using curl command"""
@@ -339,21 +375,48 @@ class ResumeDownloadTest(FastFileLinkTestBase):
                 raise AssertionError("Expected timeout did not occur")
             print("[Test] Partial download completed (timed out as expected)")
         else:
-            # Resume download
-            result = subprocess.run(
-                f"{curl} -L -C - {shareLink} -o {outputPath}", shell=True, capture_output=True, text=True
-            )
-            print(result.stderr)
-            if result.returncode != 0:
-                raise AssertionError(f"Curl download failed: {result.stderr}")
+            # Resume download.  A healthy transfer has no fixed wall-clock
+            # limit, but it must continue making byte-level progress.
+            command = [curl, '-L', '-C', '-', shareLink, '-o', outputPath]
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            lastSize = os.path.getsize(outputPath) if os.path.exists(outputPath) else 0
+            lastProgressAt = time.monotonic()
+            try:
+                while process.poll() is None:
+                    time.sleep(1)
+                    size = os.path.getsize(outputPath) if os.path.exists(outputPath) else 0
+                    if size > lastSize:
+                        print(f"[Test] cURL resume progress: {size} bytes")
+                        lastSize = size
+                        lastProgressAt = time.monotonic()
+                    elif time.monotonic() - lastProgressAt >= self._CURL_IDLE_TIMEOUT_SECONDS:
+                        process.terminate()
+                        try:
+                            _stdout, stderr = process.communicate(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            _stdout, stderr = process.communicate()
+                        self._printCurlStallDiagnostics(shareLink, outputPath, stderr)
+                        raise AssertionError(
+                            f"Curl resume made no progress for {self._CURL_IDLE_TIMEOUT_SECONDS} seconds"
+                        )
+                _stdout, stderr = process.communicate()
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate()
+            print(stderr)
+            if process.returncode != 0:
+                raise AssertionError(f"Curl download failed: {stderr}")
             print(f"[Test] File downloaded successfully to {outputPath}")
-            if '** Resuming transfer from byte position' in result.stderr:
+            if '** Resuming transfer from byte position' in stderr:
                 print("[Test] Download was resumed from previous attempt")
 
     def _testResumingDownload(self, p2p=True):
         """Test resuming download functionality using curl"""
         try:
-            shareLink = self._startFastFileLink(p2p)
+            self._shareOutputCapture = {}
+            shareLink = self._startFastFileLink(p2p, captureOutputIn=self._shareOutputCapture)
             downloadedFilePath = self._getDownloadedFilePath()
 
             # First, download incompletely
@@ -368,6 +431,7 @@ class ResumeDownloadTest(FastFileLinkTestBase):
             print("[Test] Resuming download successfully!")
         finally:
             self._terminateProcess()
+            self._shareOutputCapture = None
 
     # Public test methods
     def testResumingDownloadByP2P(self):

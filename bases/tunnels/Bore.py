@@ -36,6 +36,8 @@ from hmac import HMAC
 
 from bases.Kernel import getLogger
 
+from . import Socks5ProxySupport
+
 # Configure logging
 logger = getLogger(__name__)
 
@@ -49,9 +51,6 @@ DEFAULT_CONTROL_IDLE_TIMEOUT = int(os.getenv("BORE_CONTROL_IDLE_TIMEOUT", "90"))
 
 BORE_DEBUG = os.getenv('BORE_DEBUG', False)
 BORE_VERBOSE = os.getenv('BORE_VERBOSE', False)
-
-# SOCKS5 proxy support via environment variable
-SOCKS5_ENV_VAR = "FFL_TUNNEL_SOCKS5"
 
 class _SSLContextCache:
     # ssl.create_default_context() loads the system trust store on first call.
@@ -183,7 +182,7 @@ class ControlConnectionStaleError(ConnectionError):
     """Raised when the control channel stops delivering frames for too long."""
 
 
-class BoreClient:
+class BoreClient(Socks5ProxySupport):
     """Python implementation of the bore client."""
 
     def __init__(
@@ -352,52 +351,18 @@ class BoreClient:
             # Task was already removed or set was cleared during shutdown
             logger.debug("Task already removed from running tasks: %s", e)
 
-    @staticmethod
-    def _parseSocks5Env():
-        """
-        Parse FFL_TUNNEL_SOCKS5 environment variable.
-        Returns (host, port) tuple or None if not configured.
-        """
-        value = os.environ.get(SOCKS5_ENV_VAR)
-        if not value:
-            return None
-
-        value = value.strip()
-        if not value:
-            return None
-
-        # Parse as host:port format
-        host, sep, portStr = value.rpartition(":")
-        if not sep:
-            logger.error(f"Invalid {SOCKS5_ENV_VAR} value (expected host:port): {value!r}")
-            return None
-
-        try:
-            port = int(portStr)
-        except ValueError:
-            logger.error(f"Invalid {SOCKS5_ENV_VAR} port in {value!r}")
-            return None
-
-        return host, port
-
-    @staticmethod
-    def openTcpConnectionBlocking(host, port, proxyConfig=None, timeout=NETWORK_TIMEOUT):
+    @classmethod
+    def openTcpConnectionBlocking(cls, host, port, proxyConfig=None, timeout=NETWORK_TIMEOUT):
         """Establish a TCP connection (optionally via SOCKS5 proxy) in blocking mode.
 
         Returns a socket ready for asyncio adoption via open_connection(sock=..., ssl=...).
         Returns None on failure so callers can fall back to a normal connect().
         """
         try:
-            if proxyConfig and proxyConfig.get('type') == 'socks5':
-                return BoreClient._connectViaSocks5Blocking(
-                    proxyConfig['host'], proxyConfig['port'], host, port, timeout
-                )
-            
-            envProxy = BoreClient._parseSocks5Env()
-            if envProxy:
-                proxyHost, proxyPort = envProxy
-                return BoreClient._connectViaSocks5Blocking(proxyHost, proxyPort, host, port, timeout)
-                
+            proxy = cls.resolveSocks5Proxy(proxyConfig)
+            if proxy:
+                return cls._connectViaSocks5Blocking(*proxy, host, port, timeout)
+
             return socket.create_connection((host, port), timeout=timeout)
         except Exception as e:
             logger.debug(f"TCP pre-connect to {host}:{port} failed: {e}")
@@ -407,22 +372,8 @@ class BoreClient:
         """Inject a pre-connected TCP socket to skip the TCP RTT in connect()."""
         self._preTcpSocket = sock
 
-    @staticmethod
-    def _recvExact(sock, n):
-        """
-        Blocking recv until exactly n bytes are received.
-        Raises OSError if connection closes before n bytes received.
-        """
-        data = bytearray()
-        while len(data) < n:
-            chunk = sock.recv(n - len(data))
-            if not chunk:
-                raise OSError("SOCKS5 proxy closed connection unexpectedly")
-            data.extend(chunk)
-        return bytes(data)
-
-    @staticmethod
-    def _connectViaSocks5Blocking(proxyHost, proxyPort, destHost, destPort, timeout):
+    @classmethod
+    def _connectViaSocks5Blocking(cls, proxyHost, proxyPort, destHost, destPort, timeout):
         """
         Establish connection to destHost:destPort via SOCKS5 proxy using blocking I/O.
         This function runs in a thread executor to avoid blocking the event loop.
@@ -435,64 +386,12 @@ class BoreClient:
             timeout: Connection timeout in seconds
 
         Returns a non-blocking socket connected to destHost:destPort.
-        Raises OSError if SOCKS5 handshake fails.
+        Raises ConnectionError (an OSError subclass) if the SOCKS5 handshake fails.
         """
         logger.info(f"Connecting to {destHost}:{destPort} via SOCKS5 proxy {proxyHost}:{proxyPort}")
-
-        # Connect to SOCKS5 proxy
-        sock = socket.create_connection((proxyHost, proxyPort), timeout=timeout)
-        sock.settimeout(timeout)
-
-        try:
-            # 1. SOCKS5 greeting: VER=5, NMETHODS=1, METHOD=0 (no authentication)
-            sock.sendall(b"\x05\x01\x00")
-            resp = BoreClient._recvExact(sock, 2)
-            if resp[0] != 5 or resp[1] == 0xFF:
-                raise OSError(f"SOCKS5 proxy does not accept no-auth method, resp={resp!r}")
-
-            # 2. CONNECT request: use ATYP=3 (DOMAIN) so proxy does DNS resolution
-            destBytes = destHost.encode("idna")
-            if len(destBytes) > 255:
-                raise OSError("Destination hostname too long for SOCKS5")
-
-            req = bytearray()
-            # VER=5, CMD=1 (CONNECT), RSV=0, ATYP=3 (DOMAIN), LEN
-            req.extend((5, 1, 0, 3, len(destBytes)))
-            req.extend(destBytes)
-            req.extend(destPort.to_bytes(2, "big"))
-            sock.sendall(req)
-
-            # 3. Read CONNECT response header: VER REP RSV ATYP
-            hdr = BoreClient._recvExact(sock, 4)
-            if hdr[0] != 5:
-                raise OSError(f"Invalid SOCKS5 version in response: {hdr[0]}")
-            if hdr[1] != 0:
-                raise OSError(f"SOCKS5 CONNECT failed with reply code: {hdr[1]}")
-
-            # 4. Read BND.ADDR based on ATYP
-            atyp = hdr[3]
-            if atyp == 1:      # IPv4
-                toRead = 4
-            elif atyp == 3:    # DOMAIN
-                ln = BoreClient._recvExact(sock, 1)[0]
-                toRead = ln
-            elif atyp == 4:    # IPv6
-                toRead = 16
-            else:
-                raise OSError(f"Unknown SOCKS5 ATYP: {atyp}")
-
-            # Read BND.ADDR + BND.PORT (2 bytes) - we don't need these values
-            _ = BoreClient._recvExact(sock, toRead + 2)
-
-            # 5. SOCKS5 handshake complete - switch to non-blocking for asyncio
-            sock.settimeout(None)
-            sock.setblocking(False)
-            logger.debug("SOCKS5 connection established to %s:%s", destHost, destPort)
-            return sock
-
-        except Exception:
-            sock.close()
-            raise
+        sock = cls._connectSocks5(proxyHost, proxyPort, destHost, destPort, timeout, nonBlocking=True)
+        logger.debug("SOCKS5 connection established to %s:%s", destHost, destPort)
+        return sock
 
     async def _openTlsConnection(self, host, port, sslCtx, serverHostname=None, timeout=None):
         """
@@ -505,21 +404,10 @@ class BoreClient:
 
         Returns (reader, writer) tuple compatible with asyncio streams.
         """
-        # Determine proxy from priority: self.proxyConfig > FFL_TUNNEL_SOCKS5 > None
-        proxyHost = None
-        proxyPort = None
-
-        if self.proxyConfig and self.proxyConfig['type'] == 'socks5':
-            # Use proxy from --proxy argument (highest priority)
-            proxyHost = self.proxyConfig['host']
-            proxyPort = self.proxyConfig['port']
-            logger.debug("Using SOCKS5 proxy from --proxy: %s:%s", proxyHost, proxyPort)
-        else:
-            # Fall back to FFL_TUNNEL_SOCKS5 environment variable
-            envProxy = self._parseSocks5Env()
-            if envProxy:
-                proxyHost, proxyPort = envProxy
-                logger.debug("Using SOCKS5 proxy from FFL_TUNNEL_SOCKS5: %s:%s", proxyHost, proxyPort)
+        proxy = self._getSocks5Proxy()
+        proxyHost, proxyPort = proxy if proxy else (None, None)
+        if proxy:
+            logger.debug("Using SOCKS5 proxy: %s:%s", proxyHost, proxyPort)
 
         if not proxyHost:
             # No proxy configured - use standard asyncio connection

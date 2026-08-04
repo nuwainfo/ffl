@@ -426,7 +426,9 @@ class TunnelRunnerProvider:
                     config = provider.getTunnelConfig(self.preferredTunnel)
                     if config:
                         return config.get('name', self.preferredTunnel)
+                        
                     return self.preferredTunnel
+                    
                 return super().getTunnelType()
 
             def _getPreferredTunnel(self) -> Optional[str]:
@@ -468,7 +470,6 @@ class TunnelRunnerProvider:
 
             def createClient(self, port, **kwargs):
                 """Override to support external tunnels"""
-
                 # Try external tunnel first if available
                 if self.preferredTunnel:
                     try:

@@ -32,7 +32,7 @@ from functools import partial
 
 import requests
 
-from bases.Bore import BoreClient # isort:skip
+from bases.tunnels.Bore import BoreClient # isort:skip
 from bases.Tunnel import AsyncTunnelThread, fetchTunnelToken # isort:skip
 from tests.CoreTestBase import FastFileLinkTestBase
 
@@ -346,7 +346,6 @@ class BoreHttpsTest(unittest.TestCase):
         self.httpProcess.terminate()
         self.httpProcess.wait()
 
-        # 如果自己建的，就負責清掉
         if self._ownsTempDir:
             self._tempDirObj.cleanup()
 

@@ -40,7 +40,7 @@ import psutil
 
 import addons.API as apiModule
 import addons.Features as featuresModule
-from bases.Kernel import Singleton
+from bases.Kernel import EventService, Singleton
 from bases.Settings import SettingsGetter
 
 
@@ -184,6 +184,35 @@ class FastFileLinkTestBase(unittest.TestCase):
         importlib.reload(featuresModule)
         self._resetSingletonsByModulePrefix('addons.Features', 'addons.auth')
         SettingsGetter.getInstance()._featureManager = None
+        self._reattachFeatureManagerEvents()
+
+    def _reattachFeatureManagerEvents(self):
+        """Re-apply the eventService.attach() patches that addons.Features.load()
+        installs once at addon startup.
+
+        importlib.reload(featuresModule) rebuilds the FeatureManager class from
+        scratch, so its methods are the original, unpatched versions again --
+        attach() replaces a method on the class object directly (see
+        EventService.attach in bases/Kernel.py), it doesn't register a
+        removable subscription. Since this reload doesn't re-run any addon's
+        load(), those patches are silently lost, and the corresponding
+        FeatureEvent.*ClassCreate events never fire again for the rest of the
+        process's life -- meaning any addon that enhances a class through one
+        of these events (e.g. addons/Preview.py adding ZIP manifest/file/thumb
+        routes via downloadHandlerClassCreate) silently stops working for
+        every share created afterwards, regardless of what's being shared.
+        Re-running the same attach() calls addons.Features.load() makes keeps
+        this in sync; if load() ever attaches a new FeatureManager method,
+        it must be added here too.
+        """
+        eventService = EventService.getInstance()
+        FeatureEvent = featuresModule.FeatureEvent
+        FeatureManager = featuresModule.FeatureManager
+        eventService.attach(FeatureEvent.downloadHandlerClassCreate.key, FeatureManager.getDownloadHandlerClass)
+        eventService.attach(FeatureEvent.webrtcManagerClassCreate.key, FeatureManager.getWebRTCManagerClass)
+        eventService.attach(FeatureEvent.tunnelRunnerClassCreate.key, FeatureManager.getTunnelRunnerClass)
+        eventService.attach(FeatureEvent.uidGeneratorClassCreate.key, FeatureManager.getUIDGeneratorClass)
+        eventService.attach(FeatureEvent.shareRequestClassCreate.key, FeatureManager.getShareRequestClass)
 
     def _resetSingletonsByModulePrefix(self, *modulePrefixes):
         for singletonClass in list(Singleton._instances):
@@ -1409,7 +1438,10 @@ class FastFileLinkTestBase(unittest.TestCase):
             if extraEnvVars:
                 for key, value in extraEnvVars.items():
                     mergedEnvVars[key] = str(value)
-                    print(f"[Test] Extra env var: {key}={value}")
+                    # Test diagnostics must never disclose credentials copied
+                    # from the caller's environment.
+                    safeValue = '[redacted]' if any(marker in key.upper() for marker in ('SECRET', 'PASSWORD', 'TOKEN', 'KEY')) else value
+                    print(f"[Test] Extra env var: {key}={safeValue}")
 
             if not showOutput:
                 # File-based output: redirect stdout/stderr to log file to avoid pipe buffer deadlock

@@ -70,7 +70,7 @@ class TunnelsIntegrationTest(unittest.TestCase):
                             results.append((host, False))
                         return
                     
-                from tests.bases.BoreTest import BoreHttpsTest # isort:skip                 
+                from tests.bases.tunnels.BoreTest import BoreHttpsTest # isort:skip
                 
                 testCase = BoreHttpsTest(
                     methodName='testUseHttpsTunnel', remoteHost=host, secret=secret, tempDir=tempDir, port=port

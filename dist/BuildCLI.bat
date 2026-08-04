@@ -86,6 +86,7 @@ call conda deactivate
 
 powershell -Command ".\python.exe -m compileall --invalidation-mode=unchecked-hash -b -q Lib"
 powershell -Command "Get-ChildItem -Path 'Lib' -Recurse -Filter *.py | Remove-Item -Force"
+powershell -Command "Get-ChildItem -Path 'Lib' -Recurse -Directory -Filter '__pycache__' | Remove-Item -Recurse -Force"
 powershell -Command "Rename-Item 'python.exe' 'ffl.exe'"
 powershell -Command ^
 "Invoke-WebRequest https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe -OutFile rcedit.exe; ^

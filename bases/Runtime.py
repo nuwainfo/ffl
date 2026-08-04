@@ -269,7 +269,7 @@ class MultiShareServerRuntime(AbstractRuntime):
             ),
         )
 
-    def startTunnel(self, tunnelRunner, port, context):
+    def startTunnel(self, tunnelRunner, port, context, uid=None):
         output = context.reporter.output
         tunnelType = tunnelRunner.getTunnelType()
         if tunnelType != "default":
@@ -282,7 +282,7 @@ class MultiShareServerRuntime(AbstractRuntime):
         else:
             output(_('Establishing tunnel connection...\n'))
 
-        domain, tunnelLink = tunnelRunner.start(port)
+        domain, tunnelLink = tunnelRunner.start(port, uid=uid)
         return domain, tunnelLink
 
 
@@ -297,7 +297,7 @@ class SingleShareRuntime(MultiShareServerRuntime):
 
         tunnelRunner = self.createTunnel(size, context)
         with tunnelRunner:
-            domain, tunnelLink = self.startTunnel(tunnelRunner, port, context)
+            domain, tunnelLink = self.startTunnel(tunnelRunner, port, context, uid=uid)
             tunnelType = tunnelRunner.getTunnelType()
             link = f"{tunnelLink}{uid}"
 

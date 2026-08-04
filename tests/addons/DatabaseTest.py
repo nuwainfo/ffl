@@ -109,7 +109,7 @@ class DatabaseTest(DaemonLifecycleMixin, FastFileLinkTestBase):
         finally:
             connection.close()
 
-        self.assertTrue({'schemaMigrations', 'shares', 'shareEvents'}.issubset(tableNames))
+        self.assertTrue({'SchemaMigrations', 'Shares', 'ShareEvents'}.issubset(tableNames))
         self.assertTrue({'createdAt', 'availableAt', 'stoppedAt', 'downloadCount'}.issubset(shareColumns))
 
     def testBackgroundUploadIsPersistedAfterRemoteVerification(self):

@@ -41,7 +41,12 @@ import certifi
 
 from functools import partial
 
-from bases.Kernel import FFLEvent
+from bases.Kernel import FFLEvent, loadEnvFile
+
+# Load .env before any other imports so its values are already in os.environ
+# by the time other modules read their os.getenv(...) defaults at import time.
+loadEnvFile()
+
 from bases.Settings import DEFAULT_STATIC_ROOT, ExecutionMode, SettingsGetter
 from bases.FileSystems import ExcludeFilter
 from bases.Readers import SourceReader
@@ -52,7 +57,7 @@ from bases.Share import ShareExecutionContext, ShareReporter, createShareRequest
 from bases.Download import processDownload
 from bases.Daemon import DaemonClient, ProcessDaemonManager
 from bases.CLI import (
-    ShareCLIArgumentAdapter, configureCLIParser, loadEnvFile, preprocessArguments, processArgumentsAndCommands,
+    ShareCLIArgumentAdapter, configureCLIParser, preprocessArguments, processArgumentsAndCommands,
     processGlobalArguments
 )
 from bases.Utils import flushPrint, getLogger, sendException, validateCompatibleWithServer
@@ -130,9 +135,6 @@ def detectExecutionEnvironment():
 
 
 def setupSettings(logger):
-
-    # Load .env file early (before any configuration or addon loading)
-    loadEnvFile()
 
     # Detect execution environment (PyInstaller, PyApp, Cosmopolitan, or pure Python)
     exeMode, baseDir, exePath = detectExecutionEnvironment()

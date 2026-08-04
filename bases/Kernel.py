@@ -45,7 +45,7 @@ from signalslot import Signal
 from sentry_sdk.integrations.logging import SentryHandler, LoggingIntegration
 from sentry_sdk.integrations import atexit as sentryAtexit
 
-PUBLIC_VERSION = '4.0.2'
+PUBLIC_VERSION = '4.0.4'
 
 # Map string levels to logging constants for standard level names
 LOG_LEVEL_MAPPING = {'DEBUG': logging.DEBUG, 'INFO': logging.INFO, 'WARNING': logging.WARNING, 'ERROR': logging.ERROR}
@@ -1013,6 +1013,58 @@ class StorageLocator(Singleton):
             os.makedirs(path, exist_ok=True)
             
         return path
+
+
+def loadEnvFile():
+    """Load unset process variables from the configured ``.env`` file."""
+    logger = getLogger(__name__)
+
+    storageLocator = StorageLocator.getInstance()
+    envFilePath = storageLocator.findConfig('.env')
+
+    if not os.path.exists(envFilePath):
+        return
+
+    try:
+        logger.info('Loading .env file from: %s', envFilePath)
+        loadedCount = 0
+
+        with open(envFilePath, 'r', encoding='utf-8') as envFile:
+            for lineNumber, rawLine in enumerate(envFile, 1):
+                line = rawLine.strip()
+                
+                # Skip empty lines and comments
+                if not line or line.startswith('#'):
+                    continue
+                # Parse KEY=VALUE format
+                if '=' not in line:
+                    logger.warning('.env line %s: Invalid format (missing =): %s', lineNumber, line)
+                    continue
+
+                key, _separator, value = line.partition('=')
+                key = key.strip()
+                value = value.strip()
+
+                if not key:
+                    logger.warning('.env line %s: Empty key', lineNumber)
+                    continue
+
+                # Remove quotes if present (both single and double)
+                if (value.startswith('"') and value.endswith('"')) or \
+                   (value.startswith("'") and value.endswith("'")):
+                    value = value[1:-1]
+
+                # Only set if not already in environment (environment takes precedence)
+                if key in os.environ:
+                    logger.debug('.env: Skipped %s (already set in environment)', key)
+                    continue
+                    
+                os.environ[key] = value
+                loadedCount += 1
+
+        logger.info('Loaded %s environment variables from .env', loadedCount)
+    except Exception as e:
+        logger.error('Unexpected error loading .env file: %s', e, exc_info=True)
 
 
 class SecretGetter(Singleton):

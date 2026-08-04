@@ -1104,6 +1104,11 @@ class BrowserTestBase(FastFileLinkTestBase):
         """
         script = r"""
 (function() {
+  // Page.addScriptToEvaluateOnNewDocument also runs in child frames.  Do not
+  // bootstrap StreamSaver from its own mitm iframe, or each mitm document
+  // creates another mitm iframe indefinitely.
+  if (window.top !== window.self) return;
+
   if (window.__FFL_MITM_BOOTSTRAP__) return;
   window.__FFL_MITM_BOOTSTRAP__ = true;
 

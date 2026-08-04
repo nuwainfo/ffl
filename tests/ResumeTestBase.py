@@ -476,7 +476,14 @@ class ResumeBrowserTestBase(BrowserTestBase, ResumeTestBase):
                     )
 
                 # Verify downloaded file
-                self._verifyDownloadedFile(downloadedFile)
+                try:
+                    self._verifyDownloadedFile(downloadedFile)
+                except Exception:
+                    # The browser can report a completed native download after
+                    # an upstream relay closed early. Preserve the agent/server
+                    # trace for the failing integrity assertion.
+                    self._printServerOutput(outputCapture, lastNLines=None)
+                    raise
 
                 # Print server output for final verification
                 self._printServerOutput(outputCapture, lastNLines=50)
