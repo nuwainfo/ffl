@@ -1316,7 +1316,6 @@ class LargeFileTest(ResumeBrowserTestBase):
         configPath = os.path.join(configDir, "tunnels.json")
         tunnelDomain = (
             os.getenv("FFL_TUNNEL_DOMAIN")
-            or os.getenv("BUILTIN_TUNNEL")
             or "33.fastfilelink.com"
         ).strip()
         config = {
@@ -2515,7 +2514,6 @@ class LargeFileTest(ResumeBrowserTestBase):
         for key in (
             "FILESHARE_TEST",
             "STATIC_SERVER",
-            "BUILTIN_TUNNEL",
             "FFL_TUNNEL_DOMAIN",
             "FFL_NO_API_TUNNELS",
             "TUNNEL_TOKEN_SERVER_URL",
@@ -2979,7 +2977,7 @@ def buildArgumentParser():
     )
     parser.add_argument("--file", dest="filePath", help="Override FFL_LARGE_FILE_PATH")
     parser.add_argument("--download-dir", dest="downloadDir", help="Override FFL_LARGE_FILE_DOWNLOAD_DIR")
-    parser.add_argument("--tunnel", help="Override BUILTIN_TUNNEL and FFL_TUNNEL_DOMAIN")
+    parser.add_argument("--tunnel", help="Override FFL_TUNNEL_DOMAIN")
     parser.add_argument(
         "--net-scope",
         choices=["share", "browser", "both", "host"],
@@ -3117,7 +3115,6 @@ def applyDirectRunArgs(args):
     if args.downloadDir:
         os.environ["FFL_LARGE_FILE_DOWNLOAD_DIR"] = args.downloadDir
     if args.tunnel:
-        os.environ["BUILTIN_TUNNEL"] = args.tunnel
         os.environ["FFL_TUNNEL_DOMAIN"] = args.tunnel
         os.environ["FFL_NO_API_TUNNELS"] = "True"
     if args.net_scope:

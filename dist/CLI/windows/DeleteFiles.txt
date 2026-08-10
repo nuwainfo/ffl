@@ -232,6 +232,13 @@ Lib\site-packages\wheel
 Lib\site-packages\win32ctypes
 Lib\site-packages\wx
 Lib\site-packages\pywin32.pth
+Lib\site-packages\PyWin32.chm
+Lib\site-packages\pywin32.version.txt
+Lib\site-packages\README.txt
+Lib\site-packages\pefile.py
+Lib\site-packages\pwiz.py
+Lib\site-packages\pythoncom.py
+Lib\site-packages\playhouse
 Lib\site-packages\babel
 Lib\site-packages\README.txt
 Lib\site-packages\distutils-precedence.pth

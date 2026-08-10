@@ -45,7 +45,9 @@ from signalslot import Signal
 from sentry_sdk.integrations.logging import SentryHandler, LoggingIntegration
 from sentry_sdk.integrations import atexit as sentryAtexit
 
-PUBLIC_VERSION = '4.0.4'
+PUBLIC_VERSION = '4.0.5'
+
+PUBLIC_REVISION = "$Revision: 19833 $"[11:-2]
 
 # Map string levels to logging constants for standard level names
 LOG_LEVEL_MAPPING = {'DEBUG': logging.DEBUG, 'INFO': logging.INFO, 'WARNING': logging.WARNING, 'ERROR': logging.ERROR}
@@ -85,6 +87,10 @@ if os.getenv('FFL_LOGGING_LEVEL'):
 if os.getenv('FFL_PUBLIC_VERSION'):
     PUBLIC_VERSION = os.environ['FFL_PUBLIC_VERSION']
     logging.info(f'[WARN] FFL_PUBLIC_VERSION is set to {PUBLIC_VERSION}, TEST PURPOSE ONLY.')
+
+if os.getenv('FFL_PUBLIC_REVISION'):
+    PUBLIC_REVISION = int(os.environ['FFL_PUBLIC_REVISION'])
+    logging.info(f'[WARN] FFL_PUBLIC_REVISION is set to {PUBLIC_REVISION}, TEST PURPOSE ONLY.')
 
 
 def getLogger(name, version=PUBLIC_VERSION, reinitialize=False):
@@ -563,10 +569,69 @@ class AddonsManager(Singleton):
         self.loadedAddons = []
         self.failedAddons = []
         self.storageLocator = StorageLocator.getInstance()
+        self._addonsConfig = None
+        self._addonsConfigPath = None
+        self._addonsConfigFileFound = False
+
+    def _readAddonsConfig(self):
+        """
+        Read and cache addons.json config file content, via the same
+        StorageLocator.findConfig() lookup every other config file uses.
+        Also caches the resolved path (self._addonsConfigPath) so
+        _getAddonFolders() can anchor the companion "addons" folder to the
+        exact same location, instead of re-deriving it a different way.
+
+        Uses strict=True: this file gates which addon code gets imported and
+        executed, so under FFL_STORAGE_LOCATION it must never silently fall
+        back to the real machine's ~/.fastfilelink (see findConfig/findStorage).
+
+        Returns:
+            dict: Parsed addons.json content, or empty dict if missing/invalid.
+        """
+        if self._addonsConfig is not None:
+            return self._addonsConfig
+
+        self._addonsConfig = {}
+        try:
+            self._addonsConfigPath = self.storageLocator.findConfig('addons.json', strict=True)
+            if os.path.exists(self._addonsConfigPath):
+                with open(self._addonsConfigPath, 'r', encoding='utf-8') as f:
+                    addonsConfig = json.load(f)
+
+                # Only a valid JSON object counts as "found" (even with no 'disabled' field)
+                if isinstance(addonsConfig, dict):
+                    self._addonsConfig = addonsConfig
+                    self._addonsConfigFileFound = True
+
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+            self.logger.debug(f"Could not read addons.json config: {e}")
+        except Exception as e:
+            self.logger.warning(f"Unexpected error reading addons.json config: {e}")
+
+        return self._addonsConfig
+
+    def _getConfigStringList(self, key):
+        """
+        Get a validated list of non-empty, stripped strings from an addons.json field.
+        Shared by every addons.json array field (disabled, extra_addons, addon_folders).
+
+        Returns:
+            list: Valid string entries in declared order, or [] if the field is
+                  missing or not an array.
+        """
+        addonsConfig = self._readAddonsConfig()
+        rawValues = addonsConfig.get(key, [])
+
+        if not isinstance(rawValues, (list, tuple)):
+            self.logger.warning(f"addons.json '{key}' field should be an array, got: {type(rawValues)}")
+            return []
+
+        return [value.strip() for value in rawValues if isinstance(value, str) and value.strip()]
 
     def getEnabledAddons(self):
         """
-        Get the list of enabled addons from addons.__init__, filtered by disabled addons.
+        Get the list of enabled addons from addons.__init__ plus any 'extra_addons'
+        declared in addons.json, filtered by disabled addons.
         Returns empty list if addons list doesn't exist or can't be imported.
 
         Disabling Priority (highest to lowest):
@@ -578,17 +643,33 @@ class AddonsManager(Singleton):
         Note: If addons.json exists and has a valid "disabled" field, the environment variable is ignored.
         This ensures user config files are authoritative and predictable.
 
+        Extra addon search folders can be declared via addons.json "addon_folders"
+        (see _getAddonFolders), and the "addons" folder next to addons.json itself
+        (typically ~/.fastfilelink/addons) is always searched if it exists. Addons
+        found only in those folders are NOT loaded automatically - they must also
+        be explicitly named in addons.json "extra_addons" so that dropping a module
+        into a folder can't silently enable it.
+
         Example addons.json:
         {
-            "disabled": ["GUI", "Tunnels"]
+            "disabled": ["GUI", "Tunnels"],
+            "extra_addons": ["MyCustomAddon"],
+            "addon_folders": ["C:/path/to/custom/addons"]
         }
         """
         try:
+            self._extendAddonSearchPaths()
+
             addonsModule = importlib.import_module('addons')
             addonsList = getattr(addonsModule, 'addons', [])
 
             if not isinstance(addonsList, (list, tuple)):
                 raise RuntimeError("addons.addons is not a list")
+
+            addonsList = list(addonsList)
+            for extraAddon in self._getExtraAddonNames():
+                if extraAddon not in addonsList:
+                    addonsList.append(extraAddon)
 
             # Filter out disabled addons
             disabledAddons = self._getDisabledAddons()
@@ -609,41 +690,13 @@ class AddonsManager(Singleton):
         Returns:
             set: Set of disabled addon names
         """
-        disabledAddons = set()
-        configFileFound = False
+        validDisabled = self._getConfigStringList('disabled')
+        disabledAddons = set(validDisabled)
+        if validDisabled:
+            self.logger.debug(f"Disabled addons from addons.json: {', '.join(validDisabled)}")
 
-        # 1. Read from addons.json config file first (highest priority)
-        try:
-            addonsConfigPath = self.storageLocator.findConfig('addons.json')
-            if os.path.exists(addonsConfigPath):
-                with open(addonsConfigPath, 'r', encoding='utf-8') as f:
-                    addonsConfig = json.load(f)
-
-                # If we have a valid JSON file, mark config as found (even if no 'disabled' field)
-                if isinstance(addonsConfig, dict):
-                    configFileFound = True
-
-                    if 'disabled' in addonsConfig:
-                        configDisabled = addonsConfig['disabled']
-                        if isinstance(configDisabled, (list, tuple)):
-                            validDisabled = [
-                                addon.strip() for addon in configDisabled if isinstance(addon, str) and addon.strip()
-                            ]
-                            disabledAddons.update(validDisabled)
-                            if validDisabled:
-                                self.logger.debug(f"Disabled addons from addons.json: {', '.join(validDisabled)}")
-                        else:
-                            self.logger.warning(
-                                f"addons.json 'disabled' field should be an array, got: {type(configDisabled)}"
-                            )
-
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
-            self.logger.debug(f"Could not read addons.json config: {e}")
-        except Exception as e:
-            self.logger.warning(f"Unexpected error reading addons.json config: {e}")
-
-        # 2. Read from DISABLE_ADDONS environment variable (fallback when no valid config file)
-        if not configFileFound:
+        # Read from DISABLE_ADDONS environment variable (fallback when no valid config file)
+        if not self._addonsConfigFileFound:
             envDisabled = os.getenv('DISABLE_ADDONS', '')
             if envDisabled:
                 envDisabledList = [addon.strip() for addon in envDisabled.split(',') if addon.strip()]
@@ -656,6 +709,63 @@ class AddonsManager(Singleton):
             self.logger.info(f"Disabled addons: {', '.join(sorted(disabledAddons))}")
 
         return disabledAddons
+
+    def _getExtraAddonNames(self):
+        """
+        Get additional addon names explicitly enabled via addons.json "extra_addons".
+
+        These are addon names not present in the built-in addons.addons list -
+        typically addons living in the folders returned by _getAddonFolders().
+        Listing a folder alone does not enable any addon in it; the name must
+        also appear here, so untrusted files dropped into a searched folder
+        can't be loaded without explicit consent.
+
+        Returns:
+            list: Addon names to additionally treat as enabled, in declared order.
+        """
+        extraAddons = self._getConfigStringList('extra_addons')
+        if extraAddons:
+            self.logger.debug(f"Extra addons from addons.json: {', '.join(extraAddons)}")
+
+        return extraAddons
+
+    def _getAddonFolders(self):
+        """
+        Get additional addon module search folders:
+        1. addons.json "addon_folders" array (user-declared custom paths)
+        2. the "addons" folder next to addons.json itself, if it exists -
+           wherever findConfig() actually resolved addons.json to (typically
+           ~/.fastfilelink), not a separately re-derived location
+
+        Note: a folder being searched does not enable any addon inside it - the
+        addon name must still be listed in addons.json "extra_addons" to be loaded
+        (see _getExtraAddonNames).
+
+        Returns:
+            list: Existing directory paths, in priority order.
+        """
+        configuredFolders = self._getConfigStringList('addon_folders') # resolves self._addonsConfigPath too
+        folders = [os.path.abspath(os.path.expanduser(folder)) for folder in configuredFolders]
+        folders.append(os.path.join(os.path.dirname(self._addonsConfigPath), 'addons'))
+
+        existingFolders = [folder for folder in folders if os.path.isdir(folder)]
+        if existingFolders:
+            self.logger.debug(f"Addon search folders: {', '.join(existingFolders)}")
+
+        return existingFolders
+
+    def _extendAddonSearchPaths(self):
+        """
+        Extend the addons package's __path__ so importlib.import_module('addons.<name>')
+        can resolve modules living outside the built-in addons/ folder (namespace
+        package style extension, same pattern as pkgutil.extend_path).
+        """
+        addonsModule = importlib.import_module('addons')
+
+        for folder in self._getAddonFolders():
+            if folder not in addonsModule.__path__:
+                addonsModule.__path__.append(folder)
+                self.logger.debug(f"Extended addon search path: {folder}")
 
     def loadAddon(self, addonName):
         """
@@ -836,6 +946,9 @@ class AddonsManager(Singleton):
         """
         self.loadedAddons.clear()
         self.failedAddons.clear()
+        self._addonsConfig = None
+        self._addonsConfigPath = None
+        self._addonsConfigFileFound = False
 
 
 class StorageLocator(Singleton):
@@ -937,7 +1050,7 @@ class StorageLocator(Singleton):
         # Fallback to current directory if all fail
         return os.path.abspath('.')
 
-    def findStorage(self, filename, prefer=None):
+    def findStorage(self, filename, prefer=None, strict=False):
         """
         Find storage location for reading config/data files
         Default priority: current -> home -> platform -> source_base
@@ -946,6 +1059,10 @@ class StorageLocator(Singleton):
         Args:
             filename: Name of the file to find
             prefer: Preferred location (Location.CURRENT, Location.HOME, Location.PLATFORM, Location.SOURCE_BASE)
+            strict: If True and FFL_STORAGE_LOCATION is set, only that directory is
+                    considered - a missing file there is "not found", never falling
+                    through to the real current/home/platform/source_base directories.
+                    Default False preserves the normal fallback search below.
 
         Returns:
             Path to the file (may not exist)
@@ -954,7 +1071,7 @@ class StorageLocator(Singleton):
         envStorageLocation = self._getEnvStorageLocation()
         if envStorageLocation:
             envPath = os.path.join(envStorageLocation, filename)
-            if os.path.exists(envPath):
+            if os.path.exists(envPath) or strict:
                 return envPath
 
         # Original search sequence: current -> home -> platform -> source_base
@@ -992,7 +1109,7 @@ class StorageLocator(Singleton):
 
         return os.path.join(self._homeDir, filename)
 
-    def findConfig(self, filename, prefer=None, folder=None):
+    def findConfig(self, filename, prefer=None, folder=None, strict=False):
         """
         Find configuration file
         Alias for findStorage with better naming for config files
@@ -1002,12 +1119,14 @@ class StorageLocator(Singleton):
             prefer: Preferred location (Location.CURRENT, Location.HOME, Location.PLATFORM)
             folder: If provided, return this subdirectory next to the config file,
                     creating it if it does not exist.
+            strict: See findStorage() - if True, FFL_STORAGE_LOCATION (when set)
+                    is exclusive instead of merely first in the search order.
 
         Returns:
             Path to the config file (may not exist), or the resolved subdirectory
             path when folder is specified.
         """
-        path = self.findStorage(filename, prefer=prefer)
+        path = self.findStorage(filename, prefer=prefer, strict=strict)
         if folder is not None:
             path = os.path.join(os.path.dirname(path), folder)
             os.makedirs(path, exist_ok=True)

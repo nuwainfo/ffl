@@ -412,23 +412,28 @@ class AddonsManagerTest(unittest.TestCase):
         self.addonsManager = AddonsManager.getInstance()
         self.addonsManager.reset()
 
-        # Create a fresh StorageLocator instance that uses our temp directory
+        # Point StorageLocator.homeDir at our temp dir - _readAddonsConfig() resolves
+        # addons.json from there directly, so this keeps every test isolated from
+        # whatever real ~/.fastfilelink/addons.json happens to exist on the machine.
         self.storageLocator = StorageLocator.getInstance()
-        # We'll patch the findConfig method to use our temp directory
+        homeDirPatcher = patch.object(self.storageLocator, '_homeDir', self.tempDir)
+        homeDirPatcher.start()
+        self.addCleanup(homeDirPatcher.stop)
+
+    def _writeAddonsJson(self, config, inDir=None):
+        """Write addons.json into the given directory (default: self.tempDir, the patched home)."""
+        addonsJsonPath = os.path.join(inDir or self.tempDir, 'addons.json')
+        with open(addonsJsonPath, 'w', encoding='utf-8') as f:
+            json.dump(config, f)
+        return addonsJsonPath
 
     def testGetDisabledAddonsFromJson(self):
         """
         Test reading disabled addons from addons.json config file.
         """
-        # Create test addons.json file
-        addonsConfig = {"disabled": ["GUI", "Tunnels", "Features"]}
-        addonsJsonPath = os.path.join(self.tempDir, 'addons.json')
-        with open(addonsJsonPath, 'w', encoding='utf-8') as f:
-            json.dump(addonsConfig, f)
+        self._writeAddonsJson({"disabled": ["GUI", "Tunnels", "Features"]})
 
-        # Mock StorageLocator to return our temp file
-        with patch.object(self.storageLocator, 'findConfig', return_value=addonsJsonPath):
-            disabledAddons = self.addonsManager._getDisabledAddons()
+        disabledAddons = self.addonsManager._getDisabledAddons()
 
         expectedDisabled = {"GUI", "Tunnels", "Features"}
         self.assertEqual(disabledAddons, expectedDisabled)
@@ -437,12 +442,9 @@ class AddonsManagerTest(unittest.TestCase):
         """
         Test reading disabled addons from DISABLE_ADDONS environment variable.
         """
-        # Mock StorageLocator to return non-existent file so env var is used
-        nonExistentPath = os.path.join(self.tempDir, 'nonexistent.json')
-
+        # No addons.json written - env var should be used
         with patch.dict(os.environ, {'DISABLE_ADDONS': 'GUI,Upload,API'}):
-            with patch.object(self.storageLocator, 'findConfig', return_value=nonExistentPath):
-                disabledAddons = self.addonsManager._getDisabledAddons()
+            disabledAddons = self.addonsManager._getDisabledAddons()
 
         expectedDisabled = {"GUI", "Upload", "API"}
         self.assertEqual(disabledAddons, expectedDisabled)
@@ -451,16 +453,11 @@ class AddonsManagerTest(unittest.TestCase):
         """
         Test that addons.json config file has higher priority than DISABLE_ADDONS environment variable.
         """
-        # Create addons.json with some disabled addons
-        addonsConfig = {"disabled": ["GUI", "Tunnels"]}
-        addonsJsonPath = os.path.join(self.tempDir, 'addons.json')
-        with open(addonsJsonPath, 'w', encoding='utf-8') as f:
-            json.dump(addonsConfig, f)
+        self._writeAddonsJson({"disabled": ["GUI", "Tunnels"]})
 
         # Set environment variable with different addons - should be ignored
         with patch.dict(os.environ, {'DISABLE_ADDONS': 'Upload,Features,API'}):
-            with patch.object(self.storageLocator, 'findConfig', return_value=addonsJsonPath):
-                disabledAddons = self.addonsManager._getDisabledAddons()
+            disabledAddons = self.addonsManager._getDisabledAddons()
 
         # Should only use config file, ignore environment variable
         expectedDisabled = {"GUI", "Tunnels"}
@@ -470,10 +467,7 @@ class AddonsManagerTest(unittest.TestCase):
         """
         Test behavior when addons.json file doesn't exist.
         """
-        nonExistentPath = os.path.join(self.tempDir, 'nonexistent.json')
-
-        with patch.object(self.storageLocator, 'findConfig', return_value=nonExistentPath):
-            disabledAddons = self.addonsManager._getDisabledAddons()
+        disabledAddons = self.addonsManager._getDisabledAddons()
 
         # Should return empty set when no file exists and no env var
         self.assertEqual(disabledAddons, set())
@@ -482,13 +476,11 @@ class AddonsManagerTest(unittest.TestCase):
         """
         Test handling of invalid JSON in addons.json file.
         """
-        # Create invalid JSON file
-        addonsJsonPath = os.path.join(self.tempDir, 'invalid.json')
+        addonsJsonPath = os.path.join(self.tempDir, 'addons.json')
         with open(addonsJsonPath, 'w', encoding='utf-8') as f:
             f.write('{"disabled": ["GUI",}') # Invalid JSON (trailing comma)
 
-        with patch.object(self.storageLocator, 'findConfig', return_value=addonsJsonPath):
-            disabledAddons = self.addonsManager._getDisabledAddons()
+        disabledAddons = self.addonsManager._getDisabledAddons()
 
         # Should return empty set and handle error gracefully
         self.assertEqual(disabledAddons, set())
@@ -497,16 +489,9 @@ class AddonsManagerTest(unittest.TestCase):
         """
         Test handling of valid JSON but invalid format in addons.json.
         """
-        # Create JSON with wrong structure
-        addonsConfig = {
-            "disabled": "GUI,Tunnels" # Should be array, not string
-        }
-        addonsJsonPath = os.path.join(self.tempDir, 'wrong_format.json')
-        with open(addonsJsonPath, 'w', encoding='utf-8') as f:
-            json.dump(addonsConfig, f)
+        self._writeAddonsJson({"disabled": "GUI,Tunnels"}) # Should be array, not string
 
-        with patch.object(self.storageLocator, 'findConfig', return_value=addonsJsonPath):
-            disabledAddons = self.addonsManager._getDisabledAddons()
+        disabledAddons = self.addonsManager._getDisabledAddons()
 
         # Should return empty set when format is wrong
         self.assertEqual(disabledAddons, set())
@@ -515,13 +500,9 @@ class AddonsManagerTest(unittest.TestCase):
         """
         Test handling of empty and whitespace-only values in disabled list.
         """
-        addonsConfig = {"disabled": ["GUI", "", "  ", "Tunnels", "   Features   "]}
-        addonsJsonPath = os.path.join(self.tempDir, 'empty_values.json')
-        with open(addonsJsonPath, 'w', encoding='utf-8') as f:
-            json.dump(addonsConfig, f)
+        self._writeAddonsJson({"disabled": ["GUI", "", "  ", "Tunnels", "   Features   "]})
 
-        with patch.object(self.storageLocator, 'findConfig', return_value=addonsJsonPath):
-            disabledAddons = self.addonsManager._getDisabledAddons()
+        disabledAddons = self.addonsManager._getDisabledAddons()
 
         # Should filter out empty values and strip whitespace
         expectedDisabled = {"GUI", "Tunnels", "Features"}
@@ -535,16 +516,12 @@ class AddonsManagerTest(unittest.TestCase):
         # Mock the addons module
         mockAddonsModule = MagicMock()
         mockAddonsModule.addons = ["GUI", "Upload", "Tunnels", "Features", "API"]
+        mockAddonsModule.__path__ = []
         mockImportModule.return_value = mockAddonsModule
 
-        # Create addons.json with some disabled addons
-        addonsConfig = {"disabled": ["GUI", "Features"]}
-        addonsJsonPath = os.path.join(self.tempDir, 'filter_test.json')
-        with open(addonsJsonPath, 'w', encoding='utf-8') as f:
-            json.dump(addonsConfig, f)
+        self._writeAddonsJson({"disabled": ["GUI", "Features"]})
 
-        with patch.object(self.storageLocator, 'findConfig', return_value=addonsJsonPath):
-            enabledAddons = self.addonsManager.getEnabledAddons()
+        enabledAddons = self.addonsManager.getEnabledAddons()
 
         expectedEnabled = ["Upload", "Tunnels", "API"]
         self.assertEqual(enabledAddons, expectedEnabled)
@@ -557,14 +534,12 @@ class AddonsManagerTest(unittest.TestCase):
         # Mock the addons module
         mockAddonsModule = MagicMock()
         mockAddonsModule.addons = ["GUI", "Upload", "Tunnels", "Features", "API"]
+        mockAddonsModule.__path__ = []
         mockImportModule.return_value = mockAddonsModule
 
-        # Mock StorageLocator to return non-existent file so env var is used
-        nonExistentPath = os.path.join(self.tempDir, 'nonexistent.json')
-
+        # No addons.json written - env var should be used
         with patch.dict(os.environ, {'DISABLE_ADDONS': 'Upload,API'}):
-            with patch.object(self.storageLocator, 'findConfig', return_value=nonExistentPath):
-                enabledAddons = self.addonsManager.getEnabledAddons()
+            enabledAddons = self.addonsManager.getEnabledAddons()
 
         expectedEnabled = ["GUI", "Tunnels", "Features"]
         self.assertEqual(enabledAddons, expectedEnabled)
@@ -573,11 +548,8 @@ class AddonsManagerTest(unittest.TestCase):
         """
         Test that DISABLE_ADDONS environment variable works as fallback when no config file exists.
         """
-        nonExistentPath = os.path.join(self.tempDir, 'nonexistent.json')
-
         with patch.dict(os.environ, {'DISABLE_ADDONS': 'GUI,Upload'}):
-            with patch.object(self.storageLocator, 'findConfig', return_value=nonExistentPath):
-                disabledAddons = self.addonsManager._getDisabledAddons()
+            disabledAddons = self.addonsManager._getDisabledAddons()
 
         expectedDisabled = {"GUI", "Upload"}
         self.assertEqual(disabledAddons, expectedDisabled)
@@ -590,18 +562,14 @@ class AddonsManagerTest(unittest.TestCase):
         # Mock the addons module
         mockAddonsModule = MagicMock()
         mockAddonsModule.addons = ["GUI", "Upload", "Tunnels", "Features", "API"]
+        mockAddonsModule.__path__ = []
         mockImportModule.return_value = mockAddonsModule
 
-        # Create addons.json
-        addonsConfig = {"disabled": ["GUI", "Features"]}
-        addonsJsonPath = os.path.join(self.tempDir, 'priority_test.json')
-        with open(addonsJsonPath, 'w', encoding='utf-8') as f:
-            json.dump(addonsConfig, f)
+        self._writeAddonsJson({"disabled": ["GUI", "Features"]})
 
         # Set environment variable - should be ignored when config file exists
         with patch.dict(os.environ, {'DISABLE_ADDONS': 'Upload,Tunnels'}):
-            with patch.object(self.storageLocator, 'findConfig', return_value=addonsJsonPath):
-                enabledAddons = self.addonsManager.getEnabledAddons()
+            enabledAddons = self.addonsManager.getEnabledAddons()
 
         # Should only disable addons from config file, ignore environment variable
         expectedEnabled = ["Upload", "Tunnels", "API"] # GUI and Features disabled by config
@@ -611,17 +579,112 @@ class AddonsManagerTest(unittest.TestCase):
         """
         Test handling of non-string values in disabled array.
         """
-        addonsConfig = {"disabled": ["GUI", 123, None, "Tunnels", {"invalid": "object"}]}
-        addonsJsonPath = os.path.join(self.tempDir, 'non_string.json')
-        with open(addonsJsonPath, 'w', encoding='utf-8') as f:
-            json.dump(addonsConfig, f)
+        self._writeAddonsJson({"disabled": ["GUI", 123, None, "Tunnels", {"invalid": "object"}]})
 
-        with patch.object(self.storageLocator, 'findConfig', return_value=addonsJsonPath):
-            disabledAddons = self.addonsManager._getDisabledAddons()
+        disabledAddons = self.addonsManager._getDisabledAddons()
 
         # Should only include valid string values
         expectedDisabled = {"GUI", "Tunnels"}
         self.assertEqual(disabledAddons, expectedDisabled)
+
+    def testGetExtraAddonNamesFromJson(self):
+        """
+        Test reading extra addon names from addons.json 'extra_addons' field.
+        """
+        self._writeAddonsJson({"extra_addons": ["MyCustomAddon", "AnotherAddon"]})
+
+        extraAddons = self.addonsManager._getExtraAddonNames()
+
+        self.assertEqual(extraAddons, ["MyCustomAddon", "AnotherAddon"])
+
+    def testGetExtraAddonNamesWithInvalidFormat(self):
+        """
+        Test handling of a non-array 'extra_addons' field.
+        """
+        self._writeAddonsJson({"extra_addons": "NotAnArray"})
+
+        extraAddons = self.addonsManager._getExtraAddonNames()
+
+        self.assertEqual(extraAddons, [])
+
+    def testGetAddonFoldersIncludesConfiguredAndHomeFolders(self):
+        """
+        Test that _getAddonFolders() returns configured 'addon_folders' plus
+        ~/.fastfilelink/addons when it exists, filtering out non-existent paths.
+        """
+        customAddonFolder = os.path.join(self.tempDir, 'custom_addons')
+        os.makedirs(customAddonFolder)
+        missingFolder = os.path.join(self.tempDir, 'missing_folder')
+        homeAddonsFolder = os.path.join(self.tempDir, 'addons')
+        os.makedirs(homeAddonsFolder)
+
+        self._writeAddonsJson({"addon_folders": [customAddonFolder, missingFolder]})
+
+        folders = self.addonsManager._getAddonFolders()
+
+        self.assertIn(customAddonFolder, folders)
+        self.assertIn(homeAddonsFolder, folders)
+        self.assertNotIn(missingFolder, folders)
+
+    def testGetAddonFoldersExcludesMissingHomeAddonsFolder(self):
+        """
+        Test that a non-existent ~/.fastfilelink/addons folder is silently excluded.
+        """
+        # self.tempDir (the patched home) has no 'addons' subfolder and no addons.json
+        folders = self.addonsManager._getAddonFolders()
+
+        self.assertEqual(folders, [])
+
+    @patch('importlib.import_module')
+    def testGetEnabledAddonsIncludesExtraAddons(self, mockImportModule):
+        """
+        Test that getEnabledAddons() appends addons.json 'extra_addons' after the built-in list.
+        """
+        mockAddonsModule = MagicMock()
+        mockAddonsModule.addons = ["GUI", "Upload"]
+        mockAddonsModule.__path__ = []
+        mockImportModule.return_value = mockAddonsModule
+
+        self._writeAddonsJson({"extra_addons": ["MyCustomAddon"]})
+
+        enabledAddons = self.addonsManager.getEnabledAddons()
+
+        self.assertEqual(enabledAddons, ["GUI", "Upload", "MyCustomAddon"])
+
+    @patch('importlib.import_module')
+    def testGetEnabledAddonsExtraAddonCanStillBeDisabled(self, mockImportModule):
+        """
+        Test that an addon listed in both 'extra_addons' and 'disabled' is filtered out.
+        """
+        mockAddonsModule = MagicMock()
+        mockAddonsModule.addons = ["GUI", "Upload"]
+        mockAddonsModule.__path__ = []
+        mockImportModule.return_value = mockAddonsModule
+
+        self._writeAddonsJson({"extra_addons": ["MyCustomAddon"], "disabled": ["MyCustomAddon"]})
+
+        enabledAddons = self.addonsManager.getEnabledAddons()
+
+        self.assertEqual(enabledAddons, ["GUI", "Upload"])
+
+    @patch('importlib.import_module')
+    def testExtendAddonSearchPathsAddsConfiguredFolder(self, mockImportModule):
+        """
+        Test that _extendAddonSearchPaths() appends configured addon folders to addons.__path__.
+        """
+        mockAddonsModule = MagicMock()
+        mockAddonsModule.addons = []
+        mockAddonsModule.__path__ = []
+        mockImportModule.return_value = mockAddonsModule
+
+        customAddonFolder = os.path.join(self.tempDir, 'custom_addons')
+        os.makedirs(customAddonFolder)
+
+        self._writeAddonsJson({"addon_folders": [customAddonFolder]})
+
+        self.addonsManager._extendAddonSearchPaths()
+
+        self.assertIn(customAddonFolder, mockAddonsModule.__path__)
 
 
 if __name__ == '__main__':

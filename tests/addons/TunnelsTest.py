@@ -255,7 +255,7 @@ class TunnelThreadTest(unittest.TestCase):
         must reach WebTunnelClient via the normal super().createClient() chain."""
         with tempfile.TemporaryDirectory() as tempDir, \
              mock.patch.object(TunnelRunner, 'resolveTunnel', return_value=TunnelCandidate(
-                 domain='10.fastfilelink.com', type='web',
+                 domain='1.10.fastfilelink.com', type='web',
              )), \
              mock.patch('bases.Tunnel.fetchTunnelToken', return_value='short-lived-token'):
             configPath = os.path.join(tempDir, 'tunnels.json')
@@ -279,7 +279,7 @@ class TunnelThreadTest(unittest.TestCase):
         is a user choice orthogonal to bore-vs-web, and must win either way."""
         with tempfile.TemporaryDirectory() as tempDir, \
              mock.patch.object(TunnelRunner, 'resolveTunnel', return_value=TunnelCandidate(
-                 domain='10.fastfilelink.com', type='web',
+                 domain='1.10.fastfilelink.com', type='web',
              )):
             configPath = os.path.join(tempDir, 'tunnels.json')
             config = createTestConfig(preferredTunnel='static-fixed', enableStaticUrl=True)
@@ -311,7 +311,7 @@ class TunnelThreadTest(unittest.TestCase):
         runner = TunnelRunner(1024)
 
         with mock.patch.object(TunnelRunner, 'resolveTunnel', return_value=TunnelCandidate(
-                 domain='10.fastfilelink.com', type='web',
+                 domain='1.10.fastfilelink.com', type='web',
              )), \
              mock.patch('bases.Tunnel.fetchTunnelToken', return_value='token-1') as mockFetch:
             client = runner.createClient(8000, uid='share-id')
@@ -321,7 +321,7 @@ class TunnelThreadTest(unittest.TestCase):
         self.assertIs(client.tokenProvider.func, mockFetch)
         # Every tunnel server (bore or web relay) self-serves /api/tunnel/token,
         # so the resolved domain is passed through uniformly for both transports.
-        self.assertEqual('10.fastfilelink.com', client.tokenProvider.keywords.get('domain'))
+        self.assertEqual('1.10.fastfilelink.com', client.tokenProvider.keywords.get('domain'))
 
     def testAsyncTunnelThreadReconnectsWithSamePort(self):
         resultQueue = queue.Queue()

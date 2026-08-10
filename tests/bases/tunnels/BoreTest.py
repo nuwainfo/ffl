@@ -355,7 +355,7 @@ class BoreHttpsTest(unittest.TestCase):
         # Fetch tunnel token dynamically
         if self.secret is None:
             print("[Test] Fetching tunnel token...")
-            self.secret = fetchTunnelToken()
+            self.secret = fetchTunnelToken(domain=self.remoteHost)
         
         self.assertIsNotNone(self.secret)
 

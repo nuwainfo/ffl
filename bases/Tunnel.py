@@ -32,12 +32,7 @@ from bases.Kernel import getLogger, FFLEvent
 from bases.Settings import SettingsGetter
 from bases.tunnels import createTunnelClient, resolveTunnelCandidate
 
-BUILTIN_TUNNEL = os.getenv('BUILTIN_TUNNEL', '33.fastfilelink.com')
-TUNNEL_TOKEN_SERVER_URL = os.getenv('TUNNEL_TOKEN_SERVER_URL', f'https://{BUILTIN_TUNNEL}')
-#TUNNEL_TOKEN_SERVER_URL = os.getenv('TUNNEL_TOKEN_SERVER_URL', f'https://fastfilelink.com')
-
 logger = getLogger(__name__)
-
 
 class TunnelUnavailableError(Exception):
     """Raised when tunnel server is temporarily unavailable"""
@@ -45,15 +40,21 @@ class TunnelUnavailableError(Exception):
 
 
 def _isTokenServerTunnel(serverURL):
-    return serverURL != 'https://fastfilelink.com' and serverURL.endswith('.fastfilelink.com')
-
+    if serverURL:
+        return serverURL != 'https://fastfilelink.com' and serverURL.endswith('.fastfilelink.com')
+    else:
+        return False
 
 def fetchTunnelToken(domain=None):
     """Fetch tunnel authentication token from token server"""
-    serverURL = os.getenv('TUNNEL_TOKEN_SERVER_URL', TUNNEL_TOKEN_SERVER_URL)
+    serverURL = os.getenv('TUNNEL_TOKEN_SERVER_URL', None)
 
-    if domain and _isTokenServerTunnel(serverURL):
-        # Token server is a tunnel itself; use the selected tunnel's domain instead.
+    # No explicit token server (the normal production case -- see addons/API.py,
+    # which only sets TUNNEL_TOKEN_SERVER_URL for test/custom-server runs) or an
+    # explicit one that's itself a tunnel: either way, prefer the resolved
+    # tunnel's own domain over guessing. Only a real, non-tunnel override
+    # (e.g. the test server) should be trusted to serve every domain's token.
+    if domain and (not serverURL or _isTokenServerTunnel(serverURL)):
         serverURL = f"https://{domain}"
 
     for attempt in range(3):
@@ -288,7 +289,7 @@ class TunnelRunner:
         # `domain`, a successful token fetch doesn't prove `domain` itself is
         # reachable, so guard with an explicit connectivity check in that
         # case only.
-        serverURL = os.getenv('TUNNEL_TOKEN_SERVER_URL', TUNNEL_TOKEN_SERVER_URL)
+        serverURL = os.getenv('TUNNEL_TOKEN_SERVER_URL', None)
         if not _isTokenServerTunnel(serverURL):
             try:
                 requests.get(f"https://{domain}/", timeout=5)

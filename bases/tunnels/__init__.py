@@ -49,8 +49,11 @@ SUPPORTED_TUNNEL_TYPES = ('bore', 'web')
 # Baseline (no Features addon) fallback candidates, as a single comma-separated
 # list rather than one env var per transport. Order doesn't matter; each
 # domain's type is inferred by name if not already known (see
-# TunnelCandidate.resolveType below).
-BUILTIN_TUNNELS = os.getenv('BUILTIN_TUNNELS', '33.fastfilelink.com,10.fastfilelink.com')
+# TunnelCandidate.resolveType below). 
+BUILTIN_TUNNELS = os.getenv(
+    'BUILTIN_TUNNELS',
+    ','.join(['33.fastfilelink.com'] + [f'{i}.10.fastfilelink.com' for i in range(1, 10)]),
+)
 
 
 @dataclass
@@ -68,8 +71,12 @@ class TunnelCandidate(DataclassDictMixin):
     preSock: Optional[object] = None
 
     # Domains known to speak the web relay protocol; every other domain
-    # defaults to bore. Extend this set if more web relay domains are registered.
-    _WEB_DOMAINS = frozenset({'10.fastfilelink.com'})
+    # defaults to bore. Bare '10.fastfilelink.com' is deliberately absent --
+    # it's kept alive only as a worker_tunnel deployment target, never
+    # referenced from Python (an FFL_TUNNEL_DOMAIN override should point at
+    # one of these slots instead, e.g. '1.10.fastfilelink.com'). Extend this
+    # set if more are registered.
+    _WEB_DOMAINS = frozenset({f'{i}.10.fastfilelink.com' for i in range(1, 10)})
 
     def resolveType(self):
         """Infer and cache `type` by domain name, unless already known (e.g.

@@ -154,6 +154,14 @@ lib/python3.12/site-packages/setuptools
 lib/python3.12/site-packages/setuptools-78.1.1-py3.12.egg-info
 lib/python3.12/site-packages/wheel
 lib/python3.12/site-packages/wx
+lib/python3.12/site-packages/pywin32.pth
+lib/python3.12/site-packages/PyWin32.chm
+lib/python3.12/site-packages/pywin32.version.txt
+lib/python3.12/site-packages/README.txt
+lib/python3.12/site-packages/pefile.py
+lib/python3.12/site-packages/pwiz.py
+lib/python3.12/site-packages/pythoncom.py
+lib/python3.12/site-packages/playhouse
 lib/python3.12/sqlite3
 lib/python3.12/test
 lib/python3.12/tkinter
