@@ -58,6 +58,7 @@ class URLInfo:
     e2eeEnabled: bool = False # Whether E2EE encryption is enabled
     isUploadMode: bool = False # Whether this is an uploaded file (not P2P)
     urlFragment: str = "" # URL fragment (e.g., #key for E2EE upload mode)
+    urlQuery: str = "" # Query parameters that belong on the download request
 
 
 class Downloader(ABC):
@@ -388,6 +389,19 @@ class Downloader(ABC):
 
         return fileName
 
+    def _validateOutputPath(self, outputPath: Optional[str]):
+        """Validate the local destination before a network transfer starts."""
+        if outputPath in (None, "-"):
+            return
+
+        outputDirectory = outputPath if os.path.isdir(outputPath) else os.path.dirname(outputPath)
+        outputDirectory = os.path.abspath(outputDirectory or os.curdir)
+        if not os.path.isdir(outputDirectory):
+            raise FileNotFoundError(f"Output directory does not exist: {outputDirectory}")
+
+        if not os.access(outputDirectory, os.W_OK):
+            raise PermissionError(f"Output directory is not writable: {outputDirectory}")
+
     def _sendHTTPRequest(
         self,
         url: str,
@@ -472,7 +486,13 @@ class Downloader(ABC):
 
         return "download.bin"
 
-    def _handleResumeLogic(self, filePath: str, fileSize: int, allowResume: bool) -> int:
+    def _handleResumeLogic(
+        self,
+        filePath: str,
+        fileSize: int,
+        allowResume: bool,
+        fallbackResumePosition: int = 0
+    ) -> int:
         """
         Handle resume logic for downloads
 
@@ -480,12 +500,13 @@ class Downloader(ABC):
             filePath: Path to output file
             fileSize: Total size of file to download (None or -1 for unknown)
             allowResume: Whether to resume (True) or overwrite (False)
+            fallbackResumePosition: Bytes already written to stdout by a prior transport
 
         Returns:
             Resume position in bytes (0 for new download)
         """
         if filePath == "-":
-            return 0
+            return fallbackResumePosition
 
         if not os.path.exists(filePath):
             return 0
@@ -627,7 +648,8 @@ class Downloader(ABC):
                 isGenericURL=False,
                 e2eeEnabled=e2eeEnabled,
                 isUploadMode=isUploadMode,
-                urlFragment=urlFragment
+                urlFragment=urlFragment,
+                urlQuery=parsedURL.query
             )
 
         except requests.exceptions.RequestException as e:
@@ -675,36 +697,23 @@ class Downloader(ABC):
                     # Poll status endpoint
                     logger.debug(f"[STATUS_POLL] Polling status endpoint...")
                     statusData, status = self._sendHTTPRequest(statusURL, "GET", None, authHeaders, 5)
+                    exception = self._parseStatusError(statusData) if status == 200 else None
+                    logger.debug(f"[STATUS_POLL] Status response: {status}, has error: {exception is not None}")
 
-                    hasError = statusData.get('error') if statusData else None
-                    logger.debug(f"[STATUS_POLL] Status response: {status}, has error: {hasError}")
+                    if exception:
+                        logger.debug(f"[STATUS_POLL] Server error detected: {exception}")
 
-                    if status == 200 and statusData:
-                        error = statusData.get('error')
-                        if error:
-                            errorType = error.get('type', 'unknown')
-                            errorDetail = error.get('detail', 'Server reported an error')
-                            exceptionClass = error.get('exceptionClass', '')
+                        # Add to error queue (thread-safe append, no lock needed)
+                        errorQueue.append(exception)
 
-                            logger.debug(f"[STATUS_POLL] Server error detected: {errorType}")
+                        if onError:
+                            try:
+                                onError(exception)
+                            except Exception as callbackError:
+                                logger.debug(f"[STATUS_POLL] onError callback failed: {callbackError}")
 
-                            # Create appropriate exception based on server error class
-                            if exceptionClass == FolderChangedException.__name__:
-                                exception = FolderChangedException(errorDetail)
-                            else:
-                                exception = RuntimeError(errorDetail)
-
-                            # Add to error queue (thread-safe append, no lock needed)
-                            errorQueue.append(exception)
-
-                            if onError:
-                                try:
-                                    onError(exception)
-                                except Exception as callbackError:
-                                    logger.debug(f"[STATUS_POLL] onError callback failed: {callbackError}")
-
-                            logger.debug("[STATUS_POLL] Error added to queue, stopping polling")
-                            return
+                        logger.debug("[STATUS_POLL] Error added to queue, stopping polling")
+                        return
 
                     # Wait before next poll (check stopEvent periodically)
                     stopEvent.wait(pollInterval)
@@ -721,6 +730,35 @@ class Downloader(ABC):
         thread = threading.Thread(target=pollingWorker, daemon=True, name="StatusPolling")
         thread.start()
         return thread
+
+    @staticmethod
+    def _parseStatusError(statusData: Optional[dict]) -> Optional[Exception]:
+        """Build a server-reported exception (if any) from a /status response body."""
+        error = statusData.get('error') if statusData else None
+        if not error:
+            return None
+
+        errorDetail = error.get('detail', 'Server reported an error')
+        exceptionClass = error.get('exceptionClass', '')
+        if exceptionClass == FolderChangedException.__name__:
+            return FolderChangedException(errorDetail)
+        return RuntimeError(errorDetail)
+
+    def _fetchServerErrorFromStatus(self, baseURL: str, headers: dict, timeout: int = 5) -> Optional[Exception]:
+        """
+        One-shot synchronous /status check, used as a last-chance fallback when
+        a transport failure is about to be surfaced as a generic error but the
+        async status-polling thread (0.5s cadence, plus any relay/tunnel RTT)
+        hasn't caught up to the server-reported error yet.
+        """
+        statusURL = self._buildURL(baseURL, "status", excludeUID=False)
+        try:
+            statusData, status = self._sendHTTPRequest(statusURL, "GET", None, headers, timeout)
+        except Exception as e:
+            logger.debug(f"[STATUS_POLL] Synchronous status check failed: {e}")
+            return None
+
+        return self._parseStatusError(statusData) if status == 200 else None
 
     def _fetchChecksumData(self, urlInfo) -> dict:
         """Fetch /checksum once. Always returns a dict with at least 'algorithm'.
@@ -814,6 +852,26 @@ class HTTPDownloader(Downloader):
     HTTP_CONNECT_TIMEOUT = getEnv('HTTP_CONNECT_TIMEOUT', 10)
     # Read timeout: 10 minutes to handle large file stalls
     HTTP_READ_TIMEOUT = getEnv('HTTP_READ_TIMEOUT', 600)
+    HTTP_STREAM_RESUME_MAX_ATTEMPTS = getEnv('HTTP_STREAM_RESUME_MAX_ATTEMPTS', 8)
+    HTTP_STREAM_RESUME_BASE_DELAY = getEnv('HTTP_STREAM_RESUME_BASE_DELAY', 1)
+    HTTP_STREAM_RESUME_MAX_DELAY = getEnv('HTTP_STREAM_RESUME_MAX_DELAY', 30)
+
+    def _getHTTPStreamResumeDelay(self, attemptIndex: int) -> float:
+        """Return the exponential delay before retrying an interrupted HTTP stream."""
+        return min(
+            self.HTTP_STREAM_RESUME_BASE_DELAY * (2 ** (attemptIndex - 1)),
+            self.HTTP_STREAM_RESUME_MAX_DELAY
+        )
+
+    def _canResumeHTTPStream(self, finalOutputPath: str, retryCount: int) -> bool:
+        """Return whether an interrupted response can safely be retried with Range."""
+        return finalOutputPath != "-" and retryCount < self.HTTP_STREAM_RESUME_MAX_ATTEMPTS
+
+    def _isRetryableHTTPStreamFailure(self, exception: Exception, streamDecryptor) -> bool:
+        """Identify a transport failure before an E2EE stream reaches a verified boundary."""
+        return isinstance(exception, requests.exceptions.RequestException) or (
+            streamDecryptor is not None and streamDecryptor.chunkBuffer
+        )
 
     def _downloadViaHTTP(
         self,
@@ -827,7 +885,8 @@ class HTTPDownloader(Downloader):
         urlInfo=None,
         checksumAlgorithm: str = DEFAULT_CHECKSUM_ALGORITHM,
         pickupCode: Optional[str] = None,
-        proof: Optional[str] = None
+        proof: Optional[str] = None,
+        fallbackResumePosition: int = 0
     ) -> str:
         """
         Download file via HTTP with resume capability as fallback
@@ -836,6 +895,7 @@ class HTTPDownloader(Downloader):
             resume: If True, resume incomplete download; if False, overwrite existing file
             forceResume: If True, always resume from existing file (used for WebRTC fallback)
             urlInfo: Optional pre-parsed URL info to avoid redundant parsing
+            fallbackResumePosition: Bytes already written to stdout by a prior transport
         """
 
         # Parse the original URL to get base URL and construct download endpoint
@@ -849,6 +909,8 @@ class HTTPDownloader(Downloader):
         else:
             # Construct the download URL (same as web interface)
             downloadURL = self._buildURL(urlInfo.baseURL, "download")
+            if urlInfo.urlQuery:
+                downloadURL = f"{downloadURL}?{urlInfo.urlQuery}"
 
         # Build auth headers for pickup code and pubkey proof
         authExtra = {}
@@ -878,7 +940,12 @@ class HTTPDownloader(Downloader):
         finalOutputPath = self._resolveOutputPath(outputPath, fileName)
 
         # Handle resume logic (forceResume takes precedence for WebRTC fallback)
-        resumePosition = self._handleResumeLogic(finalOutputPath, fileSize, forceResume or resume)
+        resumePosition = self._handleResumeLogic(
+            finalOutputPath,
+            fileSize,
+            forceResume or resume,
+            fallbackResumePosition
+        )
         verifyChecksum = self._shouldVerifyChecksum(urlInfo, resumePosition)
 
         # File already complete - early return (skip check for unknown/unreliable sizes)
@@ -904,15 +971,6 @@ class HTTPDownloader(Downloader):
         else:
             progress = self._ensureProgress(fileSize, self._STATUS_HTTP_DOWNLOAD, resumePosition)
 
-        # Set range header for resume using helper
-        rangeHeader = {'Range': f'bytes={resumePosition}-'} if resumePosition > 0 else None
-        downloadHeaders = self._makeHeaders(credentials, {**(rangeHeader or {}), **authExtra})
-
-        # Initialize E2EE stream decryptor if enabled (tags fetched on-demand)
-        streamDecryptor = None
-        if e2eeContext:
-            streamDecryptor = self.e2eeClient.createHTTPDecryptor(e2eeContext, resumePosition)
-
         # Start download without extra logging if using shared progress
 
         # Create session with StallResilientAdapter for Python 3.12 workarounds and better stall handling
@@ -934,86 +992,136 @@ class HTTPDownloader(Downloader):
             logger.debug(f"[HTTP] Closing active response after server error: {serverError}")
             response.close()
 
-        def raiseQueuedServerErrorIfAny():
+        def raiseQueuedServerErrorIfAny(synchronous=False):
             if statusErrorQueue:
                 serverError = statusErrorQueue[0]
                 logger.debug(f"[HTTP] Error found in queue: {serverError}")
                 statusStopEvent.set()
                 raise serverError
 
+            if not synchronous:
+                return
+
+            serverError = self._fetchServerErrorFromStatus(urlInfo.baseURL, statusHeaders)
+            if serverError:
+                logger.debug(f"[HTTP] Error found via synchronous status check: {serverError}")
+                statusStopEvent.set()
+                raise serverError
+
         # Start background thread for status polling
         statusStopEvent = threading.Event()
         statusErrorQueue = deque()
+        statusHeaders = self._makeHeaders(credentials, authExtra)
         self._startStatusPollingThread(
             urlInfo.baseURL,
-            downloadHeaders,
+            statusHeaders,
             statusStopEvent,
             statusErrorQueue,
             onError=closeActiveResponseOnServerError
         )
 
         serverDownloadId = None
+        totalDownloaded = resumePosition
+        checksumState = self._createTransferChecksumState(verifyChecksum, checksumAlgorithm)
+        streamResumeAttempts = 0
         try:
-            # Use tuple timeout: (connect_timeout, read_timeout) with increased read timeout
-            # to handle large file stalls (especially on Python 3.12 + TLS 1.3)
-            with session.get(
-                downloadURL, headers=downloadHeaders, stream=True,
-                timeout=(self.HTTP_CONNECT_TIMEOUT, self.HTTP_READ_TIMEOUT)
-            ) as response:
-                activeResponse['response'] = response
-                raiseQueuedServerErrorIfAny()
+            mode = 'ab' if resumePosition > 0 else 'wb'
+            ctx = contextlib.nullcontext(sys.stdout.buffer) if finalOutputPath == "-" else open(finalOutputPath, mode)
+            with ctx as f:
+                while True:
+                    rangeHeader = {'Range': f'bytes={totalDownloaded}-'} if totalDownloaded > 0 else {}
+                    downloadHeaders = self._makeHeaders(credentials, {**rangeHeader, **authExtra})
+                    streamDecryptor = (
+                        self.e2eeClient.createHTTPDecryptor(e2eeContext, totalDownloaded)
+                        if e2eeContext else None
+                    )
+                    responseChunkSize = e2eeContext['chunkSize'] if e2eeContext else TRANSFER_CHUNK_SIZE
 
-                # Check status codes
-                if response.status_code not in (200, 206): # 206 is partial content for resume
-                    raise RuntimeError(f"HTTP download failed: {response.status_code}")
+                    try:
+                        # Use tuple timeout: (connect_timeout, read_timeout) with increased read timeout
+                        # to handle large file stalls (especially on Python 3.12 + TLS 1.3)
+                        with session.get(
+                            downloadURL, headers=downloadHeaders, stream=True,
+                            timeout=(self.HTTP_CONNECT_TIMEOUT, self.HTTP_READ_TIMEOUT)
+                        ) as response:
+                            activeResponse['response'] = response
+                            raiseQueuedServerErrorIfAny()
 
-                # Verify content range for resume
-                if resumePosition > 0 and response.status_code != 206:
-                    raise RuntimeError("Server does not support resume")
+                            if response.status_code not in (200, 206): # 206 is partial content for resume
+                                raise RuntimeError(f"HTTP download failed: {response.status_code}")
 
-                # Extract server-assigned download ID for completion ACK (relay drain coordination)
-                serverDownloadId = response.headers.get('FFL-DownloadId')
+                            if totalDownloaded > 0 and response.status_code != 206:
+                                raise RuntimeError("Server does not support resume")
 
-                # For unknown size (generic URLs or stdin), try to get actual Content-Length from GET response
-                if not self._isKnownSize(fileSize):
-                    actualContentLength = response.headers.get('Content-Length')
-                    if actualContentLength:
-                        actualSize = int(actualContentLength)
-                        if actualSize > 0:
-                            fileSize = actualSize
-                            # Recreate progress bar with actual size
-                            if not sharedProgress:
-                                self._finishProgress(complete=False)
-                                progress = self._ensureProgress(fileSize, self._STATUS_HTTP_DOWNLOAD, resumePosition)
+                            # Extract server-assigned download ID for completion ACK (relay drain coordination)
+                            serverDownloadId = response.headers.get('FFL-DownloadId')
 
-                # Open file for writing (append mode if resuming), or stream to stdout
-                mode = 'ab' if resumePosition > 0 else 'wb'
-                totalDownloaded = resumePosition # Start from resume position
+                            # Content-Length describes only the initial full response. A Range retry can
+                            # overlap an E2EE chunk boundary, so it cannot refine an unknown total size.
+                            if not self._isKnownSize(fileSize) and totalDownloaded == 0:
+                                actualContentLength = response.headers.get('Content-Length')
+                                if actualContentLength:
+                                    actualSize = int(actualContentLength)
+                                    if actualSize > 0:
+                                        fileSize = actualSize
+                                        if not sharedProgress:
+                                            self._finishProgress(complete=False)
+                                            progress = self._ensureProgress(fileSize, self._STATUS_HTTP_DOWNLOAD, 0)
 
-                ctx = contextlib.nullcontext(sys.stdout.buffer) if finalOutputPath == "-" else open(finalOutputPath, mode)
-                with ctx as f:
-                    checksumState = self._createTransferChecksumState(verifyChecksum, checksumAlgorithm)
-                    for chunk in response.iter_content(chunk_size=TRANSFER_CHUNK_SIZE):
-                        # Check status error queue (lock-free, very fast - no performance impact)
+                            for chunk in response.iter_content(chunk_size=responseChunkSize):
+                                raiseQueuedServerErrorIfAny()
+                                if not chunk:
+                                    continue
+
+                                self._updateTransferChecksumState(checksumState, chunk)
+                                processedData = streamDecryptor.processChunk(chunk) if streamDecryptor else chunk
+                                f.write(processedData)
+                                totalDownloaded += len(processedData)
+                                progress.update(totalDownloaded, extraText="HTTP fallback")
+
+                            # The iter_content loop can end "cleanly" (no read
+                            # exception) even though the server aborted the
+                            # transfer, if the truncated response still looked
+                            # like a complete read to the transport (e.g. a
+                            # relay/tunnel leg). Check once more - synchronously,
+                            # since the async poller may not have caught up yet -
+                            # before trusting the stream as successful.
+                            raiseQueuedServerErrorIfAny(synchronous=True)
+
+                            if streamDecryptor:
+                                finalData = streamDecryptor.flush()
+                                if finalData:
+                                    f.write(finalData)
+                                    totalDownloaded += len(finalData)
+                                    progress.update(totalDownloaded, extraText="HTTP fallback")
+
+                        break
+                    except Exception as e:
                         raiseQueuedServerErrorIfAny()
+                        if (
+                            not self._isRetryableHTTPStreamFailure(e, streamDecryptor) or
+                            not self._canResumeHTTPStream(finalOutputPath, streamResumeAttempts)
+                        ):
+                            # Last chance before surfacing a generic transport error:
+                            # a fast, non-retryable failure (e.g. a relay-synthesized
+                            # 502) can outrace the async status poller's first cycle.
+                            raiseQueuedServerErrorIfAny(synchronous=True)
+                            raise
 
-                        if chunk: # Filter out keep-alive chunks
-                            self._updateTransferChecksumState(checksumState, chunk)
-
-                            # Process chunk (decrypt if E2EE enabled, otherwise passthrough)
-                            processedData = streamDecryptor.processChunk(chunk) if streamDecryptor else chunk
-
-                            f.write(processedData)
-                            totalDownloaded += len(processedData)
-                            progress.update(totalDownloaded, extraText="HTTP fallback")
-
-                    # Flush any remaining buffered data
-                    if streamDecryptor:
-                        finalData = streamDecryptor.flush()
-                        if finalData:
-                            f.write(finalData)
-                            totalDownloaded += len(finalData)
-                            progress.update(totalDownloaded, extraText="HTTP fallback")
+                        streamResumeAttempts += 1
+                        checksumState = None # A Range retry cannot continue the encrypted-byte checksum.
+                        f.flush()
+                        delay = self._getHTTPStreamResumeDelay(streamResumeAttempts)
+                        self.loggerCallback(_("Resuming HTTP download from {resumePos} after connection error ({attempt}/{maxAttempts})").format(
+                            resumePos=formatSize(totalDownloaded),
+                            attempt=streamResumeAttempts,
+                            maxAttempts=self.HTTP_STREAM_RESUME_MAX_ATTEMPTS
+                        ))
+                        logger.warning(
+                            "HTTP stream interrupted at %s bytes; retrying in %.1f seconds: %s",
+                            totalDownloaded, delay, e
+                        )
+                        time.sleep(delay)
 
         except requests.exceptions.RequestException as e:
             if statusErrorQueue:
@@ -1123,6 +1231,7 @@ class HTTPDownloader(Downloader):
     def downloadFile(self, url, outputPath=None, credentials=None, resume=False,
                       pickupCode=None, recipientPrivateKey=None) -> str:
         """Download a file over plain HTTP only, no other transport attempted."""
+        self._validateOutputPath(outputPath)
         ctx = self._resolveDownloadContext(url, credentials, recipientPrivateKey)
         return self._dispatchHTTPDownload(url, outputPath, credentials, resume, ctx, pickupCode)
 

@@ -19,6 +19,7 @@
 
 import os
 import json
+import time
 import unittest
 import zipfile
 
@@ -476,12 +477,29 @@ class DownloadTest(FastFileLinkTestBase):
         self._verifyOutputContains(
             downloadOutputCapture, "HTTP fallback", "HTTP fallback should be triggered when connection times out"
         )
+        self._verifyOutputContains(
+            downloadOutputCapture, "Waiting for data channel (", "WebRTC wait should show the HTTP fallback countdown"
+        )
 
         # Verify file was downloaded successfully via HTTP fallback
         self.assertTrue(os.path.exists(downloadedPath))
         self._verifyDownloadedFile(downloadedPath)
 
         print("[Test] Connection timeout with HTTP fallback working correctly")
+
+    def testMissingOutputDirectoryFailsBeforeDownload(self):
+        """Test that a missing output directory fails before network transport starts."""
+        outputPath = os.path.join(self.tempDir, "missing_output_directory", "download.bin")
+        startTime = time.monotonic()
+
+        with self.assertRaises(AssertionError) as errorContext:
+            self._downloadWithCore("https://invalid.fastfilelink.com/invalid", outputPath=outputPath)
+
+        elapsed = time.monotonic() - startTime
+        self.assertLess(elapsed, 5, "Missing output directory should fail before WebRTC starts")
+        self.assertIn("Output directory does not exist", str(errorContext.exception))
+
+        print("[Test] Missing output directory rejected before download")
 
     def testDownloadErrorHandling(self):
         """Test download error handling for invalid URLs and graceful failure"""
@@ -656,6 +674,44 @@ class DownloadTest(FastFileLinkTestBase):
 
         self._verifyDownloadedFile(outputPath)
         print("[Test] --stdout HTTP fallback download successful")
+
+    def testStdoutStdinHTTPFallbackResumesFromWebRTC(self):
+        """Test that stdout keeps a WebRTC offset when HTTP takes over a stdin stream."""
+        print("\n[Test] Testing --stdout stdin WebRTC to HTTP resume")
+
+        handoffWindowSize = 1 * 1024 * 1024
+        stallAfterBytes = 2 * 1024 * 1024
+        stdinPath = os.path.join(self.tempDir, "stdout_stdin_fallback.bin")
+        self.generateRandomFile(stdinPath, 4 * 1024 * 1024)
+        stdinHash = self.getFileHash(stdinPath)
+
+        try:
+            shareLink = self._startFastFileLink(
+                p2p=True,
+                timeout=60,
+                stdinInputPath=stdinPath,
+                stdinFileName="stdout_stdin_fallback.bin",
+                extraArgs=["--stdin-cache", "off"],
+                extraEnvVars={"READER_STDIN_HANDOFF_WINDOW_MB": str(handoffWindowSize // (1024 * 1024))}
+            )
+
+            rawBytes, stderrOutput = self._downloadWithCore(
+                shareLink,
+                stdoutMode=True,
+                extraEnvVars={
+                    "WEBRTC_CLI_SIMULATE_STALL": "True",
+                    "WEBRTC_CLI_STALL_AFTER_BYTES": str(stallAfterBytes),
+                }
+            )
+
+            outputPath = os.path.join(self.tempDir, "stdout_stdin_fallback_download.bin")
+            with open(outputPath, 'wb') as outputFile:
+                outputFile.write(rawBytes)
+
+            self.assertIn("HTTP fallback", stderrOutput, "HTTP fallback should follow the WebRTC stall")
+            self.assertEqual(self.getFileHash(outputPath), stdinHash, "stdout fallback must continue without duplicate bytes")
+        finally:
+            self._terminateProcess()
 
 
 if __name__ == '__main__':

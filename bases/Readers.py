@@ -86,7 +86,7 @@ class StdinHandoffWindow:
 
     This is intentionally not a general cache:
     - no disk I/O
-    - no multi-download replay
+    - no durable or unbounded multi-download replay
     - only enough buffered history to bridge a WebRTC -> HTTP handoff
     """
 
@@ -383,6 +383,7 @@ class SourceReader:
     size: Optional[int] # Total content length (None if unknown)
     supportsRange: bool # Whether offset/Range resume is supported (for downloads)
     supportsUploadResume: bool # Whether upload resume is supported
+    acceptsInitialRange: bool = False # Whether ``Range: bytes=0-`` starts a live stream
 
     def __init__(self, path: str, fileName=None):
         """
@@ -454,6 +455,21 @@ class SourceReader:
         Returns:
             SourceReader: Appropriate reader for the path type
         """
+        readerPolicy = {'reader': None}
+        
+        FFLEvent.sourceReaderCreate.trigger(
+            path=path,
+            fileName=fileName,
+            compression=compression,
+            excludeFilter=excludeFilter,
+            progressReporter=progressReporter,
+            stdinCache=stdinCache,
+            readerPolicy=readerPolicy,
+        )
+    
+        if readerPolicy['reader'] is not None:
+            return readerPolicy['reader']
+
         # Handle stdin
         if path == "-":
             return StdinSourceReader(path, fileName=fileName, stdinCache=stdinCache)
@@ -802,7 +818,7 @@ class StdinSourceReader(CachingMixin, SourceReader):
     - Simultaneously caches data to temp file for subsequent reads (via CachingMixin)
     - If caching succeeds, allows multiple reads
     - If caching fails, falls back to single-use behavior
-    - No Range/resume support for direct stdin
+    - No general Range/resume support for direct stdin; cache-off mode provides a bounded handoff window
     - Cached file supports Range/resume
 
     Usage: python FFL.py --cli -
@@ -820,7 +836,7 @@ class StdinSourceReader(CachingMixin, SourceReader):
         Args:
             path: Path (should be "-" for stdin)
             fileName: Custom filename (string), callable that returns filename, or None for default
-            stdinCache: If False, disable caching; a second read will raise RuntimeError
+            stdinCache: If False, disable disk caching and use a bounded in-memory handoff window
         """
         super().__init__(path, fileName) # CachingMixin -> SourceReader
         if not stdinCache:
@@ -837,6 +853,7 @@ class StdinSourceReader(CachingMixin, SourceReader):
         self._streamOffset = 0
         self._streamEOF = False
         self._streamError = None
+        self._streamReadInProgress = False
         self._streamOwnerCounter = 0
         self._handoffEnabled = not stdinCache
         
@@ -924,6 +941,8 @@ class StdinSourceReader(CachingMixin, SourceReader):
                     cursor += len(chunk)
                 elif self._streamEOF:
                     break
+                elif self._streamReadInProgress:
+                    self._streamCond.wait()
                 else:
                     shouldReadFromStdin = True
 
@@ -960,10 +979,10 @@ class StdinSourceReader(CachingMixin, SourceReader):
             bytes: Content chunks
 
         Raises:
-            RuntimeError: If start > 0 but no cached file available
-            RuntimeError: If stdin consumed and no cache available
+            RuntimeError: If start > 0 but neither a cache nor handoff window can serve it
+            RuntimeError: If stdin is consumed and no cache or handoff window can serve it
         """
-        if self._consumed and start > 0 and self._handoffWindow and self.canResumeFrom(start):
+        if self._consumed and self._handoffWindow and self.canResumeFrom(start):
             yield from self._iterHandoffChunks(chunkSize, start)
             return
 
@@ -976,16 +995,8 @@ class StdinSourceReader(CachingMixin, SourceReader):
                 )
                 yield from self._readFromCache(chunkSize, start)
                 return
-            else:
-                # Known gap (not fixed): if WebRTC opened the data channel and read at least one
-                # stdin chunk (_consumed=True) but the client received 0 bytes before the drop,
-                # HTTP fallback arrives here with start=0 and no cache (--stdin-cache off).
-                # The `start > 0` guard above intentionally skips _iterHandoffChunks for start=0,
-                # so we fall through and raise.  In practice this requires the connection to die
-                # in the narrow window between the server's first executor read and the client's
-                # first onMessage — extremely unlikely over a reliable TCP tunnel, and no current
-                # test exercises this path.
-                raise RuntimeError("Stdin has already been consumed and caching failed")
+                
+            raise RuntimeError("Stdin has already been consumed and caching failed")
 
         # First read: Stream from stdin with simultaneous caching
         if start > 0:
@@ -1005,8 +1016,16 @@ class StdinSourceReader(CachingMixin, SourceReader):
         read = self.stdin.read1 if hasattr(self.stdin, 'read1') else self.stdin.read
         try:
             while True:
-                self._assertStreamOwner(ownerId)
+                with self._streamCond:
+                    self._assertStreamOwner(ownerId)
+                    self._streamReadInProgress = True
+
                 chunk = read(chunkSize)
+
+                with self._streamCond:
+                    self._streamReadInProgress = False
+                    self._streamCond.notify_all()
+
                 if not chunk:
                     logger.debug("[StdinSourceReader] EOF reached, total read: %s bytes", totalRead)
                     break
@@ -1029,6 +1048,9 @@ class StdinSourceReader(CachingMixin, SourceReader):
                 self.size = totalRead # Now we know the size
                 logger.debug("[StdinSourceReader] Successfully cached %s bytes", totalRead)
 
+        except StdinHandoffTakenOver:
+            logger.info("[StdinSourceReader] Stdin stream handed off to another transport")
+            raise
         except Exception as e:
             # Clean up temp file on error (mixin handles cleanup in __del__)
             with self._streamCond:
@@ -2345,4 +2367,3 @@ class ZipDirSourceReader(CachingMixin, ZipMixin, SourceReader):
             # Clean up temp file on error (mixin handles cleanup in __del__)
             self._cleanupCacheFile()
             raise
-

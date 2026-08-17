@@ -17,10 +17,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
+import socket
+import threading
+import time
 import unittest
 
 from selenium.webdriver.support.ui import WebDriverWait
+
+from bases.WebRTC import ICEServerConfigProvider
 
 from ..BrowserTestBase import BrowserTestBase
 
@@ -268,6 +274,94 @@ class WebRTCTest(BrowserTestBase):
 
         finally:
             self._terminateProcess()
+
+    # ---------------------------
+    # webrtc.json (STUN/TURN) configuration tests
+    # ---------------------------
+    def _startLocalUDPProbe(self):
+        """Bind a UDP socket on this machine's own LAN address that just records who
+        sent it packets, standing in for a STUN server so tests can prove aiortc's
+        real ICE gathering actually contacted the address configured in webrtc.json -
+        not just that it parsed.
+
+        Bound to the host's real interface address rather than 127.0.0.1: aioice
+        excludes 127.0.0.1 from its own gathered host-candidate addresses (see
+        aioice.ice.get_host_addresses), and on Windows a socket bound to a real NIC
+        sending to a loopback destination gets an ICMP-unreachable-style connection
+        reset instead of actually being delivered - so a loopback probe never sees
+        the STUN request at all. Binding to the same real address aioice itself
+        enumerates avoids that gap.
+
+        Returns (hostIp, port, receivedFrom, stop) - stop() tears the probe down.
+        """
+        hostIp = socket.gethostbyname(socket.gethostname())
+
+        probeSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probeSocket.bind((hostIp, 0))
+        probeSocket.settimeout(0.5)
+        receivedFrom = []
+        stopEvent = threading.Event()
+
+        def _listen():
+            while not stopEvent.is_set():
+                try:
+                    __, addr = probeSocket.recvfrom(2048)
+                    receivedFrom.append(addr)
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+
+        listenerThread = threading.Thread(target=_listen, daemon=True)
+        listenerThread.start()
+
+        def stop():
+            stopEvent.set()
+            probeSocket.close()
+            listenerThread.join(timeout=2)
+
+        return hostIp, probeSocket.getsockname()[1], receivedFrom, stop
+
+    def testCustomStunServerConfigUsedByBothSides(self):
+        """A custom STUN server configured in webrtc.json must actually be contacted
+        by both the sharer (server-side offer) and the downloader (client-side answer)
+        during a real P2P transfer - proving the config is wired in, not just loadable."""
+        probeHost, probePort, receivedFrom, stopProbe = self._startLocalUDPProbe()
+
+        try:
+            configPath = os.path.join(self.tempDir, ICEServerConfigProvider.CONFIG_FILENAME)
+            with open(configPath, 'w', encoding='utf-8') as f:
+                json.dump({"ice_servers": [{"urls": f"stun:{probeHost}:{probePort}"}]}, f)
+
+            storageEnvVars = {'FFL_STORAGE_LOCATION': self.tempDir}
+
+            try:
+                shareLink = self._startFastFileLink(p2p=True, extraEnvVars=storageEnvVars)
+
+                downloadedPath = self._downloadWithCore(
+                    shareLink,
+                    os.path.join(self.tempDir, "downloaded_testfile.bin"),
+                    extraEnvVars=storageEnvVars,
+                )
+                self._verifyDownloadedFile(downloadedPath)
+
+            finally:
+                self._terminateProcess()
+
+            # ICE gathering runs in the background as soon as each side calls
+            # setLocalDescription(); give its already-sent packets a moment to
+            # land in the probe socket's receive buffer.
+            time.sleep(1)
+
+            self.assertGreater(
+                len(receivedFrom), 0,
+                "Expected at least one UDP packet at the custom STUN server from webrtc.json - "
+                "it was never contacted, so the config is not actually being used"
+            )
+            print(f"[Test] Custom STUN server received {len(receivedFrom)} packet(s) from {set(receivedFrom)}")
+
+        finally:
+            stopProbe()
 
 
 if __name__ == '__main__':

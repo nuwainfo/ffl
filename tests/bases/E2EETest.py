@@ -33,6 +33,10 @@ import urllib.error
 import requests
 import json
 import time
+import sys
+
+PROJECT_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, PROJECT_ROOT)
 
 from concurrent.futures import ThreadPoolExecutor
 from cryptography.hazmat.primitives import serialization
@@ -44,6 +48,45 @@ from tests.ResumeTestBase import ResumeTestBase, ResumeBrowserTestBase
 from tests.BrowserTestBase import CONCURRENT_WEBRTC_DOWNLOADS
 
 LOG_CONFIG_UPLOAD = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'presets', 'UploadDebugLogging.json'))
+_E2EE_STDIN_SHORT_READ_RUNNER_FLAG = '--run-e2ee-stdin-short-read-core'
+
+
+class _E2EEStdinShortReadStream:
+    """Test-only stdin proxy that simulates short pipe reads."""
+
+    READ_CHUNK_SIZE = 64 * 1024
+
+    def __init__(self, source):
+        self._source = source
+
+    def read(self, size=-1):
+        return self._source.read(self._readSize(size))
+
+    def read1(self, size=-1):
+        return self._source.read1(self._readSize(size))
+
+    def __getattr__(self, name):
+        return getattr(self._source, name)
+
+    @classmethod
+    def _readSize(cls, size):
+        return cls.READ_CHUNK_SIZE if size < 0 else min(size, cls.READ_CHUNK_SIZE)
+
+
+def _runE2EEStdinShortReadCore():
+    """Run FFL with short stdin reads for testE2EEStdinHTTPDownload."""
+    from bases.Readers import StdinSourceReader
+    from unittest import mock
+
+    originalInit = StdinSourceReader.__init__
+
+    def patchedInit(reader, *args, **kwargs):
+        originalInit(reader, *args, **kwargs)
+        reader.stdin = _E2EEStdinShortReadStream(reader.stdin)
+
+    with mock.patch.object(StdinSourceReader, '__init__', patchedInit):
+        import runpy
+        runpy.run_path(os.path.join(PROJECT_ROOT, 'FFL.py'), run_name='__main__')
 
 
 class E2EEUploadTestBase:
@@ -193,6 +236,42 @@ class E2EEDownloadTest(ResumeTestBase):
         print(f"[Test]   Hash: {resumedHash}")
         print(f"[Test]   Size: {resumedSize} bytes")
 
+    def testE2EEHttpStreamDisconnectAutomaticallyResumes(self):
+        """An interrupted E2EE HTTP stream must resume from verified plaintext."""
+        print("\n[TEST] E2EE HTTP stream disconnect auto-resume")
+
+        outputCapture = {}
+        encryptionChunkSize = 64 * 1024
+        shareLink = self._startFastFileLink(
+            p2p=True,
+            extraArgs=["--e2ee"],
+            extraEnvVars={"TRANSFER_CHUNK_SIZE": encryptionChunkSize},
+            captureOutputIn=outputCapture
+        )
+        # The interruption must occur after a complete authenticated E2EE chunk;
+        # otherwise a client has no plaintext checkpoint from which it can resume.
+        disconnectAfterBytes = encryptionChunkSize
+        interruptedLink = f"{shareLink}?disconnect-after={disconnectAfterBytes}"
+        downloadedPath = os.path.join(self.tempDir, "downloaded_e2e_auto_resume.bin")
+        downloadOutputCapture = {}
+
+        self._downloadWithCore(
+            interruptedLink,
+            downloadedPath,
+            extraEnvVars={"DISABLE_WEBRTC": "True"},
+            captureOutputIn=downloadOutputCapture
+        )
+
+        self.assertEqual(
+            self.getFileHash(downloadedPath), self.originalFileHash,
+            "E2EE HTTP stream recovery must produce the original plaintext"
+        )
+
+        outputText = self._updateCapturedOutput(outputCapture)
+        self.assertIn("Disconnect injection", outputText, "The initial HTTP response should be interrupted")
+        downloadOutputText = self._updateCapturedOutput(downloadOutputCapture)
+        self.assertIn("Resuming HTTP download", downloadOutputText, "Downloader should issue a Range retry")
+
     def testE2EEWebRTCDownload(self):
         """Test E2E encrypted WebRTC download (P2P via CLI)"""
         print("\n[TEST] E2EE WebRTC P2P download")
@@ -267,6 +346,35 @@ class E2EEDownloadTest(ResumeTestBase):
         print(f"[Test] [OK] E2E stdin download successful")
         print(f"[Test]   Hash: {downloadedHash}")
         print(f"[Test]   Size: {os.path.getsize(downloadedPath)} bytes")
+
+    def testE2EEStdinHTTPDownload(self):
+        """Test E2EE HTTP download from stdin when pipe reads are shorter than encryption chunks."""
+        print("\n[TEST] E2EE stdin HTTP download")
+
+        shareLink = self._startFastFileLink(
+            p2p=True,
+            extraArgs=["--e2ee", "--stdin-cache", "off"],
+            binaryCommand=[
+                sys.executable,
+                os.path.abspath(__file__),
+                _E2EE_STDIN_SHORT_READ_RUNNER_FLAG,
+                "--cli",
+            ],
+            stdinInputPath=self.testFilePath,
+            stdinFileName="stdin-e2ee-http.bin"
+        )
+
+        downloadedPath = os.path.join(self.tempDir, "downloaded_stdin_http_e2e.bin")
+        self._downloadWithCore(
+            shareLink,
+            downloadedPath,
+            extraEnvVars={"DISABLE_WEBRTC": "True"}
+        )
+
+        downloadedHash = self.getFileHash(downloadedPath)
+        self.assertEqual(downloadedHash, self.originalFileHash, "E2EE stdin HTTP download should match original")
+
+        print("[Test] [OK] E2EE stdin HTTP download successful")
 
     def testE2EEHttpFallback(self):
         """Test E2E encrypted download with WebRTC ICE failure → HTTP fallback"""
@@ -376,6 +484,38 @@ class E2EEDownloadTest(ResumeTestBase):
         print(f"[Test]   Hash: {downloadedHash}")
         print(f"[Test]   Size: {os.path.getsize(downloadedPath)} bytes")
 
+    def testE2EEStdinHttpFallbackBeforeFirstPayload(self):
+        """Test E2EE stdin HTTP fallback after WebRTC consumes but does not deliver its first chunk."""
+        print("\n[TEST] E2EE stdin HTTP fallback before first payload")
+
+        outputCapture = {}
+        shareLink = self._startFastFileLink(
+            p2p=True,
+            extraArgs=["--e2ee", "--stdin-cache", "off"],
+            captureOutputIn=outputCapture,
+            extraEnvVars={"WEBRTC_SIMULATE_DELAY_AFTER_FIRST_CHUNK": "True"},
+            stdinInputPath=self.testFilePath,
+            stdinFileName="stdin-e2ee-first-payload.bin"
+        )
+
+        rawBytes, stderrOutput = self._downloadWithCore(
+            shareLink,
+            extraEnvVars={"WEBRTC_CLI_SIMULATE_DROP_BEFORE_FIRST_PAYLOAD": "True"},
+            stdoutMode=True
+        )
+
+        self.assertIn("HTTP fallback", stderrOutput)
+        self.assertEqual(
+            hashlib.sha256(rawBytes).hexdigest(),
+            self.originalFileHash,
+            "E2EE stdin HTTP fallback should replay the first undelivered chunk"
+        )
+
+        outputText = self._updateCapturedOutput(outputCapture)
+        self.assertNotIn("Stdin has already been consumed", outputText)
+
+        print("[Test] [OK] E2EE stdin HTTP fallback before first payload succeeded")
+
     def testE2EEHttpFallbackWithResume(self):
         """Test E2E encrypted download with resume: partial WebRTC → ICE failure → HTTP fallback with resume"""
         print("\n[TEST] E2EE HTTP fallback with resume")
@@ -445,7 +585,18 @@ class E2EEDownloadTest(ResumeTestBase):
         Returns:
             tuple[bytes, int, dict]: (data, status_code, headers)
         """
-        headers = {}
+        # A default urllib User-Agent (e.g. "Python-urllib/3.x") is blocked with a
+        # 403 by Cloudflare's bot/signature firewall rule on the production tunnel
+        # domain (error 1010, "browser signature banned") -- confirmed by curling
+        # 1.10.fastfilelink.com directly with and without a browser UA. The real
+        # CLI downloader (bases/Download.py) already spoofs a Chrome UA for this
+        # exact reason; mirror it here so direct-HTTP tests see the same behavior.
+        headers = {
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            ),
+        }
         if start is not None:
             if end is not None:
                 headers['Range'] = f'bytes={start}-{end}'
@@ -1000,4 +1151,8 @@ class E2EEUploadDownloadTest(E2EEUploadTestBase, ResumeTestBase):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    if len(sys.argv) > 1 and sys.argv[1] == _E2EE_STDIN_SHORT_READ_RUNNER_FLAG:
+        del sys.argv[1]
+        _runE2EEStdinShortReadCore()
+    else:
+        unittest.main()

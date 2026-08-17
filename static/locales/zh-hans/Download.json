@@ -1,12 +1,12 @@
 {
     "title": "下载中",
-    "file": "档案",
+    "file": "文件",
     "ellipsis": "...",
     "warning": {
         "title": "下载在此浏览器中可能无法正常运作",
-        "text": "要下载此档案，请在您的浏览器中开启此连结。",
+        "text": "要下载此文件，请在您的浏览器中开启此链接。",
         "button": "在浏览器中下载",
-        "copyButton": "复制连结",
+        "copyButton": "复制链接",
         "watchButton": "在此观看影片",
         "listenButton": "在此聆听音频",
         "viewButton": "在此查看图片"
@@ -14,7 +14,7 @@
     "progress": {
         "preparing": "准备下载中...",
         "statusHeading": "正在准备您的下载...",
-        "statusDetails": "大型档案可能需要一些时间才能开始",
+        "statusDetails": "大型文件可能需要一些时间才能开始",
         "trouble": "🔄 遇到问题？在新分页中重试",
         "troubleSubtle": "遇到问题？在新分页中重试",
         "troubleProminent": "🔄 遇到问题？在新分页中重试",
@@ -22,17 +22,17 @@
         "backgroundDetails": "请检查您的浏览器下载列（通常在底部或顶部）以查看进度",
         "backgroundDetailsByPass": "请检查您的浏览器下载列（通常在底部或顶部）以查看进度 — 或确认下载是否已完成。",
         "inProgressHeading": "下载进行中...",
-        "inProgressDetails": "请等待您的档案下载",
+        "inProgressDetails": "请等待您的文件下载",
         "starting": "开始下载...",
-        "downloading": "下载档案中...",
-        "downloadingMightDone": "下载档案中...可能已经完成。",
-        "downloadingWithSize": "下载中 {{size}} 档案...",
+        "downloading": "下载文件中...",
+        "downloadingMightDone": "下载文件中...可能已经完成。",
+        "downloadingWithSize": "下载中 {{size}} 文件...",
         "newTabOpened": "已在新分页中开启下载",
         "canCloseTab": "您可以视需要关闭此分页",
         "unableToClose": "无法自动关闭，您可以手动关闭此分页",
-        "pleaseWait": "请等待您的档案下载",
+        "pleaseWait": "请等待您的文件下载",
         "checkDownloads": "您可以在下载面板中检查进度 (Ctrl+J)",
-        "preparingLarge": "正在准备 {{size}} 档案的直接下载...",
+        "preparingLarge": "正在准备 {{size}} 文件的直接下载...",
         "started": "✓ 下载已在您的浏览器中开始 (Firefox)",
         "havingTrouble": "遇到问题？请重试或检查您的下载资料夹",
         "stoppedForNewTab": "此分页的下载已停止 - 在新分页中继续"
@@ -55,7 +55,7 @@
     },
     "closeTab": "关闭此分页",
     "e2ee": {
-        "title": "🔒 此档案已加密",
+        "title": "🔒 此文件已加密",
         "description": "请输入加密金钥以解密并下载：",
         "placeholder": "输入加密金钥 (base64)",
         "button": "解密并下载",
@@ -63,22 +63,22 @@
             "title": "🔒 加密下载无法使用",
             "details": "大于 {{limit}} 的加密下载需要基于 Chromium 的浏览器进行串流解密。",
             "why": "为什么？",
-            "explanation": "大型加密档案在 Firefox 中无法可靠地进行串流解密。",
+            "explanation": "大型加密文件在 Firefox 中无法可靠地进行串流解密。",
             "solution": "解决方案：",
             "browsers": "Chrome、Edge 或 Brave",
             "useBrowser": "使用 {{browsers}}",
             "useCLI": "或使用 <a href=\"https://github.com/nuwainfo/ffl\" target=\"_blank\" style=\"display: inline !important; padding: 0 !important; margin: 0 !important; border: none !important; background: none !important; color: #007bff !important; text-decoration: underline !important; font-size: inherit !important;\">FastFileLink CLI</a>",
-            "smallFiles": "小型加密档案（<{{limit}}）可在 Firefox 上运作",
-            "fileSize": "档案大小：{{size}}"
+            "smallFiles": "小型加密文件（<{{limit}}）可在 Firefox 上运作",
+            "fileSize": "文件大小：{{size}}"
         },
         "retryBlocked": {
             "title": "加密下载需要此页面",
-            "message": "直接浏览器下载无法解密此档案。解密必须在此页面使用您的加密金钥进行。",
+            "message": "直接浏览器下载无法解密此文件。解密必须在此页面使用您的加密金钥进行。",
             "solutionsTitle": "尝试以下解决方案：",
             "solution1": "<strong>不同的浏览器：</strong>尝试 Chrome、Edge 或 Brave 以获得更好的兼容性",
             "solution2Title": "命令行工具：",
             "solution2Text": "使用",
-            "solution2Stable": "以稳定下载大型加密档案",
+            "solution2Stable": "以稳定下载大型加密文件",
             "solution3": "<strong>等待：</strong>下载可能仍在后台进行中"
         },
         "enterKey": "请输入加密密钥",
@@ -87,7 +87,7 @@
     },
     "pickup": {
         "title": "🔑 需要取件码",
-        "description": "发件人要求输入 6 位数取件码才能下载此档案。",
+        "description": "发件人要求输入 6 位数取件码才能下载此文件。",
         "placeholder": "6 位数码",
         "button": "继续",
         "invalidCode": "请输入有效的 6 位数字码。",
@@ -126,7 +126,7 @@
         "rateLimited": "尝试次数过多，请 5 分钟后再试。"
     },
     "downloadFooter":{
-        "message": "附注：祝您有美好的一天！在以下网址下载您的免费档案分享应用程式",
+        "message": "附注：祝您有美好的一天！在以下网址下载您的免费文件分享应用程式",
         "linkText": "快文链接"
     },
     "inappguard": {
@@ -139,13 +139,13 @@
             "download": "下载"
         },
         "messages": {
-            "iosRestricted": "此应用程式限制下载。请：(1) 点击下方按钮来分享或复制连结，(2) 开启 {{browser}}，(3) 贴上并开启连结以{{action}}。",
-            "androidRestricted": "要{{action}}此档案，点击下方按钮在{{browser}}中开启。如果无法开启，请尝试选单 (⋮) 并选择「在浏览器中开启」。",
-            "generalRestricted": "要{{action}}此档案，请在{{browser}}中开启此连结。"
+            "iosRestricted": "此应用程式限制下载。请：(1) 点击下方按钮来分享或复制链接，(2) 开启 {{browser}}，(3) 贴上并开启链接以{{action}}。",
+            "androidRestricted": "要{{action}}此文件，点击下方按钮在{{browser}}中开启。如果无法开启，请尝试选单 (⋮) 并选择「在浏览器中开启」。",
+            "generalRestricted": "要{{action}}此文件，请在{{browser}}中开启此链接。"
         },
         "clipboard": {
-            "copied": "连结已复制！请贴到 Safari 以下载。",
-            "failed": "无法复制连结。请手动从网址栏复制 URL。"
+            "copied": "链接已复制！请贴到 Safari 以下载。",
+            "failed": "无法复制链接。请手动从网址栏复制 URL。"
         }
     },
     "client": {
@@ -160,7 +160,7 @@
             "reconnecting": "连线中断，尝试重新连线...",
             "networkFluctuation": "检测到网路波动，继续传输...",
             "retryingP2p": "正在尝试重新连线…",
-            "savingFile": "储存档案中...",
+            "savingFile": "储存文件中...",
             "creatingDownload": "建立下载中...",
             "downloadingPercent": "下载中：{{percent}}%",
             "downloading": "下载中...",
@@ -180,12 +180,12 @@
         "download": {
             "startShortly": "您的下载将很快开始。",
             "deviceStarted": "下载已开始。",
-            "fileSaved": "档案已储存。请检查您的下载资料夹。"
+            "fileSaved": "文件已储存。请检查您的下载资料夹。"
         },
         "fallback": {
-            "browserNotSupported": "此浏览器无法直接下载档案",
+            "browserNotSupported": "此浏览器无法直接下载文件",
             "p2pDisabled": "已停用直接传输，改用备用连线。",
-            "fileTooBig": "档案较大，需要较新版本的浏览器支援。请尝试更换浏览器，或改用备用连线传输。",
+            "fileTooBig": "文件较大，需要较新版本的浏览器支援。请尝试更换浏览器，或改用备用连线传输。",
             "webrtcNotSupported": "此浏览器无法直接连线，改用备用连线",
             "offerFetchFailed": "无法连线到发送者的设备",
             "serverError": "伺服器准备您的下载时发生问题",
@@ -199,7 +199,7 @@
             "reconnectFailedFinal": "仍然无法重新连线",
             "channelClosedUnexpectedly": "连线意外中断",
             "channelError": "发生连线错误",
-            "savingStuck": "储存档案的时间比预期长",
+            "savingStuck": "储存文件的时间比预期长",
             "senderReportedError": "发送者回报了问题",
             "messageProcessingError": "接收资料时发生问题",
             "startTransferFailed": "无法开始直接下载",
@@ -214,17 +214,17 @@
             "design": "设计："
         }
     },
-    "downloadLink": "下载连结",
+    "downloadLink": "下载链接",
     "unavailable": "不可用",
     "needAssistance": "如需协助，请联络我们：",
     "pointsNotEnough":{
-        "reason": "此下载连结不可用，因为帐号的使用点数已用完。"
+        "reason": "此下载链接不可用，因为帐号的使用点数已用完。"
     },
     "runOutDownloadPoint":{
-        "reason": "此下载连结不可用，因为下载次数已达档案拥有者设定的上限。"
+        "reason": "此下载链接不可用，因为下载次数已达文件拥有者设定的上限。"
     },
     "errors": {
-        "folder_changed": "分享的资料夹内容在传输过程中已变更。档案拥有者需要重新分享该资料夹。",
+        "folder_changed": "分享的资料夹内容在传输过程中已变更。文件拥有者需要重新分享该资料夹。",
         "unknown": "传输过程中发生错误。"
     },
     "checksum": {
@@ -237,13 +237,13 @@
         "loadingContents": "载入压缩档内容中...",
         "startDownload": "开始下载",
         "closePreview": "关闭预览",
-        "noFiles": "找不到可预览的档案",
-        "file": "档案",
-        "fileNumber": "档案 #{{index}}",
+        "noFiles": "找不到可预览的文件",
+        "file": "文件",
+        "fileNumber": "文件 #{{index}}",
         "loadFailed": "载入压缩档内容失败",
-        "filesCount": "{{count}} 个档案",
-        "filesCount_plural": "{{count}} 个档案",
-        "filesSizeCount": "{{count}} 个档案 • {{size}}",
+        "filesCount": "{{count}} 个文件",
+        "filesCount_plural": "{{count}} 个文件",
+        "filesSizeCount": "{{count}} 个文件 • {{size}}",
         "optionsTitle": "预览选项",
         "optionsMessage": "您的下载正在进行中。您希望如何预览？",
         "continueDownloading": "继续下载同时预览（建议）",
@@ -251,7 +251,7 @@
         "optionsHint": "注意：「仅预览」将会舍弃已下载的进度并重新载入页面。",
         "hint": {
             "images": "图片",
-            "otherFiles": "其他档案",
+            "otherFiles": "其他文件",
             "inlineDetails": "查看详情",
             "inlinePreview": "预览内容"
         },
@@ -262,7 +262,7 @@
         },
         "actions": {
             "viewFullSize": "检视原图",
-            "downloadFile": "下载档案"
+            "downloadFile": "下载文件"
         },
         "sortFilter": "排序与筛选",
         "sort": "排序",

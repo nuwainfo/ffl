@@ -36,7 +36,9 @@ from tests.CoreTestBase import FastFileLinkTestBase
 
 from bases.FileSystems import LocalFileSystem
 from bases.Kernel import FFLEvent
-from bases.Readers import SourceReader, ZipDirSourceReader, FolderChangedException, StdinSourceReader, CachingMixin
+from bases.Readers import (
+    SourceReader, ZipDirSourceReader, FolderChangedException, StdinSourceReader, StdinHandoffWindow, CachingMixin
+)
 
 
 LOCAL_PATH_ACCESS = LocalFileSystem.createPathAccess()
@@ -1218,8 +1220,8 @@ class StdinCachingTest(unittest.TestCase):
 class StdinCacheOffTest(unittest.TestCase):
     """Test StdinSourceReader with caching disabled (--stdin-cache off)"""
 
-    def testStdinCacheOffSecondReadRaises(self):
-        """Test that with caching off, a second iterChunks call raises RuntimeError"""
+    def testStdinCacheOffSecondReadUsesHandoffWindow(self):
+        """Test that cache-off readers replay data still retained by the handoff window."""
 
         testData = b"Hello World from stdin! " * 1000 # ~24KB of data
         mockStdin = io.BytesIO(testData)
@@ -1236,11 +1238,24 @@ class StdinCacheOffTest(unittest.TestCase):
         self.assertFalse(reader._hasCache(), "No cache should exist when caching is disabled")
         self.assertTrue(reader.consumed, "Reader should report consumed when cache is disabled")
 
-        # Second read - should raise RuntimeError because stdin is consumed and no cache
-        with self.assertRaises(RuntimeError, msg="Second read should raise RuntimeError when caching is off"):
-            b''.join(reader.iterChunks(chunkSize=1024))
+        # Second read - cache-off handoff retains this small stream in memory.
+        secondReadData = b''.join(reader.iterChunks(chunkSize=1024))
+        self.assertEqual(secondReadData, testData, "Second read should use the in-memory handoff window")
 
-        print("[Test] StdinSourceReader cache-off second read raises RuntimeError successfully")
+        print("[Test] StdinSourceReader cache-off handoff replay successful")
+
+    def testStdinCacheOffReadOutsideHandoffWindowRaises(self):
+        """Test that cache-off readers cannot replay bytes evicted from the handoff window."""
+
+        testData = b"Hello World from stdin! " * 1000
+        reader = StdinSourceReader('-', stdinCache=False)
+        reader.stdin = io.BytesIO(testData)
+        reader._handoffWindow = StdinHandoffWindow(1024)
+
+        self.assertEqual(b''.join(reader.iterChunks(chunkSize=1024)), testData)
+
+        with self.assertRaises(RuntimeError, msg="Evicted stdin data must not be replayed"):
+            b''.join(reader.iterChunks(chunkSize=1024))
 
 
 class DeflateCachingTest(unittest.TestCase):

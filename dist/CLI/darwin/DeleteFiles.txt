@@ -160,6 +160,13 @@ lib/python3.12/site-packages/pwiz.py
 lib/python3.12/site-packages/pythoncom.py
 lib/python3.12/site-packages/playhouse
 lib/python3.12/site-packages/README.txt
+lib/python3.12/site-packages/~distutils_hack
+lib/python3.12/site-packages/~etuptools
+lib/python3.12/site-packages/~etuptools-80.9.0.dist-info
+lib/python3.12/site-packages/~etuptools-83.0.0.dist-info
+lib/python3.12/site-packages/~-istutils_hack
+lib/python3.12/site-packages/~kg_resources
+lib/python3.12/site-packages/~-tuptools
 lib/python3.12/site-packages/distutils-precedence.pth
 lib/python3.12/site-packages/FileShare/addons/GUI.py
 lib/python3.12/site-packages/FileShare/setup.py

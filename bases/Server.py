@@ -639,7 +639,10 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
         """Collect download-specific debug/test injection options."""
         return {
             'stallAfterBytes': self._parsePositiveDebugIntArg(args, 'stall-after'),
-            'disconnectAfterBytes': self._parsePositiveDebugIntArg(args, 'disconnect-after'),
+            # A forced disconnect is used to verify client-side HTTP Range
+            # recovery. Only the initial response is interrupted; the Range
+            # retry must be allowed to complete.
+            'disconnectAfterBytes': None if self.headers.get('Range') else self._parsePositiveDebugIntArg(args, 'disconnect-after'),
         }
 
     def _truncateChunkForDebugOptions(self, data, written, debugOptions):
@@ -699,6 +702,23 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
                 'filePath': filePath,
                 'exceptionClass': exception.__class__.__name__
             }
+
+            # The response already promised a fixed Content-Length (store-mode
+            # folder ZIP) but fewer bytes were actually written. Force the
+            # connection closed so every transport (including tunnel lanes
+            # that proxy their own local HTTP connection) observes an
+            # immediate, transport-level truncation instead of silently
+            # stalling on a keep-alive socket until the client's /status
+            # poll happens to win the race.
+            self.close_connection = True
+            try:
+                self.connection.shutdown(socket.SHUT_RDWR)
+            except OSError as shutdownError:
+                logger.debug(f"Folder-changed shutdown already closed socket: {shutdownError}")
+            try:
+                self.connection.close()
+            except OSError as closeError:
+                logger.debug(f"Folder-changed close already closed socket: {closeError}")
         elif isinstance(exception, (ConnectionResetError, ConnectionAbortedError, ConnectionError, BrokenPipeError)):
             flushPrint(_('\nConnection disconnected, wait retrying.\n'))
             reason = 'connection-lost'
@@ -800,6 +820,16 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
         # Get file info using existing helper method
         path, name, size, ctype, reader = self._getFileInfo(quoteName=False)
         self._appendDownloadRequestLog(args, name, size)
+
+        # Browsers commonly probe a media URL with ``Range: bytes=0-`` before
+        # deciding whether to play it.  A live producer cannot seek, but it can
+        # safely treat this particular probe as a normal full stream.
+        initialLiveRange = bool(
+            self.byteRange and self.byteRange.start == 0 and self.byteRange.end is None and
+            reader.acceptsInitialRange
+        )
+        if initialLiveRange:
+            self.byteRange = None
 
         requestedStart = self.byteRange.start if self.byteRange else 0
         canResumeFromStart = reader.canResumeFrom(requestedStart)
@@ -905,7 +935,7 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
                 readEnd = end
 
             # Send appropriate response headers
-            if 'Range' in self.headers:
+            if 'Range' in self.headers and not initialLiveRange:
                 if self.byteRange and (reader.supportsRange or canResumeFromStart):
                     self.send_response(HTTPStatus.PARTIAL_CONTENT)
                     if size is not None:
@@ -960,8 +990,12 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
             # Send file/directory data in chunks
             chunkSize = self.session.e2eeManager.chunkSize if self.session.config.e2eeEnabled else self.CHUNK_SIZE
             progressThrottler = Throttler(interval=1.0)
+            if encryptor:
+                plaintextReader = encryptor.buildReader(reader)
+            else:
+                plaintextReader = reader
 
-            for data in reader.iterChunks(chunkSize, start=readStart):
+            for data in plaintextReader.iterChunks(chunkSize, start=readStart):
                 self._ensureLogicalDownloadStillActive(logicalDl)
 
                 # Ensure we don't send beyond the (possibly chunk-aligned) range (if known)
@@ -1096,6 +1130,10 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
             'fileName': name,
             'fileSize': size if size is not None else -1,
             'fileContentType': mediaContentType,
+            
+            # Addons that supply their own streaming UI can disable the
+            # generic WebRTC/download bootstrap without changing this handler.
+            'downloadClientEnabled': True,
 
             # Open Graph / meta
             'ogTitle': ogTitle,

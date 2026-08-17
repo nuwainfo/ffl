@@ -179,6 +179,8 @@ class DownloadCompletionTracker {
             total: record.total,
             serverId: record.serverId,
             serverAckSent: !!record.serverAckSent,
+            confirmRequired: !!record.confirmRequired,
+            confirmMessage: record.confirmMessage || null,
             downloadPath: record.downloadPath || null,
             replayed
         };
@@ -211,7 +213,7 @@ class DownloadCompletionTracker {
 
     async sendServerAck(uid, serverDownloadId, receivedBytes, downloadPath = '') {
         if (!uid || !serverDownloadId) {
-            return false;
+            return { ok: false, confirmRequired: false, confirmMessage: null };
         }
 
         try {
@@ -233,23 +235,36 @@ class DownloadCompletionTracker {
                 throw new Error(`HTTP ${response.status}`);
             }
 
+            // The page (DownloadManager.sendServerCompleteAck) is the one that
+            // normally reads this payload and pops the receipt-confirm dialog,
+            // but when the SW itself drives the download (native <a> tag path,
+            // no page-side fetch) it does this ACK instead -- so it must relay
+            // confirmRequired/message onward via the completion broadcast
+            // rather than discarding them, or the dialog can never appear.
+            const data = await response.json().catch(() => null);
             log('[ProgressSW] Direct completion ACK sent successfully for server download ID:', serverDownloadId);
-            return true;
+            return {
+                ok: true,
+                confirmRequired: !!(data && data.confirmRequired),
+                confirmMessage: (data && data.message) || null
+            };
         } catch (e) {
             console.error('[ProgressSW] Direct completion ACK failed:', e);
             log('[ProgressSW] Direct completion ACK failed:', String(e));
-            return false;
+            return { ok: false, confirmRequired: false, confirmMessage: null };
         }
     }
 
     async complete({ uid, downloadId, serverDownloadId, sent, total, downloadPath = '' }) {
-        const serverAckSent = await this.sendServerAck(uid, serverDownloadId, total, downloadPath);
+        const ackResult = await this.sendServerAck(uid, serverDownloadId, total, downloadPath);
         const record = this.remember({
             id: downloadId,
             sent,
             total,
             serverId: serverDownloadId,
-            serverAckSent,
+            serverAckSent: ackResult.ok,
+            confirmRequired: ackResult.confirmRequired,
+            confirmMessage: ackResult.confirmMessage,
             downloadPath
         });
 

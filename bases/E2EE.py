@@ -418,6 +418,29 @@ class E2EEUnframer(E2EEFramerBase):
 # ============================================================================
 
 
+class E2EEChunkReader:
+    """Adapts a source reader to the canonical chunk boundaries required by E2EE."""
+
+    def __init__(self, sourceReader, chunkSize):
+        self.sourceReader = sourceReader
+        self.chunkSize = chunkSize
+
+    def __getattr__(self, name):
+        """Delegate the SourceReader interface not specialized for E2EE."""
+        return getattr(self.sourceReader, name)
+
+    def iterChunks(self, chunkSize, start=0):
+        chunkBuffer = bytearray()
+        for data in self.sourceReader.iterChunks(chunkSize, start=start):
+            chunkBuffer.extend(data)
+            while len(chunkBuffer) >= self.chunkSize:
+                yield bytes(chunkBuffer[:self.chunkSize])
+                del chunkBuffer[:self.chunkSize]
+
+        if chunkBuffer:
+            yield bytes(chunkBuffer)
+
+
 class StreamEncryptor:
     """Stream encryptor for HTTP downloads - compatible with PAKE project
 
@@ -435,6 +458,7 @@ class StreamEncryptor:
         fileName: str,
         fileSize: int,
         tagStorage,
+        chunkSize,
         startChunkIndex=0,
         saveTags=True,
         streamId="global"
@@ -447,6 +471,7 @@ class StreamEncryptor:
             fileName: Original filename
             fileSize: Original file size
             tagStorage: Tag storage object with save() method
+            chunkSize: Plaintext size for each authenticated encryption chunk
             startChunkIndex: Starting chunk index (for Range support)
             saveTags: Whether to save tags (False for unaligned Range requests)
             streamId: Stream identifier for tag storage (default: "global")
@@ -456,12 +481,17 @@ class StreamEncryptor:
         self.fileName = fileName
         self.fileSize = fileSize
         self.tagStorage = tagStorage
+        self.chunkSize = chunkSize
         self.chunkIndex = startChunkIndex
         self.saveTags = saveTags
         self.streamId = streamId
 
         self.crypto = CryptoInterface()
         self.aesgcm = self.crypto.createAESGCM(contentKey)
+
+    def buildReader(self, sourceReader):
+        """Build a reader that preserves the encryption chunk boundaries."""
+        return E2EEChunkReader(sourceReader, self.chunkSize)
 
     def encryptChunk(self, plaintext: bytes) -> bytes:
         """Encrypt a chunk and store its tag separately
@@ -633,8 +663,8 @@ class E2EEManager:
 
         normalizedFileSize = CryptoHelper.normalizeFileSize(fileSize)
         return StreamEncryptor(
-            self.contentKey, self.nonceBase, fileName, normalizedFileSize, self.encryptionMetaStorage, startChunkIndex,
-            saveTags, streamId
+            self.contentKey, self.nonceBase, fileName, normalizedFileSize, self.encryptionMetaStorage, self.chunkSize,
+            startChunkIndex, saveTags, streamId
         )
 
     def getTags(self, streamId):

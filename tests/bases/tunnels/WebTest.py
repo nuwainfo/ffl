@@ -27,6 +27,7 @@ import socket
 import ssl
 import struct
 import threading
+import time
 import unittest
 import urllib.parse
 from unittest import mock
@@ -40,6 +41,7 @@ from bases.tunnels.Web import (
 from addons.Features import FeatureLevel, FeatureManager # isort:skip
 
 from tests.BrowserTestBase import BrowserTestBase # isort:skip
+from tests.CoreTestBase import FastFileLinkTestBase # isort:skip
 
 
 class _FakeSSLContext:
@@ -58,9 +60,14 @@ class _FakeConnection:
         self.closed = False
         self.connected = False
         self.auto_open = 1
+        self.sock = None
 
     def connect(self):
         self.connected = True
+        # Mirrors real http.client.HTTPConnection, which only has .sock once
+        # connected -- _runRequest widens its read timeout via
+        # localConnection.sock.settimeout(...) right after connect().
+        self.sock = mock.MagicMock()
 
     def close(self):
         self.closed = True
@@ -1195,6 +1202,72 @@ class WebTunnelFunctionalTest(BrowserTestBase):
             print("[OK] Browser WebRTC + E2EE download over the web tunnel verified")
         finally:
             driver.quit()
+
+
+class WebTunnelE2ETestBase(FastFileLinkTestBase):
+    _TUNNEL_DOMAIN = '1.10.fastfilelink.com'
+
+    def _assertTunnelStayedConnected(self, outputCapture):
+        self.assertIsNone(self.coreProcess.poll(), 'Share process exited while its tunnel was active')
+        output = self._updateCapturedOutput(outputCapture)
+        self.assertNotIn('Web tunnel control connection ended', output)
+        self.assertNotIn('Web tunnel lane 0 ended after', output)
+
+
+class WebTunnelIdleConnectionE2ETest(WebTunnelE2ETestBase):
+    """A real tunnel agent must retain its control socket and lane pool while
+    it has no public request to relay. This isolates connection lifetime from
+    HTTP, E2EE, and response-stream backpressure."""
+
+    def _startTunnelShare(self, outputCapture):
+        return self._startFastFileLink(
+            p2p=True,
+            timeout=60,
+            serverTimeout=180,
+            extraArgs=['--log-level', 'DEBUG'],
+            extraEnvVars={'FFL_TUNNEL_DOMAIN': self._TUNNEL_DOMAIN},
+            captureOutputIn=outputCapture,
+        )
+
+    @unittest.skipIf(os.getenv('SKIP_INTEGRATION_TESTS'), "Integration tests disabled")
+    def testWebTunnelKeepsIdleConnectionsAlivePastTwoMinutes(self):
+        outputCapture = {}
+        shareLink = self._startTunnelShare(outputCapture)
+
+        self.assertIn(self._TUNNEL_DOMAIN, shareLink)
+        time.sleep(125)
+        self._assertTunnelStayedConnected(outputCapture)
+
+
+class WebTunnelLargeE2EEHTTPDownloadE2ETest(WebTunnelE2ETestBase):
+    """Streams an E2EE payload past the old relay failure duration."""
+
+    _FILE_SIZE_BYTES = 384 * 1024 * 1024
+    _DOWNLOAD_TIMEOUT_SECONDS = 420
+
+    def __init__(self, methodName='runTest'):
+        super().__init__(methodName, fileSizeBytes=self._FILE_SIZE_BYTES)
+
+    @unittest.skipIf(os.getenv('SKIP_INTEGRATION_TESTS'), "Integration tests disabled")
+    def testLargeE2EEHTTPDownloadPastOldConnectionFailureDuration(self):
+        outputCapture = {}
+        shareLink = self._startFastFileLink(
+            p2p=True,
+            extraArgs=['--e2ee', '--log-level', 'DEBUG'],
+            extraEnvVars={'FFL_TUNNEL_DOMAIN': self._TUNNEL_DOMAIN},
+            captureOutputIn=outputCapture,
+        )
+        downloadedPath = os.path.join(self.tempDir, 'large_e2ee_http.bin')
+
+        self._downloadWithCore(
+            shareLink,
+            downloadedPath,
+            extraEnvVars={'DISABLE_WEBRTC': 'True'},
+            timeout=self._DOWNLOAD_TIMEOUT_SECONDS,
+        )
+
+        self._verifyDownloadedFile(downloadedPath)
+        self._assertTunnelStayedConnected(outputCapture)
 
 
 if __name__ == '__main__':

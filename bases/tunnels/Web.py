@@ -971,6 +971,22 @@ class _TunnelLane(_HeartbeatedSocket):
             localConnection.connect()
             localConnection.auto_open = 0
 
+            # The 30s constructor timeout above is generous for what should
+            # be a near-instant localhost connect, but http.client applies
+            # that same socket timeout to every subsequent read too -- and a
+            # local origin can legitimately go quiet far longer than 30s
+            # without being dead (slow backend work, or the local server's
+            # own stall-detection/diagnosis feature deliberately holding a
+            # response open). Widen it once connected, to the same
+            # stuck-but-not-dead ceiling _waitForSendRoom already uses for
+            # the outbound side, so a merely slow-but-alive origin isn't
+            # killed by this transport's own impatience. A genuinely dead
+            # origin is still promptly caught the same way it already is if
+            # the browser cancels mid-wait: _cancelCurrent's
+            # _forceCloseLocalConnection() unblocks this read via a
+            # cross-thread socket shutdown regardless of its timeout value.
+            localConnection.sock.settimeout(self._STALL_DEADLINE)
+
             with self._stateChanged:
                 if state is not self._current or state.cancelled:
                     return

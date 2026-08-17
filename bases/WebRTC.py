@@ -18,6 +18,7 @@
 # limitations under the License.
 
 import asyncio
+import json
 import sys
 import threading
 import uuid
@@ -27,26 +28,49 @@ import time
 
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Set, Tuple, Callable
+from typing import Any, Dict, List, Optional, Set, Tuple, Callable
 
 import requests
 
 from aiortc import (RTCConfiguration, RTCDataChannel, RTCIceServer, RTCPeerConnection, RTCSessionDescription)
 from aiortc.sdp import candidate_from_sdp
 
+try:
+    from aiortc_native_sctp import install_native_sctp
+    install_native_sctp()
+except ImportError as e:
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.debug('Unable to use aiortc_native_sctp: {e}')
+
 from bases.Checksum import DEFAULT_CHECKSUM_ALGORITHM
-from bases.Kernel import getLogger, FFLEvent, Throttler
+from bases.Kernel import getLogger, FFLEvent, StorageLocator, Throttler
 from bases.Utils import ONE_MB, formatSize, getEnv
 from bases.Progress import Progress
 from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
-from bases.Readers import FolderChangedException
+from bases.Readers import FolderChangedException, StdinHandoffTakenOver
 from bases.I18n import _
 
+# Setup logging
+logger = getLogger(__name__)
 
 # Custom exception for WebRTC connection timeout
 class WebRTCConnectionTimeout(Exception):
     """Raised when WebRTC connection establishment times out"""
     pass
+
+
+class WebRTCDataChannelTimeout(WebRTCConnectionTimeout):
+    """Raised when a connected WebRTC peer does not open its data channel."""
+    pass
+
+
+class WebRTCFallbackError(RuntimeError):
+    """Carries the output offset when WebRTC hands a download to HTTP."""
+
+    def __init__(self, error: Exception, resumePosition: int):
+        super().__init__(str(error))
+        self.resumePosition = resumePosition
 
 
 # Custom exception for WebRTC disabled by server policy
@@ -57,14 +81,6 @@ class WebRTCDisabledError(Exception):
         self.reason = reason
         super().__init__(reason)
 
-
-# Default ICE servers for WebRTC connections
-DEFAULT_ICE_SERVERS = [
-    RTCIceServer(urls="stun:stun.l.google.com:19302"),
-    RTCIceServer(urls="stun:stun.cloudflare.com:3478"),
-    RTCIceServer(urls="stun:stun.nextcloud.com:443"),
-    RTCIceServer(urls="stun:openrelayproject.org:443"),
-]
 
 # Chrome/Edge local connection sleep delay (seconds) - "3 ticks trick" to avoid buffer issues
 # https://github.com/aiortc/aioice/issues/58
@@ -93,10 +109,6 @@ if sys.platform == "win32":
     import winloop._noop # pylint: disable=import-error
     winloop.install()
     assert isinstance(asyncio.get_event_loop_policy(), winloop.EventLoopPolicy)
-
-# Setup logging
-logger = getLogger(__name__)
-
 
 class DummyWebRTCManager:
     """
@@ -180,6 +192,71 @@ class ClientInfo:
     detectedIp: Optional[str] = None
 
 
+class ICEServerConfigProvider:
+    """Resolves the RTCIceServer list used for WebRTC ICE negotiation.
+
+    Reads `webrtc.json` (StorageLocator search order, current dir first, same
+    as tunnels.json) if the user has created one with their own STUN/TURN
+    servers. Never writes to disk - if the file is absent, unreadable, or has
+    no usable entries, this silently falls back to FFL's built-in public STUN
+    servers rather than breaking WebRTC connectivity.
+    """
+
+    CONFIG_FILENAME = 'webrtc.json'
+
+    _DEFAULT_ICE_SERVER_ENTRIES = [
+        {"urls": "stun:stun.l.google.com:19302"},
+        {"urls": "stun:stun.cloudflare.com:3478"},
+        {"urls": "stun:stun.nextcloud.com:443"},
+        {"urls": "stun:openrelayproject.org:443"},
+    ]
+
+    @staticmethod
+    def _buildICEServer(entry: Dict[str, Any]) -> RTCIceServer:
+        return RTCIceServer(
+            urls=entry['urls'],
+            username=entry.get('username'),
+            credential=entry.get('credential'),
+            credentialType=entry.get('credential_type', 'password'),
+        )
+
+    def __init__(self, configPath: Optional[str] = None):
+        self.configPath = configPath or self._getDefaultConfigPath()
+        self.iceServers = self._loadICEServers()
+
+    def _getDefaultConfigPath(self) -> str:
+        storageLocator = StorageLocator.getInstance()
+        return storageLocator.findConfig(self.CONFIG_FILENAME, prefer=StorageLocator.Location.CURRENT)
+
+    def _loadICEServers(self) -> List[RTCIceServer]:
+        if not os.path.exists(self.configPath):
+            return self._buildICEServers(self._DEFAULT_ICE_SERVER_ENTRIES)
+
+        try:
+            with open(self.configPath, 'r') as f:
+                data = json.load(f)
+        except (OSError, ValueError) as e:
+            logger.warning(f"Failed to load WebRTC config from {self.configPath}, using built-in defaults: {e}")
+            return self._buildICEServers(self._DEFAULT_ICE_SERVER_ENTRIES)
+
+        iceServers = self._buildICEServers(data.get('ice_servers') or [])
+        if not iceServers:
+            logger.warning(f"No usable ice_servers in {self.configPath}, using built-in defaults")
+            return self._buildICEServers(self._DEFAULT_ICE_SERVER_ENTRIES)
+
+        return iceServers
+
+    def _buildICEServers(self, entries: List[Dict[str, Any]]) -> List[RTCIceServer]:
+        iceServers = []
+        for entry in entries:
+            try:
+                iceServers.append(self._buildICEServer(entry))
+            except (KeyError, TypeError) as e:
+                logger.warning(f"Skipping invalid ICE server entry {entry} in {self.configPath}: {e}")
+
+        return iceServers
+
+
 class WebRTCManager(AsyncLoopExceptionMixin):
     # Transfer chunk size - shared across WebRTC and HTTP downloads
     CHUNK_SIZE = TRANSFER_CHUNK_SIZE
@@ -191,6 +268,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         exceptionCallback=None,
         checksumStore=None,
         shareId=None,
+        iceServers: Optional[List[RTCIceServer]] = None,
     ):
         # WebRTC state
         self.loop = asyncio.new_event_loop()
@@ -213,8 +291,9 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         # Track peer statistics (file size, reported bytes, etc.) for diagnostics
         self.peerStats: Dict[str, Dict[str, Any]] = {}
 
-        # ICE servers configuration
-        self.iceServers = DEFAULT_ICE_SERVERS
+        # ICE servers configuration - defaults to the user's webrtc.json (or FFL's
+        # built-in STUN servers if absent/invalid); pass explicitly to override.
+        self.iceServers = iceServers if iceServers is not None else ICEServerConfigProvider().iceServers
 
     def _runLoop(self):
         """Run asyncio event loop with exception handler"""
@@ -743,6 +822,9 @@ class WebRTCManager(AsyncLoopExceptionMixin):
                 sent += plaintextSize # Count plaintext bytes, not encrypted bytes
                 bufferFlushed.clear()
 
+                if sent == plaintextSize and os.environ.get("WEBRTC_SIMULATE_DELAY_AFTER_FIRST_CHUNK") == "True":
+                    await asyncio.sleep(1)
+
                 if clientInfo and clientInfo.browser in ('edge', 'chrome'):
                     # Use isLocalConnection instead of domain check
                     if clientInfo.isLocalConnection:
@@ -824,6 +906,9 @@ class WebRTCManager(AsyncLoopExceptionMixin):
             # Trigger post event (includes tracking and callback)
             self._handlePostDownloadActions(sent)
 
+        except StdinHandoffTakenOver:
+            logger.info("WebRTC stdin stream handed off to HTTP fallback")
+            await self._cleanupPeer(peerId)
         except Exception as e:
             # Handle all exceptions generically
             logger.exception(f"Error sending file: {e}")
@@ -904,10 +989,14 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
     _STATUS_ESTABLISHING = _("Establishing connection")
     _STATUS_NEGOTIATING = _("Negotiating connection")
     _STATUS_WAITING_CHANNEL = _("Waiting for data channel")
+    _STATUS_CONNECTION_COUNTDOWN = _("Establishing WebRTC ({seconds}s)")
+    _STATUS_CHANNEL_COUNTDOWN = _("Waiting for data channel ({seconds}s)")
+    _STATUS_TRANSFER_COUNTDOWN = _("Waiting for transfer ({seconds}s)")
 
     # Default connection timeout for WebRTC establishment (seconds)
     # Web uses 30s, CLI uses 60s for more tolerance on slower connections
     CONNECTION_TIMEOUT_DEFAULT = 60
+    DATA_CHANNEL_TIMEOUT_DEFAULT = 10
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -918,6 +1007,9 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
         # Debug simulation settings from environment variables
         self.debugSimulateStall = os.environ.get("WEBRTC_CLI_SIMULATE_STALL") == "True"
         self.debugStallAfterBytes = int(os.environ.get("WEBRTC_CLI_STALL_AFTER_BYTES", "50000")) # Default 50KB
+        self.debugSimulateDropBeforeFirstPayload = os.environ.get(
+            "WEBRTC_CLI_SIMULATE_DROP_BEFORE_FIRST_PAYLOAD"
+        ) == "True"
         self.debugSimulateIceFailure = os.environ.get("WEBRTC_CLI_SIMULATE_ICE_FAILURE") == "True"
         self.debugSimulateConnectionHang = os.environ.get("WEBRTC_CLI_SIMULATE_CONNECTION_HANG") == "True"
         self.disableHTTPFallback = os.environ.get("DISABLE_HTTP_FALLBACK") == "True"
@@ -926,25 +1018,30 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
         self.connectionTimeout = int(
             os.environ.get('WEBRTC_CLI_CONNECTION_TIMEOUT', str(self.CONNECTION_TIMEOUT_DEFAULT))
         )
+        self.dataChannelTimeout = int(
+            os.environ.get('WEBRTC_CLI_DATA_CHANNEL_TIMEOUT', str(self.DATA_CHANNEL_TIMEOUT_DEFAULT))
+        )
 
         # Always log the timeout value during initialization for debugging
         envTimeout = os.environ.get('WEBRTC_CLI_CONNECTION_TIMEOUT', 'not set')
         logger.debug(
             f"Downloader initialized with connectionTimeout={self.connectionTimeout}s "
-            f"(env var: {envTimeout})"
+            f"(env var: {envTimeout}), dataChannelTimeout={self.dataChannelTimeout}s"
         )
 
         debugEnabled = (
-            self.debugSimulateStall or self.debugSimulateIceFailure or self.debugSimulateConnectionHang or
+            self.debugSimulateStall or self.debugSimulateDropBeforeFirstPayload or self.debugSimulateIceFailure or self.debugSimulateConnectionHang or
             self.disableHTTPFallback
         )
         if debugEnabled:
             logger.debug(
                 f"Debug mode enabled: stall={self.debugSimulateStall} "
                 f"(after {self.debugStallAfterBytes} bytes), "
+                f"drop-before-first-payload={self.debugSimulateDropBeforeFirstPayload}, "
                 f"ice-failure={self.debugSimulateIceFailure}, "
                 f"connection-hang={self.debugSimulateConnectionHang}, "
-                f"disable-http-fallback={self.disableHTTPFallback}, timeout={self.connectionTimeout}s"
+                f"disable-http-fallback={self.disableHTTPFallback}, timeout={self.connectionTimeout}s, "
+                f"data-channel-timeout={self.dataChannelTimeout}s"
             )
 
         self._setupEventLoop()
@@ -954,6 +1051,16 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self._runLoop, daemon=True)
         self.thread.start()
+
+    def _updateFallbackCountdown(self, progress, statusTemplate, deadline, context):
+        """Show the remaining WebRTC wait before the HTTP fallback starts."""
+        remainingSeconds = max(0, int(deadline - time.time() + 0.999))
+        countdown = (statusTemplate, remainingSeconds)
+        if context['lastCountdown'] == countdown:
+            return
+
+        context['lastCountdown'] = countdown
+        self._updateProgressStatus(progress, statusTemplate.format(seconds=remainingSeconds))
 
     def _runLoop(self):
         """Run asyncio event loop with exception handler"""
@@ -1101,9 +1208,13 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
             'bytesReceived': resumePosition,
             'outputFile': None,
             'stallSimulated': False,
+            'dropBeforeFirstPayloadSimulated': False,
             'error': None,
             'downloadStarted': False,
             'statusUpdated': False,
+            'connectedAt': None,
+            'dataChannelOpen': False,
+            'lastCountdown': None,
             'streamDecryptor': streamDecryptor,
             'checksumState': self._createTransferChecksumState(verifyChecksum, checksumAlgorithm)
         }
@@ -1113,6 +1224,9 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
         async def onConnectionStateChange():
             state = pc.connectionState
             logger.debug(f"WebRTC connection state changed to: {state}")
+
+            if state == "connected" and context['connectedAt'] is None:
+                context['connectedAt'] = time.time()
 
             # If connection fails/closes before download completes, trigger error
             if state in ("failed", "closed", "disconnected") and not downloadComplete.is_set():
@@ -1147,14 +1261,18 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
                 except Exception as e:
                     logger.warning(f"Failed to send START signal: {e}")
 
+            def markDataChannelOpen():
+                context['dataChannelOpen'] = True
+                sendStartSignal()
+
             @channel.on("open")
             def onChannelOpen():
-                sendStartSignal()
+                markDataChannelOpen()
 
             # If channel is already open, send START immediately
             if channel.readyState == "open":
                 logger.debug(f"Data channel already open, sending START immediately")
-                sendStartSignal()
+                markDataChannelOpen()
 
             @channel.on("message")
             def onMessage(data):
@@ -1208,6 +1326,22 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
                     else:
                         # Binary data
                         if context['outputFile']:
+                            if context['error']:
+                                return
+
+                            if (
+                                self.debugSimulateDropBeforeFirstPayload and
+                                not context['dropBeforeFirstPayloadSimulated']
+                            ):
+                                context['dropBeforeFirstPayloadSimulated'] = True
+                                channel.close()
+                                self._failDownload(
+                                    context,
+                                    RuntimeError("Debug: Simulated drop before first payload write"),
+                                    errorEvent
+                                )
+                                return
+
                             self._updateTransferChecksumState(context['checksumState'], data)
 
                             # Process chunk (decrypt if E2EE enabled, otherwise passthrough)
@@ -1390,7 +1524,7 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
         # Setup WebRTC peer connection
         self._updateProgressStatus(progress, self._STATUS_SETUP_WEBRTC)
 
-        iceServers = DEFAULT_ICE_SERVERS
+        iceServers = ICEServerConfigProvider().iceServers
 
         # Debug: Simulate ICE failure by using invalid STUN servers
         if self.debugSimulateIceFailure:
@@ -1475,9 +1609,7 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
                 completionTask = asyncio.create_task(downloadComplete.wait())
                 errorTask = asyncio.create_task(errorEvent.wait())
 
-                # Connection establishment timeout (cleared when download starts)
-                connectionTimeout = self.connectionTimeout
-                connectionStart = time.time()
+                connectionDeadline = time.time() + self.connectionTimeout
 
                 # Monitor context and update status when download starts
                 while True:
@@ -1485,8 +1617,6 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
                     if context['downloadStarted'] and not context['statusUpdated']:
                         self._updateProgressStatus(progress, self._STATUS_DOWNLOADING)
                         context['statusUpdated'] = True
-                        # Clear connection timeout once download starts
-                        connectionTimeout = None
 
                     # Check status error queue (lock-free, no performance impact)
                     if statusErrorQueue:
@@ -1496,15 +1626,35 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
                         await self._cancelTasks([pollingTask, completionTask, errorTask])
                         raise serverError
 
-                    # Check connection timeout (only before download starts)
-                    if connectionTimeout:
-                        elapsed = time.time() - connectionStart
-                        if elapsed > connectionTimeout:
+                    if not context['downloadStarted']:
+                        connectedAt = context['connectedAt']
+                        
+                        if connectedAt is None:
+                            timeoutDeadline = connectionDeadline
+                            timeoutError = WebRTCConnectionTimeout(
+                                f"WebRTC connection timeout after {self.connectionTimeout} seconds"
+                            )
+                            statusTemplate = self._STATUS_CONNECTION_COUNTDOWN
+                        elif not context['dataChannelOpen']:
+                            dataChannelDeadline = connectedAt + self.dataChannelTimeout
+                            timeoutDeadline = min(connectionDeadline, dataChannelDeadline)
+                            timeoutError = WebRTCDataChannelTimeout(
+                                f"WebRTC data channel did not open after {self.dataChannelTimeout} seconds"
+                            )
+                            statusTemplate = self._STATUS_CHANNEL_COUNTDOWN
+                        else:
+                            timeoutDeadline = connectionDeadline
+                            timeoutError = WebRTCConnectionTimeout(
+                                f"WebRTC transfer did not start after {self.connectionTimeout} seconds"
+                            )
+                            statusTemplate = self._STATUS_TRANSFER_COUNTDOWN
+
+                        self._updateFallbackCountdown(progress, statusTemplate, timeoutDeadline, context)
+                        
+                        if time.time() >= timeoutDeadline:
                             statusStopEvent.set()
                             await self._cancelTasks([pollingTask, completionTask, errorTask])
-                            raise WebRTCConnectionTimeout(
-                                f"WebRTC connection timeout after {connectionTimeout} seconds"
-                            )
+                            raise timeoutError
 
                     # Wait for either completion or error with timeout
                     done, pending = await asyncio.wait([completionTask, errorTask],
@@ -1559,6 +1709,11 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
 
             return finalOutputPath
 
+        except Exception as error:
+            if context is not None:
+                raise WebRTCFallbackError(error, context['bytesReceived']) from error
+                
+            raise
         finally:
             # Clean up any completion notification task (but NOT progress bar - might be reused for HTTP fallback)
             if context and 'completionTask' in context:
@@ -1588,7 +1743,8 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
         urlInfo=None,
         checksumAlgorithm: str = DEFAULT_CHECKSUM_ALGORITHM,
         pickupCode: Optional[str] = None,
-        proof: Optional[str] = None
+        proof: Optional[str] = None,
+        fallbackResumePosition: int = 0
     ) -> str:
         """Common HTTP fallback logic for both timeout and exception cases
 
@@ -1632,7 +1788,8 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
                 urlInfo=urlInfo,
                 pickupCode=pickupCode,
                 proof=proof,
-                checksumAlgorithm=checksumAlgorithm
+                checksumAlgorithm=checksumAlgorithm,
+                fallbackResumePosition=fallbackResumePosition
             )
             self._finishProgress()
             return result
@@ -1652,6 +1809,7 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
     def downloadFile(self, url, outputPath=None, credentials=None, resume=False,
                       pickupCode=None, recipientPrivateKey=None) -> str:
         """Try WebRTC first (if supported/enabled), fall back to HTTP."""
+        self._validateOutputPath(outputPath)
         ctx = self._resolveDownloadContext(url, credentials, recipientPrivateKey)
         urlInfo = ctx['urlInfo']
 
@@ -1699,6 +1857,12 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
                 except Exception as e:
                     logger.debug(f"Error finishing progress bar after Ctrl+C: {e}")
             raise
+        except WebRTCFallbackError as webrtcError:
+            return self._fallbackToHTTP(
+                url, outputPath, credentials, resume, webrtcError,
+                ctx['e2eeContext'], urlInfo, ctx['checksumAlgorithm'], pickupCode, ctx['proof'],
+                webrtcError.resumePosition
+            )
         except WebRTCConnectionTimeout as timeoutError:
             # Connection establishment timed out, fall back to HTTP
             return self._fallbackToHTTP(

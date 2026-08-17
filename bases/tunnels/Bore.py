@@ -193,7 +193,7 @@ class BoreClient(Socks5ProxySupport):
         remotePort=0,
         secret=None,
         tokenProvider=None,
-        bufferSize=8192,
+        bufferSize=65536,
         verbose=False,
         debug=True,
         useHttps=False, # Ignored - always uses HTTPS for security

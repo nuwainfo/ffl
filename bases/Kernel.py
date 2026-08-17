@@ -45,9 +45,9 @@ from signalslot import Signal
 from sentry_sdk.integrations.logging import SentryHandler, LoggingIntegration
 from sentry_sdk.integrations import atexit as sentryAtexit
 
-PUBLIC_VERSION = '4.0.5'
+PUBLIC_VERSION = '4.0.6'
 
-PUBLIC_REVISION = "$Revision: 19833 $"[11:-2]
+PUBLIC_REVISION = "$Revision: 19870 $"[11:-2] # UPDATE: flag to update this 
 
 # Map string levels to logging constants for standard level names
 LOG_LEVEL_MAPPING = {'DEBUG': logging.DEBUG, 'INFO': logging.INFO, 'WARNING': logging.WARNING, 'ERROR': logging.ERROR}
@@ -1375,6 +1375,10 @@ class FFLEvent:
     cliArgumentsSharesActionsRegister = Event('/cli/arguments/shares/actions/create')
     cliArgumentsShareOptionsRegister = Event('/cli/arguments/share/options/create')
     cliArgumentsStore = Event('/cli/arguments/get')
+
+    # Source construction hook. Addons may provide a non-file SourceReader
+    # (for example a live producer) through readerPolicy['reader'].
+    sourceReaderCreate = Event('/source/reader/create')
 
     # Application lifecycle events
     applicationStarted = Event('/application/start')

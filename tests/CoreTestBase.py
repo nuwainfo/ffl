@@ -654,7 +654,8 @@ class FastFileLinkTestBase(unittest.TestCase):
         extraArgs=None,
         extraEnvVars=None,
         captureOutputIn=None,
-        stdoutMode=False
+        stdoutMode=False,
+        timeout=120,
     ):
         """
         Download file using FFL.py directly
@@ -667,6 +668,7 @@ class FastFileLinkTestBase(unittest.TestCase):
             captureOutputIn (dict, optional): Dictionary to capture process output
             stdoutMode (bool): If True, pass `--stdout` and return file bytes plus
                 stderr text instead of saving to a file.
+            timeout (int): Maximum seconds to wait for the download process.
 
         Returns:
             str: Path to the downloaded file when stdoutMode=False
@@ -739,7 +741,7 @@ class FastFileLinkTestBase(unittest.TestCase):
                         stderr=subprocess.PIPE
                     )
                     try:
-                        rawBytes, stderrOutput = downloadProcess.communicate(timeout=120)
+                        rawBytes, stderrOutput = downloadProcess.communicate(timeout=timeout)
                     except subprocess.TimeoutExpired:
                         downloadProcess.kill()
                         raise AssertionError("Stdout download process timed out")
@@ -750,7 +752,7 @@ class FastFileLinkTestBase(unittest.TestCase):
                     output, returnCode = self._runCoreCommand(
                         downloadArgs,
                         extraEnvVars=extraEnvVars,
-                        timeout=120,
+                        timeout=timeout,
                         outputTarget=logFile,
                     )
             finally:

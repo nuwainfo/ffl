@@ -2405,6 +2405,15 @@ class DownloadManager {
         }
         this.serverAckSent = this.serverAckSent || !!data.serverAckSent;
 
+        // When the SW drives the download (native <a> tag path), it POSTs the
+        // completion ACK itself instead of the page -- see sendServerCompleteAck,
+        // which is skipped above via serverAckSent. So the SW's own ACK is the
+        // only place that ever saw /complete's response body, and it must relay
+        // confirmRequired/message here or the receipt-confirm dialog never shows.
+        if (this.receiptConfirmationUI && data.confirmRequired) {
+            this.receiptConfirmationUI.show(data.confirmMessage);
+        }
+
         this.log('DownloadManager', `Handling download-complete from ${source}`, data);
         this.handleDownloadComplete(data.total || data.sent || this.totalBytesHint || 0);
     }

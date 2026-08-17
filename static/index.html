@@ -667,13 +667,17 @@ Licensed under Apache-2.0 license.
                 webrtcManager.start();
             } // End of startWebRTCDownload function
 
-            // Start when i18n is ready (or immediately if i18n is already initialized).
-            window.runAfterI18nReady(startWebRTCDownload);
+            // An addon may supply its own stream consumer and disable the
+            // generic WebRTC/download bootstrap through template context.
+            if ({{ downloadClientEnabled | tojson }}) {
+                // Start when i18n is ready (or immediately if i18n is already initialized).
+                window.runAfterI18nReady(startWebRTCDownload);
 
-            // Fallback: if i18nReady doesn't fire within 2 seconds, proceed anyway
-            startWebRTCTimer = setTimeout(() => {
-                startWebRTCDownload();
-            }, 2000);
+                // Fallback: if i18nReady doesn't fire within 2 seconds, proceed anyway
+                startWebRTCTimer = setTimeout(() => {
+                    startWebRTCDownload();
+                }, 2000);
+            }
         </script>
 
         <script>

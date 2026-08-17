@@ -27,7 +27,7 @@ import platform
 from dataclasses import MISSING, fields
 
 from bases.Kernel import (
-    LOG_LEVEL_MAPPING, PUBLIC_VERSION, getLogger, FFLEvent, configureGlobalLogLevel, AddonsManager
+    LOG_LEVEL_MAPPING, PUBLIC_VERSION, PUBLIC_REVISION, getLogger, FFLEvent, configureGlobalLogLevel, AddonsManager
 )
 from bases.Settings import DEFAULT_AUTH_USER_NAME, DEFAULT_UPLOAD_DURATION, SettingsGetter
 from bases.Utils import flushPrint, checkVersionCompatibility, getEnv, parseProxyString, setupProxyEnvironment
@@ -108,7 +108,7 @@ def configureLogging(logLevel):
 
 def showVersion():
     """Display version information and enabled addons"""
-    flushPrint(_('FastFileLink v{version}').format(version=PUBLIC_VERSION))
+    flushPrint(_('FastFileLink v{version} ({revision})').format(version=PUBLIC_VERSION, revision=PUBLIC_REVISION))
     flushPrint("")
 
     # Check version compatibility with server
