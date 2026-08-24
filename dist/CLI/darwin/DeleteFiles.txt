@@ -96,8 +96,6 @@ bin/openssl
 bin/c_rehash
 
 # 其他多餘執行檔
-bin/sqlite3
-bin/sqlite3_analyzer
 bin/xmlwf
 
 lib/python3.12/lib2to3
@@ -112,7 +110,6 @@ lib/python3.12/curses
 lib/python3.12/dbm
 lib/python3.12/ensurepip
 lib/python3.12/pydoc_data
-lib/python3.12/sqlite3
 lib/python3.12/test
 lib/python3.12/tomllib
 lib/python3.12/turtledemo

@@ -70,7 +70,6 @@ DLLs\_ctypes_test.pyd
 DLLs\_elementtree.pyd
 DLLs\_msi.pyd
 DLLs\_multiprocessing.pyd
-DLLs\_sqlite3.pyd
 DLLs\_testbuffer.pyd
 DLLs\_testcapi.pyd
 DLLs\_testclinic.pyd
@@ -156,8 +155,6 @@ Library\bin\msvcp140_atomic_wait.dll
 Library\bin\msvcp140_codecvt_ids.dll
 Library\bin\openssl.exe
 Library\bin\openssl.pdb
-Library\bin\sqlite3.dll
-Library\bin\sqlite3.exe
 Library\bin\tcl86t.dll
 Library\bin\tclsh.exe
 Library\bin\tclsh86.exe
@@ -181,7 +178,6 @@ Lib\idlelib
 Lib\lib2to3
 Lib\msilib
 Lib\pydoc_data
-Lib\sqlite3
 Lib\test
 Lib\tkinter
 Lib\tomllib

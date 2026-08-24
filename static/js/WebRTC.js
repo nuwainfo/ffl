@@ -1456,6 +1456,86 @@ class WebRTCManager {
         // _reportActualConnectionType / _deliverLocalConnectionCorrection).
         // null = not yet computed.
         this._pendingLocalCorrection = null;
+
+        // Benchmark-only browser receive accounting.  Keep this completely
+        // outside the normal transfer protocol: the Selenium benchmark runner
+        // reads this object directly from the page.
+        const browserBenchmarkSeconds = Number.parseFloat(
+            new URLSearchParams(window.location.search).get('webrtc-benchmark-seconds')
+        );
+        this.browserBenchmark = Number.isFinite(browserBenchmarkSeconds) && browserBenchmarkSeconds > 0
+            ? {
+                enabled: true,
+                durationSeconds: browserBenchmarkSeconds,
+                startedAtMs: null,
+                deadlineAtMs: null,
+                completedAtMs: null,
+                elapsedSeconds: null,
+                bytesReceived: 0,
+                messagesReceived: 0,
+                lastPayloadAtMs: null,
+                mibPerSecond: null,
+                mbps: null,
+                done: false
+            }
+            : null;
+        this.browserBenchmarkTimer = null;
+
+        if (this.browserBenchmark) {
+            window.__fflWebRTCBenchmark = this.browserBenchmark;
+        }
+    }
+
+    _finishBrowserBenchmark() {
+        const benchmark = this.browserBenchmark;
+        if (!benchmark || benchmark.done || benchmark.startedAtMs === null) {
+            return;
+        }
+
+        if (this.browserBenchmarkTimer) {
+            clearTimeout(this.browserBenchmarkTimer);
+            this.browserBenchmarkTimer = null;
+        }
+
+        benchmark.done = true;
+        benchmark.completedAtMs = benchmark.deadlineAtMs;
+        benchmark.elapsedSeconds = benchmark.durationSeconds;
+        benchmark.mibPerSecond =
+            benchmark.bytesReceived / (1024 * 1024) / benchmark.elapsedSeconds;
+        benchmark.mbps =
+            benchmark.bytesReceived * 8 / 1_000_000 / benchmark.elapsedSeconds;
+    }
+
+    _recordBrowserBenchmarkPayload(data) {
+        const benchmark = this.browserBenchmark;
+        if (!benchmark || benchmark.done) {
+            return;
+        }
+
+        const byteLength = data instanceof Blob
+            ? data.size
+            : (Number.isFinite(data?.byteLength) ? data.byteLength : 0);
+        const nowMs = performance.now();
+
+        if (benchmark.startedAtMs === null) {
+            benchmark.startedAtMs = nowMs;
+            benchmark.deadlineAtMs = nowMs + benchmark.durationSeconds * 1000;
+            this.browserBenchmarkTimer = setTimeout(
+                () => this._finishBrowserBenchmark(),
+                benchmark.durationSeconds * 1000
+            );
+        }
+
+        // setTimeout may be delayed under a busy browser main thread.  Enforce
+        // the measurement boundary at message arrival time as well.
+        if (nowMs >= benchmark.deadlineAtMs) {
+            this._finishBrowserBenchmark();
+            return;
+        }
+
+        benchmark.bytesReceived += byteLength;
+        benchmark.messagesReceived++;
+        benchmark.lastPayloadAtMs = nowMs;
     }
 
     /**
@@ -2579,6 +2659,12 @@ class WebRTCManager {
 
         // Set up message handler NOW before sending START
         dc.onmessage = ({ data }) => {
+            // Benchmark the browser-side DataChannel delivery before checksum,
+            // decrypt, UI, or writer work can affect the measurement.
+            if (typeof data !== 'string') {
+                this._recordBrowserBenchmarkPayload(data);
+            }
+
             // Chain message processing to ensure sequential execution
             messageProcessingChain = messageProcessingChain
                 .then(() => this._handleDataChannelMessage(data, dc, fallbackToHTTP))

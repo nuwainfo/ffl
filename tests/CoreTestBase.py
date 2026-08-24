@@ -61,13 +61,43 @@ _UNSET = object()
 class FastFileLinkTestBase(unittest.TestCase):
     """Base class for FastFileLink tests"""
 
-    def __init__(self, methodName='runTest', fileSizeBytes=1024 * 1024, testConfigVars=None):
+    DEFAULT_FILE_SIZE = 1024 * 1024
+    TEST_FILE_SIZE_ENVIRONMENT_VARIABLE = 'TEST_FILE_SIZE'
+
+    @classmethod
+    def _getTestFileSize(cls, defaultSizeBytes):
+        """Return TEST_FILE_SIZE (MiB) when explicitly configured."""
+        configuredSize = os.environ.get(cls.TEST_FILE_SIZE_ENVIRONMENT_VARIABLE)
+        if not configuredSize:
+            return defaultSizeBytes
+
+        try:
+            sizeBytes = int(float(configuredSize) * 1024 * 1024)
+            if sizeBytes <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            print(
+                f"[Test] Invalid {cls.TEST_FILE_SIZE_ENVIRONMENT_VARIABLE}="
+                f"{configuredSize!r}; using the test default"
+            )
+            return defaultSizeBytes
+
+        print(
+            f"[Test] Using {cls.TEST_FILE_SIZE_ENVIRONMENT_VARIABLE}="
+            f"{configuredSize} MiB ({sizeBytes:,} bytes)"
+        )
+        return sizeBytes
+
+    def __init__(self, methodName='runTest', fileSizeBytes=None, testConfigVars=None):
         super().__init__(methodName)
         self._ownsTempDir = True
         self._tempDirObj = tempfile.TemporaryDirectory()
         self.tempDir = self._tempDirObj.name
         self.coreProcess = None
-        self.fileSizeBytes = fileSizeBytes # Store the file size
+        if fileSizeBytes is None:
+            fileSizeBytes = self._getTestFileSize(self.DEFAULT_FILE_SIZE)
+            
+        self.fileSizeBytes = fileSizeBytes
         self.procLogPath = os.path.join(self.tempDir, "ffl_proc.log")
         self._procLogFile = None
         self._managedTestServerProcesses = []

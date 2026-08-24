@@ -27,8 +27,6 @@ bin/pip
 bin/pip3
 bin/pyav
 bin/pydoc3.12
-bin/sqlite3
-bin/sqlite3_analyzer
 bin/tabs
 bin/tclsh8.6
 bin/tic
@@ -84,7 +82,6 @@ lib/libpython3.so
 lib/libquadmath.so.0.0.0
 lib/libreadline.a
 lib/libreadline.so.8.3
-lib/libsqlite3.so.3.50.2
 lib/libssl.a
 lib/libstdc++.so.6.0.29
 lib/libtcl8.6.so
@@ -169,7 +166,6 @@ lib/python3.12/site-packages/~etuptools-83.0.0.dist-info
 lib/python3.12/site-packages/~-istutils_hack
 lib/python3.12/site-packages/~kg_resources
 lib/python3.12/site-packages/~-tuptools
-lib/python3.12/sqlite3
 lib/python3.12/test
 lib/python3.12/tkinter
 lib/python3.12/tomllib
@@ -179,7 +175,6 @@ lib/python3.12/venv
 lib/python3.12/wsgiref
 lib/python3.12/xmlrpc
 lib/python3.12/zoneinfo
-lib/sqlite3.45.3
 lib/tcl8
 lib/tcl8.6
 lib/tclConfig.sh

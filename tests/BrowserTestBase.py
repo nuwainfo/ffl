@@ -71,8 +71,6 @@ class BrowserTestBase(FastFileLinkTestBase):
         return value not in ("0", "false", "no", "off")
 
     def __init__(self, methodName='runTest', fileSizeBytes=None):
-        if fileSizeBytes is None:
-            fileSizeBytes = self.DEFAULT_FILE_SIZE
         super().__init__(methodName, fileSizeBytes=fileSizeBytes)
 
     def setUp(self):

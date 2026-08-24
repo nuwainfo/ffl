@@ -679,10 +679,29 @@ class DownloadTest(FastFileLinkTestBase):
         """Test that stdout keeps a WebRTC offset when HTTP takes over a stdin stream."""
         print("\n[Test] Testing --stdout stdin WebRTC to HTTP resume")
 
-        handoffWindowSize = 1 * 1024 * 1024
-        stallAfterBytes = 2 * 1024 * 1024
+        # A fast sender (e.g. native SCTP over loopback) can read the entire
+        # stdin source into the SCTP layer within milliseconds of the transfer
+        # starting -- well before the client's simulated stall is detected and
+        # acted on (close channel, raise, fall back to HTTP is itself a
+        # ~sub-second round trip). Sizing this test so the stall trigger is
+        # merely a fixed multiple of the file size (as before) makes the
+        # server's read-ahead at HTTP-fallback time a race that scales with
+        # sender throughput, not a bounded quantity, so it flakes under a fast
+        # sender no matter how the handoff window and file size are scaled
+        # together.
+        #
+        # Instead, size this deterministically: leave only a small remainder
+        # of the file unread when the stall fires, so the server can never
+        # read more than that remainder before hitting real EOF -- regardless
+        # of how fast the sender is -- and make the handoff window comfortably
+        # larger than that remainder. This guarantees the HTTP fallback's
+        # resume offset always falls inside the replay window.
+        fileSize = 16 * 1024 * 1024
+        handoffWindowSize = 4 * 1024 * 1024
+        remainderAfterStall = 2 * 1024 * 1024 # comfortably < handoffWindowSize
+        stallAfterBytes = fileSize - remainderAfterStall
         stdinPath = os.path.join(self.tempDir, "stdout_stdin_fallback.bin")
-        self.generateRandomFile(stdinPath, 4 * 1024 * 1024)
+        self.generateRandomFile(stdinPath, fileSize)
         stdinHash = self.getFileHash(stdinPath)
 
         try:
@@ -692,7 +711,9 @@ class DownloadTest(FastFileLinkTestBase):
                 stdinInputPath=stdinPath,
                 stdinFileName="stdout_stdin_fallback.bin",
                 extraArgs=["--stdin-cache", "off"],
-                extraEnvVars={"READER_STDIN_HANDOFF_WINDOW_MB": str(handoffWindowSize // (1024 * 1024))}
+                extraEnvVars={
+                    "READER_STDIN_HANDOFF_WINDOW_MB": str(handoffWindowSize // (1024 * 1024)),
+                }
             )
 
             rawBytes, stderrOutput = self._downloadWithCore(

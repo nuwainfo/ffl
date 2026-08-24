@@ -17,7 +17,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import unittest
 
 import tracemalloc
@@ -36,25 +35,7 @@ class CoreCliTest(FastFileLinkTestBase):
     """Core test class for FastFileLink basic functionality"""
 
     def __init__(self, methodName='runTest'):
-        # Read TEST_FILE_SIZE environment variable (in MB)
-        testFileSizeMB = os.environ.get('TEST_FILE_SIZE')
-
-        # Prepare kwargs for parent constructor
-        kwargs = {}
-
-        if testFileSizeMB:
-            try:
-                fileSizeBytes = int(float(testFileSizeMB) * 1024 * 1024) # Convert MB to bytes
-                kwargs['fileSizeBytes'] = fileSizeBytes
-                print(
-                    f"[Test] Using custom file size from TEST_FILE_SIZE: {testFileSizeMB} MB ({fileSizeBytes:,} bytes)"
-                )
-            except (ValueError, TypeError):
-                print(f"[Test] Invalid TEST_FILE_SIZE value '{testFileSizeMB}', using default file size")
-                # Don't add fileSizeBytes to kwargs, let parent use its default
-
-        # Call parent constructor with or without custom file size
-        super().__init__(methodName, **kwargs)
+        super().__init__(methodName)
 
     def _testCliWithJsonOutput(self, p2p=True, useTestServer=False):
         """Test CLI mode with JSON output using requests"""

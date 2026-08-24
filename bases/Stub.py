@@ -37,10 +37,15 @@ import os
 import sys
 import types
 import logging
+import socket
+import weakref
+import asyncio.selector_events
 import importlib.abc as _abc
 import importlib.machinery as _machinery
 
 from typing import Set, Optional
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Internal logging helpers
@@ -215,6 +220,76 @@ mimetypes.MimeTypes.read = _safeMimeTypesRead
 if not mimetypes.guess_type('test.webp')[0]:
     mimetypes.add_type('image/webp', '.webp')
 
+
+class AioiceBatchedUdpReadPatch:
+    """Drains up to MAX_BATCH_SIZE datagrams per readiness event for aioice's
+    StunProtocol UDP transport, and grows that socket's receive buffer once.
+    Cosmopolitan libc's poll-based event loop has higher per-wakeup overhead
+    than native epoll/kqueue, so batching reads reduces the number of poll
+    wakeups needed under load. Only aioice's StunProtocol is affected; every
+    other datagram transport keeps asyncio's stock one-read-per-wakeup
+    behavior."""
+
+    MAX_BATCH_SIZE = 32
+    RECV_BUFFER_SIZE = 4 * 1024 * 1024
+
+    _originalReadReady = asyncio.selector_events._SelectorDatagramTransport._read_ready
+    _rcvBufAdjustedTransports = weakref.WeakSet()
+
+    @classmethod
+    def _isStunTransport(cls, transport):
+        protocolCls = type(transport._protocol)
+        return protocolCls.__module__ == 'aioice.ice' and protocolCls.__name__ == 'StunProtocol'
+
+    @classmethod
+    def _growReceiveBuffer(cls, transport):
+        if transport in cls._rcvBufAdjustedTransports:
+            return
+
+        cls._rcvBufAdjustedTransports.add(transport)
+        try:
+            transport._sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, cls.RECV_BUFFER_SIZE)
+        except OSError as e:
+            logger.debug(f"Unable to grow aioice SO_RCVBUF: {e}")
+
+    @staticmethod
+    def _batchedReadReady(transport):
+        # Installed directly as _SelectorDatagramTransport._read_ready, so
+        # `transport` plays the role of `self` here.
+        if not AioiceBatchedUdpReadPatch._isStunTransport(transport):
+            return AioiceBatchedUdpReadPatch._originalReadReady(transport)
+
+        if transport._conn_lost:
+            return
+
+        AioiceBatchedUdpReadPatch._growReceiveBuffer(transport)
+
+        for _readIndex in range(AioiceBatchedUdpReadPatch.MAX_BATCH_SIZE):
+            try:
+                data, addr = transport._sock.recvfrom(transport.max_size)
+            except (BlockingIOError, InterruptedError):
+                break
+            except OSError as e:
+                transport._protocol.error_received(e)
+                break
+            except (SystemExit, KeyboardInterrupt):
+                raise
+            except BaseException as e:
+                transport._fatal_error(e, "Fatal read error on datagram transport")
+                break
+            else:
+                transport._protocol.datagram_received(data, addr)
+
+    @classmethod
+    def install(cls):
+        transportCls = asyncio.selector_events._SelectorDatagramTransport
+        if transportCls._read_ready is cls._batchedReadReady:
+            return
+
+        transportCls._read_ready = cls._batchedReadReady
+        logger.debug(f"Enabled batched UDP receive for aioice StunProtocol (max batch={cls.MAX_BATCH_SIZE})")
+
+
 if 'Cosmopolitan' in platform.version():
     BASE_DIR = os.path.dirname(os.path.dirname(__file__))
     lib = os.path.join(BASE_DIR, 'Lib', 'site-packages')
@@ -243,3 +318,5 @@ if 'Cosmopolitan' in platform.version():
     from crc32c import crc32c # pylint: disable=import-error
 
     rtcsctptransport.crc32c = crc32c
+
+    AioiceBatchedUdpReadPatch.install()

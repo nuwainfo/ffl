@@ -32,16 +32,37 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Callable
 
 import requests
 
-from aiortc import (RTCConfiguration, RTCDataChannel, RTCIceServer, RTCPeerConnection, RTCSessionDescription)
-from aiortc.sdp import candidate_from_sdp
 
-try:
-    from aiortc_native_sctp import install_native_sctp
-    install_native_sctp()
-except ImportError as e:
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.debug('Unable to use aiortc_native_sctp: {e}')
+FFL_WEBRTC_BACKEND = os.getenv('FFL_WEBRTC_BACKEND', 'aiortc')
+FFL_WEBRTC_BENCHMARK = os.getenv('FFL_WEBRTC_BENCHMARK') == 'True'
+
+if FFL_WEBRTC_BACKEND == 'ffl':
+    try:
+        from ffl_datachannel import (
+            RTCConfiguration, RTCDataChannel, RTCIceServer, RTCPeerConnection, RTCSessionDescription
+        )
+        from ffl_datachannel.sdp import candidate_from_sdp
+    except ImportError as error:
+        raise ImportError(
+            'FFL_WEBRTC_BACKEND=ffl requires the ffl-datachannel package'
+        ) from error
+else:
+    # aiortc-native-sctp's 4 MiB default lets a stdin source run far ahead of
+    # the peer.  Keep the native queue within the bounded stdin handoff window
+    # used by WebRTC -> HTTP fallback; callers can still opt into a larger
+    # queue explicitly.
+    #os.environ.setdefault('NATIVE_SCTP_SENDSPACE', str(1024 * 1024))
+
+    from aiortc import (RTCConfiguration, RTCDataChannel, RTCIceServer, RTCPeerConnection, RTCSessionDescription)
+    from aiortc.sdp import candidate_from_sdp
+
+    try:
+        from aiortc_native_sctp import install_native_sctp
+        install_native_sctp()
+    except ImportError as error:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f'Unable to use aiortc_native_sctp: {error}')
 
 from bases.Checksum import DEFAULT_CHECKSUM_ALGORITHM
 from bases.Kernel import getLogger, FFLEvent, StorageLocator, Throttler
@@ -53,6 +74,9 @@ from bases.I18n import _
 
 # Setup logging
 logger = getLogger(__name__)
+
+logger.info('Using WebRTC implementation: %s', FFL_WEBRTC_BACKEND)
+
 
 # Custom exception for WebRTC connection timeout
 class WebRTCConnectionTimeout(Exception):
@@ -85,6 +109,7 @@ class WebRTCDisabledError(Exception):
 # Chrome/Edge local connection sleep delay (seconds) - "3 ticks trick" to avoid buffer issues
 # https://github.com/aiortc/aioice/issues/58
 CHROME_EDGE_LOCAL_SLEEP_DELAY = getEnv('WEBRTC_CHROME_EDGE_LOCAL_SLEEP_DELAY', 0.047)
+
 # Sleep once every N bytes to avoid excessive sleeping (default: TRANSFER_CHUNK_SIZE for original behavior)
 CHROME_EDGE_LOCAL_SLEEP_INTERVAL = getEnv('WEBRTC_CHROME_EDGE_LOCAL_SLEEP_INTERVAL', TRANSFER_CHUNK_SIZE)
 
@@ -93,12 +118,41 @@ CHROME_EDGE_LOCAL_SLEEP_INTERVAL = getEnv('WEBRTC_CHROME_EDGE_LOCAL_SLEEP_INTERV
 # Max wait for START: Hard upper limit to prevent infinite waiting for START signal
 # 5 minutes - generous for background tab throttling
 HEARTBEAT_IDLE_TIMEOUT = getEnv('WEBRTC_HEARTBEAT_IDLE_TIMEOUT', 5 * 60)
+
 # 2 hours - optional hard limit to prevent infinite waiting
 MAX_WAIT_FOR_START = getEnv('WEBRTC_MAX_WAIT_FOR_START', 2 * 60 * 60)
-# Send-buffer drain timeout: how long to wait for bufferedamountlow before
-# treating an active WebRTC transfer as stalled. This prevents indefinite hangs
-# when the data channel stays open but stops draining.
+
+# Send-buffer backpressure.
+#
+# HIGH=LOW=0 is an explicit legacy compatibility mode: send one chunk, then
+# wait for bufferedamountlow before sending the next chunk, matching the
+# previous send -> wait -> send -> wait behavior exactly.
+#
+# With HIGH > 0, chunks are allowed to flow while bufferedAmount is below HIGH.
+# Once HIGH is reached, sending pauses until bufferedAmount drains to LOW.
+WEBRTC_SEND_BUFFER_HIGH_WATER = int(getEnv('WEBRTC_SEND_BUFFER_HIGH_WATER', 4 * 1024 * 1024))
+WEBRTC_SEND_BUFFER_LOW_WATER = int(getEnv('WEBRTC_SEND_BUFFER_LOW_WATER', 1 * 1024 * 1024))
+
+# How long to wait for bufferedamountlow before treating an active WebRTC
+# transfer as stalled.
 WEBRTC_SEND_BUFFER_DRAIN_TIMEOUT = getEnv('WEBRTC_SEND_BUFFER_DRAIN_TIMEOUT', 60)
+
+if WEBRTC_SEND_BUFFER_HIGH_WATER < 0 or WEBRTC_SEND_BUFFER_LOW_WATER < 0:
+    raise ValueError('WebRTC send-buffer watermarks cannot be negative')
+    
+if WEBRTC_SEND_BUFFER_HIGH_WATER == 0:
+    if WEBRTC_SEND_BUFFER_LOW_WATER != 0:
+        raise ValueError(
+            'WEBRTC_SEND_BUFFER_LOW_WATER must also be 0 when '
+            'WEBRTC_SEND_BUFFER_HIGH_WATER=0 (legacy mode)'
+        )
+elif WEBRTC_SEND_BUFFER_LOW_WATER >= WEBRTC_SEND_BUFFER_HIGH_WATER:
+    raise ValueError(
+        'WEBRTC_SEND_BUFFER_LOW_WATER must be smaller than '
+        'WEBRTC_SEND_BUFFER_HIGH_WATER'
+    )
+else:
+    pass # OK
 
 # Without winloop, Edge will fail to use WebRTC, it will cause consent query timeout after few seconds.
 # It speeds up a lot on Firefox, but slow down a little on Chrome/Edge.
@@ -109,6 +163,93 @@ if sys.platform == "win32":
     import winloop._noop # pylint: disable=import-error
     winloop.install()
     assert isinstance(asyncio.get_event_loop_policy(), winloop.EventLoopPolicy)
+
+class WebRTCTransferBenchmark:
+    """Reports cumulative payload throughput without affecting transfer control."""
+
+    # 1_000_000_000 => 1s
+    _REPORT_INTERVAL_NS = getEnv('WEBRTC_REPORT_INTERVAL_NS',  0) #1_000_000_000
+    
+    _BENCHMARK_ONLY_SECONDS = getEnv('WEBRTC_BENCHMARK_ONLY_SECONDS', 0)
+    
+    def __init__(self, backend: str, peerId: str, loggerCallback):
+        self.backend = backend
+        self.peerId = peerId[:5]
+        self.output = loggerCallback
+        
+        self.bytesTransferred = 0
+        self.startedAtNs = None
+        self.lastReportAtNs = None
+        self.finished = False
+
+    def _checkTimeout(self, nowNs: int):
+        if not self._BENCHMARK_ONLY_SECONDS or self.startedAtNs is None:
+            return
+            
+        elapsed = (nowNs - self.startedAtNs) / 1_000_000_000
+        if elapsed >= self._BENCHMARK_ONLY_SECONDS:
+            self._report(nowNs, final=False)
+            self.output(f"Benchmark-only time {self._BENCHMARK_ONLY_SECONDS}s reached")
+            os._exit(0) # Force stop everything.
+
+    def start(self):
+        if self.startedAtNs is not None:
+            return
+
+        nowNs = time.perf_counter_ns()
+        self.startedAtNs = nowNs
+        self.lastReportAtNs = nowNs
+        self.output(f"[WebRTC BENCH START] backend={self.backend} peer={self.peerId}")
+
+    def add(self, byteCount: int):
+        if self.finished:
+            return
+            
+        if self.startedAtNs is None:
+            self.start()
+
+        self.bytesTransferred += byteCount
+               
+        nowNs = time.perf_counter_ns()
+        
+        # check timeout before counting/printing
+        self._checkTimeout(nowNs)        
+        
+        if not self._REPORT_INTERVAL_NS:
+            return
+        
+        if nowNs - self.lastReportAtNs >= self._REPORT_INTERVAL_NS:
+            self._report(nowNs, final=False)
+            self.lastReportAtNs = nowNs
+
+    def finish(self):
+        if self.finished or self.startedAtNs is None:
+            return
+
+        self.finished = True
+        self._report(time.perf_counter_ns(), final=True)
+
+    def _report(self, nowNs: int, final: bool):
+        elapsedSeconds = (nowNs - self.startedAtNs) / 1_000_000_000
+        if elapsedSeconds <= 0:
+            return
+
+        mib = self.bytesTransferred / (1024 * 1024)
+        mibPerSecond = mib / elapsedSeconds
+        mbps = self.bytesTransferred * 8 / 1_000_000 / elapsedSeconds
+        
+        self.output(
+            "[WebRTC BENCH%s] backend=%s peer=%s elapsed=%.6fs bytes=%d MiB=%.6f MiB/s=%.6f Mbps=%.6f" % (
+            " FINAL" if final else "",
+            self.backend,
+            self.peerId,
+            elapsedSeconds,
+            self.bytesTransferred,
+            mib,
+            mibPerSecond,
+            mbps,
+        ))
+
 
 class DummyWebRTCManager:
     """
@@ -276,6 +417,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         self.thread.start()
         self.pcs: Set[RTCPeerConnection] = set()
         self.peers: Dict[str, Tuple[RTCPeerConnection, Optional[ClientInfo], deque]] = {}
+        self.pendingRemoteCandidates: Dict[str, deque] = {}
         self.loggerCallback = loggerCallback
         self.downloadCallback = downloadCallback
         self.exceptionCallback = exceptionCallback
@@ -351,6 +493,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         self.pcs.add(pc)
         # Store peer connection with its ID (initially no client info) and candidate queue
         self.peers[peerId] = (pc, None, q)
+        self.pendingRemoteCandidates[peerId] = deque()
         self.peerStats[peerId] = {
             "fileSize": fileSize,
             "offset": offset,
@@ -447,7 +590,19 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         desc = RTCSessionDescription(sdp=data["sdp"], type=data["type"])
         await pc.setRemoteDescription(desc)
 
+        pendingCandidates = self.pendingRemoteCandidates.get(peerId, ())
+        while pendingCandidates:
+            await self._addIceCandidate(pc, pendingCandidates.popleft())
+
         return "OK"
+
+    async def _addIceCandidate(self, pc: RTCPeerConnection, data: Dict[str, Any]):
+        """Parse and add one browser ICE candidate after remote SDP is available."""
+        candidateSDP = data["candidate"].removeprefix('a=').removeprefix('candidate:')
+        ice = candidate_from_sdp(candidateSDP)
+        ice.sdpMid = data.get("sdpMid")
+        ice.sdpMLineIndex = data.get("sdpMLineIndex")
+        await pc.addIceCandidate(ice)
 
     async def addCandidate(self, data: Dict[str, Any]):
         if "peerId" not in data:
@@ -470,14 +625,11 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         if not candLine or candLine.strip() == "end-of-candidates":
             return "skip"
 
-        ice = candidate_from_sdp(candLine)
-        ice.sdpMid = data.get("sdpMid")
-        ice.sdpMLineIndex = data.get("sdpMLineIndex")
-        try:
-            await pc.addIceCandidate(ice)
-        except AttributeError as e:
-            if 'media' in str(e):
-                logger.warning("self.__remoteDescription().media, 'NoneType' object has no attribute 'media' => pass")
+        if pc.remoteDescription is None:
+            self.pendingRemoteCandidates[peerId].append(data)
+            return "queued"
+
+        await self._addIceCandidate(pc, data)
 
         return "OK"
 
@@ -554,6 +706,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         self.downloadCompleteEvents.pop(peerId, None)
         self.sendFileTasks.pop(peerId, None)
         self.peerStats.pop(peerId, None)
+        self.pendingRemoteCandidates.pop(peerId, None)
 
     async def _failPeerWithErrorCode(self, dc: RTCDataChannel, peerId: str, errorMsg: str, errorCode: str):
         """
@@ -617,6 +770,50 @@ class WebRTCManager(AsyncLoopExceptionMixin):
                 f"WebRTC send buffer stalled during {phase} after sending {sentBytes} bytes "
                 f"for peer {peerId} (waited {WEBRTC_SEND_BUFFER_DRAIN_TIMEOUT}s)"
             ) from e
+
+    async def _waitForSendBufferCapacity(self, dc, bufferFlushed, peerId, sentBytes):
+        """Wait only when the send buffer reaches the configured high watermark."""
+        if WEBRTC_SEND_BUFFER_HIGH_WATER == 0:
+            # Exact legacy behavior. The event starts set, each send clears it,
+            # and the next chunk waits for bufferedamountlow.
+            await self._waitForSendBufferDrain(
+                bufferFlushed, peerId, sentBytes, "chunk send"
+            )
+            return
+
+        if dc.bufferedAmount < WEBRTC_SEND_BUFFER_HIGH_WATER:
+            return
+
+        # Hysteresis: after hitting HIGH, resume only at/below LOW.
+        #
+        # Clear before re-checking the level. If bufferedamountlow races with
+        # this code, its handler sets the Event again and the wake-up is not
+        # lost.
+        while dc.bufferedAmount > WEBRTC_SEND_BUFFER_LOW_WATER:
+            bufferFlushed.clear()
+
+            if dc.bufferedAmount <= WEBRTC_SEND_BUFFER_LOW_WATER:
+                return
+
+            await self._waitForSendBufferDrain(
+                bufferFlushed, peerId, sentBytes, "high-water drain"
+            )
+
+    async def _waitForSendBufferLow(self, dc, bufferFlushed, peerId, sentBytes, phase):
+        """Wait until LOW before sending a terminal/control boundary message."""
+        if WEBRTC_SEND_BUFFER_HIGH_WATER == 0:
+            await self._waitForSendBufferDrain(
+                bufferFlushed, peerId, sentBytes, phase
+            )
+            return
+
+        while dc.bufferedAmount > WEBRTC_SEND_BUFFER_LOW_WATER:
+            bufferFlushed.clear()
+            if dc.bufferedAmount <= WEBRTC_SEND_BUFFER_LOW_WATER:
+                return
+            await self._waitForSendBufferDrain(
+                bufferFlushed, peerId, sentBytes, phase
+            )
 
     async def sendFile(
         self,
@@ -766,8 +963,22 @@ class WebRTCManager(AsyncLoopExceptionMixin):
             bufferFlushed.set()
 
         dc.on("bufferedamountlow", setFlushed)
+        dc.bufferedAmountLowThreshold = WEBRTC_SEND_BUFFER_LOW_WATER
+
+        legacySendBufferMode = WEBRTC_SEND_BUFFER_HIGH_WATER == 0
+        logger.debug(
+            "WebRTC send-buffer mode for peer %s: %s (high=%d, low=%d)",
+            peerId,
+            "legacy" if legacySendBufferMode else "watermark",
+            WEBRTC_SEND_BUFFER_HIGH_WATER,
+            WEBRTC_SEND_BUFFER_LOW_WATER,
+        )
 
         sent = offset # Start counting from offset
+        
+        benchmark = None
+        if FFL_WEBRTC_BENCHMARK:
+            benchmark = WebRTCTransferBenchmark(FFL_WEBRTC_BACKEND, peerId, self.loggerCallback) 
 
         settingsGetter = SettingsGetter.getInstance()
         progress = Progress(
@@ -805,8 +1016,12 @@ class WebRTCManager(AsyncLoopExceptionMixin):
                 if chunk is None:
                     break
 
-                # Wait until buffer is acceptable for next packet
-                await self._waitForSendBufferDrain(bufferFlushed, peerId, sent, "chunk send")
+                # Watermark mode sends freely below HIGH and pauses until LOW
+                # only after HIGH is reached. Legacy 0/0 mode keeps the old
+                # one-chunk-at-a-time Event gate.
+                await self._waitForSendBufferCapacity(
+                    dc, bufferFlushed, peerId, sent
+                )
 
                 # Track plaintext size before encryption
                 plaintextSize = len(chunk)
@@ -818,10 +1033,18 @@ class WebRTCManager(AsyncLoopExceptionMixin):
                 if checksumSession:
                     checksumSession.update(chunk)
 
+                if benchmark:
+                    benchmark.start()
+
                 dc.send(chunk)
                 sent += plaintextSize # Count plaintext bytes, not encrypted bytes
-                bufferFlushed.clear()
 
+                if legacySendBufferMode:
+                    bufferFlushed.clear()
+                
+                if benchmark:
+                    benchmark.add(plaintextSize)
+                    
                 if sent == plaintextSize and os.environ.get("WEBRTC_SIMULATE_DELAY_AFTER_FIRST_CHUNK") == "True":
                     await asyncio.sleep(1)
 
@@ -854,9 +1077,15 @@ class WebRTCManager(AsyncLoopExceptionMixin):
                         speed=speed,
                     )
 
-            # Wait for buffer to drain before sending EOF to prevent race condition
-            # where EOF arrives before final chunk on receiver side
-            await self._waitForSendBufferDrain(bufferFlushed, peerId, sent, "EOF send")
+            # Bound the outstanding application queue before EOF. The ordered
+            # data channel itself preserves message ordering, so watermark mode
+            # only needs to drain to LOW; legacy 0/0 mode keeps the old wait.
+            await self._waitForSendBufferLow(
+                dc, bufferFlushed, peerId, sent, "EOF send"
+            )
+
+            if benchmark:
+                benchmark.finish()            
 
             if checksumSession and shouldCommitChecksum:
                 checksumSession.commit()
@@ -926,6 +1155,9 @@ class WebRTCManager(AsyncLoopExceptionMixin):
             # Clean up peer connection and resources
             await self._cleanupPeer(peerId)
         finally:
+            if benchmark:
+                benchmark.finish()
+
             if checksumSession and not checksumSession.isClosed:
                 checksumSession.abort()
 
@@ -946,6 +1178,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         # Clear all tracking dictionaries
         self.pcs.clear()
         self.peers.clear()
+        self.pendingRemoteCandidates.clear()
         self.downloadCompleteEvents.clear()
         self.sendFileTasks.clear()
 
