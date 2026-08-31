@@ -32,8 +32,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Callable
 
 import requests
 
-
-FFL_WEBRTC_BACKEND = os.getenv('FFL_WEBRTC_BACKEND', 'aiortc')
+FFL_WEBRTC_BACKEND = os.getenv('FFL_WEBRTC_BACKEND', 'ffl')
 FFL_WEBRTC_BENCHMARK = os.getenv('FFL_WEBRTC_BENCHMARK') == 'True'
 
 if FFL_WEBRTC_BACKEND == 'ffl':
@@ -47,12 +46,6 @@ if FFL_WEBRTC_BACKEND == 'ffl':
             'FFL_WEBRTC_BACKEND=ffl requires the ffl-datachannel package'
         ) from error
 else:
-    # aiortc-native-sctp's 4 MiB default lets a stdin source run far ahead of
-    # the peer.  Keep the native queue within the bounded stdin handoff window
-    # used by WebRTC -> HTTP fallback; callers can still opt into a larger
-    # queue explicitly.
-    #os.environ.setdefault('NATIVE_SCTP_SENDSPACE', str(1024 * 1024))
-
     from aiortc import (RTCConfiguration, RTCDataChannel, RTCIceServer, RTCPeerConnection, RTCSessionDescription)
     from aiortc.sdp import candidate_from_sdp
 

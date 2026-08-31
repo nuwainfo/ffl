@@ -302,21 +302,26 @@ if 'Cosmopolitan' in platform.version():
 
     installAs("ifaddr")
 
-    import _ifaddr_c # pylint: disable=import-error
-    from aioice import ice
-    ice.ifaddr = _ifaddr_c
+    # aiortc/aioice related patch for Cosmopolitan Libc.
+    try:
+        from aioice import ice
+        import _ifaddr_c # pylint: disable=import-error
+        from aioice import ice
+        ice.ifaddr = _ifaddr_c
 
-    if platform.system() == "Windows":
-        from aioice import mdns
+        if platform.system() == "Windows":
+            from aioice import mdns
 
-        mdns.sys = IsolationRef(sys)
-        mdns.sys.platform = 'win32'
+            mdns.sys = IsolationRef(sys)
+            mdns.sys.platform = 'win32'
 
-    installAs("google_crc32c")
+        installAs("google_crc32c")
 
-    from aiortc import rtcsctptransport
-    from crc32c import crc32c # pylint: disable=import-error
+        from aiortc import rtcsctptransport
+        from crc32c import crc32c # pylint: disable=import-error
 
-    rtcsctptransport.crc32c = crc32c
+        rtcsctptransport.crc32c = crc32c
 
-    AioiceBatchedUdpReadPatch.install()
+        AioiceBatchedUdpReadPatch.install()
+    except ImportError: # no aioice/aiortc
+        logger.debug("No aioice/aiortc")
