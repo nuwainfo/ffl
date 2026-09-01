@@ -47,7 +47,7 @@ from sentry_sdk.integrations import atexit as sentryAtexit
 
 PUBLIC_VERSION = '4.1.0'
 
-PUBLIC_REVISION = "$Revision: 19910 $"[11:-2] # UPDATE: flag to update this 
+PUBLIC_REVISION = "$Revision: 19917 $"[11:-2] # UPDATE: flag to update this!
 
 # Map string levels to logging constants for standard level names
 LOG_LEVEL_MAPPING = {'DEBUG': logging.DEBUG, 'INFO': logging.INFO, 'WARNING': logging.WARNING, 'ERROR': logging.ERROR}
