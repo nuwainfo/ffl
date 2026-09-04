@@ -356,10 +356,16 @@ class ServerSession(ShareSession):
     logicalDownloadRequestStore: Optional[LogicalDownloadRequestStore] = None
     httpDownloadCompletionStore: Optional[HTTPDownloadCompletionStore] = None
     eventHub: Optional[EventHub] = None
+    p2pPublishers: dict[str, Any] = field(default_factory=dict)
     lastError: Optional[dict[str, Optional[str]]] = None
     _debugUserAgentSessions: set[str] = field(default_factory=set)
 
     def stop(self):
+        for publisher in self.p2pPublishers.values():
+            publisher.close()
+            
+        self.p2pPublishers.clear()
+
         if self.webRTC:
             try:
                 self.webRTC.closeWebRTC()

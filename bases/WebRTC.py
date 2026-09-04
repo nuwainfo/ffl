@@ -32,8 +32,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Callable
 
 import requests
 
-FFL_WEBRTC_BACKEND = os.getenv('FFL_WEBRTC_BACKEND', 'ffl')
-FFL_WEBRTC_BENCHMARK = os.getenv('FFL_WEBRTC_BENCHMARK') == 'True'
+from bases.Utils import getEnv
+
+FFL_WEBRTC_BACKEND = getEnv('FFL_WEBRTC_BACKEND', 'ffl')
+FFL_WEBRTC_BENCHMARK = getEnv('FFL_WEBRTC_BENCHMARK', False)
 
 if FFL_WEBRTC_BACKEND == 'ffl':
     try:
@@ -59,7 +61,7 @@ else:
 
 from bases.Checksum import DEFAULT_CHECKSUM_ALGORITHM
 from bases.Kernel import getLogger, FFLEvent, StorageLocator, Throttler
-from bases.Utils import ONE_MB, formatSize, getEnv
+from bases.Utils import ONE_MB, formatSize
 from bases.Progress import Progress
 from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
 from bases.Readers import FolderChangedException, StdinHandoffTakenOver
@@ -1038,7 +1040,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
                 if benchmark:
                     benchmark.add(plaintextSize)
                     
-                if sent == plaintextSize and os.environ.get("WEBRTC_SIMULATE_DELAY_AFTER_FIRST_CHUNK") == "True":
+                if sent == plaintextSize and getEnv('WEBRTC_SIMULATE_DELAY_AFTER_FIRST_CHUNK', False):
                     await asyncio.sleep(1)
 
                 if clientInfo and clientInfo.browser in ('edge', 'chrome'):
@@ -1231,25 +1233,21 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
         self.thread = None
 
         # Debug simulation settings from environment variables
-        self.debugSimulateStall = os.environ.get("WEBRTC_CLI_SIMULATE_STALL") == "True"
-        self.debugStallAfterBytes = int(os.environ.get("WEBRTC_CLI_STALL_AFTER_BYTES", "50000")) # Default 50KB
-        self.debugSimulateDropBeforeFirstPayload = os.environ.get(
-            "WEBRTC_CLI_SIMULATE_DROP_BEFORE_FIRST_PAYLOAD"
-        ) == "True"
-        self.debugSimulateIceFailure = os.environ.get("WEBRTC_CLI_SIMULATE_ICE_FAILURE") == "True"
-        self.debugSimulateConnectionHang = os.environ.get("WEBRTC_CLI_SIMULATE_CONNECTION_HANG") == "True"
-        self.disableHTTPFallback = os.environ.get("DISABLE_HTTP_FALLBACK") == "True"
+        self.debugSimulateStall = getEnv('WEBRTC_CLI_SIMULATE_STALL', False)
+        self.debugStallAfterBytes = getEnv('WEBRTC_CLI_STALL_AFTER_BYTES', 50000) # Default 50KB
+        self.debugSimulateDropBeforeFirstPayload = getEnv(
+            'WEBRTC_CLI_SIMULATE_DROP_BEFORE_FIRST_PAYLOAD', False
+        )
+        self.debugSimulateIceFailure = getEnv('WEBRTC_CLI_SIMULATE_ICE_FAILURE', False)
+        self.debugSimulateConnectionHang = getEnv('WEBRTC_CLI_SIMULATE_CONNECTION_HANG', False)
+        self.disableHTTPFallback = getEnv('DISABLE_HTTP_FALLBACK', False)
 
         # Connection timeout can be overridden via WEBRTC_CLI_CONNECTION_TIMEOUT environment variable
-        self.connectionTimeout = int(
-            os.environ.get('WEBRTC_CLI_CONNECTION_TIMEOUT', str(self.CONNECTION_TIMEOUT_DEFAULT))
-        )
-        self.dataChannelTimeout = int(
-            os.environ.get('WEBRTC_CLI_DATA_CHANNEL_TIMEOUT', str(self.DATA_CHANNEL_TIMEOUT_DEFAULT))
-        )
+        self.connectionTimeout = getEnv('WEBRTC_CLI_CONNECTION_TIMEOUT', self.CONNECTION_TIMEOUT_DEFAULT)
+        self.dataChannelTimeout = getEnv('WEBRTC_CLI_DATA_CHANNEL_TIMEOUT', self.DATA_CHANNEL_TIMEOUT_DEFAULT)
 
         # Always log the timeout value during initialization for debugging
-        envTimeout = os.environ.get('WEBRTC_CLI_CONNECTION_TIMEOUT', 'not set')
+        envTimeout = getEnv('WEBRTC_CLI_CONNECTION_TIMEOUT', 'not set')
         logger.debug(
             f"Downloader initialized with connectionTimeout={self.connectionTimeout}s "
             f"(env var: {envTimeout}), dataChannelTimeout={self.dataChannelTimeout}s"
@@ -1325,6 +1323,10 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
             try:
                 return future.result(timeout=pollInterval)
             except concurrent.futures.TimeoutError as e:
+                if self._cancelEvent.is_set():
+                    future.cancel()
+                    raise InterruptedError('Download paused')
+                    
                 # Just a poll timeout, continue waiting (allows KeyboardInterrupt to be caught)
                 logger.debug(f"Future polling timeout after {pollInterval}s, continuing: {e}")
                 continue
@@ -1609,10 +1611,6 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
 
                             # Update progress bar
                             progress.update(context['bytesReceived'], extraText="WebRTC P2P")
-
-                            # Legacy progress callback
-                            if self.progressCallback:
-                                self.progressCallback(context['bytesReceived'], fileSize)
                 except Exception as e:
                     # Capture exception in context and signal error
                     logger.error(f"Error in onMessage callback: {e}")
@@ -1677,7 +1675,7 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
             urlInfo: Optional pre-parsed URL info to avoid redundant parsing
         """
         if urlInfo is None:
-            urlInfo = self._extractURLInfo(url)
+            urlInfo = self._extractURLInfo(url, credentials)
 
         authHeaders = self._createAuthHeaders(credentials)
 
@@ -1995,7 +1993,7 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
         else:
             # Fallback: create new progress bar if somehow we don't have one
             if urlInfo is None:
-                urlInfo = self._extractURLInfo(url)
+                urlInfo = self._extractURLInfo(url, credentials)
 
             authHeaders = self._createAuthHeaders(credentials)
             fileSize, __, __ = self._getRemoteMetadata(urlInfo.baseURL, authHeaders)
@@ -2024,6 +2022,10 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
             self._finishProgress(complete=False)
             # Folder changed error - re-raise with clear message
             raise FolderChangedException(str(folderError)) from folderError
+        except InterruptedError:
+            # A daemon pause is a control-flow signal, not an HTTP fallback failure.
+            self._finishProgress(complete=False)
+            raise
         except Exception as httpError:
             # Clean up progress bar on failure without completing to 100%
             self._finishProgress(complete=False)
@@ -2032,17 +2034,21 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
                 f"Both WebRTC and HTTP downloads failed. WebRTC: {webrtcError}. HTTP: {httpError}"
             ) from webrtcError
 
-    def downloadFile(self, url, outputPath=None, credentials=None, resume=False,
-                      pickupCode=None, recipientPrivateKey=None) -> str:
+    def downloadFile(self, url, outputPath=None, resume=False, downloadAuth=None) -> str:
         """Try WebRTC first (if supported/enabled), fall back to HTTP."""
         self._validateOutputPath(outputPath)
-        ctx = self._resolveDownloadContext(url, credentials, recipientPrivateKey)
+        credentials, pickupCode, recipientPrivateKey, encryptionKey = self._getDownloadAuthValues(downloadAuth)
+        ctx = self._resolveDownloadContext(url, credentials, recipientPrivateKey, encryptionKey)
+        return self._downloadWithResolvedContext(url, outputPath, credentials, resume, pickupCode, ctx)
+
+    def _downloadWithResolvedContext(self, url, outputPath, credentials, resume, pickupCode, ctx) -> str:
+        """Continue WebRTC/HTTP selection with a context resolved by an outer transport mixin."""
         urlInfo = ctx['urlInfo']
 
         if urlInfo.isGenericURL:
             return self._dispatchHTTPDownload(url, outputPath, credentials, resume, ctx, pickupCode)
 
-        webrtcDisabled = os.getenv('DISABLE_WEBRTC', None) == 'True'
+        webrtcDisabled = getEnv('DISABLE_WEBRTC', False)
         useWebRTC = urlInfo.supportsWebRTC and not webrtcDisabled
 
         if not useWebRTC:
@@ -2063,6 +2069,14 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
 
             # Wait for result with interruptible polling to allow Ctrl+C
             return self._waitFutureInterruptibly(future)
+        except InterruptedError:
+            if future:
+                future.cancel()
+                
+            if self._currentProgress:
+                self._finishProgress(complete=False)
+                
+            raise
         except KeyboardInterrupt:
             # User pressed Ctrl+C - cancel the download and cleanup
             logger.debug("Download interrupted by user (Ctrl+C)")

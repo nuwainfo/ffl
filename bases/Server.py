@@ -114,6 +114,7 @@ from bases.views.DownloadComplete import DownloadCompleteView
 from bases.views.E2EE import E2EEView
 from bases.views.Status import StatusView
 from bases.views.WebRTC import WebRTCView
+from bases.views.P2P import P2PView
 
 LOG_OUTPUT_DURATION = 1 # Seconds
 
@@ -180,6 +181,7 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
         ChecksumView,
         E2EEView,
         WebRTCView,
+        P2PView,
         StatusView,
         DebugView,
         DownloadCompleteView,

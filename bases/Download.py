@@ -41,6 +41,7 @@ from bases.Utils import flushPrint, formatSize, getEnv, sendException, StallResi
 from bases.Progress import Progress
 from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
 from bases.E2EE import E2EEClient
+from bases.Auth import DownloadAuth, HTTPAuth
 from bases.Readers import FolderChangedException
 from bases.crypto import CryptoInterface
 from bases.I18n import _
@@ -95,17 +96,45 @@ class Downloader(ABC):
         """Check if file size is known and positive (> 0)"""
         return fileSize is not None and fileSize > 0
 
-    def __init__(self, loggerCallback: Callable = print, progressCallback: Optional[Callable] = None):
+    def __init__(self, loggerCallback: Callable = print, progressCallback: Optional[Callable] = None,
+                 urlInfoCallback: Optional[Callable] = None):
         self.loggerCallback = loggerCallback
         self.progressCallback = progressCallback
+        self.urlInfoCallback = urlInfoCallback
         self._currentProgress = None
         self._e2eeClient = None
+        self._cancelEvent = threading.Event()
+        self._activeHTTPResponse = None
+
+    def cancel(self):
+        """Interrupt a transfer while preserving its partial output file for resume."""
+        self._cancelEvent.set()
+        if self._activeHTTPResponse is not None:
+            self._activeHTTPResponse.close()
+
+    def _raiseIfCancelled(self):
+        if self._cancelEvent.is_set():
+            raise InterruptedError('Download paused')
+
+    @staticmethod
+    def _getDownloadAuthValues(downloadAuth):
+        downloadAuth = downloadAuth or DownloadAuth()
+        return (
+            downloadAuth.httpAuth.asCredentials(),
+            downloadAuth.pickupCode,
+            downloadAuth.recipientPrivateKey,
+            downloadAuth.encryptionKey,
+        )
 
     def _updateProgressStatus(self, progress, description):
         """Update progress bar description and refresh display"""
         progress.setDescription(description)
         if progress.useBar and progress.pbar:
             progress.pbar.refresh()
+
+    def _notifyProgress(self, transferred, fileSize):
+        if self.progressCallback:
+            self.progressCallback(transferred, fileSize)
 
     def _ensureProgress(self, fileSize: int, desc: str, resumePosition: int = 0) -> Progress:
         """Ensure progress bar exists and is configured correctly - reuse if exists, create if needed"""
@@ -126,7 +155,8 @@ class Downloader(ABC):
             sizeFormatter=formatSize,
             loggerCallback=self.loggerCallback,
             useBar=settingsGetter.isCLIMode(),
-            barFormat=barFormat
+            barFormat=barFormat,
+            updateCallback=lambda progress: self._notifyProgress(progress.transferred, progress.totalSize),
         )
         self._currentProgress.setDescription(desc)
         if resumePosition > 0:
@@ -253,10 +283,26 @@ class Downloader(ABC):
         return checksum
 
     def _fetchReadyRemoteChecksum(self, baseURL: str, headers: dict) -> Optional[dict]:
+        """Poll /checksum until the server reports it's ready, or give up.
+
+        A transfer that already finished successfully (file complete, 100%
+        written) must not be turned into a reported failure just because this
+        purely confirmatory step couldn't reach the server -- a request
+        exception here (timeout, connection reset, DNS blip) is treated the
+        same as "not ready yet": the caller (_verifyTransferChecksum) already
+        skips strict verification gracefully on None, rather than raising.
+        Only an actual mismatch once the server *does* respond should be a
+        hard error. See ChecksumNetworkResilienceTest for the regression this
+        guards against.
+        """
         checksumURL = self._buildURL(baseURL, "checksum")
 
         for attemptIndex in range(self.CHECKSUM_READY_POLL_RETRIES):
-            responseData, statusCode = self._sendHTTPRequest(checksumURL, "GET", None, headers, 10)
+            try:
+                responseData, statusCode = self._sendHTTPRequest(checksumURL, "GET", None, headers, 10)
+            except requests.exceptions.RequestException as e:
+                logger.debug(f"Checksum endpoint request failed, skip strict checksum verification: {e}")
+                return None
 
             if statusCode == 200 and isinstance(responseData, dict) and responseData.get('ready'):
                 return responseData
@@ -308,7 +354,7 @@ class Downloader(ABC):
             
         return self._e2eeClient
 
-    def _getUploadModeEncryptionKey(self, urlFragment: str) -> bytes:
+    def _getUploadModeEncryptionKey(self, urlFragment: str, suppliedKey: Optional[str] = None) -> bytes:
         """Get encryption key for upload mode - from URL fragment or user prompt
 
         Args:
@@ -320,9 +366,12 @@ class Downloader(ABC):
         Raises:
             ValueError: If key is invalid or user doesn't provide one
         """
-        # First check URL fragment for key
-        if urlFragment:
-            keyBase64 = urlFragment.strip()
+        # Prefer a key explicitly supplied by a GUI/API client, then the URL fragment.
+        for keyBase64 in (suppliedKey, urlFragment):
+            if not keyBase64:
+                continue
+                
+            keyBase64 = keyBase64.strip()
             try:
                 key = base64.b64decode(keyBase64)
                 if len(key) == 32: # AES-256 requires 32 bytes
@@ -541,7 +590,7 @@ class Downloader(ABC):
             
         return currentSize
 
-    def _extractURLInfo(self, url: str) -> URLInfo:
+    def _extractURLInfo(self, url: str, credentials: Optional[Tuple[str, str]] = None) -> URLInfo:
         """Extract base URL and UID from FastFileLink URL, validate it's downloadable
 
         This method handles three scenarios:
@@ -552,12 +601,21 @@ class Downloader(ABC):
         Special case: Local test server uses format http://127.0.0.1:5000/port/UID
         where 'port' is a numeric port identifier and 'UID' is the actual share ID.
 
+        Args:
+            credentials: Optional (username, password) tuple for HTTP Basic Auth,
+                required on every probe below when the share enforces it -- the
+                server authenticates each request independently, so a share
+                protected with --auth-user/--auth-password 401s this method's
+                own pre-flight HEAD requests just like it would any other
+                unauthenticated request.
+
         Returns:
             URLInfo: Object containing URL information and validation results
 
         Raises:
             ValueError: If URL is not accessible or invalid
         """
+        headers = self._makeHeaders(credentials)
         # Extract domain and URL fragment from URL
         parsedURL = urllib.parse.urlparse(url)
         domain = parsedURL.netloc
@@ -613,7 +671,7 @@ class Downloader(ABC):
 
         try:
             # Try HEAD request to base URL first (Caddy quirk handled automatically)
-            head = self._sendHTTPHead(baseURL.rstrip('/'), self._makeHeaders(None))
+            head = self._sendHTTPHead(baseURL.rstrip('/'), headers)
 
             # Check if this is a FastFileLink server
             isFastFileLinkDomain = 'fastfilelink.com' in domain
@@ -624,7 +682,7 @@ class Downloader(ABC):
 
             if not isFastFileLinkDomain and not isFastFileLinkServer and not fflMode:
                 # Not a FastFileLink server? TRY /download:
-                head = self._sendHTTPHead(f"{baseURL.rstrip('/')}/download", self._makeHeaders(None))
+                head = self._sendHTTPHead(f"{baseURL.rstrip('/')}/download", headers)
                 fflMode = head.get('FFL-Mode', '')
                 if not fflMode:
                     #  fall through to generic URL handling
@@ -659,7 +717,7 @@ class Downloader(ABC):
             )
 
             # Verify the URL itself is accessible (use consistent headers for better compatibility)
-            head = self._sendHTTPHead(url, self._makeHeaders(None))
+            head = self._sendHTTPHead(url, headers)
             # This is a valid generic HTTP URL
             return URLInfo(
                 baseURL=url, # Use original URL as-is
@@ -760,11 +818,11 @@ class Downloader(ABC):
 
         return self._parseStatusError(statusData) if status == 200 else None
 
-    def _fetchChecksumData(self, urlInfo) -> dict:
+    def _fetchChecksumData(self, urlInfo, credentials: Optional[Tuple[str, str]] = None) -> dict:
         """Fetch /checksum once. Always returns a dict with at least 'algorithm'.
         Also contains 'encryptedChallenges' when pubkey auth is enabled on the server."""
         checksumURL = self._buildURL(urlInfo.baseURL, "checksum")
-        response = requests.get(checksumURL, timeout=15)
+        response = requests.get(checksumURL, headers=self._makeHeaders(credentials), timeout=15)
         response.raise_for_status()
         return response.json()
 
@@ -793,7 +851,8 @@ class Downloader(ABC):
         return None
 
     def _resolveDownloadContext(self, url: str, credentials: Optional[Tuple[str, str]],
-                                 recipientPrivateKey: Optional[str] = None) -> dict:
+                                 recipientPrivateKey: Optional[str] = None,
+                                 encryptionKey: Optional[str] = None) -> dict:
         """
         Perform the one-time, transport-agnostic setup shared by every concrete
         downloadFile() implementation: resolve URLInfo, fetch checksum metadata,
@@ -805,11 +864,14 @@ class Downloader(ABC):
         input()-prompting for E2EE keys.
         """
         try:
-            urlInfo = self._extractURLInfo(url)
+            urlInfo = self._extractURLInfo(url, credentials)
         except (ValueError, requests.exceptions.RequestException) as e:
             raise RuntimeError(f"Invalid download URL: {e}")
 
-        checksumData = {} if urlInfo.isGenericURL else self._fetchChecksumData(urlInfo)
+        if self.urlInfoCallback:
+            self.urlInfoCallback(urlInfo)
+
+        checksumData = {} if urlInfo.isGenericURL else self._fetchChecksumData(urlInfo, credentials)
         proof = self._resolveProof(checksumData, recipientPrivateKey)
         checksumAlgorithm = checksumData.get('algorithm', DEFAULT_CHECKSUM_ALGORITHM)
 
@@ -818,7 +880,7 @@ class Downloader(ABC):
             self.loggerCallback(_("🔒 End-to-end encryption detected"))
 
             # Get encryption key for upload mode (from URL fragment or user input)
-            contentKey = self._getUploadModeEncryptionKey(urlInfo.urlFragment) if urlInfo.isUploadMode else None
+            contentKey = self._getUploadModeEncryptionKey(urlInfo.urlFragment, encryptionKey) if urlInfo.isUploadMode else None
 
             # Build E2EE context (handles both upload and P2P modes)
             # Returns None if E2EE is not actually enabled (e.g., manifest endpoint returns 404)
@@ -836,9 +898,8 @@ class Downloader(ABC):
         }
 
     @abstractmethod
-    def downloadFile(self, url: str, outputPath: Optional[str] = None, credentials: Optional[Tuple[str, str]] = None,
-                      resume: bool = False, pickupCode: Optional[str] = None,
-                      recipientPrivateKey: Optional[str] = None) -> str:
+    def downloadFile(self, url: str, outputPath: Optional[str] = None, resume: bool = False,
+                     downloadAuth: Optional[DownloadAuth] = None) -> str:
         """Download url and return the local output path. Concrete transports must implement this."""
 
     def close(self):
@@ -901,7 +962,9 @@ class HTTPDownloader(Downloader):
         # Parse the original URL to get base URL and construct download endpoint
         # Follow same pattern as DownloadManager.js: /{uid}/download
         if urlInfo is None:
-            urlInfo = self._extractURLInfo(url)
+            urlInfo = self._extractURLInfo(url, credentials)
+
+        self._raiseIfCancelled()
 
         # For generic URLs, use the URL directly; otherwise construct /download endpoint
         if urlInfo.isGenericURL:
@@ -1045,6 +1108,7 @@ class HTTPDownloader(Downloader):
                             timeout=(self.HTTP_CONNECT_TIMEOUT, self.HTTP_READ_TIMEOUT)
                         ) as response:
                             activeResponse['response'] = response
+                            self._activeHTTPResponse = response
                             raiseQueuedServerErrorIfAny()
 
                             if response.status_code not in (200, 206): # 206 is partial content for resume
@@ -1069,6 +1133,7 @@ class HTTPDownloader(Downloader):
                                             progress = self._ensureProgress(fileSize, self._STATUS_HTTP_DOWNLOAD, 0)
 
                             for chunk in response.iter_content(chunk_size=responseChunkSize):
+                                self._raiseIfCancelled()
                                 raiseQueuedServerErrorIfAny()
                                 if not chunk:
                                     continue
@@ -1097,6 +1162,7 @@ class HTTPDownloader(Downloader):
 
                         break
                     except Exception as e:
+                        self._raiseIfCancelled()
                         raiseQueuedServerErrorIfAny()
                         if (
                             not self._isRetryableHTTPStreamFailure(e, streamDecryptor) or
@@ -1151,6 +1217,12 @@ class HTTPDownloader(Downloader):
             if not sharedProgress:
                 self._finishProgress(complete=False)
             raise
+        except InterruptedError:
+            statusStopEvent.set()
+            if not sharedProgress:
+                self._finishProgress(complete=False)
+                
+            raise
         except Exception as e:
             # Don't update progress to 100% on any failure
             statusStopEvent.set()
@@ -1159,6 +1231,7 @@ class HTTPDownloader(Downloader):
             raise RuntimeError(f"HTTP download failed: {e}")
         finally:
             activeResponse['response'] = None
+            self._activeHTTPResponse = None
             statusStopEvent.set()
             session.close() # Clean up session resources
 
@@ -1217,6 +1290,9 @@ class HTTPDownloader(Downloader):
         FFL-vs-generic-URL distinction: generic/third-party URLs never receive
         E2EE context or the FFL-specific X-FFL-Pickup/X-FFL-Proof auth headers.
         """
+        if getEnv('DISABLE_HTTP_FALLBACK', False):
+            raise RuntimeError('HTTP fallback disabled via DISABLE_HTTP_FALLBACK')
+
         urlInfo = ctx['urlInfo']
         if urlInfo.isGenericURL:
             self.loggerCallback(_("⚠️  This is not a FastFileLink URL, downloading directly via HTTP (like wget)..."))
@@ -1228,11 +1304,11 @@ class HTTPDownloader(Downloader):
             proof=ctx['proof'], checksumAlgorithm=ctx['checksumAlgorithm']
         )
 
-    def downloadFile(self, url, outputPath=None, credentials=None, resume=False,
-                      pickupCode=None, recipientPrivateKey=None) -> str:
+    def downloadFile(self, url, outputPath=None, resume=False, downloadAuth=None) -> str:
         """Download a file over plain HTTP only, no other transport attempted."""
         self._validateOutputPath(outputPath)
-        ctx = self._resolveDownloadContext(url, credentials, recipientPrivateKey)
+        credentials, pickupCode, recipientPrivateKey, encryptionKey = self._getDownloadAuthValues(downloadAuth)
+        ctx = self._resolveDownloadContext(url, credentials, recipientPrivateKey, encryptionKey)
         return self._dispatchHTTPDownload(url, outputPath, credentials, resume, ctx, pickupCode)
 
 
@@ -1240,9 +1316,10 @@ class HTTPDownloader(Downloader):
 # WebRTCDownloadMixin stays purely WebRTC-focused. This is the one place that
 # composes the concrete, FastFileLink-specific downloader.
 from bases.WebRTC import WebRTCDownloadMixin # noqa: E402
+from bases.P2P import P2PDownloadMixin # noqa: E402
 
 
-class FFLDownloader(WebRTCDownloadMixin, HTTPDownloader):
+class FFLDownloader(P2PDownloadMixin, WebRTCDownloadMixin, HTTPDownloader):
     """
     FastFileLink CLI/receiver-side downloader. Combines the WebRTC transport
     (tried first, via WebRTCDownloadMixin) with the HTTP base transport
@@ -1267,11 +1344,6 @@ def processDownload(args):
 
     downloader = None
     try:
-        # Setup credentials if provided
-        credentials = None
-        if args.authPassword:
-            credentials = (args.authUser, args.authPassword)
-
         logCallback = (lambda text: print(text, file=sys.stderr, flush=True)) if args.stdout else flushPrint
 
         # Create downloader and download file
@@ -1279,10 +1351,12 @@ def processDownload(args):
         outputPath = downloader.downloadFile(
             args.url,
             "-" if args.stdout else args.output,
-            credentials,
             resume=args.resume,
-            pickupCode=args.pickupCode,
-            recipientPrivateKey=args.recipientPrivateKey
+            downloadAuth=DownloadAuth(
+                httpAuth=HTTPAuth(user=args.authUser, password=args.authPassword),
+                pickupCode=args.pickupCode,
+                recipientPrivateKey=args.recipientPrivateKey,
+            ),
         )
 
         logger.debug(f"File downloaded successfully: {outputPath}")

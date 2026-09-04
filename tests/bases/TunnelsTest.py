@@ -25,25 +25,80 @@ import threading
 import unittest
 
 from bases.Tunnel import fetchTunnelToken # isort:skip
+from bases.tunnels import SUPPORTED_TUNNEL_TYPES # isort:skip
 from tests.CoreTestBase import FastFileLinkTestBase
+
+
+def _buildTunnelTypeTestClasses():
+    """Map each transport type to the live integration TestCase that exercises
+    it, built lazily so importing this module doesn't drag in every tunnel
+    test module's own dependencies.
+
+    /api/tunnels decides transport per-domain via its `type` field (see
+    bases/tunnels/__init__.py) -- getBuiltinTunnels() asks for every type this
+    client supports (bases.tunnels.SUPPORTED_TUNNEL_TYPES), so both 'bore' and
+    'web' candidates can appear here. Dispatching on `type` instead of
+    assuming 'bore' means each candidate is tested with the client code that
+    will actually handle it in production, not silently exercised through the
+    wrong transport (which would just fail with a confusing low-level
+    protocol error instead of a clear "no test for this type" message); a
+    type this test suite has no live coverage for yet fails loudly instead of
+    being skipped unnoticed.
+    """
+    from tests.bases.tunnels.BoreTest import BoreHTTPSTest # isort:skip
+    from tests.bases.tunnels.WebTest import WebHTTPSTest # isort:skip
+
+    return {
+        'bore': lambda host, secret, tempDir, port: BoreHTTPSTest(
+            methodName='testUseHTTPSTunnel', remoteHost=host, secret=secret, tempDir=tempDir, port=port
+        ),
+        'web': lambda host, secret, tempDir, port: WebHTTPSTest(
+            methodName='testUseHTTPSTunnel', remoteHost=host, secret=secret, tempDir=tempDir, port=port
+        ),
+    }
 
 
 class TunnelsIntegrationTest(unittest.TestCase):
 
     def testAllTunnelServers(self):
         servers = FastFileLinkTestBase.getBuiltinTunnels()
+        typeTestClasses = _buildTunnelTypeTestClasses()
 
-        print(f"\n[Test] Total servers to test: {len(servers)}\n")
+        typeCounts = {}
+        for tunnel in servers:
+            tunnelType = tunnel.get('type')
+            typeCounts[tunnelType] = typeCounts.get(tunnelType, 0) + 1
+        typeBreakdown = ', '.join(f'{t}={n}' for t, n in sorted(typeCounts.items(), key=lambda kv: str(kv[0])))
+
+        print(f"\n[Test] Total servers to test: {len(servers)} ({typeBreakdown})\n")
 
         results = []
         lock = threading.Lock()
 
         def runOne(i, tunnel):
             host = tunnel["domain"]
+            tunnelType = tunnel.get("type")
             tempDir = tempfile.mkdtemp()
             port = 9000 + i
 
             try:
+                if tunnelType not in SUPPORTED_TUNNEL_TYPES:
+                    with lock:
+                        print(f"[❌ FAIL] {host} - Unknown tunnel type {tunnelType!r} from /api/tunnels")
+                        results.append((host, False))
+                    return
+
+                buildTestCase = typeTestClasses.get(tunnelType)
+                if buildTestCase is None:
+                    with lock:
+                        print(
+                            f"[❌ FAIL] {host} - No live integration test registered for tunnel "
+                            f"type {tunnelType!r} (add one under tests/bases/tunnels/ and wire it "
+                            f"into _buildTunnelTypeTestClasses)"
+                        )
+                        results.append((host, False))
+                    return
+
                 # Fetch token dynamically for each test
                 print(f"[Test] Fetching token for {host}...")
                 try:
@@ -69,12 +124,8 @@ class TunnelsIntegrationTest(unittest.TestCase):
                             print(f"[❌ FAIL] {host} - Token fetch failed: {e}")
                             results.append((host, False))
                         return
-                    
-                from tests.bases.tunnels.BoreTest import BoreHttpsTest # isort:skip
-                
-                testCase = BoreHttpsTest(
-                    methodName='testUseHttpsTunnel', remoteHost=host, secret=secret, tempDir=tempDir, port=port
-                )
+
+                testCase = buildTestCase(host, secret, tempDir, port)
                 result = unittest.TestResult()
                 testCase.run(result)
 
@@ -89,7 +140,7 @@ class TunnelsIntegrationTest(unittest.TestCase):
 
                         results.append((host, False))
                     else:
-                        print(f"[✅ OK] {host}")
+                        print(f"[✅ OK] {host} ({tunnelType})")
                         results.append((host, True))
 
             finally:

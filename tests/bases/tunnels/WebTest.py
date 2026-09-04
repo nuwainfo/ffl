@@ -23,16 +23,22 @@ import contextlib
 import hashlib
 import json
 import os
+import queue
 import socket
 import ssl
 import struct
+import subprocess
+import tempfile
 import threading
 import time
 import unittest
 import urllib.parse
+import uuid
 from unittest import mock
 
-from bases.Tunnel import TunnelRunner
+import requests
+
+from bases.Tunnel import AsyncTunnelThread, TunnelRunner, fetchTunnelToken # isort:skip
 from bases.tunnels import TunnelCandidate
 from bases.tunnels.Web import (
     WebTunnelClient, WebTunnelConfigurationError,
@@ -1202,6 +1208,139 @@ class WebTunnelFunctionalTest(BrowserTestBase):
             print("[OK] Browser WebRTC + E2EE download over the web tunnel verified")
         finally:
             driver.quit()
+
+
+class WebHTTPSTest(unittest.TestCase):
+    """Live smoke test for the 'web' transport, mirroring
+    tests/bases/tunnels/BoreTest.py's BoreHTTPSTest: drive the raw tunnel
+    client directly against a plain `python -m http.server` local target and
+    verify content round-trips through the real relay, without spinning up
+    the full FFL app. This is what tests/bases/TunnelsTest.py dispatches to
+    for every 'web'-typed candidate from /api/tunnels.
+    """
+
+    def __init__(
+        self,
+        methodName='testUseHTTPSTunnel',
+        remoteHost="1.10.fastfilelink.com",
+        secret=None, # Will be fetched dynamically
+        tempDir=None,
+        port=None
+    ):
+        super().__init__(methodName)
+        self.remoteHost = remoteHost
+        self.secret = secret
+        if port is None:
+            with socket.socket() as s:
+                s.bind(('', 0))
+                port = s.getsockname()[1]
+        self.testPort = port
+
+        if tempDir is None:
+            self._ownsTempDir = True
+            self._tempDirObj = tempfile.TemporaryDirectory()
+            self.tempDir = self._tempDirObj.name
+        else:
+            self._ownsTempDir = False
+            self.tempDir = tempDir
+
+    def setUp(self):
+        assert isinstance(self.tempDir, str), "tempDir must be a path string"
+
+        self.indexPath = os.path.join(self.tempDir, "index.html")
+        self.dataPath = os.path.join(self.tempDir, "data.bin")
+
+        with open(self.indexPath, 'w', encoding='utf-8') as fileHandle:
+            fileHandle.write("<html><body>Hello Web!</body></html>")
+        FastFileLinkTestBase.generateRandomFile(self.dataPath, 1024 * 1024) # 1MB
+
+        self.httpProcess = subprocess.Popen(["python", "-m", "http.server",
+                                             str(self.testPort)],
+                                            cwd=self.tempDir,
+                                            stdout=subprocess.DEVNULL,
+                                            stderr=subprocess.DEVNULL)
+
+        time.sleep(1)
+
+    def tearDown(self):
+        self.httpProcess.terminate()
+        self.httpProcess.wait()
+
+        if self._ownsTempDir:
+            self._tempDirObj.cleanup()
+
+    def testUseHTTPSTunnel(self):
+        self.assertIsNotNone(self.remoteHost)
+
+        # Fetch tunnel token dynamically
+        if self.secret is None:
+            print("[Test] Fetching tunnel token...")
+            self.secret = fetchTunnelToken(domain=self.remoteHost)
+
+        self.assertIsNotNone(self.secret)
+
+        # Opaque per-connection routing key -- the relay never interprets it,
+        # it only needs to be printable ASCII (see
+        # WebTunnelClient._isValidTunnelID). Production uses the share uid
+        # here; any unique value works for this smoke test.
+        tunnelID = uuid.uuid4().hex
+        agentURL = f'https://{self.remoteHost}/'
+        publicURL = f'https://{self.remoteHost}/'
+
+        client = WebTunnelClient(
+            self.testPort, agentURL, publicURL, self.secret, tunnelID,
+            # createTunnelClient() (production) never sets this because FFL's
+            # own local server already understands uid-prefixed paths. This
+            # test's local target is a plain http.server that only knows
+            # about '/' and '/data.bin', so ask the client to strip the
+            # tunnelID prefix before forwarding, the same way FFL's server
+            # would otherwise have handled it internally.
+            localPathPrefix='/',
+        )
+
+        resultQueue = queue.Queue()
+        tunnelThread = AsyncTunnelThread(resultQueue, client)
+        print("[Test] Starting tunnel client...")
+        tunnelThread.start()
+
+        try:
+            ok, tunnelUrl = resultQueue.get(timeout=30)
+            self.assertTrue(ok, f"Web tunnel did not connect: {tunnelThread.e}")
+            self.assertIsNotNone(tunnelUrl, "Tunnel did not return a valid tunnel URL")
+
+            # Matches how bases/Runtime.py builds the real share link:
+            # link = f"{tunnelLink}{uid}"
+            baseUrl = f"{tunnelUrl}{tunnelID}"
+            print(f"[Test] Tunnel URL: {baseUrl}")
+
+            # Wait until the tunnel actually accepts a request
+            for attempt in range(15):
+                try:
+                    print(f"[Test] Attempt {attempt + 1} to fetch index.html")
+                    r = requests.get(baseUrl, timeout=5)
+                    if r.status_code == 200:
+                        print("[Test] index.html is served.")
+                        break
+                except Exception as e:
+                    print(f"[Test] attempt {attempt + 1} failed: {e}")
+                time.sleep(1)
+            else:
+                self.fail("Tunnel never responded with valid HTTP response")
+
+            # Validate index.html
+            indexResp = requests.get(baseUrl, timeout=5)
+            with open(self.indexPath, 'r', encoding='utf-8') as f:
+                self.assertEqual(indexResp.text.strip(), f.read().strip())
+
+            # Validate data.bin
+            dataResp = requests.get(f"{baseUrl}/data.bin", timeout=10)
+            with open(self.dataPath, 'rb') as f:
+                self.assertEqual(dataResp.content, f.read())
+
+            print("[Test] Tunnel content validated.")
+        finally:
+            tunnelThread.kill()
+            tunnelThread.join(timeout=10)
 
 
 class WebTunnelE2ETestBase(FastFileLinkTestBase):

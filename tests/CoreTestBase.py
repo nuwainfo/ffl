@@ -40,8 +40,9 @@ import psutil
 
 import addons.API as apiModule
 import addons.Features as featuresModule
-from bases.Kernel import EventService, Singleton
+from bases.Kernel import EventService, PUBLIC_REVISION, Singleton
 from bases.Settings import SettingsGetter
+from bases.tunnels import SUPPORTED_TUNNEL_TYPES
 
 
 # ---------------------------
@@ -109,8 +110,22 @@ class FastFileLinkTestBase(unittest.TestCase):
         self._downloadChecksumByPath = {}
 
     @classmethod
-    def getBuiltinTunnels(cls):
-        response = requests.get("https://fastfilelink.com/api/tunnels", timeout=5)
+    def getBuiltinTunnels(cls, size=0):
+        """Fetch the server's tunnel candidates the same way a real client does.
+
+        A bare GET (no `types`/`revision`) only gets the server's
+        backward-compatible default, which today is 'bore'-only -- the server
+        only returns other transports (e.g. 'web') to a request that
+        specifically declares it understands them, exactly like
+        addons/impl/features/Tunnels.py's getLowLatencyTunnel() does. Mirror
+        that query here so tests exercise every type this client actually
+        supports (bases.tunnels.SUPPORTED_TUNNEL_TYPES), not just whatever the
+        no-params default happens to be.
+        """
+        types = ','.join(SUPPORTED_TUNNEL_TYPES)
+        revisionParam = f'&revision={PUBLIC_REVISION}' if PUBLIC_REVISION is not None else ''
+        url = f"https://fastfilelink.com/api/tunnels?size={size}&types={types}{revisionParam}"
+        response = requests.get(url, timeout=5)
         response.raise_for_status()
         return response.json()
 

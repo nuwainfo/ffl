@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-08-03 23:29+0800\n"
+"POT-Creation-Date: 2026-09-05 00:24+0800\n"
 "PO-Revision-Date: 2025-12-17 09:22+0800\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -16,7 +16,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.17.0\n"
+"Generated-By: Babel 2.18.0\n"
 
 msgid "GUI support not available. Install required dependencies or use CLI mode."
 msgstr ""
@@ -44,26 +44,6 @@ msgid "Server return error"
 msgstr ""
 
 #, python-brace-format
-msgid "Loading .env file from: {envFilePath}"
-msgstr ""
-
-#, python-brace-format
-msgid "Warning: .env line {lineNum}: Invalid format (missing =): {line}"
-msgstr ""
-
-#, python-brace-format
-msgid "Warning: .env line {lineNum}: Empty key"
-msgstr ""
-
-#, python-brace-format
-msgid "Loaded {loadedCount} environment variables from .env"
-msgstr ""
-
-#, python-brace-format
-msgid "Error: Unexpected error loading .env file: {error}"
-msgstr ""
-
-#, python-brace-format
 msgid "Failed to load logging config from {logLevel}: {error}"
 msgstr ""
 
@@ -71,7 +51,7 @@ msgid "Falling back to default logging level configuration"
 msgstr ""
 
 #, python-brace-format
-msgid "FastFileLink v{version}"
+msgid "FastFileLink v{version} ({revision})"
 msgstr ""
 
 msgid "🔄 Update available!"
@@ -403,6 +383,22 @@ msgstr ""
 msgid "Please specify a file or folder path instead of \"-\""
 msgstr ""
 
+msgid "Download URL is required."
+msgstr ""
+
+msgid "Download destination is required."
+msgstr ""
+
+#, python-brace-format
+msgid "Download destination does not exist: {path}"
+msgstr ""
+
+msgid "Paused"
+msgstr ""
+
+msgid "Downloading"
+msgstr ""
+
 #, python-brace-format
 msgid "Daemon worker is missing for delivery {uid}."
 msgstr ""
@@ -541,9 +537,6 @@ msgstr ""
 msgid "Requesting connection"
 msgstr ""
 
-msgid "Downloading"
-msgstr ""
-
 msgid "HTTP download"
 msgstr ""
 
@@ -592,6 +585,12 @@ msgstr ""
 
 #, python-brace-format
 msgid "Resuming download from {resumePos} / {totalSize}"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Resuming HTTP download from {resumePos} after connection error "
+"({attempt}/{maxAttempts})"
 msgstr ""
 
 msgid ""
@@ -1206,6 +1205,18 @@ msgid "Waiting for data channel"
 msgstr ""
 
 #, python-brace-format
+msgid "Establishing WebRTC ({seconds}s)"
+msgstr ""
+
+#, python-brace-format
+msgid "Waiting for data channel ({seconds}s)"
+msgstr ""
+
+#, python-brace-format
+msgid "Waiting for transfer ({seconds}s)"
+msgstr ""
+
+#, python-brace-format
 msgid "Downloading {filename} ({fileSize})"
 msgstr ""
 
@@ -1368,5 +1379,23 @@ msgstr ""
 #~ msgstr ""
 
 #~ msgid "Failed to send stop command to daemon"
+#~ msgstr ""
+
+#~ msgid "Loading .env file from: {envFilePath}"
+#~ msgstr ""
+
+#~ msgid "Warning: .env line {lineNum}: Invalid format (missing =): {line}"
+#~ msgstr ""
+
+#~ msgid "Warning: .env line {lineNum}: Empty key"
+#~ msgstr ""
+
+#~ msgid "Loaded {loadedCount} environment variables from .env"
+#~ msgstr ""
+
+#~ msgid "Error: Unexpected error loading .env file: {error}"
+#~ msgstr ""
+
+#~ msgid "FastFileLink v{version}"
 #~ msgstr ""
 

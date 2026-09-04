@@ -297,11 +297,11 @@ class FaultInjectingSocks5Proxy:
 # ---------------------------
 # Main test case
 # ---------------------------
-class BoreHttpsTest(unittest.TestCase):
+class BoreHTTPSTest(unittest.TestCase):
 
     def __init__(
         self,
-        methodName='testUseHttpsTunnel',
+        methodName='testUseHTTPSTunnel',
         remoteHost="33.fastfilelink.com",
         secret=None,  # Will be fetched dynamically
         tempDir=None,
@@ -349,7 +349,7 @@ class BoreHttpsTest(unittest.TestCase):
         if self._ownsTempDir:
             self._tempDirObj.cleanup()
 
-    def testUseHttpsTunnel(self):
+    def testUseHTTPSTunnel(self):
         self.assertIsNotNone(self.remoteHost)
         
         # Fetch tunnel token dynamically

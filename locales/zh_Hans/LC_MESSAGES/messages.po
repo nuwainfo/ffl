@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-08-03 23:29+0800\n"
+"POT-Creation-Date: 2026-09-05 00:24+0800\n"
 "PO-Revision-Date: 2025-12-21 08:43+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -16,7 +16,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.17.0\n"
+"Generated-By: Babel 2.18.0\n"
 
 msgid "GUI support not available. Install required dependencies or use CLI mode."
 msgstr "GUI 支援不可用。请安装所需的相依套件或使用 CLI 模式。"
@@ -46,26 +46,6 @@ msgid "Server return error"
 msgstr "伺服器回传错误"
 
 #, python-brace-format
-msgid "Loading .env file from: {envFilePath}"
-msgstr "正在从以下位置载入 .env 档案：{envFilePath}"
-
-#, python-brace-format
-msgid "Warning: .env line {lineNum}: Invalid format (missing =): {line}"
-msgstr "警告：.env 第 {lineNum} 行：格式无效（缺少 =）：{line}"
-
-#, python-brace-format
-msgid "Warning: .env line {lineNum}: Empty key"
-msgstr "警告：.env 第 {lineNum} 行：空的键"
-
-#, python-brace-format
-msgid "Loaded {loadedCount} environment variables from .env"
-msgstr "已从 .env 载入 {loadedCount} 个环境变数"
-
-#, python-brace-format
-msgid "Error: Unexpected error loading .env file: {error}"
-msgstr "错误：载入 .env 档案时发生意外错误：{error}"
-
-#, python-brace-format
 msgid "Failed to load logging config from {logLevel}: {error}"
 msgstr "无法从 {logLevel} 载入日志配置：{error}"
 
@@ -73,8 +53,8 @@ msgid "Falling back to default logging level configuration"
 msgstr "退回到预设日志层级配置"
 
 #, python-brace-format
-msgid "FastFileLink v{version}"
-msgstr "快文链接 v{version}"
+msgid "FastFileLink v{version} ({revision})"
+msgstr ""
 
 msgid "🔄 Update available!"
 msgstr "🔄 有可用更新！"
@@ -412,6 +392,22 @@ msgstr "错误：--vfs 不支持标准输入"
 msgid "Please specify a file or folder path instead of \"-\""
 msgstr "请指定文件或文件夹路径，而不是 \"-\""
 
+msgid "Download URL is required."
+msgstr ""
+
+msgid "Download destination is required."
+msgstr ""
+
+#, python-brace-format
+msgid "Download destination does not exist: {path}"
+msgstr ""
+
+msgid "Paused"
+msgstr "已暂停"
+
+msgid "Downloading"
+msgstr "正在下载"
+
 #, python-brace-format
 msgid "Daemon worker is missing for delivery {uid}."
 msgstr "传送 {uid} 缺少 Daemon worker。"
@@ -550,9 +546,6 @@ msgstr "正在连线到云端"
 msgid "Requesting connection"
 msgstr "正在请求连线"
 
-msgid "Downloading"
-msgstr "正在下载"
-
 msgid "HTTP download"
 msgstr "HTTP 下载"
 
@@ -604,6 +597,12 @@ msgstr "✓ 加密金钥验证成功"
 #, python-brace-format
 msgid "Resuming download from {resumePos} / {totalSize}"
 msgstr "从 {resumePos} / {totalSize} 继续下载"
+
+#, python-brace-format
+msgid ""
+"Resuming HTTP download from {resumePos} after connection error "
+"({attempt}/{maxAttempts})"
+msgstr ""
 
 msgid ""
 "⚠️  This is not a FastFileLink URL, downloading directly via HTTP (like "
@@ -1237,6 +1236,18 @@ msgid "Waiting for data channel"
 msgstr "正在等待资料通道"
 
 #, python-brace-format
+msgid "Establishing WebRTC ({seconds}s)"
+msgstr ""
+
+#, python-brace-format
+msgid "Waiting for data channel ({seconds}s)"
+msgstr ""
+
+#, python-brace-format
+msgid "Waiting for transfer ({seconds}s)"
+msgstr ""
+
+#, python-brace-format
 msgid "Downloading {filename} ({fileSize})"
 msgstr "正在下载 {filename}（{fileSize}）"
 
@@ -1414,4 +1425,22 @@ msgstr "正在尝试 WebRTC 下载..."
 
 #~ msgid "Failed to send stop command to daemon"
 #~ msgstr ""
+
+#~ msgid "Loading .env file from: {envFilePath}"
+#~ msgstr "正在从以下位置载入 .env 档案：{envFilePath}"
+
+#~ msgid "Warning: .env line {lineNum}: Invalid format (missing =): {line}"
+#~ msgstr "警告：.env 第 {lineNum} 行：格式无效（缺少 =）：{line}"
+
+#~ msgid "Warning: .env line {lineNum}: Empty key"
+#~ msgstr "警告：.env 第 {lineNum} 行：空的键"
+
+#~ msgid "Loaded {loadedCount} environment variables from .env"
+#~ msgstr "已从 .env 载入 {loadedCount} 个环境变数"
+
+#~ msgid "Error: Unexpected error loading .env file: {error}"
+#~ msgstr "错误：载入 .env 档案时发生意外错误：{error}"
+
+#~ msgid "FastFileLink v{version}"
+#~ msgstr "快文链接 v{version}"
 

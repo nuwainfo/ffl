@@ -21,13 +21,14 @@ import base64
 import datetime
 import secrets
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from http import HTTPStatus
 from typing import Callable, Optional, Tuple
 
 from bases.crypto import CryptoInterface
 from bases.Kernel import getLogger, FFLEvent
+from bases.Utils import DataclassDictMixin
 
 logger = getLogger(__name__)
 
@@ -38,7 +39,7 @@ PUBKEY_PRIVATE_EXT = '.fflkey'
 
 
 @dataclass
-class HTTPAuth:
+class HTTPAuth(DataclassDictMixin):
     """HTTP Basic Authentication credentials."""
     user: Optional[str] = None
     password: Optional[str] = None
@@ -46,6 +47,27 @@ class HTTPAuth:
     def isEnabled(self) -> bool:
         """Check if authentication is enabled (password is required)."""
         return bool(self.password)
+
+    def asCredentials(self) -> Optional[Tuple[str, str]]:
+        return (self.user or '', self.password) if self.isEnabled() else None
+
+
+@dataclass
+class DownloadAuth(DataclassDictMixin):
+    """Receiver-only credentials for one download; never part of a share payload."""
+    httpAuth: HTTPAuth = field(default_factory=HTTPAuth)
+    pickupCode: Optional[str] = None
+    recipientPrivateKey: Optional[str] = None
+    encryptionKey: Optional[str] = None
+
+    @classmethod
+    def fromDict(cls, data, **overrides):
+        data = dict(data)
+        httpAuth = data.get('httpAuth')
+        if isinstance(httpAuth, dict):
+            data['httpAuth'] = HTTPAuth.fromDict(httpAuth)
+
+        return super().fromDict(data, **overrides)
 
 
 class AuthMixin:

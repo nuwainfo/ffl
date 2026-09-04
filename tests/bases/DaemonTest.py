@@ -11,6 +11,8 @@ import threading
 import time
 import unittest
 
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
 from bases.Daemon import DaemonClient, InProcessDaemonManager, InProcessShareManager, ProcessDaemonManager
@@ -321,6 +323,23 @@ class DaemonLifecycleMixin:
 
         raise AssertionError(f"Timed out waiting for {expectedCount} daemon-managed shares")
 
+    def _waitForDaemonDownload(self, downloadId, timeout=120):
+        deadline = time.time() + timeout
+        client = DaemonClient()
+        while time.time() < deadline:
+            download = client.getDownload(downloadId)
+            if download is None:
+                raise AssertionError(f"Daemon download disappeared: {downloadId}")
+
+            if download['status'] == 'completed':
+                return download
+            if download['status'] == 'failed':
+                raise AssertionError(f"Daemon download failed: {download['error']}")
+
+            time.sleep(0.3)
+
+        raise AssertionError(f"Timed out waiting for daemon download {downloadId}")
+
     def _readLatestOutputText(self):
         if self._procLogFile:
             self._procLogFile.flush()
@@ -363,6 +382,65 @@ class DaemonLifecycleMixin:
 
 class DaemonTest(DaemonLifecycleMixin, FastFileLinkTestBase):
     """Functional tests for the background daemon and multi-session share management."""
+
+    def _waitForDaemonDownloadMatching(self, downloadId, predicate, timeout=30):
+        client = DaemonClient()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            download = client.getDownload(downloadId)
+            if download is None:
+                raise AssertionError(f"Daemon download disappeared: {downloadId}")
+            if download['status'] == 'failed':
+                raise AssertionError(f"Daemon download failed: {download['error']}")
+            if predicate(download):
+                return download
+            time.sleep(0.05)
+        raise AssertionError(f"Timed out waiting for daemon download {downloadId} to match state")
+
+    def _testDaemonDownloadPauseResumeCycles(self, forceHTTPFallback=False):
+        """Exercise real daemon pause/resume repeatedly, then hash-verify output."""
+        if forceHTTPFallback:
+            self._stopDaemon()
+            self._daemonEnvOverrides = {
+                'DISABLE_P2P': 'True',
+                'WEBRTC_CLI_SIMULATE_ICE_FAILURE': 'True',
+            }
+            self._startDaemon()
+
+        sourcePath = os.path.join(self.tempDir, 'pause-resume-source.bin')
+        self.generateRandomFile(sourcePath, 32 * 1024 * 1024)
+        destinationPath = os.path.join(self.tempDir, 'pause-resume-download')
+        os.makedirs(destinationPath)
+
+        with self._usingTestFile(sourcePath):
+            shareLink = self._startFastFileLink(p2p=True, timeout=120)
+            client = DaemonClient()
+            download = client.createDownload(shareLink, destinationPath)
+
+            for cycle in range(3):
+                activeDownload = self._waitForDaemonDownloadMatching(
+                    download['id'],
+                    lambda item: item['status'] == 'downloading' and item['pauseSupported'] and item['transferred'] > 0,
+                )
+                self.assertGreater(activeDownload['transferred'], 0)
+                self.assertTrue(client.pauseDownload(download['id']), f'Pause failed in cycle {cycle + 1}')
+                pausedDownload = self._waitForDaemonDownloadMatching(
+                    download['id'], lambda item: item['status'] == 'paused',
+                )
+                self.assertGreater(pausedDownload['transferred'], 0)
+                self.assertTrue(client.resumeDownload(download['id']), f'Resume failed in cycle {cycle + 1}')
+
+            completedDownload = self._waitForDaemonDownload(download['id'], timeout=180)
+            self.assertEqual(completedDownload['status'], 'completed')
+            self._verifyDownloadedFile(completedDownload['outputPath'])
+
+    def testDaemonDownloadPauseResumeCyclesOverWebRTC(self):
+        """A FastFileLink WebRTC download survives three pause/resume cycles."""
+        self._testDaemonDownloadPauseResumeCycles()
+
+    def testDaemonDownloadPauseResumeCyclesOverHTTPFallback(self):
+        """The same pause/resume contract works after FastFileLink falls back to HTTP."""
+        self._testDaemonDownloadPauseResumeCycles(forceHTTPFallback=True)
 
     # ------------------------------------------------------------------
     # Tests
@@ -432,6 +510,47 @@ class DaemonTest(DaemonLifecycleMixin, FastFileLinkTestBase):
         downloadedFilePath = self._getDownloadedFilePath('daemon_share_test.bin')
         self.downloadFileWithRequests(shareLink, downloadedFilePath)
         self._verifyDownloadedFile(downloadedFilePath)
+
+    def testDaemonDownloadUsesP2PForFastFileLinkURL(self):
+        """A daemon-owned receiver download uses the normal FFL WebRTC path end to end."""
+        shareLink = self._startFastFileLink(p2p=True)
+        destinationPath = os.path.join(self.tempDir, 'daemon-download')
+        os.makedirs(destinationPath)
+
+        download = DaemonClient().createDownload(shareLink, destinationPath)
+        completedDownload = self._waitForDaemonDownload(download['id'])
+
+        self.assertEqual(completedDownload['status'], 'completed')
+        self.assertTrue(completedDownload['outputPath'])
+        self.assertTrue(os.path.isfile(completedDownload['outputPath']))
+        self.assertGreater(completedDownload['transferred'], 0)
+        self._verifyDownloadedFile(completedDownload['outputPath'])
+
+    def testDaemonDownloadSupportsGenericHTTPURL(self):
+        """A non-FFL URL stays on the downloader's direct HTTP transport."""
+        sourcePath = os.path.join(self.tempDir, 'generic-daemon-source.bin')
+        self.generateRandomFile(sourcePath, 256 * 1024)
+        sourceHash = self.getFileHash(sourcePath)
+        httpServer = ThreadingHTTPServer(
+            ('127.0.0.1', 0),
+            partial(SimpleHTTPRequestHandler, directory=self.tempDir),
+        )
+        serverThread = threading.Thread(target=httpServer.serve_forever, daemon=True)
+        serverThread.start()
+        destinationPath = os.path.join(self.tempDir, 'generic-daemon-download')
+        os.makedirs(destinationPath)
+
+        try:
+            url = f'http://127.0.0.1:{httpServer.server_address[1]}/{os.path.basename(sourcePath)}'
+            download = DaemonClient().createDownload(url, destinationPath)
+            completedDownload = self._waitForDaemonDownload(download['id'])
+
+            self.assertEqual(completedDownload['status'], 'completed')
+            self.assertEqual(self.getFileHash(completedDownload['outputPath']), sourceHash)
+        finally:
+            httpServer.shutdown()
+            serverThread.join(timeout=5)
+            httpServer.server_close()
 
     def testDaemonUploadShare(self):
         """Test daemon-managed background upload returns a hosted link and preserves upload metadata."""

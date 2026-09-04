@@ -103,7 +103,7 @@ class Progress:
 
     def __init__(
         self, totalSize, sizeFormatter=None, loggerCallback=print, logInterval=2.0, useBar=False, barFormat=None,
-        description=None, unit='B', unitScale=False, leave=True
+        description=None, unit='B', unitScale=False, leave=True, updateCallback=None
     ):
         self.totalSize = totalSize
         self.sizeFormatter = sizeFormatter or formatSize
@@ -115,6 +115,7 @@ class Progress:
         self.unit = unit
         self.unitScale = unitScale
         self.leave = leave
+        self.updateCallback = updateCallback
 
         # Progress tracking
         self.transferred = 0
@@ -172,6 +173,9 @@ class Progress:
         """Update progress with new bytes transferred."""
         previousTransferred = self.transferred
         self.transferred = bytesTransferred
+        if self.updateCallback:
+            self.updateCallback(self)
+            
         currentTime = time.monotonic()
 
         if self.useBar and self.pbar:
@@ -242,6 +246,11 @@ class Progress:
 
     def setDescription(self, desc):
         """Set the description of the progress bar."""
+        self.description = desc
+        
+        if self.updateCallback:
+            self.updateCallback(self)
+            
         if self.useBar and self.pbar:
             self.pbar.set_description(desc)
 

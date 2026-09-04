@@ -39,6 +39,7 @@ class WebRTCTest(BrowserTestBase):
 
     def __init__(self, methodName='runTest'):
         super().__init__(methodName)
+        self.testConfigVars['DISABLE_P2P'] = 'True' # Force WebRTC
 
     def _runBrowserDownloadTest(self, browserName, p2p=True):
         """Run download test with specified browser"""

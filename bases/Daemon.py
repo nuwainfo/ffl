@@ -60,7 +60,7 @@ import segno
 from bases.HTTP import HTTPRequestHandlerHelper, PathResolverMixin
 from bases.Hook import HookEventForwarder
 from bases.I18n import _
-from bases.Kernel import StorageLocator, getLogger
+from bases.Kernel import StorageLocator, UIDGenerator, getLogger
 from bases.Kernel import FFLEvent
 from bases.Runtime import MultiShareServerRuntime, SingleShareRuntime
 from bases.Server import createServer
@@ -77,6 +77,8 @@ from bases.Share import (
 )
 from bases.Settings import SettingsGetter, ShareMode
 from bases.Utils import DataclassDictMixin, ProcessHelper, ProxyConfig, flushPrint, getAvailablePort
+from bases.Auth import DownloadAuth, HTTPAuth
+from bases.Download import FFLDownloader
 
 logger = getLogger(__name__)
 
@@ -93,6 +95,197 @@ class ShareRecord(DataclassDictMixin):
     downloads: int
     shareResult: Optional[dict]
     shareRequest: dict
+
+
+@dataclass
+class DownloadRecord(DataclassDictMixin):
+    """A daemon-owned receiver-side download and its observable state."""
+    id: str
+    url: str
+    destinationPath: str
+    status: str
+    createdAt: str
+    outputPath: Optional[str] = None
+    fileSize: int = 0
+    transferred: int = 0
+    progressDescription: str = ''
+    error: Optional[str] = None
+    startedAt: Optional[str] = None
+    completedAt: Optional[str] = None
+    pauseSupported: bool = False
+    speed: float = 0
+
+
+class InProcessDownloadManager:
+    """Runs receiver downloads in daemon workers using the canonical downloader."""
+
+    @dataclass
+    class DownloadWorker:
+        record: DownloadRecord
+        resume: bool
+        downloadAuth: DownloadAuth = field(default_factory=DownloadAuth)
+        pauseRequested: bool = False
+        lastTransferred: int = 0
+        lastProgressAt: float = 0
+        downloader: Optional[FFLDownloader] = None
+        thread: Optional[threading.Thread] = None
+
+    def __init__(self):
+        self._workers = {}
+        self._lock = threading.RLock()
+
+    def addDownload(self, url, destinationPath, resume=False, downloadAuth=None):
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError(_('Download URL is required.'))
+            
+        if not isinstance(destinationPath, str) or not destinationPath.strip():
+            raise ValueError(_('Download destination is required.'))
+
+        destinationPath = os.path.abspath(destinationPath)
+        if not os.path.isdir(destinationPath):
+            raise FileNotFoundError(_('Download destination does not exist: {path}').format(path=destinationPath))
+
+        record = DownloadRecord(
+            id=UIDGenerator().generate(),
+            url=url.strip(),
+            destinationPath=destinationPath,
+            status='queued',
+            createdAt=datetime.datetime.now().isoformat(),
+        )
+    
+        worker = self.DownloadWorker(
+            record=record, resume=bool(resume), downloadAuth=downloadAuth or DownloadAuth(),
+        )
+    
+        with self._lock:
+            self._workers[record.id] = worker
+            
+        self._startWorker(worker)
+        
+        return record
+
+    def _startWorker(self, worker):
+        worker.thread = threading.Thread(
+            target=self._runDownloadWorker,
+            args=(worker,),
+            daemon=True,
+            name=f'daemon-download-{worker.record.id}',
+        )
+        worker.thread.start()
+
+    def _runDownloadWorker(self, worker):
+        record = worker.record
+        with self._lock:
+            record.status = 'downloading'
+            record.startedAt = datetime.datetime.now().isoformat()
+
+        try:
+            worker.downloader = FFLDownloader(
+                loggerCallback=lambda message: logger.info('[daemon download %s] %s', record.id, message),
+                progressCallback=lambda transferred, fileSize: self._updateProgress(record.id, transferred, fileSize),
+                urlInfoCallback=lambda urlInfo: self._updateDownloadCapabilities(record.id, not urlInfo.isGenericURL),
+            )
+        
+            outputPath = worker.downloader.downloadFile(
+                record.url, outputPath=record.destinationPath, resume=worker.resume,
+                downloadAuth=worker.downloadAuth,
+            )
+        except InterruptedError:
+            with self._lock:
+                if worker.pauseRequested:
+                    record.status = 'paused'
+                    record.progressDescription = _('Paused')
+                    return
+                    
+            raise
+        except Exception as e:
+            logger.exception('Daemon download %s failed', record.id)
+            with self._lock:
+                record.status = 'failed'
+                record.error = str(e)
+                record.completedAt = datetime.datetime.now().isoformat()
+                
+            return
+        finally:
+            if worker.downloader:
+                worker.downloader.close()
+
+        with self._lock:
+            record.status = 'completed'
+            record.outputPath = outputPath
+            record.completedAt = datetime.datetime.now().isoformat()
+
+    def _updateProgress(self, downloadId, transferred, fileSize):
+        with self._lock:
+            worker = self._workers.get(downloadId)
+            if worker is None:
+                return
+
+            record = worker.record
+            record.fileSize = fileSize or 0
+            record.transferred = transferred
+            now = time.monotonic()
+            
+            if worker.lastProgressAt:
+                elapsed = now - worker.lastProgressAt
+                if elapsed > 0:
+                    record.speed = max(0, (transferred - worker.lastTransferred) / elapsed)
+                    
+            worker.lastTransferred = transferred
+            worker.lastProgressAt = now
+            
+            record.progressDescription = _('Downloading')
+
+    def _updateDownloadCapabilities(self, downloadId, pauseSupported):
+        with self._lock:
+            worker = self._workers.get(downloadId)
+            if worker:
+                worker.record.pauseSupported = pauseSupported
+
+    def pauseDownload(self, downloadId):
+        with self._lock:
+            worker = self._workers.get(downloadId)
+            if worker is None or not worker.record.pauseSupported or worker.record.status != 'downloading':
+                return False
+                
+            worker.pauseRequested = True
+            worker.downloader.cancel()
+            return True
+
+    def resumeDownload(self, downloadId):
+        with self._lock:
+            worker = self._workers.get(downloadId)
+            if worker is None or not worker.record.pauseSupported or worker.record.status != 'paused':
+                return False
+                
+            worker.pauseRequested = False
+            worker.resume = True
+            worker.downloader = None
+            worker.lastProgressAt = 0
+            worker.lastTransferred = worker.record.transferred
+            worker.record.status = 'queued'
+            worker.record.progressDescription = ''
+            
+            self._startWorker(worker)
+            
+            return True
+
+    def listDownloads(self):
+        with self._lock:
+            return [worker.record for worker in self._workers.values()]
+
+    def getDownload(self, downloadId):
+        with self._lock:
+            worker = self._workers.get(downloadId)
+            return worker.record if worker else None
+
+    def shutdown(self):
+        with self._lock:
+            workers = list(self._workers.values())
+
+        for worker in workers:
+            if worker.downloader:
+                worker.downloader.close()
 
 class DaemonStateFile:
     """Manages daemon.json lockfile in FFL_STORAGE_LOCATION."""
@@ -661,9 +854,14 @@ class DaemonAPIHandler(PathResolverMixin, HTTPRequestHandlerHelper, BaseHTTPRequ
     def __init__(self, *args, **kwargs):
         self.mapGETRoute('/shares', self._handleListShares)
         self.mapGETRoute(re.compile(r'^/shares/(?P<shareId>.+)$'), self._handleGetShare)
+        self.mapGETRoute('/downloads', self._handleListDownloads)
+        self.mapGETRoute(re.compile(r'^/downloads/(?P<downloadId>.+)$'), self._handleGetDownload)
 
         self.mapPOSTRoute('/hook', self._handleSetHook)
         self.mapPOSTRoute('/shares', self._handleCreateShare)
+        self.mapPOSTRoute('/downloads', self._handleCreateDownload)
+        self.mapPOSTRoute(re.compile(r'^/downloads/(?P<downloadId>.+)/pause$'), self._handlePauseDownload)
+        self.mapPOSTRoute(re.compile(r'^/downloads/(?P<downloadId>.+)/resume$'), self._handleResumeDownload)
         self.mapPOSTRoute('/shutdown', self._handleShutdown)
         self.mapPOSTRoute(re.compile(r'^/shares/(?P<shareId>.+)/stop$'), self._handleStopShare)
         self.mapPOSTRoute(re.compile(r'^/shares/(?P<shareId>.+)/pause$'), self._handlePauseShare)
@@ -736,6 +934,18 @@ class DaemonAPIHandler(PathResolverMixin, HTTPRequestHandlerHelper, BaseHTTPRequ
 
         self._sendJSON(200, self._getShareData(session))
 
+    def _handleListDownloads(self):
+        downloads = self.server.downloadManager.listDownloads()
+        self._sendJSON(200, {'downloads': [download.toDict() for download in downloads]})
+
+    def _handleGetDownload(self, downloadId):
+        download = self.server.downloadManager.getDownload(downloadId)
+        if download is None:
+            self._sendJSON(404, {'error': 'not found'})
+            return
+
+        self._sendJSON(200, download.toDict())
+
     def _getShareData(self, session):
         shareData = session.toDict()
         shareResult = self.server.shareManager.getShareResult(session.uid)
@@ -759,6 +969,35 @@ class DaemonAPIHandler(PathResolverMixin, HTTPRequestHandlerHelper, BaseHTTPRequ
 
         session = self.server.shareManager.addShare(filePaths, config, proxyConfig=proxyConfig)
         self._sendJSON(201, self._getShareData(session))
+
+    def _handleCreateDownload(self):
+        data = self._readJSONBody()
+        download = self.server.downloadManager.addDownload(
+            data['url'],
+            data['destinationPath'],
+            resume=data.get('resume', False),
+            downloadAuth=DownloadAuth(
+                httpAuth=HTTPAuth(user=data.get('authUser'), password=data.get('authPassword')),
+                pickupCode=data.get('pickupCode'),
+                recipientPrivateKey=data.get('recipientPrivateKey'),
+                encryptionKey=data.get('encryptionKey'),
+            ),
+        )
+        self._sendJSON(201, download.toDict())
+
+    def _handlePauseDownload(self, downloadId):
+        if not self.server.downloadManager.pauseDownload(downloadId):
+            self._sendJSON(409, {'error': 'download cannot be paused'})
+            return
+            
+        self._sendJSON(200, {'ok': True})
+
+    def _handleResumeDownload(self, downloadId):
+        if not self.server.downloadManager.resumeDownload(downloadId):
+            self._sendJSON(409, {'error': 'download cannot be resumed'})
+            return
+            
+        self._sendJSON(200, {'ok': True})
 
     def _handleSetHook(self):
         data = self._readJSONBody()
@@ -800,6 +1039,7 @@ class DaemonServer(ThreadingHTTPServer):
     def __init__(self, processHosted: bool = True):
         super().__init__(('127.0.0.1', 0), DaemonAPIHandler)
         self.shareManager = InProcessShareManager()
+        self.downloadManager = InProcessDownloadManager()
         self.token = secrets.token_hex(16)
         self._stateFile = DaemonStateFile()
         self._hookURL = None
@@ -844,6 +1084,7 @@ class DaemonServer(ThreadingHTTPServer):
 
         self._running = False
         self.shareManager.shutdown()
+        self.downloadManager.shutdown()
         self._stateFile.clear()
 
         threading.Thread(target=self.shutdown, daemon=True).start()
@@ -932,6 +1173,52 @@ class DaemonClient:
         data = {'filePaths': filePaths, 'config': config, 'proxyConfig': proxyConfig}
         response = requests.post(self.buildURL('/shares'), json=data, headers=self._headers, timeout=self.API_TIMEOUT)
         return self._parseRecord(self._getResponseData(response, expectedStatusCodes={201}))
+
+    def createDownload(self, url, destinationPath, resume=False, downloadAuth=None, pickupCode=None, authUser=None,
+                       authPassword=None, recipientPrivateKey=None, encryptionKey=None) -> dict:
+        if downloadAuth is not None:
+            pickupCode = downloadAuth.pickupCode
+            authUser = downloadAuth.httpAuth.user
+            authPassword = downloadAuth.httpAuth.password
+            recipientPrivateKey = downloadAuth.recipientPrivateKey
+            encryptionKey = downloadAuth.encryptionKey
+
+        response = requests.post(
+            self.buildURL('/downloads'),
+            json={
+                'url': url, 'destinationPath': destinationPath, 'resume': resume, 'pickupCode': pickupCode,
+                'authUser': authUser, 'authPassword': authPassword,
+                'recipientPrivateKey': recipientPrivateKey, 'encryptionKey': encryptionKey,
+            },
+            headers=self._headers,
+            timeout=self.API_TIMEOUT,
+        )
+        return self._getResponseData(response, expectedStatusCodes={201})
+
+    def listDownloads(self) -> list:
+        response = requests.get(self.buildURL('/downloads'), headers=self._headers, timeout=self.API_TIMEOUT)
+        return self._getResponseData(response, expectedStatusCodes={200})['downloads']
+
+    def getDownload(self, downloadId: str) -> Optional[dict]:
+        response = requests.get(self.buildURL(f'/downloads/{downloadId}'), headers=self._headers, timeout=self.API_TIMEOUT)
+        if response.status_code == 404:
+            return None
+
+        return self._getResponseData(response, expectedStatusCodes={200})
+
+    def _postDownloadAction(self, downloadId, action):
+        response = requests.post(self.buildURL(f'/downloads/{downloadId}/{action}'), headers=self._headers, timeout=self.API_TIMEOUT)
+        if response.status_code in (404, 409):
+            return False
+            
+        self._getResponseData(response, expectedStatusCodes={200})
+        return True
+
+    def pauseDownload(self, downloadId):
+        return self._postDownloadAction(downloadId, 'pause')
+
+    def resumeDownload(self, downloadId):
+        return self._postDownloadAction(downloadId, 'resume')
 
     def waitForLink(self, shareId: str, timeout: float = CREATE_SHARE_TIMEOUT) -> Optional[dict]:
         """Poll GET /shares/{id} until link is available, then return the full share dict."""

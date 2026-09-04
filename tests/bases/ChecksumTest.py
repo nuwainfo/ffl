@@ -20,10 +20,13 @@
 import hashlib
 import os
 import unittest
+
+from unittest import mock
 from urllib.parse import urlparse
 
 import requests
 
+from bases.Download import FFLDownloader
 from ..CoreTestBase import FastFileLinkTestBase, LOCAL_TEST_SERVER_URL
 from ..BrowserTestBase import BrowserTestBase
 
@@ -205,6 +208,69 @@ class ChecksumBrowserTest(ChecksumAssertionsMixin, BrowserTestBase):
                 driver.quit()
             except Exception:
                 pass
+
+
+class ChecksumNetworkResilienceTest(unittest.TestCase):
+    """Unit tests: a network error while confirming an already-complete
+    transfer's checksum must not be treated as a transfer failure.
+
+    Regression test: _fetchReadyRemoteChecksum() used to let a plain
+    requests exception (timeout, connection reset, DNS blip) while polling
+    /checksum propagate uncaught -- indistinguishable from an actual
+    checksum mismatch -- even though the file had already been fully and
+    correctly written to disk and progress already showed 100%. In the
+    WebRTC path this got wrapped into WebRTCFallbackError, forcing an
+    unnecessary (and possibly itself failing) HTTP re-fallback for a
+    transfer that had already succeeded.
+    """
+
+    def _makeDownloader(self):
+        return FFLDownloader(loggerCallback=lambda _text: None)
+
+    def testFetchReadyRemoteChecksumSkipsOnNetworkError(self):
+        downloader = self._makeDownloader()
+        try:
+            with mock.patch.object(
+                downloader, '_sendHTTPRequest', side_effect=requests.exceptions.ConnectionError('boom')
+            ):
+                result = downloader._fetchReadyRemoteChecksum('https://example.test/uid', {})
+
+            self.assertIsNone(result, "A network error fetching the checksum should be treated like 'not ready yet'")
+        finally:
+            downloader.close()
+
+    def testVerifyTransferChecksumDoesNotRaiseOnNetworkError(self):
+        downloader = self._makeDownloader()
+        try:
+            checksumState = downloader._createTransferChecksumState(True)
+            downloader._updateTransferChecksumState(checksumState, b'already downloaded and fully correct')
+
+            with mock.patch.object(
+                downloader, '_sendHTTPRequest', side_effect=requests.exceptions.ConnectionError('boom')
+            ):
+                # Must not raise: the transfer already completed successfully,
+                # this call only confirms it -- a network blip here must not
+                # turn a successful download into a reported failure.
+                downloader._verifyTransferChecksum('https://example.test/uid', {}, checksumState, 'http')
+        finally:
+            downloader.close()
+
+    def testVerifyTransferChecksumStillRaisesOnGenuineMismatch(self):
+        """Guard against overcorrecting: an actual mismatch (real data
+        corruption, server responded successfully) must still be reported."""
+        downloader = self._makeDownloader()
+        try:
+            checksumState = downloader._createTransferChecksumState(True)
+            downloader._updateTransferChecksumState(checksumState, b'locally received bytes')
+
+            with mock.patch.object(
+                downloader, '_sendHTTPRequest',
+                return_value=({'ready': True, 'checksum': 'deadbeef', 'size': 999}, 200)
+            ):
+                with self.assertRaisesRegex(RuntimeError, 'Checksum verification failed'):
+                    downloader._verifyTransferChecksum('https://example.test/uid', {}, checksumState, 'http')
+        finally:
+            downloader.close()
 
 
 if __name__ == '__main__':

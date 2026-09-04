@@ -107,6 +107,7 @@ createPythonTarGz() {
     if [ "$OS" = "linux" ]; then
         cp ../REQUIREMENTS.txt ../REQUIREMENTS.txt.bak
         grep -vi -e "pyinstaller" ../REQUIREMENTS.txt > ../REQUIREMENTS.txt.tmp 
+        sed -ie "s/wxPython.*//g" ../REQUIREMENTS.txt.tmp
         mv ../REQUIREMENTS.txt.tmp ../REQUIREMENTS.txt
     fi
 
@@ -121,7 +122,8 @@ createPythonTarGz() {
     createWheel # FileShare
 
     rm -f "$envName.tar.gz"
-    conda pack -n "$envName" -o "$envName.tar.gz" --ignore-missing-files
+    # conda pack -n "$envName" -o "$envName.tar.gz" --ignore-missing-files 交接時 因 Woody 的環境需要加 conda-pack，而學姊那邊不用
+    conda-pack -n "$envName" -o "$envName.tar.gz" --ignore-missing-files
 
     mkdir -p "$envName"
     tar -xzf "$envName.tar.gz" -C "$envName"

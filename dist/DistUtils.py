@@ -31,7 +31,6 @@ import zlib
 from pathlib import Path
 from typing import Optional, Tuple
 
-import wx
 
 rootPath = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, rootPath)
@@ -70,6 +69,7 @@ packageData = [
 ]
 
 if sys.platform == 'win32':
+    import wx
     packageData.append((os.path.join(os.path.dirname(wx.__file__), 'WebView2Loader.dll'), 'wx'))
 
 featuresSupported = True

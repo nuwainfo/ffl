@@ -37,7 +37,10 @@ class DownloadTest(FastFileLinkTestBase):
 
     def __init__(self, methodName='runTest'):
         # Use smaller file size for faster download tests
-        super().__init__(methodName, fileSizeBytes=512 * 1024) # 512KB
+        super().__init__(
+            methodName, fileSizeBytes=512 * 1024,
+            #testConfigVars={'DISABLE_P2P': 'True'}, # For DownloadTest, all mode should test
+        ) # 512KB
         self.testFolderPath = None # Will be created in setUp if needed
 
     def _createPartialFile(self, outputPath: str, partialSize: int = None) -> int:
@@ -733,6 +736,33 @@ class DownloadTest(FastFileLinkTestBase):
             self.assertEqual(self.getFileHash(outputPath), stdinHash, "stdout fallback must continue without duplicate bytes")
         finally:
             self._terminateProcess()
+
+    def testBasicAuthP2PDownload(self):
+        """A Basic-Auth-protected P2P share must be downloadable with matching
+        --auth-user/--auth-password.
+
+        Regression test: _resolveDownloadContext()'s pre-flight HTTP calls
+        (_extractURLInfo's HEAD probes, _fetchChecksumData's GET) used to send
+        no Authorization header regardless of the credentials the caller was
+        given, so an auth-protected share's own server rejected them with 401
+        before any real download attempt began -- the download failed with no
+        output file ever created, for every transport (P2P, WebRTC, HTTP),
+        since they all funnel through _resolveDownloadContext() first.
+        """
+        shareLink = self._startFastFileLink(
+            p2p=True,
+            timeout=60,
+            extraArgs=["--auth-user", "ffl-test-user", "--auth-password", "correct-horse-battery-staple"],
+        )
+
+        outputPath = os.path.join(self.tempDir, "basic_auth_download.bin")
+        downloadedPath = self._downloadWithCore(
+            shareLink,
+            outputPath=outputPath,
+            extraArgs=["--auth-user", "ffl-test-user", "--auth-password", "correct-horse-battery-staple"],
+        )
+
+        self._verifyDownloadedFile(downloadedPath)
 
 
 if __name__ == '__main__':
