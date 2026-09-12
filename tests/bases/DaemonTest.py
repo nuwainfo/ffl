@@ -1,5 +1,21 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: Apache-2.0
+#
+# FastFileLink CLI - Fast, no-fuss file sharing
+# Copyright (C) 2025-2026 FastFileLink contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import contextlib
 import json
@@ -14,6 +30,8 @@ import unittest
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
+
+import requests
 
 from bases.Daemon import DaemonClient, InProcessDaemonManager, InProcessShareManager, ProcessDaemonManager
 from bases.Kernel import FFLEvent
@@ -324,6 +342,7 @@ class DaemonLifecycleMixin:
         raise AssertionError(f"Timed out waiting for {expectedCount} daemon-managed shares")
 
     def _waitForDaemonDownload(self, downloadId, timeout=120):
+        timeout *= self.DOWNLOAD_TIMEOUT_MULTIPLIER
         deadline = time.time() + timeout
         client = DaemonClient()
         while time.time() < deadline:
@@ -382,6 +401,12 @@ class DaemonLifecycleMixin:
 
 class DaemonTest(DaemonLifecycleMixin, FastFileLinkTestBase):
     """Functional tests for the background daemon and multi-session share management."""
+
+    # An in-process daemon's WebRTC threads share the GIL with the rest of a
+    # full suite run instead of getting a subprocess's own OS-level isolation,
+    # so a download can take longer to make progress under that contention.
+    # InProcessDaemonTest raises this rather than the subprocess suite needing it.
+    DOWNLOAD_TIMEOUT_MULTIPLIER = 1
 
     def _waitForDaemonDownloadMatching(self, downloadId, predicate, timeout=30):
         client = DaemonClient()
@@ -900,6 +925,7 @@ class InProcessDaemonTest(DaemonTest):
     """Run the daemon functional suite against a daemon hosted by this test process."""
 
     daemonManagerClass = InProcessDaemonManager
+    DOWNLOAD_TIMEOUT_MULTIPLIER = 2
 
 
 class InProcessDaemonBrowserTest(DaemonBrowserTest):

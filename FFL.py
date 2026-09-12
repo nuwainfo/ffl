@@ -52,6 +52,7 @@ from bases.FileSystems import ExcludeFilter
 from bases.Readers import SourceReader
 from bases.Tunnel import TunnelUnavailableError
 from bases.Runtime import SingleShareRuntime
+from bases.Collection import processWatchSharing
 from bases.Session import createSession
 from bases.Share import ShareExecutionContext, ShareReporter, createShareRequest, processSharing
 from bases.Download import processDownload
@@ -244,6 +245,20 @@ def runCLIMain():
 
     if args.command == 'share':
         shareRequest = createShareRequest(args)
+
+        if shareRequest.watch:
+            if isinstance(shareRequest.file, list) and len(shareRequest.file) != 1:
+                parser.error('--watch requires exactly one folder')
+                
+            watchPath = shareRequest.file[0] if isinstance(shareRequest.file, list) else shareRequest.file
+            if not os.path.isdir(watchPath):
+                parser.error('--watch can only be used with a folder')
+                
+            if shareRequest.upload:
+                parser.error('--watch does not support --upload; each delivery is a normal immutable share')
+                
+            shareRequest.file = watchPath
+
         session = createSession(shareRequest)
         
         shareReporter = ShareReporter(
@@ -279,7 +294,10 @@ def runCLIMain():
             shareConfig = ShareCLIArgumentAdapter.createDaemonShareConfig(args, shareSubparser)
             return ProcessDaemonManager.handleBackgroundShare(args, shareConfig, proxyConfig=proxyConfig)
         else:
-            return processSharing(shareRequest, shareContext)
+            if shareRequest.watch:
+                return processWatchSharing(shareRequest, shareContext)
+            else:
+                return processSharing(shareRequest, shareContext)
 
     return None
 

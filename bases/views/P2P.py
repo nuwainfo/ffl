@@ -19,20 +19,34 @@
 
 from http import HTTPStatus
 
-from bases.P2P import P2PAnswer, P2PPublisher, isP2PAvailable
+from bases.P2P import (
+    QUICFileSender,
+    P2PAnswer,
+    P2PConfiguration,
+    P2PPublisher,
+    isP2PAvailable,
+)
 from bases.views import BaseController, BaseView, HTTPResult
 
 
 class P2PController(BaseController):
-    def _newPublisher(self, port, host):
+    def _newPublisher(self, port, host, server=None):
         if not isP2PAvailable() or not self.session.config.defaultWebRTC:
             return None
 
         localHosts = [host] if host not in {'', '0.0.0.0', '::'} else None
-        return P2PPublisher(port, tcpPath=f'/{self.session.uid}', tcpLocalHosts=localHosts)
+        udpHandler = QUICFileSender(self.session, server=server)
+        
+        return P2PPublisher(
+            port,
+            configuration=P2PConfiguration.createICEConfiguration(),
+            tcpPath=f'/{self.session.uid}',
+            tcpLocalHosts=localHosts,
+            udpHandler=udpHandler,
+        )
 
-    def createOffer(self, port, host):
-        publisher = self._newPublisher(port, host)
+    def createOffer(self, port, host, server=None):
+        publisher = self._newPublisher(port, host, server=server)
         if publisher is None:
             return None
             
@@ -67,7 +81,10 @@ class P2PView(BaseView):
         self._registerRoute(mapPOSTRoute, '/p2p/answer', self.handleAnswer)
 
     def handleOffer(self, args, *, controller):
-        result = controller.createOffer(self.server.server_port, self.server.server_address[0])
+        result = controller.createOffer(
+            self.server.server_port, self.server.server_address[0], server=self.server
+        )
+        
         self.sendHTTPResult(result or controller._buildNotFoundResult())
 
     def handlePing(self, args, *, controller):

@@ -21,7 +21,6 @@ import os
 import json
 import time
 import unittest
-import zipfile
 
 from ..CoreTestBase import FastFileLinkTestBase
 
@@ -64,76 +63,6 @@ class DownloadTest(FastFileLinkTestBase):
         if errorMessage is None:
             errorMessage = f"Expected '{expectedText}' not found in output"
         self.assertIn(expectedText, outputText, errorMessage)
-
-    def _createTestFolder(self) -> str:
-        """
-        Create a test folder with multiple files for folder sharing tests
-
-        Returns:
-            str: Path to the created test folder
-        """
-        folderPath = os.path.join(self.tempDir, "test_folder")
-        os.makedirs(folderPath, exist_ok=True)
-
-        # Create multiple files with different sizes
-        testFiles = [
-            ("file1.txt", b"This is file 1 content\n" * 100), # ~2.3KB
-            ("file2.bin", os.urandom(50 * 1024)), # 50KB
-            ("file3.dat", b"File 3 data\n" * 1000), # ~12KB
-            ("subdir/file4.txt", b"Nested file content\n" * 50), # ~1KB in subdir
-        ]
-
-        for filename, content in testFiles:
-            filePath = os.path.join(folderPath, filename)
-            os.makedirs(os.path.dirname(filePath), exist_ok=True)
-            with open(filePath, 'wb') as f:
-                f.write(content)
-
-        return folderPath
-
-    def _verifyZipFile(self, zipPath: str, expectedFolder: str):
-        """
-        Verify that a downloaded ZIP file contains the expected folder structure
-
-        Args:
-            zipPath: Path to the ZIP file to verify
-            expectedFolder: Path to the original folder for comparison
-        """
-        self.assertTrue(os.path.exists(zipPath), "ZIP file should exist")
-        self.assertTrue(zipfile.is_zipfile(zipPath), "File should be a valid ZIP")
-
-        with zipfile.ZipFile(zipPath, 'r') as zf:
-            # Verify no corrupted files
-            badFile = zf.testzip()
-            self.assertIsNone(badFile, f"ZIP file should not be corrupted, but {badFile} is bad")
-
-            # Extract and verify contents
-            extractDir = os.path.join(self.tempDir, "extracted")
-            os.makedirs(extractDir, exist_ok=True)
-            zf.extractall(extractDir)
-
-            # Verify all files exist and have correct content
-            folderName = os.path.basename(expectedFolder)
-            extractedFolder = os.path.join(extractDir, folderName)
-            self.assertTrue(os.path.exists(extractedFolder), f"Extracted folder {folderName} should exist")
-
-            # Compare each file
-            for root, dirs, files in os.walk(expectedFolder):
-                for filename in files:
-                    originalFile = os.path.join(root, filename)
-                    relativePath = os.path.relpath(originalFile, expectedFolder)
-                    extractedFile = os.path.join(extractedFolder, relativePath)
-
-                    self.assertTrue(os.path.exists(extractedFile), f"Extracted file {relativePath} should exist")
-
-                    # Compare file sizes
-                    originalSize = os.path.getsize(originalFile)
-                    extractedSize = os.path.getsize(extractedFile)
-                    self.assertEqual(originalSize, extractedSize, f"File {relativePath} should have same size")
-
-                    # Compare file contents
-                    with open(originalFile, 'rb') as f1, open(extractedFile, 'rb') as f2:
-                        self.assertEqual(f1.read(), f2.read(), f"File {relativePath} should have same content")
 
     def _testFolderResume(self, useWebRTC: bool, simulateFailure: str = None):
         """
@@ -585,18 +514,24 @@ class DownloadTest(FastFileLinkTestBase):
 
     def testStdinWebRTCDownload(self):
         """
-        Test WebRTC download with unknown size from a stdin-backed share.
+        Test a pure WebRTC download with unknown size from a stdin-backed
+        share. Native P2P and HTTP fallback are disabled on the downloader so
+        a successful transfer proves the WebRTC /offer path and stdin stream
+        both work without another transport masking a failure.
         """
-        print("\n[Test] Testing WebRTC download with unknown size (stdin streaming)")
+        print("\n[Test] Testing pure WebRTC download with unknown-size stdin streaming")
 
         try:
-            shareLink = self._startFastFileLink(stdinInputPath=self.testFilePath)
+            shareLink = self._startFastFileLink(
+                stdinInputPath=self.testFilePath,
+                extraArgs=["--stdin-cache", "off"],
+            )
 
             # Read share info to verify unknown size
             with open(self.jsonOutputPath, 'r') as f:
                 shareInfo = json.load(f)
 
-            fileSize = shareInfo.get("fileSize", -1)
+            fileSize = shareInfo.get("file_size")
             print(f"[Test] File size from JSON: {fileSize} (should be -1 for unknown size)")
 
             # Verify unknown size
@@ -605,7 +540,15 @@ class DownloadTest(FastFileLinkTestBase):
             # Download the file using WebRTC
             outputPath = os.path.join(self.tempDir, "stdin_webrtc_download.bin")
             downloadOutputCapture = {}
-            downloadedPath = self._downloadWithCore(shareLink, outputPath=outputPath, captureOutputIn=downloadOutputCapture)
+            downloadedPath = self._downloadWithCore(
+                shareLink,
+                outputPath=outputPath,
+                extraEnvVars={
+                    "DISABLE_P2P": "True",
+                    "DISABLE_HTTP_FALLBACK": "True",
+                },
+                captureOutputIn=downloadOutputCapture,
+            )
 
             # Verify download messages
             outputText = self._updateCapturedOutput(downloadOutputCapture)
@@ -613,12 +556,13 @@ class DownloadTest(FastFileLinkTestBase):
             # Check for unknown size message
             self.assertIn("unknown bytes", outputText, "Should show 'unknown bytes' for stdin")
 
-            # Verify WebRTC was used (P2P message)
-            if "P2P" in outputText or "WebRTC" in outputText:
-                print("[Test] WebRTC confirmed in output")
-            else:
-                # HTTP fallback is acceptable too (on some systems WebRTC may not work)
-                print("[Test] HTTP fallback occurred (WebRTC may not be available)")
+            # The flags above make either alternate transport fail the test;
+            # assert the logged path too, so a future dispatch change cannot
+            # silently weaken this regression coverage.
+            self.assertIn("Attempting WebRTC download...", outputText)
+            self.assertNotIn("Attempting P2P download...", outputText)
+            self.assertNotIn("HTTP fallback", outputText)
+            print("[Test] Pure WebRTC confirmed in output")
 
             # Verify downloaded file matches original
             self.assertTrue(os.path.exists(downloadedPath), "Downloaded file should exist")
@@ -632,13 +576,51 @@ class DownloadTest(FastFileLinkTestBase):
         finally:
             self._terminateProcess()
 
+    def testStdinWebRTCStdoutDownload(self):
+        """Test unknown-size stdin bytes remain clean on stdout through WebRTC."""
+        print("\n[Test] Testing pure WebRTC stdin download to stdout")
+
+        try:
+            with open(self.testFilePath, 'rb') as inputFile:
+                expectedBytes = inputFile.read()
+
+            shareLink = self._startFastFileLink(
+                stdinInputPath=self.testFilePath,
+                extraArgs=["--stdin-cache", "off"],
+            )
+
+            rawBytes, stderrOutput = self._downloadWithCore(
+                shareLink,
+                stdoutMode=True,
+                extraEnvVars={
+                    "DISABLE_P2P": "True",
+                    "DISABLE_HTTP_FALLBACK": "True",
+                },
+            )
+
+            self.assertEqual(rawBytes, expectedBytes, "WebRTC stdout must contain only payload bytes")
+            self.assertIn("Attempting WebRTC download...", stderrOutput)
+            self.assertNotIn("Attempting P2P download...", stderrOutput)
+            self.assertNotIn("HTTP fallback", stderrOutput)
+            print("[Test] Pure WebRTC stdin stdout download successful!")
+
+        finally:
+            self._terminateProcess()
+
     def testStdoutDownload(self):
         """Test --stdout download: file bytes come via stdout, progress to stderr (WebRTC path)"""
         print("\n[Test] Testing --stdout download via WebRTC")
 
         shareLink = self._startFastFileLink(p2p=True, timeout=60)
 
-        rawBytes, stderrOutput = self._downloadWithCore(shareLink, stdoutMode=True)
+        rawBytes, stderrOutput = self._downloadWithCore(
+            shareLink,
+            stdoutMode=True,
+            extraEnvVars={
+                "DISABLE_P2P": "True",
+                "DISABLE_HTTP_FALLBACK": "True",
+            },
+        )
 
         # Write captured bytes to a temp file so _verifyDownloadedFile can hash it
         outputPath = os.path.join(self.tempDir, "stdout_download_webrtc.bin")
@@ -650,6 +632,9 @@ class DownloadTest(FastFileLinkTestBase):
 
         # Progress messages should be on stderr
         self.assertIn("Download complete", stderrOutput, "Completion message should appear on stderr")
+        self.assertIn("Attempting WebRTC download...", stderrOutput)
+        self.assertNotIn("Attempting P2P download...", stderrOutput)
+        self.assertNotIn("HTTP fallback", stderrOutput)
 
         self._verifyDownloadedFile(outputPath)
         print("[Test] --stdout WebRTC download successful")

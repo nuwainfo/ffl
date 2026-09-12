@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-09-05 00:24+0800\n"
+"POT-Creation-Date: 2026-09-11 18:01+0800\n"
 "PO-Revision-Date: 2025-12-17 09:22+0800\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -639,6 +639,21 @@ msgstr ""
 msgid "Encryption Key: {encryptionKey}"
 msgstr ""
 
+msgid "P2P QUIC"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Finish transfer {sizeDisplay} for [#{downloadId}], please wait for the "
+"recipient to finish downloading before you close the application..\n"
+msgstr ""
+
+msgid "P2P QUIC download"
+msgstr ""
+
+msgid "P2P TCP"
+msgstr ""
+
 msgid "0/sec"
 msgstr ""
 
@@ -1222,6 +1237,9 @@ msgstr ""
 
 #, python-brace-format
 msgid "Resuming WebRTC download from {resumePos} / {totalSize}"
+msgstr ""
+
+msgid "P2P direct connectivity failed, using HTTP download..."
 msgstr ""
 
 msgid "WebRTC not supported, using HTTP download..."

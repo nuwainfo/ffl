@@ -17,6 +17,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import os
 import unittest
 
@@ -24,13 +25,46 @@ from types import SimpleNamespace
 from unittest import mock
 
 from bases.Download import FFLDownloader
-from bases.P2P import isP2PAvailable
+from bases.P2P import P2PConfiguration, isP2PAvailable
 from tests.CoreTestBase import FastFileLinkTestBase
 
 
 @unittest.skipUnless(isP2PAvailable(), 'ffl-p2p extension is not available')
 class P2PTest(FastFileLinkTestBase):
-    """Verify a full FFL share and download uses the direct P2P TCP path."""
+    """Verify full FFL shares use the intended direct P2P transport."""
+
+    def testP2PConfigurationEnablesNativeDebugLogging(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch('bases.P2P.logging.getLogger') as getRootLogger:
+                getRootLogger.return_value.isEnabledFor.return_value = True
+                P2PConfiguration._enableNativeDebugLogging()
+
+            self.assertEqual(os.environ['FFL_P2P_NATIVE_LOGGING_LEVEL'], 'DEBUG')
+
+    def testP2PConfigurationPreservesNativeLoggingOverride(self):
+        with mock.patch.dict(os.environ, {
+            'FFL_P2P_NATIVE_LOGGING_LEVEL': 'WARNING',
+        }, clear=True):
+            with mock.patch('bases.P2P.logging.getLogger') as getRootLogger:
+                getRootLogger.return_value.isEnabledFor.return_value = True
+                P2PConfiguration._enableNativeDebugLogging()
+
+            self.assertEqual(os.environ['FFL_P2P_NATIVE_LOGGING_LEVEL'], 'WARNING')
+
+    def testP2PConfigurationUsesSharedSTUNSettings(self):
+        """Native P2P must use Settings' STUN list, not a second hard-coded list."""
+        with mock.patch('bases.P2P.SettingsGetter.getInstance') as getSettings:
+            getSettings.return_value.getSTUNServerURLs.return_value = [
+                'stun:primary.example.test:3478',
+                'stun:secondary.example.test:3478',
+            ]
+
+            configuration = P2PConfiguration.createICEConfiguration()
+
+        self.assertEqual(
+            [server.urls for server in configuration.iceServers],
+            ['stun:primary.example.test:3478', 'stun:secondary.example.test:3478'],
+        )
 
     def testDirectP2PDownload(self):
         shareOutput = {}
@@ -58,6 +92,48 @@ class P2PTest(FastFileLinkTestBase):
         self.assertIn(
             'Using P2P TCP download...', outputText,
             f'Download did not use the direct P2P TCP path:\n{outputText}',
+        )
+        self.assertIn(
+            'P2P TCP', outputText,
+            f'Direct P2P TCP progress was not labelled correctly:\n{outputText}',
+        )
+        self.assertNotIn(
+            'HTTP fallback', outputText,
+            f'Direct P2P TCP progress was incorrectly labelled as fallback:\n{outputText}',
+        )
+
+    def testDirectP2PUDPQUICDownload(self):
+        shareOutput = {}
+        shareLink = self._startFastFileLink(
+            p2p=True,
+            timeout=60,
+            captureOutputIn=shareOutput,
+        )
+        outputPath = os.path.join(self.tempDir, 'p2p-udp-quic-download.bin')
+        downloadOutput = {}
+
+        downloadedPath = self._downloadWithCore(
+            shareLink,
+            outputPath=outputPath,
+            extraEnvVars={
+                'DISABLE_WEBRTC': 'True',
+                'DISABLE_HTTP_FALLBACK': 'True',
+                'P2P_TRANSPORT_PREFERENCE': 'udp',
+            },
+            captureOutputIn=downloadOutput,
+        )
+
+        self.assertEqual(outputPath, downloadedPath)
+        self._verifyDownloadedFile(downloadedPath)
+        outputText = self._updateCapturedOutput(downloadOutput)
+        self.assertIn(
+            'Using P2P UDP/QUIC download...', outputText,
+            f'Download did not use the direct P2P UDP/QUIC path:\n{outputText}',
+        )
+        shareText = self._updateCapturedOutput(shareOutput)
+        self.assertIn(
+            'P2P QUIC', shareText,
+            f'Share side did not display P2P QUIC progress:\n{shareText}',
         )
 
     def testDisabledFallbackPreventsHTTPDownload(self):

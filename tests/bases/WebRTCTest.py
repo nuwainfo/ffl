@@ -26,7 +26,7 @@ import unittest
 
 from selenium.webdriver.support.ui import WebDriverWait
 
-from bases.WebRTC import ICEServerConfigProvider
+from bases.Settings import SettingsGetter
 
 from ..BrowserTestBase import BrowserTestBase
 
@@ -277,12 +277,12 @@ class WebRTCTest(BrowserTestBase):
             self._terminateProcess()
 
     # ---------------------------
-    # webrtc.json (STUN/TURN) configuration tests
+    # ice.json (STUN/TURN) configuration tests
     # ---------------------------
     def _startLocalUDPProbe(self):
         """Bind a UDP socket on this machine's own LAN address that just records who
         sent it packets, standing in for a STUN server so tests can prove aiortc's
-        real ICE gathering actually contacted the address configured in webrtc.json -
+        real ICE gathering actually contacted the address configured in ice.json -
         not just that it parsed.
 
         Bound to the host's real interface address rather than 127.0.0.1: aioice
@@ -324,13 +324,13 @@ class WebRTCTest(BrowserTestBase):
         return hostIp, probeSocket.getsockname()[1], receivedFrom, stop
 
     def testCustomStunServerConfigUsedByBothSides(self):
-        """A custom STUN server configured in webrtc.json must actually be contacted
+        """A custom STUN server configured in ice.json must actually be contacted
         by both the sharer (server-side offer) and the downloader (client-side answer)
         during a real P2P transfer - proving the config is wired in, not just loadable."""
         probeHost, probePort, receivedFrom, stopProbe = self._startLocalUDPProbe()
 
         try:
-            configPath = os.path.join(self.tempDir, ICEServerConfigProvider.CONFIG_FILENAME)
+            configPath = os.path.join(self.tempDir, SettingsGetter.ICE_CONFIG_FILENAME)
             with open(configPath, 'w', encoding='utf-8') as f:
                 json.dump({"ice_servers": [{"urls": f"stun:{probeHost}:{probePort}"}]}, f)
 
@@ -356,7 +356,7 @@ class WebRTCTest(BrowserTestBase):
 
             self.assertGreater(
                 len(receivedFrom), 0,
-                "Expected at least one UDP packet at the custom STUN server from webrtc.json - "
+                "Expected at least one UDP packet at the custom STUN server from ice.json - "
                 "it was never contacted, so the config is not actually being used"
             )
             print(f"[Test] Custom STUN server received {len(receivedFrom)} packet(s) from {set(receivedFrom)}")

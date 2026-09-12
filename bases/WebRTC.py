@@ -18,7 +18,6 @@
 # limitations under the License.
 
 import asyncio
-import json
 import sys
 import threading
 import uuid
@@ -60,10 +59,10 @@ else:
         logger.debug(f'Unable to use aiortc_native_sctp: {error}')
 
 from bases.Checksum import DEFAULT_CHECKSUM_ALGORITHM
-from bases.Kernel import getLogger, FFLEvent, StorageLocator, Throttler
+from bases.Kernel import getLogger, FFLEvent, Throttler
 from bases.Utils import ONE_MB, formatSize
 from bases.Progress import Progress
-from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
+from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE, TransferTransport
 from bases.Readers import FolderChangedException, StdinHandoffTakenOver
 from bases.I18n import _
 
@@ -328,74 +327,22 @@ class ClientInfo:
     detectedIp: Optional[str] = None
 
 
-class ICEServerConfigProvider:
-    """Resolves the RTCIceServer list used for WebRTC ICE negotiation.
-
-    Reads `webrtc.json` (StorageLocator search order, current dir first, same
-    as tunnels.json) if the user has created one with their own STUN/TURN
-    servers. Never writes to disk - if the file is absent, unreadable, or has
-    no usable entries, this silently falls back to FFL's built-in public STUN
-    servers rather than breaking WebRTC connectivity.
-    """
-
-    CONFIG_FILENAME = 'webrtc.json'
-
-    _DEFAULT_ICE_SERVER_ENTRIES = [
-        {"urls": "stun:stun.l.google.com:19302"},
-        {"urls": "stun:stun.cloudflare.com:3478"},
-        {"urls": "stun:stun.nextcloud.com:443"},
-        {"urls": "stun:openrelayproject.org:443"},
-    ]
-
-    @staticmethod
-    def _buildICEServer(entry: Dict[str, Any]) -> RTCIceServer:
-        return RTCIceServer(
-            urls=entry['urls'],
-            username=entry.get('username'),
-            credential=entry.get('credential'),
-            credentialType=entry.get('credential_type', 'password'),
-        )
-
-    def __init__(self, configPath: Optional[str] = None):
-        self.configPath = configPath or self._getDefaultConfigPath()
-        self.iceServers = self._loadICEServers()
-
-    def _getDefaultConfigPath(self) -> str:
-        storageLocator = StorageLocator.getInstance()
-        return storageLocator.findConfig(self.CONFIG_FILENAME, prefer=StorageLocator.Location.CURRENT)
-
-    def _loadICEServers(self) -> List[RTCIceServer]:
-        if not os.path.exists(self.configPath):
-            return self._buildICEServers(self._DEFAULT_ICE_SERVER_ENTRIES)
-
-        try:
-            with open(self.configPath, 'r') as f:
-                data = json.load(f)
-        except (OSError, ValueError) as e:
-            logger.warning(f"Failed to load WebRTC config from {self.configPath}, using built-in defaults: {e}")
-            return self._buildICEServers(self._DEFAULT_ICE_SERVER_ENTRIES)
-
-        iceServers = self._buildICEServers(data.get('ice_servers') or [])
-        if not iceServers:
-            logger.warning(f"No usable ice_servers in {self.configPath}, using built-in defaults")
-            return self._buildICEServers(self._DEFAULT_ICE_SERVER_ENTRIES)
-
-        return iceServers
-
-    def _buildICEServers(self, entries: List[Dict[str, Any]]) -> List[RTCIceServer]:
-        iceServers = []
-        for entry in entries:
-            try:
-                iceServers.append(self._buildICEServer(entry))
-            except (KeyError, TypeError) as e:
-                logger.warning(f"Skipping invalid ICE server entry {entry} in {self.configPath}: {e}")
-
-        return iceServers
-
-
 class WebRTCManager(AsyncLoopExceptionMixin):
     # Transfer chunk size - shared across WebRTC and HTTP downloads
     CHUNK_SIZE = TRANSFER_CHUNK_SIZE
+
+    @classmethod
+    def getICEServers(cls):
+        """Build this backend's ICE server objects from shared settings."""
+        return [
+            RTCIceServer(
+                urls=entry['urls'],
+                username=entry.get('username'),
+                credential=entry.get('credential'),
+                credentialType=entry.get('credential_type', 'password'),
+            )
+            for entry in SettingsGetter.getInstance().getICEServerEntries()
+        ]
 
     def __init__(
         self,
@@ -428,9 +375,9 @@ class WebRTCManager(AsyncLoopExceptionMixin):
         # Track peer statistics (file size, reported bytes, etc.) for diagnostics
         self.peerStats: Dict[str, Dict[str, Any]] = {}
 
-        # ICE servers configuration - defaults to the user's webrtc.json (or FFL's
+        # ICE servers configuration - defaults to the user's ice.json (or FFL's
         # built-in STUN servers if absent/invalid); pass explicitly to override.
-        self.iceServers = iceServers if iceServers is not None else ICEServerConfigProvider().iceServers
+        self.iceServers = iceServers if iceServers is not None else self.getICEServers()
 
     def _runLoop(self):
         """Run asyncio event loop with exception handler"""
@@ -907,6 +854,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
             fileName=reader.contentName,
             fileSize=fileSize,
             resumeOffset=offset,
+            connectionType=TransferTransport.WEBRTC.value,
             e2eeEnabled=e2eeManager is not None
         )
 
@@ -1674,6 +1622,8 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
         Args:
             urlInfo: Optional pre-parsed URL info to avoid redundant parsing
         """
+        self._notifyTransport(TransferTransport.WEBRTC.value)
+        
         if urlInfo is None:
             urlInfo = self._extractURLInfo(url, credentials)
 
@@ -1737,7 +1687,13 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
             logger.debug(f"Using offer URL: {offerURL}")
 
         try:
-            offerData, __ = await asyncio.to_thread(self._sendHTTPRequest, offerURL, "GET", None, authHeaders)
+            offerData, offerStatusCode = await asyncio.to_thread(self._sendHTTPRequest, offerURL, "GET", None, authHeaders)
+            if offerData is None:
+                # _sendHTTPRequest returns (None, status) for 204/404 instead of
+                # raising (candidate polling relies on that) -- the offer endpoint
+                # has no such "not ready yet" case, so treat it the same as the
+                # HTTPError 404 below rather than subscripting None.
+                raise RuntimeError(f"WebRTC not supported (/offer endpoint returned {offerStatusCode})")
             peerId = offerData["peerId"]
         except requests.exceptions.HTTPError as e:
             if e.response and e.response.status_code == 404:
@@ -1748,7 +1704,7 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
         # Setup WebRTC peer connection
         self._updateProgressStatus(progress, self._STATUS_SETUP_WEBRTC)
 
-        iceServers = ICEServerConfigProvider().iceServers
+        iceServers = WebRTCManager.getICEServers()
 
         # Debug: Simulate ICE failure by using invalid STUN servers
         if self.debugSimulateIceFailure:
@@ -2013,7 +1969,8 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
                 pickupCode=pickupCode,
                 proof=proof,
                 checksumAlgorithm=checksumAlgorithm,
-                fallbackResumePosition=fallbackResumePosition
+                fallbackResumePosition=fallbackResumePosition,
+                transport=TransferTransport.HTTP_FALLBACK.value,
             )
             self._finishProgress()
             return result
@@ -2041,18 +1998,28 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
         ctx = self._resolveDownloadContext(url, credentials, recipientPrivateKey, encryptionKey)
         return self._downloadWithResolvedContext(url, outputPath, credentials, resume, pickupCode, ctx)
 
-    def _downloadWithResolvedContext(self, url, outputPath, credentials, resume, pickupCode, ctx) -> str:
-        """Continue WebRTC/HTTP selection with a context resolved by an outer transport mixin."""
+    def _downloadWithResolvedContext(self, url, outputPath, credentials, resume, pickupCode, ctx, skipWebRTC=False) -> str:
+        """Continue WebRTC/HTTP selection with a context resolved by an outer transport mixin.
+
+        ``skipWebRTC`` lets an outer transport mixin (e.g. P2PDownloadMixin) veto
+        the WebRTC attempt for a failure it has already classified as unlikely to
+        behave differently under WebRTC, without this mixin needing to know
+        anything about that transport's failure modes.
+        """
         urlInfo = ctx['urlInfo']
 
         if urlInfo.isGenericURL:
             return self._dispatchHTTPDownload(url, outputPath, credentials, resume, ctx, pickupCode)
 
         webrtcDisabled = getEnv('DISABLE_WEBRTC', False)
-        useWebRTC = urlInfo.supportsWebRTC and not webrtcDisabled
+        useWebRTC = urlInfo.supportsWebRTC and not webrtcDisabled and not skipWebRTC
 
         if not useWebRTC:
-            self.loggerCallback(_("WebRTC not supported, using HTTP download..."))
+            if skipWebRTC:
+                self.loggerCallback(_("P2P direct connectivity failed, using HTTP download..."))
+            else:
+                self.loggerCallback(_("WebRTC not supported, using HTTP download..."))
+                
             return self._dispatchHTTPDownload(url, outputPath, credentials, resume, ctx, pickupCode)
 
         future = None

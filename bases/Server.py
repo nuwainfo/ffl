@@ -89,7 +89,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from bases.Kernel import getLogger, PUBLIC_VERSION, FFLEvent, Throttler
 from bases.Utils import flushPrint, utf8, formatSize
-from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
+from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE, TransferTransport
 from bases.WebRTC import WebRTCManager
 from bases.Progress import Progress
 from bases.Auth import AuthMixin, HTTPAuth
@@ -556,6 +556,9 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
         while sibling segments are still in flight.
         """
         return not self.byteRange or self.byteRange.end is None
+        
+    def _getTransferTransport(self):
+        return self.headers.get('X-FFL-Transfer-Transport', TransferTransport.HTTP.value)
 
     def _handleStartDownloadActions(self, size, isLogicalCompletionRequest):
         flushPrint(_('[{timestamp}] Downloading by user').format(timestamp=self.date_time_string()))
@@ -578,7 +581,7 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
             timestamp=self.date_time_string(),
             shareId=self.session.uid,
             downloadId=self._downloadId,
-            connectionType='http',
+            connectionType=self._getTransferTransport(),
             clientInfo={
                 'userAgent': userAgent,
                 'domain': host
@@ -609,7 +612,7 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
             bytesTransferred=size if size else 0,
             duration=duration,
             averageSpeed=averageSpeed,
-            connectionType='http',
+            connectionType=self._getTransferTransport(),
             clientInfo={
                 'userAgent': userAgent,
                 'domain': host
@@ -1042,7 +1045,7 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
                         totalBytes=size,
                         percentage=percentage,
                         speed=speed,
-                        connectionType='http',
+                        connectionType=self._getTransferTransport(),
                         elapsedTime=duration,
                         estimatedRemaining=((size - written) / speed) if (speed > 0 and size) else None
                     )

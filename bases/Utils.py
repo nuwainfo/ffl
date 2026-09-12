@@ -659,12 +659,17 @@ class StoreHelper:
     def isAppleStore(cls):
         if cls._cachedIsAppleStore is not None:
             return cls._cachedIsAppleStore
-            
-        if sys.platform != 'darwin':
+
+        if os.environ.get('FFL_SIMULATE_APPLE_STORE') == 'True':
+            # Lets developers exercise the Apple Store sandbox code paths (hidden
+            # activation menu, disabled login/register commands, etc.) on any
+            # platform without an actual macOS App Sandbox.
+            cls._cachedIsAppleStore = True
+        elif sys.platform != 'darwin':
             cls._cachedIsAppleStore = False
         else:
             cls._cachedIsAppleStore = cls._isMacSandboxed()
-            
+
         return cls._cachedIsAppleStore
 
     @classmethod

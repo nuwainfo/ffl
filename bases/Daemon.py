@@ -79,6 +79,7 @@ from bases.Settings import SettingsGetter, ShareMode
 from bases.Utils import DataclassDictMixin, ProcessHelper, ProxyConfig, flushPrint, getAvailablePort
 from bases.Auth import DownloadAuth, HTTPAuth
 from bases.Download import FFLDownloader
+from bases.Collection import processWatchSharing
 
 logger = getLogger(__name__)
 
@@ -114,6 +115,7 @@ class DownloadRecord(DataclassDictMixin):
     completedAt: Optional[str] = None
     pauseSupported: bool = False
     speed: float = 0
+    transport: Optional[str] = None
 
 
 class InProcessDownloadManager:
@@ -178,12 +180,14 @@ class InProcessDownloadManager:
         with self._lock:
             record.status = 'downloading'
             record.startedAt = datetime.datetime.now().isoformat()
+            record.transport = None
 
         try:
             worker.downloader = FFLDownloader(
                 loggerCallback=lambda message: logger.info('[daemon download %s] %s', record.id, message),
                 progressCallback=lambda transferred, fileSize: self._updateProgress(record.id, transferred, fileSize),
                 urlInfoCallback=lambda urlInfo: self._updateDownloadCapabilities(record.id, not urlInfo.isGenericURL),
+                transportCallback=lambda transport: self._updateDownloadTransport(record.id, transport),
             )
         
             outputPath = worker.downloader.downloadFile(
@@ -241,6 +245,12 @@ class InProcessDownloadManager:
             worker = self._workers.get(downloadId)
             if worker:
                 worker.record.pauseSupported = pauseSupported
+
+    def _updateDownloadTransport(self, downloadId, transport):
+        with self._lock:
+            worker = self._workers.get(downloadId)
+            if worker:
+                worker.record.transport = transport
 
     def pauseDownload(self, downloadId):
         with self._lock:
@@ -611,7 +621,10 @@ class InProcessShareManager(ShareManager):
 
     def _runShareWorker(self, worker):
         try:
-            worker.exitCode = processSharing(worker.shareRequest, worker.context)
+            if worker.shareRequest.watch:
+                worker.exitCode = processWatchSharing(worker.shareRequest, worker.context)
+            else:
+                worker.exitCode = processSharing(worker.shareRequest, worker.context)
         except Exception as e:
             logger.exception(f"Share worker {worker.session.uid} crashed: {e}")
             worker.exitCode = 1
@@ -1317,6 +1330,10 @@ class DaemonManager(ABC):
     """Starts and stops the local daemon API without knowing its host process."""
 
     STARTUP_TIMEOUT = 15
+    # Separate from STARTUP_TIMEOUT: exiting has to tear down real WebRTC/STUN/DTLS
+    # connections and join their threads, which can run well past a budget sized
+    # for "the HTTP server came up and answered /health".
+    SHUTDOWN_TIMEOUT = 30
     POLL_INTERVAL = 0.1
 
     @property
@@ -1443,7 +1460,7 @@ class ProcessDaemonManager(DaemonManager):
             raise RuntimeError(_('Daemon process may not have stopped cleanly'))
 
     def _waitForDaemonProcessStopped(self):
-        return self._waitUntil(lambda: not ProcessHelper.isAlive(self._daemonPID), self.STARTUP_TIMEOUT)
+        return self._waitUntil(lambda: not ProcessHelper.isAlive(self._daemonPID), self.SHUTDOWN_TIMEOUT)
 
     @classmethod
     def stopRunningDaemon(cls, force=False):

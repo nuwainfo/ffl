@@ -41,7 +41,7 @@ import requests
 from bases.Tunnel import AsyncTunnelThread, TunnelRunner, fetchTunnelToken # isort:skip
 from bases.tunnels import TunnelCandidate
 from bases.tunnels.Web import (
-    WebTunnelClient, WebTunnelConfigurationError,
+    WebTunnelCandidate, WebTunnelClient, WebTunnelConfigurationError,
     _HeartbeatedSocket, _LaneRequestState, _TunnelLane, _WebSocketConnection,
 )
 from addons.Features import FeatureLevel, FeatureManager # isort:skip
@@ -179,7 +179,7 @@ class WebTunnelConfigurationTest(unittest.TestCase):
         # A fresh instance every call: createClient()/prefetch mutate `secret`/
         # `preSock` on the resolved candidate in place, so a single shared
         # instance would leak state between test methods.
-        return TunnelCandidate(domain='1.10.fastfilelink.com', type='web')
+        return WebTunnelCandidate(domain='1.10.fastfilelink.com')
 
     def testWebTypeCreatesClientWithoutBore(self):
         with mock.patch.object(TunnelRunner, 'resolveTunnel', return_value=self._makeResolvedWeb()), \
@@ -199,7 +199,7 @@ class WebTunnelConfigurationTest(unittest.TestCase):
 
     def testWebTypeDefaultsWhenResolverOmitsType(self):
         """A resolver result with no `type` key must fall back to bore."""
-        with mock.patch.object(TunnelRunner, 'resolveTunnel', return_value=TunnelCandidate(domain='33.fastfilelink.com')), \
+        with mock.patch.object(TunnelRunner, 'resolveTunnel', return_value=TunnelCandidate.fromDomain(domain='33.fastfilelink.com')), \
              mock.patch('bases.Tunnel.requests.get'), \
              mock.patch('bases.Tunnel.fetchTunnelToken', return_value='token'):
             runner = TunnelRunner(1024)

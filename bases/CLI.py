@@ -479,6 +479,13 @@ def configureCLIParser():
         help=_("Resume incomplete download (like curl -C), otherwise overwrite existing file")
     )
     downloadSubparser.add_argument(
+        "--follow", "--watch",
+        action="store_true",
+        default=False,
+        help=_("Keep watching a collection URL and download newly appended deliveries"),
+        dest="follow"
+    )
+    downloadSubparser.add_argument(
         "--auth-user",
         help=_("Username for HTTP Basic Authentication (default: '{default}')").format(
             default=DEFAULT_AUTH_USER_NAME),

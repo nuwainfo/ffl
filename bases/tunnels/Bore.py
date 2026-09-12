@@ -23,6 +23,7 @@ For security, all connections are forced to use HTTPS/TLS encryption.
 """
 
 import asyncio
+import concurrent.futures
 import json
 import os
 import socket
@@ -31,12 +32,14 @@ import threading
 import traceback
 import uuid
 
+from dataclasses import dataclass
 from hashlib import sha256
 from hmac import HMAC
+from typing import Optional
 
 from bases.Kernel import getLogger
 
-from . import Socks5ProxySupport
+from . import Socks5ProxySupport, TunnelCandidate
 
 # Configure logging
 logger = getLogger(__name__)
@@ -777,3 +780,57 @@ class BoreClient(Socks5ProxySupport):
 
         # Always return HTTPS URL for security
         return f"https://{self.remotePort}.{self.remoteHost}/"
+
+
+@dataclass
+class BoreTunnelCandidate(TunnelCandidate):
+    """A candidate resolved to the bore transport -- the default when a
+    domain's type isn't already known (see TunnelCandidate._classFor() in
+    bases/tunnels/__init__.py)."""
+
+    type: Optional[str] = 'bore'
+
+    @property
+    def probeHost(self):
+        # Bore multiplexes many tunnels behind one control connection, dialed
+        # at '0.<domain>' -- that's the dedicated probe/control host, not the
+        # bare domain (which has no listener of its own).
+        return f"0.{self.domain}"
+
+    def createClient(self, port, uid, tokenProvider, proxyConfig=None, **kwargs):
+        client = BoreClient(
+            localhost='127.0.0.1',
+            localPort=port,
+            remoteHost=self.domain,
+            remotePort=0,
+            secret=self.secret,
+            tokenProvider=tokenProvider,
+            verbose=False,
+            debug=False,
+            useHttps=True,
+            proxyConfig=proxyConfig,
+            **kwargs
+        )
+        if self.preSock is not None:
+            client.injectPreTcpSocket(self.preSock)
+
+        return client
+
+    def attachToken(self, tokenGetter, proxyConfig):
+        # Bore's control handshake benefits from paying the TCP RTT and the
+        # SSL context's trust-store load ahead of time; both run alongside
+        # the token fetch instead of after it.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            tokenFuture = executor.submit(tokenGetter, domain=self.domain)
+            tcpFuture = executor.submit(BoreClient.openTcpConnectionBlocking, self.probeHost, HTTPS_PORT, proxyConfig)
+            executor.submit(warmSSLContext)
+
+        self.secret = tokenFuture.result()
+        self.preSock = tcpFuture.result()
+
+    def tryReuseCached(self, tokenGetter, proxyConfig):
+        # Unlike the base default, a live token alone doesn't prove the
+        # cached domain is still reachable -- only a successful TCP
+        # pre-connect does, so treat that as the reuse verdict.
+        self.attachToken(tokenGetter, proxyConfig)
+        return self.preSock is not None

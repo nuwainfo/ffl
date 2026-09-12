@@ -20,6 +20,7 @@
 import base64
 import contextlib
 import hashlib
+import json
 import os
 import re
 import sys
@@ -39,7 +40,7 @@ from bases.Checksum import DEFAULT_CHECKSUM_ALGORITHM
 from bases.Kernel import getLogger
 from bases.Utils import flushPrint, formatSize, getEnv, sendException, StallResilientAdapter
 from bases.Progress import Progress
-from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE
+from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE, TransferTransport
 from bases.E2EE import E2EEClient
 from bases.Auth import DownloadAuth, HTTPAuth
 from bases.Readers import FolderChangedException
@@ -97,10 +98,11 @@ class Downloader(ABC):
         return fileSize is not None and fileSize > 0
 
     def __init__(self, loggerCallback: Callable = print, progressCallback: Optional[Callable] = None,
-                 urlInfoCallback: Optional[Callable] = None):
+                 urlInfoCallback: Optional[Callable] = None, transportCallback: Optional[Callable] = None):
         self.loggerCallback = loggerCallback
         self.progressCallback = progressCallback
         self.urlInfoCallback = urlInfoCallback
+        self.transportCallback = transportCallback
         self._currentProgress = None
         self._e2eeClient = None
         self._cancelEvent = threading.Event()
@@ -135,6 +137,10 @@ class Downloader(ABC):
     def _notifyProgress(self, transferred, fileSize):
         if self.progressCallback:
             self.progressCallback(transferred, fileSize)
+
+    def _notifyTransport(self, transport):
+        if self.transportCallback:
+            self.transportCallback(transport)
 
     def _ensureProgress(self, fileSize: int, desc: str, resumePosition: int = 0) -> Progress:
         """Ensure progress bar exists and is configured correctly - reuse if exists, create if needed"""
@@ -947,7 +953,9 @@ class HTTPDownloader(Downloader):
         checksumAlgorithm: str = DEFAULT_CHECKSUM_ALGORITHM,
         pickupCode: Optional[str] = None,
         proof: Optional[str] = None,
-        fallbackResumePosition: int = 0
+        fallbackResumePosition: int = 0,
+        progressLabel: Optional[str] = None,
+        transport: Optional[str] = None,
     ) -> str:
         """
         Download file via HTTP with resume capability as fallback
@@ -957,7 +965,13 @@ class HTTPDownloader(Downloader):
             forceResume: If True, always resume from existing file (used for WebRTC fallback)
             urlInfo: Optional pre-parsed URL info to avoid redundant parsing
             fallbackResumePosition: Bytes already written to stdout by a prior transport
+            progressLabel: Transport name displayed in download progress
         """
+        transport = transport or TransferTransport.HTTP.value
+        self._notifyTransport(transport)
+        
+        progressDescription = progressLabel or self._STATUS_HTTP_DOWNLOAD
+        progressText = progressLabel or self._STATUS_HTTP_FALLBACK
 
         # Parse the original URL to get base URL and construct download endpoint
         # Follow same pattern as DownloadManager.js: /{uid}/download
@@ -977,6 +991,8 @@ class HTTPDownloader(Downloader):
 
         # Build auth headers for pickup code and pubkey proof
         authExtra = {}
+        if transport != TransferTransport.HTTP.value:
+            authExtra['X-FFL-Transfer-Transport'] = transport
         if pickupCode:
             authExtra['X-FFL-Pickup'] = pickupCode
         if proof:
@@ -998,6 +1014,9 @@ class HTTPDownloader(Downloader):
             raise RuntimeError(f"Failed to get file metadata: HTTP {e.response.status_code if e.response else 'error'}")
         except Exception as e:
             raise RuntimeError(f"Failed to get file metadata: {e}")
+
+        if fileSize < 0:
+            self.loggerCallback(_('Downloading {fileName} (unknown bytes)').format(fileName=fileName))
 
         # Resolve output path using helper
         finalOutputPath = self._resolveOutputPath(outputPath, fileName)
@@ -1027,12 +1046,12 @@ class HTTPDownloader(Downloader):
         # Use shared progress or create new one
         if sharedProgress:
             progress = sharedProgress
-            self._updateProgressStatus(progress, self._STATUS_HTTP_DOWNLOAD)
+            self._updateProgressStatus(progress, progressDescription)
             # Update progress to current resume position if needed
             if resumePosition > 0 and resumePosition > progress.transferred:
                 progress.update(resumePosition)
         else:
-            progress = self._ensureProgress(fileSize, self._STATUS_HTTP_DOWNLOAD, resumePosition)
+            progress = self._ensureProgress(fileSize, progressDescription, resumePosition)
 
         # Start download without extra logging if using shared progress
 
@@ -1130,7 +1149,7 @@ class HTTPDownloader(Downloader):
                                         fileSize = actualSize
                                         if not sharedProgress:
                                             self._finishProgress(complete=False)
-                                            progress = self._ensureProgress(fileSize, self._STATUS_HTTP_DOWNLOAD, 0)
+                                            progress = self._ensureProgress(fileSize, progressDescription, 0)
 
                             for chunk in response.iter_content(chunk_size=responseChunkSize):
                                 self._raiseIfCancelled()
@@ -1142,7 +1161,7 @@ class HTTPDownloader(Downloader):
                                 processedData = streamDecryptor.processChunk(chunk) if streamDecryptor else chunk
                                 f.write(processedData)
                                 totalDownloaded += len(processedData)
-                                progress.update(totalDownloaded, extraText="HTTP fallback")
+                                progress.update(totalDownloaded, extraText=progressText)
 
                             # The iter_content loop can end "cleanly" (no read
                             # exception) even though the server aborted the
@@ -1158,7 +1177,7 @@ class HTTPDownloader(Downloader):
                                 if finalData:
                                     f.write(finalData)
                                     totalDownloaded += len(finalData)
-                                    progress.update(totalDownloaded, extraText="HTTP fallback")
+                                    progress.update(totalDownloaded, extraText=progressText)
 
                         break
                     except Exception as e:
@@ -1244,7 +1263,7 @@ class HTTPDownloader(Downloader):
                 raise RuntimeError(f"Download incomplete: {finalSize} != {fileSize} bytes")
 
         # Final progress update on success
-        progress.update(finalSize, forceLog=True, extraText="HTTP fallback")
+        progress.update(finalSize, forceLog=True, extraText=progressText)
         if not sharedProgress: # Only finish bar if we created it
             self._finishProgress()
 
@@ -1296,12 +1315,16 @@ class HTTPDownloader(Downloader):
         urlInfo = ctx['urlInfo']
         if urlInfo.isGenericURL:
             self.loggerCallback(_("⚠️  This is not a FastFileLink URL, downloading directly via HTTP (like wget)..."))
-            return self._downloadViaHTTP(url, outputPath, credentials, None, resume, e2eeContext=None, urlInfo=urlInfo)
+            return self._downloadViaHTTP(
+                url, outputPath, credentials, None, resume,
+                e2eeContext=None, urlInfo=urlInfo, transport=TransferTransport.HTTP.value,
+            )
 
         return self._downloadViaHTTP(
             url, outputPath, credentials, None, resume,
             e2eeContext=ctx['e2eeContext'], urlInfo=urlInfo, pickupCode=pickupCode,
-            proof=ctx['proof'], checksumAlgorithm=ctx['checksumAlgorithm']
+            proof=ctx['proof'], checksumAlgorithm=ctx['checksumAlgorithm'],
+            transport=TransferTransport.HTTP_FALLBACK.value,
         )
 
     def downloadFile(self, url, outputPath=None, resume=False, downloadAuth=None) -> str:
@@ -1340,11 +1363,116 @@ class FFLDownloader(P2PDownloadMixin, WebRTCDownloadMixin, HTTPDownloader):
     pass
 
 
+class CollectionDownloadFollower:
+    """Downloads an append-only collection and optionally waits for later entries."""
+
+    POLL_SECONDS = 2
+
+    def __init__(self, args, logCallback):
+        self.args = args
+        self.logCallback = logCallback
+        self.outputDirectory = self._getOutputDirectory()
+        self.statePath = os.path.join(self.outputDirectory, '.ffl-state')
+        self.state = self._loadState()
+
+    @staticmethod
+    def isCollection(url, credentials=None):
+        response = requests.head(url, timeout=15, allow_redirects=True, auth=credentials)
+        return response.headers.get('X-FFL-Resource-Type') == 'collection'
+
+    def _getOutputDirectory(self):
+        output = self.args.output or os.getcwd()
+        if not os.path.isdir(output):
+            raise ValueError('Collection downloads require --output to be an existing directory')
+            
+        return os.path.abspath(output)
+
+    def _loadState(self):
+        if not os.path.exists(self.statePath):
+            return {}
+            
+        with open(self.statePath, 'r', encoding='utf-8') as fileHandle:
+            return json.load(fileHandle)
+
+    def _saveState(self):
+        temporaryPath = f'{self.statePath}.tmp{os.getpid()}'
+        with open(temporaryPath, 'w', encoding='utf-8') as fileHandle:
+            json.dump(self.state, fileHandle, indent=2)
+            
+        os.replace(temporaryPath, self.statePath)
+
+    def _fetchManifest(self):
+        response = requests.get(self.args.url, timeout=15, auth=self._credentials)
+        if response.headers.get('X-FFL-Resource-Type') != 'collection':
+            return None
+            
+        response.raise_for_status()
+        return response.json()
+
+    def _downloadItem(self, item):
+        downloader = FFLDownloader(loggerCallback=self.logCallback)
+        try:
+            return downloader.downloadFile(
+                item['link'],
+                self.outputDirectory,
+                resume=self.args.resume,
+                downloadAuth=DownloadAuth(
+                    httpAuth=HTTPAuth(user=self.args.authUser, password=self.args.authPassword),
+                    pickupCode=self.args.pickupCode,
+                    recipientPrivateKey=self.args.recipientPrivateKey,
+                ),
+            )
+        finally:
+            downloader.close()
+
+    def run(self):
+        collectionKey = self.args.url.rstrip('/')
+        lastSeenSeq = self.state.get(collectionKey, 0)
+        
+        while True:
+            manifest = self._fetchManifest()
+            if manifest is None:
+                return False
+                
+            for item in manifest['items']:
+                if item['seq'] <= lastSeenSeq:
+                    continue
+                    
+                outputPath = self._downloadItem(item)
+                lastSeenSeq = item['seq']
+                self.state[collectionKey] = lastSeenSeq
+                self._saveState()
+                
+                self.logCallback(_('Downloaded: {outputPath}').format(outputPath=outputPath))
+                
+            if not self.args.follow:
+                return True
+                
+            # self.logCallback(_('Watching for new deliveries...'))
+            time.sleep(self.POLL_SECONDS)
+
+    @property
+    def _credentials(self):
+        return HTTPAuth(user=self.args.authUser, password=self.args.authPassword).asCredentials()
+
+
 def processDownload(args):
 
     downloader = None
     try:
         logCallback = (lambda text: print(text, file=sys.stderr, flush=True)) if args.stdout else flushPrint
+
+        if args.stdout and args.follow:
+            raise ValueError('--follow cannot be used with --stdout')
+
+        if args.output and not args.stdout:
+            outputDirectory = args.output if os.path.isdir(args.output) else os.path.dirname(os.path.abspath(args.output))
+            if not os.path.isdir(outputDirectory):
+                raise ValueError(f'Output directory does not exist: {outputDirectory}')
+
+        credentials = HTTPAuth(user=args.authUser, password=args.authPassword).asCredentials()
+        if CollectionDownloadFollower.isCollection(args.url, credentials=credentials):
+            return 0 if CollectionDownloadFollower(args, logCallback).run() else 1
 
         # Create downloader and download file
         downloader = FFLDownloader(loggerCallback=logCallback)

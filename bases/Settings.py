@@ -17,6 +17,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import shutil
 import sys
 import os
@@ -27,7 +28,7 @@ from dataclasses import asdict, dataclass
 from datetime import timedelta
 from enum import Enum
 
-from bases.Kernel import PUBLIC_VERSION, Singleton, AddonsManager, getLogger
+from bases.Kernel import PUBLIC_VERSION, Singleton, AddonsManager, StorageLocator, getLogger
 
 DEFAULT_STATIC_ROOT = 'static'
 # Default static server for open source users - serves from local directory
@@ -80,7 +81,6 @@ RETENTION_TIMES = {
 DEFAULT_AUTH_USER_NAME = 'ffl'
 DEFAULT_UPLOAD_DURATION = '6 hours'
 
-
 class ExecutionMode(Enum):
     """Enum representing the execution environment mode"""
     PURE_PYTHON = 1
@@ -91,6 +91,14 @@ class ExecutionMode(Enum):
 class ShareMode:
     P2P = 'p2p'
     SERVER = 'server'
+
+
+class TransferTransport(str, Enum):
+    HTTP = 'http'
+    HTTP_FALLBACK = 'http-fallback'
+    WEBRTC = 'webrtc'
+    P2P_TCP = 'p2p-tcp'
+    P2P_QUIC = 'p2p-quic'
 
 
 logger = getLogger(__name__)
@@ -247,6 +255,15 @@ class DummyAPIHandler:
 
 # Singleton
 class SettingsGetter(Singleton):
+
+    ICE_CONFIG_FILENAME = 'ice.json'
+    
+    _DEFAULT_ICE_SERVER_ENTRIES = (
+        {'urls': 'stun:stun.l.google.com:19302'},
+        {'urls': 'stun:stun.cloudflare.com:3478'},
+        {'urls': 'stun:stun.nextcloud.com:443'},
+        {'urls': 'stun:openrelayproject.org:443'},
+    )
 
     @classmethod
     def getInstance(cls):
@@ -423,3 +440,67 @@ class SettingsGetter(Singleton):
         Features addon may overwrite STATIC_SERVER based on user level or GUI support.
         """
         return STATIC_SERVER
+
+    def getICEServerEntries(self, configPath=None):
+        """Return validated ``ice.json`` entries for direct transports.
+
+        A missing or invalid file intentionally retains FFL's public STUN
+        defaults.  The returned dictionaries are copies, so callers cannot
+        mutate the process-wide defaults or parsed configuration.
+        """
+        if configPath is None:
+            storageLocator = StorageLocator.getInstance()
+            configPath = storageLocator.findConfig(
+                self.ICE_CONFIG_FILENAME,
+                prefer=StorageLocator.Location.CURRENT,
+            )
+
+        entries = None
+        if os.path.exists(configPath):
+            try:
+                with open(configPath, 'r', encoding='utf-8') as configFile:
+                    entries = json.load(configFile).get('ice_servers')
+            except (OSError, ValueError, AttributeError) as error:
+                logger.warning(
+                    'Failed to load WebRTC config from %s, using built-in defaults: %s',
+                    configPath,
+                    error,
+                )
+
+        if not isinstance(entries, list):
+            entries = self._DEFAULT_ICE_SERVER_ENTRIES
+
+        usableEntries = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not entry.get('urls'):
+                logger.warning('Skipping invalid ICE server entry %r in %s', entry, configPath)
+                continue
+                
+            usableEntries.append(dict(entry))
+
+        if usableEntries:
+            return usableEntries
+
+        logger.warning('No usable ice_servers in %s, using built-in defaults', configPath)
+        return [dict(entry) for entry in self._DEFAULT_ICE_SERVER_ENTRIES]
+
+    def getSTUNServerURLs(self, configPath=None):
+        """Return STUN URLs from the shared ICE configuration in listed order.
+
+        WebRTC may additionally use TURN entries.  ffl-p2p currently supports
+        STUN only, so its adapter must receive this filtered list.
+        """
+        stunURLs = []
+        for entry in self.getICEServerEntries(configPath):
+            urls = entry['urls']
+            urls = [urls] if isinstance(urls, str) else urls
+            if not isinstance(urls, list):
+                logger.warning('Skipping ICE server with invalid URLs %r', entry['urls'])
+                continue
+                
+            stunURLs.extend(
+                url for url in urls
+                if isinstance(url, str) and url.lower().startswith('stun:')
+            )
+        
+        return stunURLs

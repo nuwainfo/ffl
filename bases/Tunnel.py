@@ -223,7 +223,7 @@ class TunnelRunner:
     def _getResolvedTunnel(self):
         if self._resolved is None:
             self._resolved = self.resolveTunnel()
-            
+
         return self._resolved
 
     def getTunnelType(self):
@@ -284,21 +284,22 @@ class TunnelRunner:
         resolved = self._getResolvedTunnel()
         domain = resolved.domain
 
-        # Every tunnel server (bore or web relay) can serve its own
-        # /api/tunnel/token. When the default token server differs from
-        # `domain`, a successful token fetch doesn't prove `domain` itself is
-        # reachable, so guard with an explicit connectivity check in that
-        # case only.
-        serverURL = os.getenv('TUNNEL_TOKEN_SERVER_URL', None)
-        if not _isTokenServerTunnel(serverURL):
-            try:
-                requests.get(f"https://{domain}/", timeout=5)
-            except Exception as e:
-                logger.error(f"Failed to verify tunnel server reachability: {e}")
-                raise TunnelUnavailableError('Cannot connect to tunnel server')
+        if resolved.requiresNetworkSetup:
+            # Every tunnel server (bore or web relay) can serve its own
+            # /api/tunnel/token. When the default token server differs from
+            # `domain`, a successful token fetch doesn't prove `domain` itself is
+            # reachable, so guard with an explicit connectivity check in that
+            # case only.
+            serverURL = os.getenv('TUNNEL_TOKEN_SERVER_URL', None)
+            if not _isTokenServerTunnel(serverURL):
+                try:
+                    requests.get(f"https://{domain}/", timeout=5)
+                except Exception as e:
+                    logger.error(f"Failed to verify tunnel server reachability: {e}")
+                    raise TunnelUnavailableError('Cannot connect to tunnel server')
 
-        if resolved.secret is None:
-            resolved.secret = fetchTunnelToken(domain=domain)
+            if resolved.secret is None:
+                resolved.secret = fetchTunnelToken(domain=domain)
 
         return createTunnelClient(
             resolved, port, uid,

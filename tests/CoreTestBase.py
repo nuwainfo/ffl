@@ -33,6 +33,7 @@ import unittest
 import requests
 import socket
 import shutil
+import zipfile
 
 from urllib.parse import urlsplit, urlunsplit
 
@@ -279,6 +280,98 @@ class FastFileLinkTestBase(unittest.TestCase):
             for block in iter(lambda: fileHandle.read(65536), b''):
                 sha256.update(block)
         return sha256.hexdigest()
+
+    def _createTestFolder(self) -> str:
+        """
+        Create a test folder with multiple files for folder sharing tests
+
+        Returns:
+            str: Path to the created test folder
+        """
+        folderPath = os.path.join(self.tempDir, "test_folder")
+        os.makedirs(folderPath, exist_ok=True)
+
+        # Create multiple files with different sizes
+        testFiles = [
+            ("file1.txt", b"This is file 1 content\n" * 100), # ~2.3KB
+            ("file2.bin", os.urandom(50 * 1024)), # 50KB
+            ("file3.dat", b"File 3 data\n" * 1000), # ~12KB
+            ("subdir/file4.txt", b"Nested file content\n" * 50), # ~1KB in subdir
+        ]
+
+        for filename, content in testFiles:
+            filePath = os.path.join(folderPath, filename)
+            os.makedirs(os.path.dirname(filePath), exist_ok=True)
+            with open(filePath, 'wb') as f:
+                f.write(content)
+
+        return folderPath
+
+    def _verifyZipFile(self, zipPath: str, expectedFolder: str):
+        """
+        Verify that a downloaded ZIP file contains the expected folder structure
+
+        Args:
+            zipPath: Path to the ZIP file to verify
+            expectedFolder: Path to the original folder for comparison
+        """
+        self.assertTrue(os.path.exists(zipPath), "ZIP file should exist")
+        self.assertTrue(zipfile.is_zipfile(zipPath), "File should be a valid ZIP")
+
+        with zipfile.ZipFile(zipPath, 'r') as zf:
+            # Verify no corrupted files
+            badFile = zf.testzip()
+            self.assertIsNone(badFile, f"ZIP file should not be corrupted, but {badFile} is bad")
+
+            # Extract and verify contents
+            extractDir = os.path.join(self.tempDir, "extracted")
+            os.makedirs(extractDir, exist_ok=True)
+            zf.extractall(extractDir)
+
+            # Verify all files exist and have correct content
+            folderName = os.path.basename(expectedFolder)
+            extractedFolder = os.path.join(extractDir, folderName)
+            self.assertTrue(os.path.exists(extractedFolder), f"Extracted folder {folderName} should exist")
+
+            # Compare each file
+            for root, dirs, files in os.walk(expectedFolder):
+                for filename in files:
+                    originalFile = os.path.join(root, filename)
+                    relativePath = os.path.relpath(originalFile, expectedFolder)
+                    extractedFile = os.path.join(extractedFolder, relativePath)
+
+                    self.assertTrue(os.path.exists(extractedFile), f"Extracted file {relativePath} should exist")
+
+                    # Compare file sizes
+                    originalSize = os.path.getsize(originalFile)
+                    extractedSize = os.path.getsize(extractedFile)
+                    self.assertEqual(originalSize, extractedSize, f"File {relativePath} should have same size")
+
+                    # Compare file contents
+                    with open(originalFile, 'rb') as f1, open(extractedFile, 'rb') as f2:
+                        self.assertEqual(f1.read(), f2.read(), f"File {relativePath} should have same content")
+
+    def _waitForText(self, path, pattern, timeout=60, process=None):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8', errors='replace') as fileHandle:
+                    text = fileHandle.read()
+
+                match = re.search(pattern, text)
+                if match:
+                    return match
+
+            if process and process.poll() is not None:
+                raise AssertionError(f"Process exited with {process.returncode} while waiting for {pattern!r}")
+
+            time.sleep(0.5)
+        raise AssertionError(f"Timed out waiting for {pattern!r} in {path}")
+
+    def _stopTestProcess(self, process):
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=10)
 
     @staticmethod
     def isProcessRunning(pid):

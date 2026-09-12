@@ -262,7 +262,7 @@ class Progress:
     def write(self, text):
         """Write text without interfering with the progress bar."""
         if self.useBar and self.pbar:
-            self.pbar.write(text)
+            self.pbar.write(text, file=self.pbar.fp)
         else:
             self.loggerCallback(text)
 

@@ -31,6 +31,7 @@ import os
 import socket
 import threading
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from time import monotonic
 from typing import Optional
@@ -44,25 +45,24 @@ logger = getLogger(__name__)
 # Transport types createTunnelClient() knows how to build. Callers that fetch
 # candidates from the server (e.g. the Features addon) pass this to /api/tunnels
 # so the server never returns a type this client version can't yet construct.
-SUPPORTED_TUNNEL_TYPES = ('bore', 'web')
+# 'loopback' (bases/tunnels/Loopback.py) is only ever actually resolved by the
+# local FFL_TUNNEL_DOMAIN override (resolveTunnelDomainFromEnv() below), never
+# by a server response, but is listed here too for a consistent type registry.
+SUPPORTED_TUNNEL_TYPES = ('bore', 'web', 'loopback')
 
 # Baseline (no Features addon) fallback candidates, as a single comma-separated
 # list rather than one env var per transport. Order doesn't matter; each
 # domain's type is inferred by name if not already known (see
-# TunnelCandidate.resolveType below). 
+# TunnelCandidate._classFor below).
 BUILTIN_TUNNELS = os.getenv(
     'BUILTIN_TUNNELS',
-    ','.join(['33.fastfilelink.com'] + [f'{i}.10.fastfilelink.com' for i in range(1, 10)]),
+    ','.join(['33.fastfilelink.com'] + [f'{i}.10.fastfilelink.com' for i in range(1, 3)]),
 )
 
 
 @dataclass
-class TunnelCandidate(DataclassDictMixin):
-    """One entry from /api/tunnels (or a hardcoded fallback with the same shape).
-
-    Everything about what a tunnel "type" means lives on this class — no other
-    module compares against the 'bore'/'web' strings directly.
-    """
+class TunnelCandidate(DataclassDictMixin, ABC):
+    """One entry from /api/tunnels (or a hardcoded fallback with the same shape)."""
 
     domain: str
     type: Optional[str] = None
@@ -70,32 +70,117 @@ class TunnelCandidate(DataclassDictMixin):
     secret: Optional[str] = None
     preSock: Optional[object] = None
 
-    # Domains known to speak the web relay protocol; every other domain
-    # defaults to bore. Bare '10.fastfilelink.com' is deliberately absent --
-    # it's kept alive only as a worker_tunnel deployment target, never
-    # referenced from Python (an FFL_TUNNEL_DOMAIN override should point at
-    # one of these slots instead, e.g. '1.10.fastfilelink.com'). Extend this
-    # set if more are registered.
-    _WEB_DOMAINS = frozenset({f'{i}.10.fastfilelink.com' for i in range(1, 10)})
+    @classmethod
+    def _classFor(cls, domain, type=None):
+        """Resolve the concrete subclass for `domain`. `type` selects it
+        directly when already known; omit it to infer from the domain name
+        instead (a bare BUILTIN_TUNNELS entry, an explicit
+        FFL_TUNNEL_DOMAIN=<real domain> override, or a legacy /api/tunnels
+        response with no `type` key) -- every domain outside
+        WebTunnelCandidate's known set defaults to bore.
+        """
+        from .Bore import BoreTunnelCandidate
+        from .Loopback import LoopbackTunnelCandidate
+        from .Web import WebTunnelCandidate
 
-    def resolveType(self):
-        """Infer and cache `type` by domain name, unless already known (e.g.
-        a candidate built from the server's /api/tunnels response, which
-        already reports its own type)."""
-        if self.type is None:
-            self.type = 'web' if self.domain in self._WEB_DOMAINS else 'bore'
-            
-        return self.type
+        classesByType = {
+            'bore': BoreTunnelCandidate,
+            'web': WebTunnelCandidate,
+            'loopback': LoopbackTunnelCandidate,
+        }
+        resolvedType = type or ('web' if domain in WebTunnelCandidate.WEB_DOMAINS else 'bore')
+        
+        return classesByType[resolvedType]
+
+    @classmethod
+    def fromDomain(cls, domain, type=None, **kwargs):
+        """Construct the concrete subclass for a bare `domain` (see _classFor())."""
+        return cls._classFor(domain, type=type)(domain=domain, **kwargs)
+
+    @classmethod
+    def fromDict(cls, data, **overrides):
+        """TunnelCandidate.fromDict(data) is polymorphic: it resolves
+        data['type'] (or, absent that, the domain-name convention) to a
+        concrete subclass first, then that subclass's own inherited
+        fromDict() does the actual field mapping. Called directly on an
+        already-concrete subclass (e.g. WebTunnelCandidate.fromDict(data)),
+        it skips re-resolving and just maps fields, like the generic
+        DataclassDictMixin.fromDict() it falls through to.
+        """
+        if cls is TunnelCandidate:
+            concreteClass = cls._classFor(data.get('domain'), type=data.get('type'))
+            return concreteClass.fromDict(data, **overrides)
+
+        return super().fromDict(data, **overrides)
+
+    @property
+    def probeHost(self):
+        """Host to TCP-probe for reachability/latency racing (see
+        getLowLatencyTunnel() below). Defaults to the bare domain;
+        BoreTunnelCandidate overrides this to add its '0.'-prefixed
+        dedicated probe/control host.
+        """
+        return self.domain
 
     @property
     def reusableAcrossShares(self):
         """Whether one connected client can serve more than one share.
 
-        True for bore (one control connection multiplexes every share by URL
-        path); False for web (each share is a separate relay endpoint, so a
-        fresh client/connection is required per share).
+        True for every transport except web, which overrides this to False
+        (each share is a separate relay endpoint, so a fresh client/connection
+        is required per share).
         """
-        return self.resolveType() != 'web'
+        return True
+
+    @property
+    def requiresNetworkSetup(self):
+        """Whether createClient() must probe the domain's reachability and
+        fetch a token before building a client for this candidate.
+
+        True for every real transport (bore/web), regardless of whether a
+        secret already happens to be attached (e.g. from Features.py's
+        prefetch path) -- the reachability probe and the secret answer
+        different questions. LoopbackTunnelCandidate overrides this to
+        False, since it needs neither.
+        """
+        return True
+
+    @abstractmethod
+    def createClient(self, port, uid, tokenProvider, proxyConfig=None, **kwargs):
+        """Build the tunnel client for this resolved candidate.
+
+        Args:
+            port: Local port to tunnel.
+            uid: Share uid; web uses it as its opaque per-share routing key,
+                bore/loopback ignore it (bore routes by URL path instead).
+            tokenProvider: Callable returning a fresh token when the client
+                needs to refresh it.
+            proxyConfig: Optional proxy configuration.
+            **kwargs: Forwarded to BoreClient only, unused elsewhere.
+        """
+
+    def attachToken(self, tokenGetter, proxyConfig):
+        """Fetch and attach this candidate's auth token.
+        Base: a plain token fetch. BoreTunnelCandidate overrides this
+        to also warm its control TCP socket and the shared SSL context in
+        parallel, since only bore's own connect() benefits from either.
+        """
+        self.secret = tokenGetter(domain=self.domain)
+
+    def tryReuseCached(self, tokenGetter, proxyConfig):
+        """Attempt to reuse this candidate without a full
+        re-resolution. Returns True once `secret` (and, where applicable,
+        `preSock`) are attached; False tells the caller to discard this
+        candidate and fall back to a fresh getLowLatencyTunnel() call
+        instead.
+
+        Base: trusts the cache and just calls attachToken(). BoreTunnelCandidate
+        overrides this to first prove the cached domain is still actually
+        reachable via its own TCP pre-connect, since a live token alone
+        doesn't guarantee that for bore's dedicated control connection.
+        """
+        self.attachToken(tokenGetter, proxyConfig)
+        return True
 
 
 def getLatency(host: str, port: int = 443, timeout: float = 5):
@@ -259,7 +344,7 @@ def getLowLatencyTunnel(candidates, latencyThreshold=60):
             candidate to answer within this threshold wins immediately.
 
     Returns:
-        TunnelCandidate: The winning candidate, with `type` resolved.
+        TunnelCandidate: The winning candidate.
 
     Raises:
         ConnectionError: When no candidates are given, or none are reachable.
@@ -276,7 +361,7 @@ def getLowLatencyTunnel(candidates, latencyThreshold=60):
         if foundGood.is_set():
             return candidate
 
-        candidate.latency = getLatency(f"0.{candidate.domain}")
+        candidate.latency = getLatency(candidate.probeHost)
         if candidate.latency is not None and candidate.latency <= latencyThreshold and not foundGood.is_set():
             best['result'] = candidate
             foundGood.set()
@@ -295,7 +380,6 @@ def getLowLatencyTunnel(candidates, latencyThreshold=60):
                 break
 
     if best['result']:
-        best['result'].resolveType()
         return best['result']
 
     # Fallback: TCP latency probe already proved reachability; pick the lowest-latency result.
@@ -303,19 +387,54 @@ def getLowLatencyTunnel(candidates, latencyThreshold=60):
     if not reachable:
         raise ConnectionError('Cannot connect to any FastFileLink server.')
 
-    winner = min(reachable, key=lambda candidate: candidate.latency)
-    winner.resolveType()
-    return winner
+    return min(reachable, key=lambda candidate: candidate.latency)
+
+
+def resolveTunnelDomainFromEnv():
+    """Resolve an explicit FFL_TUNNEL_DOMAIN override, or None if it's unset
+    or not a domain this client recognizes -- the single place that knows
+    what that env var means, shared by resolveTunnelCandidate() (below) and
+    addons/Features.py's server-based resolveTunnel(), so neither has to
+    special-case it on its own.
+
+    Recognizes:
+      - a loopback alias ('localhost' or '127.0.0.1') -> LoopbackTunnelCandidate
+        (bases/tunnels/Loopback.py), for exercising the CLI/server code path
+        in a sandbox with no real internet access. Its secret is already set
+        (not None) since loopback needs no token -- callers that fetch a
+        token only when `candidate.secret is None` skip that step for free.
+      - an explicit fastfilelink.com (sub)domain -> a plain candidate with no
+        secret yet; the caller is responsible for fetching/attaching one.
+    """
+    envTunnelDomain = os.getenv('FFL_TUNNEL_DOMAIN', '').strip()
+    if not envTunnelDomain:
+        return None
+
+    if envTunnelDomain.lower() in ('localhost', '127.0.0.1'):
+        from .Loopback import LoopbackTunnelCandidate
+
+        return LoopbackTunnelCandidate()
+
+    if envTunnelDomain.endswith('fastfilelink.com'):
+        return TunnelCandidate.fromDomain(envTunnelDomain)
+
+    return None
 
 
 def resolveTunnelCandidate(latencyThreshold=60):
     """Baseline (no Features addon) domain+type resolution.
 
-    Races the domains in BUILTIN_TUNNELS through getLowLatencyTunnel() using
-    the same selection logic the Features addon uses for the real server list.
+    Honors an explicit FFL_TUNNEL_DOMAIN override first (see
+    resolveTunnelDomainFromEnv()); otherwise races the domains in
+    BUILTIN_TUNNELS through getLowLatencyTunnel() using the same selection
+    logic the Features addon uses for the real server list.
     """
+    envCandidate = resolveTunnelDomainFromEnv()
+    if envCandidate is not None:
+        return envCandidate
+
     domains = [domain.strip() for domain in BUILTIN_TUNNELS.split(',') if domain.strip()]
-    candidates = [TunnelCandidate(domain=domain) for domain in domains]
+    candidates = [TunnelCandidate.fromDomain(domain) for domain in domains]
     return getLowLatencyTunnel(candidates, latencyThreshold=latencyThreshold)
 
 
@@ -334,38 +453,6 @@ def createTunnelClient(resolved, port, uid, tokenProvider, proxyConfig=None, **k
         **kwargs: Forwarded to BoreClient only, unused for web.
 
     Returns:
-        BoreClient or WebTunnelClient: Configured client instance.
+        BoreClient, WebTunnelClient, or LoopbackTunnelClient: Configured client instance.
     """
-    domain = resolved.domain
-
-    if resolved.resolveType() == 'web':
-        from .Web import WebTunnelClient
-        
-        agentURL = os.getenv('FFL_WEB_TUNNEL_AGENT_URL') or f'https://{domain}/'
-        publicURL = os.getenv('FFL_WEB_TUNNEL_PUBLIC_URL') or f'https://{domain}/'
-
-        return WebTunnelClient(
-            port, agentURL, publicURL, resolved.secret, uid,
-            tokenProvider=tokenProvider,
-            proxyConfig=proxyConfig,
-        )
-
-    from .Bore import BoreClient
-    
-    client = BoreClient(
-        localhost='127.0.0.1',
-        localPort=port,
-        remoteHost=domain,
-        remotePort=0,
-        secret=resolved.secret,
-        tokenProvider=tokenProvider,
-        verbose=False,
-        debug=False,
-        useHttps=True,
-        proxyConfig=proxyConfig,
-        **kwargs
-    )
-    if resolved.preSock is not None:
-        client.injectPreTcpSocket(resolved.preSock)
-
-    return client
+    return resolved.createClient(port, uid, tokenProvider, proxyConfig=proxyConfig, **kwargs)

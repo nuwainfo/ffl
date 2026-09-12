@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-09-05 00:24+0800\n"
+"POT-Creation-Date: 2026-09-11 18:01+0800\n"
 "PO-Revision-Date: 2025-12-21 08:43+0800\n"
 "Last-Translator: \n"
 "Language: zh_TW\n"
@@ -654,6 +654,21 @@ msgstr "注意：在 URL 後附加 #<金鑰> 可以運作，但較不安全且�
 msgid "Encryption Key: {encryptionKey}"
 msgstr "加密金鑰：{encryptionKey}"
 
+msgid "P2P QUIC"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Finish transfer {sizeDisplay} for [#{downloadId}], please wait for the "
+"recipient to finish downloading before you close the application..\n"
+msgstr ""
+
+msgid "P2P QUIC download"
+msgstr ""
+
+msgid "P2P TCP"
+msgstr ""
+
 msgid "0/sec"
 msgstr "0/秒"
 
@@ -1256,6 +1271,9 @@ msgstr "正在下載 {filename}（{fileSize}）"
 #, python-brace-format
 msgid "Resuming WebRTC download from {resumePos} / {totalSize}"
 msgstr "從 {resumePos} / {totalSize} 繼續 WebRTC 下載"
+
+msgid "P2P direct connectivity failed, using HTTP download..."
+msgstr ""
 
 msgid "WebRTC not supported, using HTTP download..."
 msgstr "不支援 WebRTC，使用 HTTP 下載..."

@@ -34,8 +34,8 @@ from unittest import mock
 
 from addons.Tunnels import TunnelRunnerProvider, StaticURLTunnelClient # isort:skip
 from bases.Tunnel import AsyncTunnelThread, TunnelRunner, TunnelUnavailableError # isort:skip
-from bases.tunnels import TunnelCandidate # isort:skip
-from bases.tunnels.Web import WebTunnelClient # isort:skip
+from bases.tunnels.Bore import BoreTunnelCandidate # isort:skip
+from bases.tunnels.Web import WebTunnelClient, WebTunnelCandidate # isort:skip
 
 from tests.BrowserTestBase import BrowserTestBase # isort:skip
 
@@ -254,8 +254,8 @@ class TunnelThreadTest(unittest.TestCase):
         """With no external tunnel configured, a server-resolved web candidate
         must reach WebTunnelClient via the normal super().createClient() chain."""
         with tempfile.TemporaryDirectory() as tempDir, \
-             mock.patch.object(TunnelRunner, 'resolveTunnel', return_value=TunnelCandidate(
-                 domain='1.10.fastfilelink.com', type='web',
+             mock.patch.object(TunnelRunner, 'resolveTunnel', return_value=WebTunnelCandidate(
+                 domain='1.10.fastfilelink.com',
              )), \
              mock.patch('bases.Tunnel.fetchTunnelToken', return_value='short-lived-token'):
             configPath = os.path.join(tempDir, 'tunnels.json')
@@ -278,8 +278,8 @@ class TunnelThreadTest(unittest.TestCase):
         """An explicitly configured external tunnel (cloudflared/ngrok/static URL)
         is a user choice orthogonal to bore-vs-web, and must win either way."""
         with tempfile.TemporaryDirectory() as tempDir, \
-             mock.patch.object(TunnelRunner, 'resolveTunnel', return_value=TunnelCandidate(
-                 domain='1.10.fastfilelink.com', type='web',
+             mock.patch.object(TunnelRunner, 'resolveTunnel', return_value=WebTunnelCandidate(
+                 domain='1.10.fastfilelink.com',
              )):
             configPath = os.path.join(tempDir, 'tunnels.json')
             config = createTestConfig(preferredTunnel='static-fixed', enableStaticUrl=True)
@@ -295,8 +295,8 @@ class TunnelThreadTest(unittest.TestCase):
     def testTunnelRunnerCreateClientPassesTokenProviderForBore(self):
         runner = TunnelRunner(1024)
 
-        with mock.patch.object(TunnelRunner, 'resolveTunnel', return_value=TunnelCandidate(
-                 domain='33.fastfilelink.com', type='bore',
+        with mock.patch.object(TunnelRunner, 'resolveTunnel', return_value=BoreTunnelCandidate(
+                 domain='33.fastfilelink.com',
              )), \
              mock.patch('bases.Tunnel.requests.get') as mockGet, \
              mock.patch('bases.Tunnel.fetchTunnelToken', return_value='token-1') as mockFetch:
@@ -310,8 +310,8 @@ class TunnelThreadTest(unittest.TestCase):
     def testTunnelRunnerCreateClientPassesTokenProviderForWeb(self):
         runner = TunnelRunner(1024)
 
-        with mock.patch.object(TunnelRunner, 'resolveTunnel', return_value=TunnelCandidate(
-                 domain='1.10.fastfilelink.com', type='web',
+        with mock.patch.object(TunnelRunner, 'resolveTunnel', return_value=WebTunnelCandidate(
+                 domain='1.10.fastfilelink.com',
              )), \
              mock.patch('bases.Tunnel.fetchTunnelToken', return_value='token-1') as mockFetch:
             client = runner.createClient(8000, uid='share-id')

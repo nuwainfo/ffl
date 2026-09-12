@@ -22,12 +22,19 @@ lief>=0.16.3; sys_platform != "win32"
 
 winloop<0.7; sys_platform == "win32"
 
-# In-house
+# ffl-datachannel
 ffl-datachannel @ https://github.com/nuwainfo/ffl-datachannel/releases/download/v0.2.3/ffl_datachannel-0.2.3-cp312-cp312-win_amd64.whl; sys_platform == "win32" and python_version == "3.12" and platform_machine == "AMD64"
 
 ffl-datachannel @ https://github.com/nuwainfo/ffl-datachannel/releases/download/v0.2.3/ffl_datachannel-0.2.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl; sys_platform == "linux" and python_version == "3.12" and platform_machine == "x86_64"
 
 ffl-datachannel @ https://github.com/nuwainfo/ffl-datachannel/releases/download/v0.2.3/ffl_datachannel-0.2.3-cp312-cp312-macosx_15_0_arm64.whl; sys_platform == "darwin" and python_version == "3.12" and platform_machine == "arm64"
+
+# ffl-p2p
+ffl-p2p @ https://github.com/nuwainfo/ffl-p2p/releases/download/v0.2.5/ffl_p2p-0.2.5-cp312-cp312-win_amd64.whl; sys_platform == "win32" and python_version == "3.12" and platform_machine == "AMD64"
+
+ffl-p2p @ https://github.com/nuwainfo/ffl-p2p/releases/download/v0.2.5/ffl_p2p-0.2.5-cp312-cp312-manylinux_2_28_x86_64.whl; sys_platform == "linux" and python_version == "3.12" and platform_machine == "x86_64"
+
+ffl-p2p @ https://github.com/nuwainfo/ffl-p2p/releases/download/v0.2.5/ffl_p2p-0.2.5-cp312-cp312-macosx_15_0_arm64.whl; sys_platform == "darwin" and python_version == "3.12" and platform_machine == "arm64"
 
 # Patch
 setuptools<81

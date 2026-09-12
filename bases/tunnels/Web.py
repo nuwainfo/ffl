@@ -54,11 +54,13 @@ import threading
 import time
 import urllib.parse
 
+from dataclasses import dataclass
+from typing import Optional
 
 from bases.Kernel import getLogger
 from bases.Utils import ENABLE_PY312_WORKAROUND
 
-from . import _receiveExactly, Socks5ProxySupport
+from . import _receiveExactly, Socks5ProxySupport, TunnelCandidate
 
 
 logger = getLogger(__name__)
@@ -1893,3 +1895,33 @@ class WebTunnelClient(_HeartbeatedSocket, Socks5ProxySupport):
 
     async def shutdown(self):
         await asyncio.to_thread(self.stop)
+
+
+@dataclass
+class WebTunnelCandidate(TunnelCandidate):
+    """A candidate resolved to the web transport."""
+
+    type: Optional[str] = 'web'
+
+    # Domains known to speak the web relay protocol; every other domain
+    # defaults to bore (see _inferTypeFromDomain() in bases/tunnels/__init__.py).
+    # Bare '10.fastfilelink.com' is deliberately absent -- it's kept alive
+    # only as a worker_tunnel deployment target, never referenced from
+    # Python (an FFL_TUNNEL_DOMAIN override should point at one of these
+    # slots instead, e.g. '1.10.fastfilelink.com'). Extend this set if more
+    # are registered.
+    WEB_DOMAINS = frozenset({f'{i}.10.fastfilelink.com' for i in range(1, 3)})
+
+    @property
+    def reusableAcrossShares(self):
+        return False
+
+    def createClient(self, port, uid, tokenProvider, proxyConfig=None, **kwargs):
+        agentURL = os.getenv('FFL_WEB_TUNNEL_AGENT_URL') or f'https://{self.domain}/'
+        publicURL = os.getenv('FFL_WEB_TUNNEL_PUBLIC_URL') or f'https://{self.domain}/'
+
+        return WebTunnelClient(
+            port, agentURL, publicURL, self.secret, uid,
+            tokenProvider=tokenProvider,
+            proxyConfig=proxyConfig,
+        )

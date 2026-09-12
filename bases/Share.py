@@ -96,6 +96,29 @@ class ShareRequest(DataclassDictMixin):
         },
     })
 
+    watch: bool = field(default=False, metadata={
+        'cli': {
+            'flags': ('--watch',),
+            'options': {
+                'action': 'store_true',
+                'help': lambda context: _(
+                    'Watch a folder for new direct child folders and publish each as an immutable delivery'
+                ),
+            },
+        },
+    })
+
+    watchSettle: int = field(default=5, metadata={
+        'cli': {
+            'flags': ('--watch-settle',),
+            'options': {
+                'type': 'int',
+                'metavar': 'SECONDS',
+                'help': lambda context: _('Seconds a new delivery folder must remain unchanged (default: 5)'),
+            },
+        },
+    })
+
     json: Optional[str] = field(default=None, metadata={
         'cli': {
             'flags': ('--json',),
