@@ -72,6 +72,7 @@
 # and maintenance cost together, keeping the local backend on HTTP/1.1 while
 # terminating HTTP/2/HTTP/3 at nginx is currently the best overall tradeoff.
 
+import contextlib
 import json
 import os
 import re
@@ -1208,10 +1209,23 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
         # itself -- see StaticMixin._SERVICE_WORKER_SCRIPT_RE.
         self._handleStaticScript("/static/js/ProgressServiceWorker.js")
 
+    def _applySessionNetworkPolicy(self):
+        """Apply the resolved session's own network policy (e.g. a LAN share's
+        direct-only transports) to just this request, in this handler thread's
+        context, so concurrent shares with different policies never see each other's."""
+        if self.session is None:
+            return contextlib.nullcontext()
+
+        return SettingsGetter.getInstance().overrideNetworkPolicy(self.session.networkPolicy)
+
     def do_GET(self):
         if not self._guardRequest():
             return
 
+        with self._applySessionNetworkPolicy():
+            self._serveGET()
+
+    def _serveGET(self):
         self.byteRange = RangeResolver.parse(self.headers.get('Range'))
 
         # Get the appropriate handler for this path
@@ -1251,6 +1265,10 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
         if not self._guardRequest():
             return
 
+        with self._applySessionNetworkPolicy():
+            self._servePOST()
+
+    def _servePOST(self):
         # Read and parse request body. Malformed Content-Length or non-JSON bodies
         # must not raise past this point uncaught — that would skip send_error
         # entirely (the outer catch around super().__init__() only catches

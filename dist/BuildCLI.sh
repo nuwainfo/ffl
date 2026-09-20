@@ -90,16 +90,17 @@ createPythonTarGz() {
         export CONDA_SUBDIR=osx-64
         envName="ffl_python_temp_x86_64"
     fi
-
-    if [ "$OS" = "linux" ]; then
-        source "$HOME/miniconda3/etc/profile.d/conda.sh"
+    
+    #在遠端主機ssh連線時用的
+    if [ "$OS" = "linux" ]; then 
+        source "${CONDA_BASE:-$HOME/miniconda3}/etc/profile.d/conda.sh" 
     fi
 
     eval "$(conda shell.bash hook)"
     rm -rf "$envName"
 
     echo "Activating conda environment: $envName"
-    conda create -n "$envName" python=3.12 -y
+    conda create -n "$envName" python=3.12 -y -c defaults --override-channels  # 解決遠端容器打包 linux cli 比 本地 wsl 大的問題
     conda activate "$envName"
 
     export PYTHONIOENCODING=utf-8

@@ -37,6 +37,7 @@ from time import monotonic
 from typing import Optional
 
 from bases.Kernel import getLogger
+from bases.Settings import NetworkPolicy
 from bases.Utils import DataclassDictMixin
 
 
@@ -45,15 +46,27 @@ logger = getLogger(__name__)
 # Transport types createTunnelClient() knows how to build. Callers that fetch
 # candidates from the server (e.g. the Features addon) pass this to /api/tunnels
 # so the server never returns a type this client version can't yet construct.
-# 'loopback' (bases/tunnels/Loopback.py) is only ever actually resolved by the
-# local FFL_TUNNEL_DOMAIN override (resolveTunnelDomainFromEnv() below), never
-# by a server response, but is listed here too for a consistent type registry.
-SUPPORTED_TUNNEL_TYPES = ('bore', 'web', 'loopback')
+# 'loopback' and 'lan' are local-only transports resolved by the explicit
+# FFL_TUNNEL_DOMAIN override (resolveTunnelDomainFromEnv() below), not normal
+# server-selected relay backends, but they live in the same registry so every
+# bases/tunnels/*.py transport has one consistent type name.
+SUPPORTED_TUNNEL_TYPES = ('bore', 'web', 'loopback', 'lan')
+
+# FFL_TUNNEL_DOMAIN values that select a local-only transport instead of a domain.
+LOCAL_TUNNEL_ALIASES = {
+    'localhost': 'loopback',
+    '127.0.0.1': 'loopback',
+    'lan': 'lan',
+}
+
+# The local-only tunnel types those aliases select: built directly, with no
+# tunnel server list to choose from.
+LOCAL_TUNNEL_TYPES = tuple(dict.fromkeys(LOCAL_TUNNEL_ALIASES.values()))
 
 # Baseline (no Features addon) fallback candidates, as a single comma-separated
 # list rather than one env var per transport. Order doesn't matter; each
 # domain's type is inferred by name if not already known (see
-# TunnelCandidate._classFor below).
+# TunnelCandidate._resolveClass below).
 BUILTIN_TUNNELS = os.getenv(
     'BUILTIN_TUNNELS',
     ','.join(['33.fastfilelink.com'] + [f'{i}.10.fastfilelink.com' for i in range(1, 3)]),
@@ -71,7 +84,17 @@ class TunnelCandidate(DataclassDictMixin, ABC):
     preSock: Optional[object] = None
 
     @classmethod
-    def _classFor(cls, domain, type=None):
+    def resolveType(cls, domain, type=None):
+        """The tunnel type of `domain`: `type` when already known, otherwise
+        inferred from the domain name -- only WebTunnelCandidate's known
+        domains are web, every other domain is bore.
+        """
+        from .Web import WebTunnelCandidate
+
+        return type or ('web' if domain in WebTunnelCandidate.WEB_DOMAINS else 'bore')
+
+    @classmethod
+    def _resolveClass(cls, domain, type=None):
         """Resolve the concrete subclass for `domain`. `type` selects it
         directly when already known; omit it to infer from the domain name
         instead (a bare BUILTIN_TUNNELS entry, an explicit
@@ -80,6 +103,7 @@ class TunnelCandidate(DataclassDictMixin, ABC):
         WebTunnelCandidate's known set defaults to bore.
         """
         from .Bore import BoreTunnelCandidate
+        from .LAN import LANTunnelCandidate
         from .Loopback import LoopbackTunnelCandidate
         from .Web import WebTunnelCandidate
 
@@ -87,15 +111,19 @@ class TunnelCandidate(DataclassDictMixin, ABC):
             'bore': BoreTunnelCandidate,
             'web': WebTunnelCandidate,
             'loopback': LoopbackTunnelCandidate,
+            'lan': LANTunnelCandidate,
         }
-        resolvedType = type or ('web' if domain in WebTunnelCandidate.WEB_DOMAINS else 'bore')
-        
-        return classesByType[resolvedType]
+        return classesByType[cls.resolveType(domain, type=type)]
+
+    @classmethod
+    def fromType(cls, type):
+        """Construct the candidate of a local-only tunnel `type` (see LOCAL_TUNNEL_TYPES)."""
+        return cls._resolveClass(None, type=type)()
 
     @classmethod
     def fromDomain(cls, domain, type=None, **kwargs):
-        """Construct the concrete subclass for a bare `domain` (see _classFor())."""
-        return cls._classFor(domain, type=type)(domain=domain, **kwargs)
+        """Construct the concrete subclass for a bare `domain` (see _resolveClass())."""
+        return cls._resolveClass(domain, type=type)(domain=domain, **kwargs)
 
     @classmethod
     def fromDict(cls, data, **overrides):
@@ -108,7 +136,7 @@ class TunnelCandidate(DataclassDictMixin, ABC):
         DataclassDictMixin.fromDict() it falls through to.
         """
         if cls is TunnelCandidate:
-            concreteClass = cls._classFor(data.get('domain'), type=data.get('type'))
+            concreteClass = cls._resolveClass(data.get('domain'), type=data.get('type'))
             return concreteClass.fromDict(data, **overrides)
 
         return super().fromDict(data, **overrides)
@@ -141,9 +169,16 @@ class TunnelCandidate(DataclassDictMixin, ABC):
         secret already happens to be attached (e.g. from Features.py's
         prefetch path) -- the reachability probe and the secret answer
         different questions. LoopbackTunnelCandidate overrides this to
-        False, since it needs neither.
+        False, since it needs neither (as does LANTunnelCandidate).
         """
         return True
+
+    def resolveNetworkPolicy(self, client):
+        """Runtime network policy that `client` (built by createClient())
+        implies for the share it carries. Base: no constraint. LAN overrides
+        this to require direct-only transports.
+        """
+        return NetworkPolicy()
 
     @abstractmethod
     def createClient(self, port, uid, tokenProvider, proxyConfig=None, **kwargs):
@@ -398,11 +433,14 @@ def resolveTunnelDomainFromEnv():
     special-case it on its own.
 
     Recognizes:
-      - a loopback alias ('localhost' or '127.0.0.1') -> LoopbackTunnelCandidate
-        (bases/tunnels/Loopback.py), for exercising the CLI/server code path
-        in a sandbox with no real internet access. Its secret is already set
-        (not None) since loopback needs no token -- callers that fetch a
-        token only when `candidate.secret is None` skip that step for free.
+      - a local alias (see LOCAL_TUNNEL_ALIASES): 'localhost'/'127.0.0.1' ->
+        LoopbackTunnelCandidate (bases/tunnels/Loopback.py), for exercising the
+        CLI/server code path in a sandbox with no real internet access; 'lan'
+        -> LANTunnelCandidate (bases/tunnels/LAN.py), which exposes the local
+        HTTP server on a directly reachable LAN IPv4 address. Their secret is
+        already set (not None) since neither needs a token -- callers that
+        fetch a token only when `candidate.secret is None` skip that step for
+        free.
       - an explicit fastfilelink.com (sub)domain -> a plain candidate with no
         secret yet; the caller is responsible for fetching/attaching one.
     """
@@ -410,10 +448,9 @@ def resolveTunnelDomainFromEnv():
     if not envTunnelDomain:
         return None
 
-    if envTunnelDomain.lower() in ('localhost', '127.0.0.1'):
-        from .Loopback import LoopbackTunnelCandidate
-
-        return LoopbackTunnelCandidate()
+    localType = LOCAL_TUNNEL_ALIASES.get(envTunnelDomain.lower())
+    if localType:
+        return TunnelCandidate.fromType(localType)
 
     if envTunnelDomain.endswith('fastfilelink.com'):
         return TunnelCandidate.fromDomain(envTunnelDomain)
@@ -421,20 +458,32 @@ def resolveTunnelDomainFromEnv():
     return None
 
 
-def resolveTunnelCandidate(latencyThreshold=60):
+def resolveTunnelCandidate(latencyThreshold=60, tunnelType=None):
     """Baseline (no Features addon) domain+type resolution.
 
-    Honors an explicit FFL_TUNNEL_DOMAIN override first (see
-    resolveTunnelDomainFromEnv()); otherwise races the domains in
-    BUILTIN_TUNNELS through getLowLatencyTunnel() using the same selection
-    logic the Features addon uses for the real server list.
+    `tunnelType` forces one type of tunnel (see SUPPORTED_TUNNEL_TYPES): a
+    local-only type is built directly, a relay type restricts the race to
+    candidates of that type. Otherwise an explicit FFL_TUNNEL_DOMAIN override
+    is honored first (see resolveTunnelDomainFromEnv()), and then the domains
+    in BUILTIN_TUNNELS are raced through getLowLatencyTunnel() using the same
+    selection logic the Features addon uses for the real server list.
     """
-    envCandidate = resolveTunnelDomainFromEnv()
-    if envCandidate is not None:
-        return envCandidate
+    if tunnelType in LOCAL_TUNNEL_TYPES:
+        return TunnelCandidate.fromType(tunnelType)
+
+    if tunnelType is None:
+        envCandidate = resolveTunnelDomainFromEnv()
+        if envCandidate is not None:
+            return envCandidate
 
     domains = [domain.strip() for domain in BUILTIN_TUNNELS.split(',') if domain.strip()]
     candidates = [TunnelCandidate.fromDomain(domain) for domain in domains]
+    if tunnelType is not None:
+        candidates = [
+            candidate for candidate in candidates
+            if TunnelCandidate.resolveType(candidate.domain, type=candidate.type) == tunnelType
+        ]
+
     return getLowLatencyTunnel(candidates, latencyThreshold=latencyThreshold)
 
 
@@ -453,6 +502,6 @@ def createTunnelClient(resolved, port, uid, tokenProvider, proxyConfig=None, **k
         **kwargs: Forwarded to BoreClient only, unused for web.
 
     Returns:
-        BoreClient, WebTunnelClient, or LoopbackTunnelClient: Configured client instance.
+        BoreClient, WebTunnelClient, LoopbackTunnelClient, or LANTunnelClient: Configured client instance.
     """
     return resolved.createClient(port, uid, tokenProvider, proxyConfig=proxyConfig, **kwargs)

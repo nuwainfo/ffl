@@ -785,7 +785,7 @@ class BoreClient(Socks5ProxySupport):
 @dataclass
 class BoreTunnelCandidate(TunnelCandidate):
     """A candidate resolved to the bore transport -- the default when a
-    domain's type isn't already known (see TunnelCandidate._classFor() in
+    domain's type isn't already known (see TunnelCandidate._resolveClass() in
     bases/tunnels/__init__.py)."""
 
     type: Optional[str] = 'bore'

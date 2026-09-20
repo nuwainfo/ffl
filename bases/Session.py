@@ -32,6 +32,7 @@ from bases.Auth import RecipientAuth
 from bases.Checksum import TransferChecksumStore
 from bases.E2EE import E2EEManager
 from bases.Kernel import getLogger
+from bases.Settings import NetworkPolicy
 from bases.Readers import SourceReader
 from bases.Share import ShareSession, ShareStatus
 from bases.SSE import EventHub
@@ -341,6 +342,7 @@ class UploadSession(ShareSession):
 @dataclass
 class ServerSession(ShareSession):
     domain: Optional[str] = None
+    networkPolicy: NetworkPolicy = field(default_factory=NetworkPolicy) # Applied to this share's requests
     reader: Optional[SourceReader] = None
     config: Optional[ServerConfig] = None
     handlerClass: Optional[type[BaseHTTPRequestHandler]] = None
@@ -359,6 +361,11 @@ class ServerSession(ShareSession):
     p2pPublishers: dict[str, Any] = field(default_factory=dict)
     lastError: Optional[dict[str, Optional[str]]] = None
     _debugUserAgentSessions: set[str] = field(default_factory=set)
+
+    def attachTunnel(self, domain, networkPolicy):
+        """Record where this share is reachable and the network policy that implies."""
+        self.domain = domain
+        self.networkPolicy = networkPolicy
 
     def stop(self):
         for publisher in self.p2pPublishers.values():

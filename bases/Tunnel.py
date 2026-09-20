@@ -29,8 +29,8 @@ from functools import partial
 import requests
 
 from bases.Kernel import getLogger, FFLEvent
-from bases.Settings import SettingsGetter
-from bases.tunnels import createTunnelClient, resolveTunnelCandidate
+from bases.Settings import NetworkPolicy, SettingsGetter
+from bases.tunnels import TunnelCandidate, createTunnelClient, resolveTunnelCandidate
 
 logger = getLogger(__name__)
 
@@ -208,7 +208,9 @@ class TunnelRunner:
         self.proxyConfig = proxyConfig
         self.tunnelThread = None
         self.lock = threading.Lock()
+        self.forcedTunnelType = None # Set to force one type of tunnel (see SUPPORTED_TUNNEL_TYPES)
         self._resolved = None
+        self._client = None
 
     def resolveTunnel(self):
         """Decide which tunnel domain and transport type to use.
@@ -218,7 +220,11 @@ class TunnelRunner:
         this baseline implementation is only used when no such addon is
         available, and defaults to bore.
         """
-        return resolveTunnelCandidate()
+        return resolveTunnelCandidate(tunnelType=self.forcedTunnelType)
+
+    def matchesForcedType(self, candidate):
+        """Whether `candidate` is of the forced tunnel type (always true when none is forced)."""
+        return self.forcedTunnelType in (None, TunnelCandidate.resolveType(candidate.domain, type=candidate.type))
 
     def _getResolvedTunnel(self):
         if self._resolved is None:
@@ -244,6 +250,23 @@ class TunnelRunner:
     def reusableAcrossShares(self):
         """Whether one connected client can serve more than one share."""
         return self._getResolvedTunnel().reusableAcrossShares
+
+    @property
+    def resolvedType(self):
+        """The type ('bore', 'web', 'lan', ...) of the tunnel this runner resolved."""
+        resolved = self._getResolvedTunnel()
+        return TunnelCandidate.resolveType(resolved.domain, type=resolved.type)
+
+    @property
+    def networkPolicy(self):
+        """Runtime network policy the started tunnel implies for its share
+        (see SettingsGetter.overrideNetworkPolicy). Empty for any tunnel
+        that adds no constraint, including external tunnels, which never
+        resolve a candidate."""
+        if self._client is None or self._resolved is None:
+            return NetworkPolicy()
+
+        return self._resolved.resolveNetworkPolicy(self._client)
 
     def getProxyInfo(self):
         """
@@ -347,6 +370,7 @@ class TunnelRunner:
         try:
             # Create client and tunnel thread
             client = self.createClient(port, uid=uid)
+            self._client = client
             self.tunnelThread, resultQueue = self.createTunnelThread(client)
             self.tunnelThread.start()
 

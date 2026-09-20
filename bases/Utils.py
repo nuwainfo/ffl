@@ -17,21 +17,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import ipaddress
 import json
 import locale
 import os
 import re
-from datetime import datetime
 import signal
 import socket
 import ssl
 import sys
+import urllib.parse
 import webbrowser
 
-from dataclasses import fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional, TypedDict
+from typing import ClassVar, Optional, TypedDict
 
 import bitmath
 import chardet
@@ -44,7 +46,7 @@ from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 
 from bases.Kernel import getLogger, PUBLIC_VERSION
-from bases.Settings import SettingsGetter
+from bases.Settings import NetworkPolicy, SettingsGetter
 from bases.I18n import _
 
 ONE_KB = bitmath.KiB(1).bytes
@@ -631,6 +633,55 @@ def validateCompatibleWithServer(action=flushPrint):
         webbrowser.open(user.updateURL)
         return False
     return True
+
+
+@dataclass(frozen=True)
+class NetworkEndpoint:
+    """Classifies a URL endpoint by the network path its address implies."""
+
+    host: Optional[str]
+
+    _DIRECT_NETWORKS: ClassVar[tuple] = tuple(
+        ipaddress.ip_network(network)
+        for network in (
+            '10.0.0.0/8',
+            '100.64.0.0/10',
+            '127.0.0.0/8',
+            '169.254.0.0/16',
+            '172.16.0.0/12',
+            '192.168.0.0/16',
+            '::1/128',
+            'fc00::/7',
+            'fe80::/10',
+        )
+    )
+
+    @classmethod
+    def fromURL(cls, url):
+        parsedURL = urllib.parse.urlparse(url)
+        return cls(host=parsedURL.hostname)
+
+    @property
+    def requiresNATTraversal(self):
+        if self.host is None:
+            return True
+
+        if self.host.lower() == 'localhost':
+            return False
+
+        try:
+            ipAddress = ipaddress.ip_address(self.host)
+        except ValueError:
+            return True
+
+        return not any(ipAddress in network for network in self._DIRECT_NETWORKS)
+
+    @property
+    def networkPolicy(self):
+        if self.requiresNATTraversal:
+            return NetworkPolicy()
+
+        return NetworkPolicy.createDirect()
 
 
 class StoreHelper:

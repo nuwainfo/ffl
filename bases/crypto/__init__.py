@@ -34,7 +34,7 @@ class CryptoBackend(ABC):
 
     @abstractmethod
     def generateKeyPair(self):
-        """Generate Ed25519 key pair, returns (privateKeyB64, publicKeyB64)"""
+        """Generate ECDSA P-384 key pair, returns (privateKeyB64, publicKeyB64)"""
         pass
 
     @abstractmethod
@@ -129,9 +129,9 @@ class CryptoInterface:
     def __init__(self, preferredBackend=None):
         self.backend = self._initializeBackend(preferredBackend)
 
-    def _initializeBackend(self, preferredBackend='auto'):
+    def _initializeBackend(self, preferredBackend=None):
         """Initialize crypto backend with fallback priority"""
-        backendList = ['cryptography', 'mbedTLS']
+        backendList = ['cryptography', 'gnuTLS']
 
         # If specific backend requested, try that first
         if preferredBackend is None:

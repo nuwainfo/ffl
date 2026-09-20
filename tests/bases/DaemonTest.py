@@ -343,12 +343,29 @@ class DaemonLifecycleMixin:
 
     def _waitForDaemonDownload(self, downloadId, timeout=120):
         timeout *= self.DOWNLOAD_TIMEOUT_MULTIPLIER
-        deadline = time.time() + timeout
+        startedWaitingAt = time.time()
+        deadline = startedWaitingAt + timeout
         client = DaemonClient()
+        lastDownload = None
+        # (status, transferred, elapsed-since-wait-started) whenever status or
+        # transferred progress actually changes, so a timeout's error message
+        # shows the download's whole trajectory (e.g. "reached 100% at 4s,
+        # then nothing" vs "never left 0%") instead of just its final snapshot.
+        statusHistory = []
+
         while time.time() < deadline:
             download = client.getDownload(downloadId)
             if download is None:
                 raise AssertionError(f"Daemon download disappeared: {downloadId}")
+
+            if (
+                lastDownload is None or download['status'] != lastDownload['status'] or
+                download.get('transferred') != lastDownload.get('transferred')
+            ):
+                statusHistory.append(
+                    (round(time.time() - startedWaitingAt, 1), download['status'], download.get('transferred'))
+                )
+            lastDownload = download
 
             if download['status'] == 'completed':
                 return download
@@ -357,7 +374,11 @@ class DaemonLifecycleMixin:
 
             time.sleep(0.3)
 
-        raise AssertionError(f"Timed out waiting for daemon download {downloadId}")
+        raise AssertionError(
+            f"Timed out waiting for daemon download {downloadId} after {timeout}s. "
+            f"Last known state: {lastDownload}. "
+            f"Status history (elapsed_s, status, transferred): {statusHistory}"
+        )
 
     def _readLatestOutputText(self):
         if self._procLogFile:

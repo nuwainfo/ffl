@@ -1060,10 +1060,23 @@ class WebRTCManager(AsyncLoopExceptionMixin):
             # Wait for browser to signal completion or timeout after 30 seconds
             completionEvent = self.downloadCompleteEvents.get(peerId)
             if completionEvent:
-                # Wait in a thread to avoid blocking the asyncio loop
-                with concurrent.futures.ThreadPoolExecutor() as executor:
+                # Wait in a thread to avoid blocking the asyncio loop. Not a
+                # `with` block: `with`'s __exit__ calls shutdown(wait=True),
+                # which -- if this task is cancelled (e.g. session torn down
+                # mid-transfer) while the worker is still inside
+                # completionEvent.wait(30) -- blocks THIS event loop's own
+                # thread for however long is left of that 30s window, since
+                # asyncio cancellation can't interrupt a plain blocking
+                # threading.Event.wait() already running on its own thread.
+                # shutdown(wait=False) lets cleanup proceed immediately; the
+                # abandoned worker still exits on its own once the wait
+                # naturally elapses.
+                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                try:
                     future = executor.submit(completionEvent.wait, 30) # 30 second timeout
                     completed = await asyncio.get_event_loop().run_in_executor(None, future.result)
+                finally:
+                    executor.shutdown(wait=False)
 
                 if not completed:
                     logger.warning(
@@ -1130,6 +1143,17 @@ class WebRTCManager(AsyncLoopExceptionMixin):
             self.runAsync(self.shutdownWebRTC(), timeout=5)
         except Exception as e:
             logger.exception(f"Error closing WebRTC connections: {e}")
+        finally:
+            # shutdownWebRTC() above only closes peer connections; it never stops
+            # this manager's own event-loop thread (started in __init__ with
+            # run_forever()), so without this the thread leaks for the rest of
+            # the process's life -- one per share session, forever. Mirrors
+            # WebRTCDownloadMixin.close()'s stop+join further down this file.
+            if self.loop and self.loop.is_running():
+                self.loop.call_soon_threadsafe(self.loop.stop)
+
+            if self.thread and self.thread.is_alive():
+                self.thread.join(timeout=1)
 
 
 class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
@@ -1245,7 +1269,7 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
         """Unified helper to handle download failure: close file and set error"""
         context['error'] = error
 
-        if context.get('outputFile') and context['outputFile'] is not sys.stdout.buffer:
+        if context.get('outputFile') and not context.get('isStdoutMode'):
             try:
                 context['outputFile'].close()
                 context['outputFile'] = None
@@ -1427,7 +1451,19 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
             logger.debug("Data channel accepted - setting up file transfer")
             # Open file when data channel is established (append mode if resuming), or use stdout
             mode = 'ab' if resumePosition > 0 else 'wb'
-            context['outputFile'] = sys.stdout.buffer if outputPath == "-" else open(outputPath, mode)
+            # Recorded once, rather than re-derived later via `is not
+            # sys.stdout.buffer`: that comparison re-evaluates sys.stdout at
+            # call time, and anything that replaces sys.stdout with a plain
+            # wrapper lacking a .buffer attribute (e.g. xmlrunner's
+            # _DuplicateWriter, swapped in for the whole duration of each
+            # test to capture output for the JUnit XML) raises AttributeError
+            # right in the EOF handler, before downloadComplete.set() runs --
+            # hanging the download forever, since the timeout logic below is
+            # skipped entirely once downloadStarted is True. 100% reproducible
+            # under the real xmlrunner-based CI run, never under a plain
+            # `python -m unittest` invocation. See Refs #4297.
+            context['isStdoutMode'] = (outputPath == "-")
+            context['outputFile'] = sys.stdout.buffer if context['isStdoutMode'] else open(outputPath, mode)
 
             # Send START signal when channel opens
             def sendStartSignal():
@@ -1468,7 +1504,7 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
 
                                 context['outputFile'].flush()
 
-                                if context['outputFile'] is not sys.stdout.buffer:
+                                if not context.get('isStdoutMode'):
                                     context['outputFile'].close()
 
                             self._finalizeTransferChecksumState(context['checksumState'])
@@ -1483,7 +1519,7 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
                             downloadComplete.set()
                         elif data == "ERROR":
                             progress.write("Server reported error during transfer")
-                            if context['outputFile'] and context['outputFile'] is not sys.stdout.buffer:
+                            if context['outputFile'] and not context.get('isStdoutMode'):
                                 context['outputFile'].close()
 
                             downloadComplete.set()
@@ -1492,7 +1528,7 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
                             errorType = data.split(":", 1)[1] if ":" in data else "UNKNOWN"
                             progress.write(f"Server connection error: {errorType}")
 
-                            if context['outputFile'] and context['outputFile'] is not sys.stdout.buffer:
+                            if context['outputFile'] and not context.get('isStdoutMode'):
                                 context['outputFile'].close()
 
                             self._failDownload(context, RuntimeError(f"Server error: {errorType}"), errorEvent)
@@ -1866,7 +1902,7 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
                 statusStopEvent.set()
                 await self._cancelTasks([pollingTask, completionTask, errorTask])
 
-                if context.get('outputFile') and context['outputFile'] is not sys.stdout.buffer:
+                if context.get('outputFile') and not context.get('isStdoutMode'):
                     context['outputFile'].close()
                     context['outputFile'] = None
 

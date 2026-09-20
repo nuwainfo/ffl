@@ -20,7 +20,7 @@
 import base64
 import hashlib
 
-from ffl_mbedtls import CryptoEngine, RSAPrivateKey, RSAPublicKey
+from ffl_gnutls import CryptoEngine, RSAPrivateKey, RSAPublicKey
 
 from bases.crypto import CryptoBackend
 
@@ -29,8 +29,8 @@ _RSAPublicKey = RSAPublicKey
 _RSAPrivateKey = RSAPrivateKey
 
 
-class MbedTLSBackend(CryptoBackend):
-    """FastFileLink crypto backend backed by ffl_mbedtls."""
+class GnuTLSBackend(CryptoBackend):
+    """FastFileLink crypto backend backed by ffl_gnutls."""
 
     @staticmethod
     def _extractKeyMaterial(keyOrCipher):
@@ -60,7 +60,7 @@ class MbedTLSBackend(CryptoBackend):
         self.crypto = CryptoEngine()
 
     def getName(self):
-        return "ffl-mbedtls"
+        return "ffl-gnutls"
 
     def generateKeyPair(self):
         privateKeyDER, publicKeyDER = self.crypto.generateP384KeyPair()
@@ -70,19 +70,17 @@ class MbedTLSBackend(CryptoBackend):
         )
 
     def signMessage(self, message, privateKeyB64):
-        messageBytes = message.encode()
-        privateKeyDER = base64.b64decode(privateKeyB64)
-        signature = self.crypto.signSHA256(messageBytes, privateKeyDER)
+        signature = self.crypto.signSHA256(
+            message.encode(),
+            base64.b64decode(privateKeyB64),
+        )
         return base64.b64encode(signature).decode()
 
     def verifySignature(self, message, signatureB64, publicKeyB64):
-        messageBytes = message.encode()
-        signature = base64.b64decode(signatureB64)
-        publicKeyDER = base64.b64decode(publicKeyB64)
         return self.crypto.verifySHA256(
-            messageBytes,
-            signature,
-            publicKeyDER,
+            message.encode(),
+            base64.b64decode(signatureB64),
+            base64.b64decode(publicKeyB64),
         )
 
     def encryptData(self, data, keyB64):
@@ -100,7 +98,8 @@ class MbedTLSBackend(CryptoBackend):
         key = base64.b64decode(keyB64)[:32]
         iv = encrypted[:16]
         ciphertext = encrypted[16:]
-        return self.crypto.decryptAESCBC(key, ciphertext, iv)
+        plaintext = self.crypto.decryptAESCBC(key, ciphertext, iv)
+        return plaintext.decode()
 
     def verifyVoucher(
         self,
@@ -109,17 +108,14 @@ class MbedTLSBackend(CryptoBackend):
         voucher,
         endorsementPublicKey,
     ):
-        combinedString = sessionToken + serverPublicKey
-        combinedHash = hashlib.sha256(combinedString.encode()).digest()
-        voucherSignature = base64.b64decode(voucher)
-        endorsementPublicKeyDER = base64.b64decode(endorsementPublicKey)
+        combined = sessionToken + serverPublicKey
+        combinedHash = hashlib.sha256(combined.encode()).digest()
 
-        # Preserve the existing protocol: the ECDSA helper hashes this
-        # pre-hash once more with SHA-256 before verification.
+        # Existing voucher signatures hash this pre-hash once more.
         return self.crypto.verifySHA256(
             combinedHash,
-            voucherSignature,
-            endorsementPublicKeyDER,
+            base64.b64decode(voucher),
+            base64.b64decode(endorsementPublicKey),
         )
 
     def encryptWithPublicKey(
@@ -128,13 +124,17 @@ class MbedTLSBackend(CryptoBackend):
         publicKeyB64,
         devicePrivateKeyB64=None,
     ):
-        publicKeyDER = base64.b64decode(publicKeyB64)
+        # The existing backend contract accepted this argument but always used
+        # a fresh ephemeral P-384 key for each ECIES payload.
+        del devicePrivateKeyB64
+
+        serverPublicKeyDER = base64.b64decode(publicKeyB64)
         devicePrivateKeyDER, devicePublicKeyDER = (
             self.crypto.generateP384KeyPair()
         )
         sharedSecret = self.crypto.deriveP384SharedSecret(
             devicePrivateKeyDER,
-            publicKeyDER,
+            serverPublicKeyDER,
         )
         encryptionKey = self.deriveKey(
             sharedSecret,
@@ -168,14 +168,24 @@ class MbedTLSBackend(CryptoBackend):
             salt=None if salt is None else bytes(salt),
         )
 
-    def encryptAESGCM(self, keyOrCipher, plaintext, nonce=None, aad=None):
+    def encryptAESGCM(
+        self,
+        keyOrCipher,
+        plaintext,
+        nonce=None,
+        aad=None,
+    ):
         key = self._extractKeyMaterial(keyOrCipher)
         plaintextBytes = (
             plaintext.encode("utf-8")
             if isinstance(plaintext, str)
             else bytes(plaintext)
         )
-        nonceBytes = self.crypto.randomBytes(12) if nonce is None else bytes(nonce)
+        nonceBytes = (
+            self.crypto.randomBytes(12)
+            if nonce is None
+            else bytes(nonce)
+        )
         aadBytes = b"" if aad is None else bytes(aad)
         ciphertextWithTag = self.crypto.encryptAESGCM(
             key,
@@ -230,7 +240,10 @@ class MbedTLSBackend(CryptoBackend):
         return self.crypto.serializeRSAPublicKey(publicKey)
 
     def decryptRSAOAEP(self, privateKey, ciphertext):
-        return self.crypto.decryptRSAOAEP(privateKey, bytes(ciphertext))
+        return self.crypto.decryptRSAOAEP(
+            privateKey,
+            bytes(ciphertext),
+        )
 
     def serializeRSAPrivateKeyPKCS8(self, privateKey):
         return self.crypto.serializeRSAPrivateKeyPKCS8(privateKey)

@@ -28,7 +28,7 @@ from bases.I18n import _
 from bases.Kernel import getLogger
 from bases.Server import DownloadHandler, createServer
 from bases.Session import ServerConfig, ServerSession, UploadSession
-from bases.Settings import SettingsGetter, ShareMode
+from bases.Settings import NetworkPolicy, SettingsGetter, ShareMode
 from bases.Share import (
     RuntimeProtocol,
     ShareExecutionContext,
@@ -111,7 +111,9 @@ class AbstractRuntime(RuntimeProtocol, ABC):
 
         return exitCode
 
-    def prepareServerSession(self, args, context, *, reader, uid, link, port, domain, torDetected, uploadProcessor):
+    def prepareServerSession(
+        self, args, context, *, reader, uid, link, port, domain, torDetected, uploadProcessor, networkPolicy=None
+    ):
         reporter = context.reporter
         output = reporter.output
 
@@ -182,7 +184,7 @@ class AbstractRuntime(RuntimeProtocol, ABC):
         context.session.handlerClass = handlerClass
         context.session.webRTCManagerClass = webRTCManagerClass
         context.session.port = port
-        context.session.domain = domain
+        context.session.attachTunnel(domain, networkPolicy or NetworkPolicy())
         return 0
 
     def prepareBaseHandlerClass(self, context, *, uploadProcessor, link, uid):
@@ -313,7 +315,8 @@ class SingleShareRuntime(MultiShareServerRuntime):
                 port=port,
                 domain=domain,
                 torDetected=torDetected,
-                uploadProcessor=uploadProcessor
+                uploadProcessor=uploadProcessor,
+                networkPolicy=tunnelRunner.networkPolicy,
             )
             if exitCode:
                 return exitCode

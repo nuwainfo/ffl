@@ -429,9 +429,16 @@ class P2PDownloadMixin:
             not urlInfo.isGenericURL and urlInfo.supportsWebRTC
         )
 
+        settingsGetter = SettingsGetter.getInstance()
+
         skipWebRTC = False
         if canUseP2P:
-            headers = self._createAuthHeaders(credentials)
+            # Use a browser-like User-Agent (not just auth headers) because the
+            # P2P signaling request goes straight to urllib.request with no UA
+            # override; Cloudflare's bot management flags the default
+            # "Python-urllib/x.y" signature and blocks it with a 403 (error
+            # 1010, browser_signature_banned) before it reaches our server.
+            headers = self._makeHeaders(credentials)
             if pickupCode:
                 headers['X-FFL-Pickup'] = pickupCode
             if ctx['proof']:
@@ -448,7 +455,8 @@ class P2PDownloadMixin:
                 # also hides the original QUIC failure we need to diagnose.
                 try:
                     connection = P2PConnector(
-                        configuration=P2PConfiguration.createICEConfiguration()
+                        configuration=P2PConfiguration.createICEConfiguration(),
+                        useUDPPortMapping=settingsGetter.portMappingEnabled,
                     ).connect(
                         urlInfo.baseURL,
                         preference=self.p2pTransportPreference,

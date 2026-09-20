@@ -17,6 +17,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextvars
 import json
 import shutil
 import sys
@@ -253,6 +254,93 @@ class DummyAPIHandler:
         return {'success': False, 'message': 'Dummy API handler - no real requests made'}
 
 
+@dataclass(frozen=True)
+class NetworkPolicy:
+    """Runtime transport policy for one reachable network context.
+
+    A field left as None overrides nothing (see SettingsGetter.overrideNetworkPolicy).
+    """
+
+    iceServerEntries: tuple | None = None
+    portMappingEnabled: bool | None = None
+    directConnectionHosts: tuple | None = None
+
+    @classmethod
+    def createDirect(cls, directConnectionHosts=None):
+        hosts = None if directConnectionHosts is None else tuple(directConnectionHosts)
+        return cls(
+            iceServerEntries=(),
+            portMappingEnabled=False,
+            directConnectionHosts=hosts,
+        )
+
+
+class _RuntimeSettingOverride:
+    """One temporary value in a RuntimeSettingOverrideStack, restorable once."""
+
+    def __init__(self, overrideStack, value):
+        self._overrideStack = overrideStack
+        self.value = value
+
+    def restore(self):
+        self._overrideStack.remove(self)
+
+
+class RuntimeSettingOverrideStack:
+    """Temporary runtime values for one setting, scoped to the current context.
+
+    Backed by a ContextVar, so an override is visible only to the thread or
+    asyncio task that activated it (and contexts copied from it afterwards).
+    The daemon can therefore serve a LAN share while concurrently downloading
+    from an internet URL without either one's network policy leaking into the
+    other. An override must be restored from the context that activated it.
+    """
+
+    def __init__(self, name):
+        self._overrides = contextvars.ContextVar(f'runtimeSettingOverrides.{name}', default=())
+
+    def override(self, value):
+        activeOverride = _RuntimeSettingOverride(self, value)
+        self._overrides.set(self._overrides.get() + (activeOverride,))
+        return activeOverride
+
+    def remove(self, activeOverride):
+        currentOverrides = self._overrides.get()
+        if activeOverride not in currentOverrides:
+            raise RuntimeError('Runtime setting override is not active in this context')
+
+        self._overrides.set(tuple(item for item in currentOverrides if item is not activeOverride))
+
+    def resolve(self, defaultValue):
+        currentOverrides = self._overrides.get()
+        return currentOverrides[-1].value if currentOverrides else defaultValue
+
+
+class _RuntimeNetworkPolicyOverride:
+    """Owns the setting overrides activated for one NetworkPolicy."""
+
+    def __init__(self, settingOverrides):
+        self._settingOverrides = tuple(settingOverrides)
+        self._active = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exceptionType, exception, traceback):
+        self.restore()
+
+    def restore(self):
+        if not self._active:
+            raise RuntimeError('Runtime network policy override is not active')
+
+        # Mark inactive only after every restore succeeded, so a restore attempted
+        # from the wrong context raises without disabling the owner's own restore.
+        for settingOverride in reversed(self._settingOverrides):
+            settingOverride.restore()
+
+        self._active = False
+
+
 # Singleton
 class SettingsGetter(Singleton):
 
@@ -288,6 +376,9 @@ class SettingsGetter(Singleton):
         self._platform = platform
         self._exePath = exePath
         self._featureManager = None # Cache for singleton FeatureManager
+        self._iceServerEntriesOverrides = RuntimeSettingOverrideStack('iceServerEntries')
+        self._portMappingEnabledOverrides = RuntimeSettingOverrideStack('portMappingEnabled')
+        self._directConnectionHostsOverrides = RuntimeSettingOverrideStack('directConnectionHosts')
 
         self._addonsManager = AddonsManager.getInstance()
         self._addonsManager.loadAllAddons()
@@ -441,13 +532,49 @@ class SettingsGetter(Singleton):
         """
         return STATIC_SERVER
 
+    def overrideNetworkPolicy(self, policy):
+        """Apply `policy` to the current context until restored (also a context manager).
+
+        Only the settings the policy specifies are overridden; an empty
+        NetworkPolicy() changes nothing.
+        """
+        if not isinstance(policy, NetworkPolicy):
+            raise TypeError('Runtime network policy must be a NetworkPolicy')
+
+        if policy.portMappingEnabled is not None and not isinstance(policy.portMappingEnabled, bool):
+            raise TypeError('Port mapping setting must be a bool')
+
+        overridesByStack = (
+            (self._iceServerEntriesOverrides, policy.iceServerEntries, lambda entries: tuple(dict(entry) for entry in entries)),
+            (self._portMappingEnabledOverrides, policy.portMappingEnabled, lambda enabled: enabled),
+            (self._directConnectionHostsOverrides, policy.directConnectionHosts, tuple),
+        )
+
+        return _RuntimeNetworkPolicyOverride(
+            stack.override(normalize(value)) for stack, value, normalize in overridesByStack if value is not None
+        )
+
+    @property
+    def portMappingEnabled(self):
+        return self._portMappingEnabledOverrides.resolve(True)
+
+    @property
+    def directConnectionHosts(self):
+        hosts = self._directConnectionHostsOverrides.resolve(None)
+        return list(hosts) if hosts is not None else None
+
     def getICEServerEntries(self, configPath=None):
         """Return validated ``ice.json`` entries for direct transports.
 
         A missing or invalid file intentionally retains FFL's public STUN
         defaults.  The returned dictionaries are copies, so callers cannot
-        mutate the process-wide defaults or parsed configuration.
+        mutate the process-wide defaults or parsed configuration. A runtime
+        network policy active in the current context takes precedence.
         """
+        overriddenEntries = self._iceServerEntriesOverrides.resolve(None)
+        if overriddenEntries is not None:
+            return [dict(entry) for entry in overriddenEntries]
+
         if configPath is None:
             storageLocator = StorageLocator.getInstance()
             configPath = storageLocator.findConfig(

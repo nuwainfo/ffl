@@ -56,7 +56,6 @@ LOCAL_TEST_SERVER_URL = f'http://localhost:{LOCAL_TEST_SERVER_PORT}'
 # (None is a legitimate value, meaning "inherit the caller's own cwd").
 _UNSET = object()
 
-
 # ---------------------------
 # Base test class
 # ---------------------------

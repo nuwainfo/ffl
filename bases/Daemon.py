@@ -178,19 +178,28 @@ class InProcessDownloadManager:
     def _runDownloadWorker(self, worker):
         record = worker.record
         with self._lock:
-            record.status = 'downloading'
             record.startedAt = datetime.datetime.now().isoformat()
             record.transport = None
 
         try:
-            worker.downloader = FFLDownloader(
+            downloader = FFLDownloader(
                 loggerCallback=lambda message: logger.info('[daemon download %s] %s', record.id, message),
                 progressCallback=lambda transferred, fileSize: self._updateProgress(record.id, transferred, fileSize),
                 urlInfoCallback=lambda urlInfo: self._updateDownloadCapabilities(record.id, not urlInfo.isGenericURL),
                 transportCallback=lambda transport: self._updateDownloadTransport(record.id, transport),
             )
-        
-            outputPath = worker.downloader.downloadFile(
+            # status only flips to 'downloading' once worker.downloader actually
+            # exists, both under the lock pauseDownload() also takes -- otherwise
+            # pauseDownload() can observe status=='downloading' with downloader
+            # still None (the gap between this thread starting and construction
+            # finishing above) and crash calling .cancel() on None. That gap
+            # reopens on every resume, since resumeDownload() resets both status
+            # and downloader before restarting the worker.
+            with self._lock:
+                worker.downloader = downloader
+                record.status = 'downloading'
+
+            outputPath = downloader.downloadFile(
                 record.url, outputPath=record.destinationPath, resume=worker.resume,
                 downloadAuth=worker.downloadAuth,
             )
@@ -200,7 +209,7 @@ class InProcessDownloadManager:
                     record.status = 'paused'
                     record.progressDescription = _('Paused')
                     return
-                    
+
             raise
         except Exception as e:
             logger.exception('Daemon download %s failed', record.id)
@@ -208,7 +217,7 @@ class InProcessDownloadManager:
                 record.status = 'failed'
                 record.error = str(e)
                 record.completedAt = datetime.datetime.now().isoformat()
-                
+
             return
         finally:
             if worker.downloader:
@@ -255,7 +264,10 @@ class InProcessDownloadManager:
     def pauseDownload(self, downloadId):
         with self._lock:
             worker = self._workers.get(downloadId)
-            if worker is None or not worker.record.pauseSupported or worker.record.status != 'downloading':
+            if (
+                worker is None or not worker.record.pauseSupported or worker.record.status != 'downloading' or
+                worker.downloader is None
+            ):
                 return False
                 
             worker.pauseRequested = True
@@ -390,6 +402,30 @@ class DaemonSharedRuntime(MultiShareServerRuntime):
         self._proxyConfig = None
         self._fallbackRuntime = SingleShareRuntime()
 
+    def requireSameTunnelType(self, size, context):
+        """A daemon serves all its shares through one tunnel, so a share that
+        forces a tunnel type (--preferred-tunnel default:<type>) must match the
+        type of the tunnel the existing shares already use.
+
+        A share that forces none is deliberately not compared: it just uses the
+        existing tunnel. Resolving a tunnel for it again would cost another
+        latency race, and could pick a different relay type (bore or web) on
+        every call, although relay types are interchangeable and only a
+        local-only tunnel like lan really cannot be mixed with a relay. So this
+        case is only logged.
+        """
+        currentType = self._tunnelRunner.resolvedType
+        forcedType = self.createTunnel(size, context).forcedTunnelType
+        if forcedType is None:
+            logger.info(f'Share forces no tunnel type; it uses the existing {currentType} tunnel')
+            return
+
+        if forcedType != currentType:
+            raise RuntimeError(
+                _('Cannot share through a {requestedType} tunnel while existing shares use a {currentType} tunnel.'
+                  ).format(requestedType=forcedType, currentType=currentType)
+            )
+
     def _canReuseInfrastructure(self, proxyConfig):
         return (
             self._server is not None and self._serverThread is not None and self._serverThread.is_alive() and
@@ -404,7 +440,7 @@ class DaemonSharedRuntime(MultiShareServerRuntime):
         domain, tunnelLink = self.startTunnel(tunnelRunner, port, context, uid=session.uid)
 
         session.port = port
-        session.domain = domain
+        session.attachTunnel(domain, tunnelRunner.networkPolicy)
         server = createServer(session, autoShutdown=False)
 
         serverThread = threading.Thread(target=server.serve_forever, daemon=True, name='daemon-shared-server')
@@ -465,8 +501,10 @@ class DaemonSharedRuntime(MultiShareServerRuntime):
                 tunnelRunner = self._tunnelRunner
                 shareTunnelLink = self._tunnelLink
             else:
+                self.requireSameTunnelType(size, context)
+                
                 session.port = self._port
-                session.domain = self._domain
+                session.attachTunnel(self._domain, self._tunnelRunner.networkPolicy)
                 self._server.addSession(session)
                 tunnelRunner = self._tunnelRunner
                 shareTunnelLink = self._tunnelLink
@@ -1646,7 +1684,9 @@ class ProcessDaemonManager(DaemonManager):
         shareData = client.waitForLink(share.id)
 
         if not shareData:
-            flushPrint(_('Error: Failed to get share link from daemon'))
+            failedShare = client.getShare(share.id)
+            reason = failedShare and failedShare.get('error')
+            flushPrint(_('Error: Failed to get share link from daemon') + (f': {reason}' if reason else ''))
             return 1
 
         link = shareData.get('link')

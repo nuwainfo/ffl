@@ -38,7 +38,7 @@ import requests
 
 from bases.Checksum import DEFAULT_CHECKSUM_ALGORITHM
 from bases.Kernel import getLogger
-from bases.Utils import flushPrint, formatSize, getEnv, sendException, StallResilientAdapter
+from bases.Utils import flushPrint, formatSize, getEnv, sendException, StallResilientAdapter, NetworkEndpoint
 from bases.Progress import Progress
 from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE, TransferTransport
 from bases.E2EE import E2EEClient
@@ -86,6 +86,8 @@ class Downloader(ABC):
 
     CHECKSUM_READY_POLL_RETRIES = 10
     CHECKSUM_READY_POLL_INTERVAL = 0.2
+    CHECKSUM_READY_REQUEST_TIMEOUT = 3
+    CHECKSUM_READY_OVERALL_BUDGET = 8
 
     @staticmethod
     def _isKnownSize(fileSize: int) -> bool:
@@ -107,6 +109,16 @@ class Downloader(ABC):
         self._e2eeClient = None
         self._cancelEvent = threading.Event()
         self._activeHTTPResponse = None
+        # stopEvents for any _startStatusPollingThread() background threads
+        # currently running against this downloader instance, so close() can
+        # reach them directly. Needed because a status-polling thread only
+        # otherwise stops via the finally block of the coroutine/call that
+        # started it -- if that gets orphaned (e.g. the daemon tears down its
+        # event loop while a transfer is stuck/suspended, so its finally
+        # block never runs), the polling thread has no other way to learn the
+        # download is gone and polls its now-defunct /status URL forever,
+        # every 0.5s, for the life of the process. See Refs #4297.
+        self._activeStatusStopEvents = set()
 
     def cancel(self):
         """Interrupt a transfer while preserving its partial output file for resume."""
@@ -300,14 +312,27 @@ class Downloader(ABC):
         Only an actual mismatch once the server *does* respond should be a
         hard error. See ChecksumNetworkResilienceTest for the regression this
         guards against.
+
+        Bounded by CHECKSUM_READY_OVERALL_BUDGET regardless of retry count:
+        this is a best-effort confirmatory step, not a critical-path wait, so
+        a slow/contended server (each request up to CHECKSUM_READY_REQUEST_TIMEOUT
+        instead of failing fast) must not be able to hold the whole download
+        up for retries * per-request-timeout (previously up to ~100s) before
+        downloadFile() can return and the caller can report completion.
         """
         checksumURL = self._buildURL(baseURL, "checksum")
+        deadline = time.monotonic() + self.CHECKSUM_READY_OVERALL_BUDGET
 
         for attemptIndex in range(self.CHECKSUM_READY_POLL_RETRIES):
+            if time.monotonic() >= deadline:
+                return None
+
             try:
-                responseData, statusCode = self._sendHTTPRequest(checksumURL, "GET", None, headers, 10)
+                responseData, statusCode = self._sendHTTPRequest(
+                    checksumURL, "GET", None, headers, self.CHECKSUM_READY_REQUEST_TIMEOUT
+                )
             except requests.exceptions.RequestException as e:
-                logger.debug(f"Checksum endpoint request failed, skip strict checksum verification: {e}")
+                logger.debug("Checksum poll attempt %d failed, skip strict verification: %s", attemptIndex, e)
                 return None
 
             if statusCode == 200 and isinstance(responseData, dict) and responseData.get('ready'):
@@ -750,6 +775,11 @@ class Downloader(ABC):
             errorQueue: Deque to store detected errors (thread-safe, lock-free reads)
         """
 
+        # Tracked so close() can set it directly if this thread's owning
+        # transfer never reaches the code that would normally set it itself
+        # (see _activeStatusStopEvents' docstring in __init__).
+        self._activeStatusStopEvents.add(stopEvent)
+
         def pollingWorker():
             statusURL = self._buildURL(baseURL, "status", excludeUID=False)
             pollInterval = 0.5 # Poll every 0.5 seconds for faster error detection
@@ -789,6 +819,7 @@ class Downloader(ABC):
                         stopEvent.wait(pollInterval)
 
             logger.debug("[STATUS_POLL] Background thread stopped")
+            self._activeStatusStopEvents.discard(stopEvent)
 
         # Start background daemon thread
         thread = threading.Thread(target=pollingWorker, daemon=True, name="StatusPolling")
@@ -909,8 +940,14 @@ class Downloader(ABC):
         """Download url and return the local output path. Concrete transports must implement this."""
 
     def close(self):
-        """No-op by default; overridden by transports holding resources (e.g. an event loop thread)."""
-        pass
+        """Base teardown: stop any still-running status-polling threads and
+        mark the transfer cancelled, regardless of whether the transfer
+        itself ever unwinds on its own (see _activeStatusStopEvents' docstring
+        in __init__). Transports holding heavier resources (e.g. an event
+        loop thread) override this and must call super().close()."""
+        self._cancelEvent.set()
+        for stopEvent in list(self._activeStatusStopEvents):
+            stopEvent.set()
 
 
 class HTTPDownloader(Downloader):
@@ -1359,8 +1396,18 @@ class FFLDownloader(P2PDownloadMixin, WebRTCDownloadMixin, HTTPDownloader):
          bases.Download, matching WebRTCDownloadMixin's contract.
       2. Import it here and list it before HTTPDownloader in the bases tuple:
          class FFLDownloader(WebRTCDownloadMixin, IrohDownloadMixin, HTTPDownloader):
+
+    Every transport runs under the network policy of the URL's endpoint: a
+    LAN/private address is reached directly (no STUN, no NAT port mapping),
+    anything else keeps the full traversal setup. The policy is scoped to this
+    call's context, so concurrent downloads (e.g. in the daemon) do not affect
+    each other.
     """
-    pass
+
+    def downloadFile(self, url, outputPath=None, resume=False, downloadAuth=None):
+        endpoint = NetworkEndpoint.fromURL(url)
+        with SettingsGetter.getInstance().overrideNetworkPolicy(endpoint.networkPolicy):
+            return super().downloadFile(url, outputPath, resume, downloadAuth)
 
 
 class CollectionDownloadFollower:

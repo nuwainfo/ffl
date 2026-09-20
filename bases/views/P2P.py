@@ -26,6 +26,7 @@ from bases.P2P import (
     P2PPublisher,
     isP2PAvailable,
 )
+from bases.Settings import SettingsGetter
 from bases.views import BaseController, BaseView, HTTPResult
 
 
@@ -34,12 +35,19 @@ class P2PController(BaseController):
         if not isP2PAvailable() or not self.session.config.defaultWebRTC:
             return None
 
-        localHosts = [host] if host not in {'', '0.0.0.0', '::'} else None
+        settingsGetter = SettingsGetter.getInstance()
+        localHosts = settingsGetter.directConnectionHosts
+        if localHosts is None:
+            localHosts = [host] if host not in {'', '0.0.0.0', '::'} else None
+
+        portMappingEnabled = settingsGetter.portMappingEnabled
         udpHandler = QUICFileSender(self.session, server=server)
         
         return P2PPublisher(
             port,
             configuration=P2PConfiguration.createICEConfiguration(),
+            useUDPPortMapping=portMappingEnabled,
+            useTCPPortMapping=portMappingEnabled,
             tcpPath=f'/{self.session.uid}',
             tcpLocalHosts=localHosts,
             udpHandler=udpHandler,

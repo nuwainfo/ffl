@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from bases.Kernel import getLogger, FFLEvent, StorageLocator
 from bases.Tunnel import AsyncTunnelThread
 from bases.Settings import SettingsGetter
+from bases.tunnels import SUPPORTED_TUNNEL_TYPES
 
 from addons import _ # I18n for addons domain
 
@@ -245,6 +246,12 @@ class TunnelRunnerProvider:
     through configuration files.
     """
 
+    # 'default:<type>' forces one type of the built-in tunnels (e.g. 'default:lan').
+    FORCED_TYPE_PREFIX = 'default:'
+
+    # bore is the implementation of the tcp tunnel, so users name that type tcp.
+    FORCED_TYPE_ALIASES = {'tcp': 'bore'}
+
     def __init__(self, configPath: Optional[str] = None):
         """
         Initialize TunnelRunnerProvider
@@ -401,8 +408,32 @@ class TunnelRunnerProvider:
 
         if includeDefault:
             availableTunnels.append('default')
+            availableTunnels.extend(f'{self.FORCED_TYPE_PREFIX}{name}' for name in self._getForcedTypeNames())
 
         return availableTunnels
+
+    @classmethod
+    def _getForcedTypeNames(cls) -> List[str]:
+        """The names users give the supported tunnel types: an alias where the type has one."""
+        aliasesByType = {tunnelType: alias for alias, tunnelType in cls.FORCED_TYPE_ALIASES.items()}
+        return [aliasesByType.get(tunnelType, tunnelType) for tunnelType in SUPPORTED_TUNNEL_TYPES]
+
+    @classmethod
+    def parseForcedTunnelType(cls, preferred: str) -> Optional[str]:
+        """The built-in tunnel type a 'default:<type>' preference forces, or None
+        for anything else ('default', an external tunnel name)."""
+        if not preferred.startswith(cls.FORCED_TYPE_PREFIX):
+            return None
+
+        forcedName = preferred[len(cls.FORCED_TYPE_PREFIX):]
+        forcedType = cls.FORCED_TYPE_ALIASES.get(forcedName, forcedName)
+        if forcedType not in SUPPORTED_TUNNEL_TYPES:
+            raise ValueError(
+                f"Unknown tunnel type in preferred tunnel {preferred!r}; "
+                f"expected one of: {', '.join(cls.FORCED_TYPE_PREFIX + name for name in cls._getForcedTypeNames())}"
+            )
+
+        return forcedType
 
     def getTunnelConfig(self, tunnelName: str) -> Optional[Dict[str, Any]]:
         """Get configuration for specific tunnel"""
@@ -418,7 +449,9 @@ class TunnelRunnerProvider:
 
             def __init__(self, fileSize, proxyConfig=None):
                 super().__init__(fileSize, proxyConfig=proxyConfig)
-                self.preferredTunnel = self._getPreferredTunnel()
+                preferred = provider._getSettings().get('preferred_tunnel', 'default')
+                self.forcedTunnelType = provider.parseForcedTunnelType(preferred)
+                self.preferredTunnel = None if self.forcedTunnelType else self._getPreferredTunnel()
 
             def getTunnelType(self):
                 """Get the type/name of tunnel being used"""
@@ -500,6 +533,7 @@ class TunnelRunnerProvider:
                 else:
                     # For BoreClient or other async clients, use AsyncTunnelThread
                     tunnelThread = AsyncTunnelThread(resultQueue, client)
+                    
                 return tunnelThread, resultQueue
 
         return ExternalTunnelRunner
