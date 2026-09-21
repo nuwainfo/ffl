@@ -215,6 +215,33 @@ determineInstallDir() {
   fi
 }
 
+ensureOnPath() {
+  local dir="$1"
+  case ":$PATH:" in *":$dir:"*) return ;; esac
+
+  # A custom FFL_TARGET is the user's own choice; don't touch their shell config
+  [ -n "$target" ] && { echo "Note: add $dir to PATH"; return; }
+
+  local rc
+  case "$(basename "${SHELL:-}")" in
+    zsh)  rc="$HOME/.zshrc" ;;
+    bash) [ "$os" = "darwin" ] && rc="$HOME/.bash_profile" || rc="$HOME/.bashrc" ;;
+    *)    rc="$HOME/.profile" ;;
+  esac
+
+  local line="export PATH=\"$dir:\$PATH\""
+  if ! grep -qsF "$line" "$rc" 2>/dev/null; then
+    printf '\n# Added by ffl installer\n%s\n' "$line" >> "$rc" 2>/dev/null || rc=""
+  fi
+
+  # An installer runs in a child process and cannot change the parent shell's PATH
+  if [ -n "$rc" ]; then
+    echo "Added $dir to PATH in $rc."
+  fi
+  echo "To use '$APP' in this terminal right now, run:"
+  echo "  export PATH=\"$dir:\$PATH\""
+}
+
 installBinary() {
   local sourcePath="$1" destPath="$2"
   install -m 0755 "$sourcePath" "$destPath"
@@ -223,10 +250,7 @@ installBinary() {
   if [ -z "${FFL_UPGRADE:-}" ]; then
     echo "Installed to $destPath"
 
-    case ":$PATH:" in
-      *":$(dirname "$destPath"):"*) ;;
-      *) echo "Note: add $(dirname "$destPath") to PATH" ;;
-    esac
+    ensureOnPath "$(dirname "$destPath")"
   fi
 
   "$destPath" --version || true
