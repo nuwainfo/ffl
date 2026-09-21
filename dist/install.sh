@@ -297,17 +297,22 @@ namesList="$(printf '%s\n' "$assetsData" | sed "s|.*/||")"
 # Choose appropriate asset
 assetName="$(chooseAsset "$os" "$arch" "$variant")"
 
-# Linux: fallback to APE if no glibc match
-if [ -z "$assetName" ] && [ "$os" = "linux" ]; then
-  local apeEsc="${ape//./\\.}"
+# Linux/macOS: fallback to APE if no native asset matches
+if [ -z "$assetName" ]; then
+  apeEsc="${ape//./\\.}"
+  if [ "$os" = "linux" ] && [ "$arch" = "amd64" ]; then
+    reason="No compatible glibc archive"
+  else
+    reason="No native build for $os/$arch"
+  fi
   if printf '%s\n' "$namesList" | grep -qiE "^${apeEsc}$|/${apeEsc}$"; then
     assetName="$ape"
     variant="com"
-    echo "No compatible glibc archive; falling back to APE ($ape)"
+    echo "Hint: $reason; installing the portable APE binary ($ape) as $APP instead."
   elif [ "$ape" != "ffl.com" ] && printf '%s\n' "$namesList" | grep -qiE '^ffl\.com$|/ffl\.com$'; then
     assetName="ffl.com"
     variant="com"
-    echo "No compatible glibc archive; requested APE ($ape) not found; falling back to APE (ffl.com)"
+    echo "Hint: $reason; requested APE ($ape) not found; installing the portable APE binary (ffl.com) as $APP instead."
   fi
 fi
 
