@@ -95,6 +95,7 @@ class FastFileLinkTestBase(unittest.TestCase):
         self._tempDirObj = tempfile.TemporaryDirectory()
         self.tempDir = self._tempDirObj.name
         self.coreProcess = None
+        self._stdinProducer = None
         if fileSizeBytes is None:
             fileSizeBytes = self._getTestFileSize(self.DEFAULT_FILE_SIZE)
             
@@ -156,6 +157,11 @@ class FastFileLinkTestBase(unittest.TestCase):
     def tearDown(self):
         """Clean up after the test"""
         self._terminateProcess()
+        if self._stdinProducer:
+            self._stdinProducer.kill()
+            self._stdinProducer.wait()
+            self._stdinProducer = None
+
         self._stopManagedTestServers()
 
         # Clean up process log file
@@ -1426,6 +1432,7 @@ class FastFileLinkTestBase(unittest.TestCase):
         binaryCommand=None,
         stdinInputPath=None,
         stdinFileName=None,
+        stdinProducerArgs=None,
         preferredTunnel='default',
         workingDirectory=None,
         serverTimeout=None,
@@ -1449,6 +1456,8 @@ class FastFileLinkTestBase(unittest.TestCase):
             binaryCommand (str|list): Optional external command prefix, e.g. "./ffl.com" or "python FFL.py --cli"
             stdinInputPath (str): Optional path to pipe into stdin instead of sharing self.testFilePath directly
             stdinFileName (str): Optional filename to advertise when stdinInputPath is used
+            stdinProducerArgs (list): Optional command whose stdout is piped into stdin, for a producer that
+                is slower than the file at stdinInputPath (which is readable at once), like `borg export-tar`
             preferredTunnel (str|None): Preferred tunnel passed via `--preferred-tunnel`.
                 Defaults to `default`; pass None to omit the flag entirely.
             workingDirectory (str): Optional working directory for the launched sharing process
@@ -1510,9 +1519,10 @@ class FastFileLinkTestBase(unittest.TestCase):
 
             # Prepare the args - use 'share' subcommand for file sharing
             # (commandPrefix is prepended by _runCoreCommand)
-            sourcePath = "-" if stdinInputPath else self.testFilePath
+            isStdinFed = bool(stdinInputPath or stdinProducerArgs)
+            sourcePath = "-" if isStdinFed else self.testFilePath
             coreArgs = ["share", sourcePath, "--json", self.jsonOutputPath]
-            if stdinInputPath and stdinFileName:
+            if isStdinFed and stdinFileName:
                 coreArgs.extend(["--name", stdinFileName])
 
             # Add network instability parameters if needed
@@ -1593,6 +1603,9 @@ class FastFileLinkTestBase(unittest.TestCase):
             # marker file rather than waited on for completion.
             creationFlags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
             stdinFileHandle = open(stdinInputPath, 'rb') if stdinInputPath else None
+            if stdinProducerArgs:
+                self._stdinProducer = subprocess.Popen(stdinProducerArgs, stdout=subprocess.PIPE)
+                stdinFileHandle = self._stdinProducer.stdout
             stdinHandle = subprocess.PIPE if inputData is not None else stdinFileHandle
             try:
                 self.coreProcess = self._runCoreCommand(
@@ -1788,7 +1801,7 @@ class FastFileLinkTestBase(unittest.TestCase):
                     raise AssertionError(f"JSON missing '{field}' field")
 
             # Verify file size is correct (skip if originalFileSize is -1, used for folders)
-            if stdinInputPath is None and self.originalFileSize != -1 and shareInfo["file_size"] != self.originalFileSize:
+            if not isStdinFed and self.originalFileSize != -1 and shareInfo["file_size"] != self.originalFileSize:
                 raise AssertionError(
                     f"File size in JSON ({shareInfo['file_size']}) doesn't match original file ({self.originalFileSize})"
                 )

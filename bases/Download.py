@@ -1284,7 +1284,9 @@ class HTTPDownloader(Downloader):
             statusStopEvent.set()
             if not sharedProgress:
                 self._finishProgress(complete=False)
-            raise RuntimeError(f"HTTP download failed: {e}")
+                
+            # An exception can have an empty message (a dropped connection, for one): name it then.
+            raise RuntimeError(f"HTTP download failed: {str(e) or repr(e)}") from e
         finally:
             activeResponse['response'] = None
             self._activeHTTPResponse = None
@@ -1552,10 +1554,10 @@ def processDownload(args):
                 'The shared folder contents changed during the transfer.\n'
                 'Please contact the person who shared the file and ask them to share it again.'
             ).format(serverMsg=str(e))
-            sendException(logger, clientMsg)
+            sendException(logger, clientMsg, printFn=logCallback)
             return 1
         else:
-            sendException(logger, _('Download failed: {error}').format(error=e))
+            sendException(logger, _('Download failed: {error}').format(error=e), printFn=logCallback)
             return 1
     finally:
         # Clean up downloader resources

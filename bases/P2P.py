@@ -196,12 +196,30 @@ class QUICFileSender:
                 if not checksumSession.isClosed:
                     checksumSession.abort()
 
+    def _waitForClientComplete(self):
+        """Block briefly for the client's POST /complete ACK before the caller
+        tears the session down.
+
+        Without this, doAfterDownload()'s shutdown can race the client's
+        still-in-flight E2EE tag fetch or checksum verification -- both run
+        over the HTTPS control plane strictly *after* the raw QUIC byte
+        stream finishes -- leaving the client with a 503/404 on that
+        follow-up request instead of a completed, verified download. Mirrors
+        bases.Server.DownloadHandler._waitForHTTPDownloadComplete, keyed by
+        the share's own uid since a P2P/QUIC transfer is always exactly one
+        logical download (no concurrent Range segments to disambiguate).
+        """
+        completed = self.session.httpDownloadCompletionStore.wait(self.session.uid, timeout=5)
+        if not completed:
+            logger.debug(f'QUIC download complete ACK not received for {self.session.uid[:8]}, proceeding')
+
     def __call__(self, udpTransport):
         name, size, _reader = self._fileInfo()
         transferState = self._TransferState(str(uuid.uuid4()), time.time())
         completed = False
 
         self.session.downloadProgressStore.register(transferState.downloadId, size)
+        self.session.httpDownloadCompletionStore.register(self.session.uid)
         quicServer = QUICFileServer(udpTransport)
 
         try:
@@ -249,6 +267,8 @@ class QUICFileSender:
                 clientInfo={'transport': 'ice-udp/quic'},
             )
 
+            self._waitForClientComplete()
+
             if self.server is not None:
                 self.server.doAfterDownload(self.session.uid)
 
@@ -279,8 +299,18 @@ class QUICFileSender:
                 transferState.progress.finishBar(complete=completed)
                 
             quicServer.close()
-            
+
             self.session.downloadProgressStore.unregister(transferState.downloadId)
+            self.session.httpDownloadCompletionStore.unregister(self.session.uid)
+
+
+class P2PQUICFallbackError(RuntimeError):
+    """Carries the output offset when a QUIC transfer hands off after the
+    direct transport was already established."""
+
+    def __init__(self, error: Exception, bytesWritten: int):
+        super().__init__(str(error))
+        self.bytesWritten = bytesWritten
 
 
 class P2PDownloadMixin:
@@ -291,9 +321,28 @@ class P2PDownloadMixin:
         self.p2pTimeout = getEnv('P2P_CONNECT_TIMEOUT', 1.5)
         self.p2pQUICReadTimeout = getEnv('P2P_QUIC_READ_TIMEOUT', 600)
         self.p2pTransportPreference = getEnv('P2P_TRANSPORT_PREFERENCE', 'auto')
-        
+        self.debugSimulateQUICFailure = getEnv('P2P_CLI_SIMULATE_QUIC_FAILURE', False)
+        self.debugQUICFailureAfterBytes = getEnv('P2P_CLI_QUIC_FAILURE_AFTER_BYTES', 50000)
+        self.debugQUICFailureDelaySeconds = getEnv('P2P_CLI_QUIC_FAILURE_DELAY_SECONDS', 0)
+
         if self.p2pTransportPreference not in {'auto', 'tcp', 'udp'}:
             raise ValueError("P2P_TRANSPORT_PREFERENCE must be 'auto', 'tcp', or 'udp'")
+
+    def _maybeSimulateQUICFailure(self, bytesWritten):
+        """Test hook: fail as if the transport died once
+        P2P_CLI_QUIC_FAILURE_AFTER_BYTES has been reached, so download tests
+        can exercise the P2P->WebRTC->HTTP fallback chain without depending
+        on a genuinely flaky network.
+
+        P2P_CLI_QUIC_FAILURE_DELAY_SECONDS makes it a stall first: the receiver
+        hangs that long and then fails, like the idle timeout of a transport
+        that went silent, so the HTTP fallback starts long after the transfer
+        stopped (while a stdin producer has since finished, for one)."""
+        if not self.debugSimulateQUICFailure or bytesWritten < self.debugQUICFailureAfterBytes:
+            return
+
+        time.sleep(self.debugQUICFailureDelaySeconds)
+        raise RuntimeError(f'Debug: Simulated QUIC transfer failure at {bytesWritten} bytes')
 
     def _downloadViaQUIC(
         self,
@@ -363,6 +412,8 @@ class P2PDownloadMixin:
         )
 
         try:
+            self._maybeSimulateQUICFailure(totalDownloaded)
+
             with outputContext as output:
                 for wireData in client.iterDownload(
                     offset=resumePosition,
@@ -370,14 +421,15 @@ class P2PDownloadMixin:
                 ):
                     if not wireData:
                         continue
-                        
+
                     self._updateTransferChecksumState(checksumState, wireData)
-                    
+
                     data = streamDecryptor.processChunk(wireData) if streamDecryptor else wireData
                     if data:
                         output.write(data)
                         totalDownloaded += len(data)
                         progress.update(totalDownloaded, extraText='P2P QUIC')
+                        self._maybeSimulateQUICFailure(totalDownloaded)
 
                 if streamDecryptor:
                     tail = streamDecryptor.flush()
@@ -404,11 +456,19 @@ class P2PDownloadMixin:
                     'quic',
                 )
 
+            # Tell the sender it may tear down the share session now that this
+            # download's own post-processing (E2EE tag flush above, checksum
+            # verification just above) is actually done -- not merely once the
+            # raw QUIC byte stream reported clean close. Reuses the same
+            # /complete ACK as the HTTP path, keyed by the share uid since a
+            # QUIC transfer is always exactly one logical download.
+            self._notifyHTTPDownloadComplete(urlInfo.baseURL, urlInfo.uid, credentials, finalSize)
+
             logger.debug(f'P2P QUIC download completed: {finalOutputPath}')
             return finalOutputPath
         except Exception as error:
             self._finishProgress(complete=False)
-            raise
+            raise P2PQUICFallbackError(error, totalDownloaded) from error
         finally:
             client.close()
 
@@ -449,10 +509,11 @@ class P2PDownloadMixin:
                 self.loggerCallback(self._STATUS_CONNECTING)
                 self.loggerCallback('Attempting P2P download...')
 
-                # Connection-establishment failures may fall back. Once UDP/QUIC
-                # is selected, a transfer failure is terminal: switching transport
-                # after bytes may already have been written can corrupt stdout and
-                # also hides the original QUIC failure we need to diagnose.
+                # Connection-establishment failures fall back below. A QUIC
+                # transfer failure after bytes were already written also falls
+                # back, but only to HTTP (via P2PQUICFallbackError.bytesWritten),
+                # since only an HTTP Range request can safely continue without
+                # corrupting or duplicating what was already written.
                 try:
                     connection = P2PConnector(
                         configuration=P2PConfiguration.createICEConfiguration(),
@@ -513,14 +574,29 @@ class P2PDownloadMixin:
                             )
                         except InterruptedError:
                             raise
-                        except Exception as error:
+                        except P2PQUICFallbackError as error:
                             logger.exception(
                                 'P2P UDP/QUIC transfer failed after the direct transport '
-                                'was established; refusing WebRTC fallback (%s): %s',
-                                type(error).__name__,
+                                'was established at %d bytes (%s): %s',
+                                error.bytesWritten,
+                                type(error.__cause__ or error).__name__,
                                 error,
                             )
-                            raise
+                            if error.bytesWritten > 0:
+                                # Bytes already reached the output; only an HTTP
+                                # Range request can safely continue without
+                                # corrupting or duplicating them -- the same
+                                # resume path WebRTC's own mid-transfer fallback
+                                # already uses.
+                                return self._fallbackToHTTP(
+                                    url, outputPath, credentials, resume, error,
+                                    ctx['e2eeContext'], urlInfo, ctx['checksumAlgorithm'],
+                                    pickupCode, ctx['proof'], error.bytesWritten,
+                                )
+                            
+                            # Nothing reached the output yet: as safe to retry
+                            # via WebRTC as any other connection-establishment
+                            # failure, so fall through to the normal chain below.
             finally:
                 if connection:
                     # Preserve a real transfer exception if connection cleanup also

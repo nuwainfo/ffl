@@ -1378,6 +1378,56 @@ class WebTunnelIdleConnectionE2ETest(WebTunnelE2ETestBase):
         self._assertTunnelStayedConnected(outputCapture)
 
 
+class WebTunnelUnknownSizeHeadE2ETest(WebTunnelE2ETestBase):
+    """Regression test for the /download HEAD-vs-framing bug: an unknown-size
+    (stdin) share's protocol-probe HEAD must resolve immediately over the Web
+    tunnel, not stall for a full read-timeout and force the client to treat
+    the link as a non-FastFileLink URL (see bases.Server._handleDownloadHead
+    and bases.tunnels.Web's hop-by-hop header stripping)."""
+
+    @unittest.skipIf(os.getenv('SKIP_INTEGRATION_TESTS'), "Integration tests disabled")
+    def testUnknownSizeDownloadHeadRespondsPromptlyOverWebTunnel(self):
+        shareLink = self._startFastFileLink(
+            p2p=True,
+            stdinInputPath=self.testFilePath,
+            extraEnvVars={'FFL_TUNNEL_DOMAIN': self._TUNNEL_DOMAIN},
+        )
+        self.assertIn(self._TUNNEL_DOMAIN, shareLink)
+
+        headURL = f"{shareLink}/download"
+        startedAt = time.monotonic()
+        response = requests.head(headURL, timeout=8)
+        elapsed = time.monotonic() - startedAt
+
+        self.assertEqual(200, response.status_code)
+        self.assertLess(
+            elapsed, 5,
+            f"HEAD {headURL} took {elapsed:.1f}s -- an unknown-size share's HEAD must "
+            "resolve immediately, not stall for a read-timeout (see _handleDownloadHead)",
+        )
+        self.assertEqual('0', response.headers.get('Content-Length'))
+        self.assertNotIn('Transfer-Encoding', response.headers)
+
+        # End-to-end confirmation: with the HEAD probe no longer stalling, a
+        # real download (forced onto the same HTTP/metadata path that probe
+        # feeds into) must succeed via the normal FFL protocol, not the
+        # generic "not a FastFileLink URL" wget-style fallback.
+        outputPath = os.path.join(self.tempDir, 'unknown_size_web_tunnel.bin')
+        downloadOutput = {}
+        downloadedPath = self._downloadWithCore(
+            shareLink,
+            outputPath=outputPath,
+            extraEnvVars={'DISABLE_WEBRTC': 'True'},
+            captureOutputIn=downloadOutput,
+        )
+        self._verifyDownloadedFile(downloadedPath)
+        outputText = self._updateCapturedOutput(downloadOutput)
+        self.assertNotIn(
+            'This is not a FastFileLink URL', outputText,
+            f"Download incorrectly fell back to generic HTTP handling:\n{outputText}",
+        )
+
+
 class WebTunnelLargeE2EEHTTPDownloadE2ETest(WebTunnelE2ETestBase):
     """Streams an E2EE payload past the old relay failure duration."""
 

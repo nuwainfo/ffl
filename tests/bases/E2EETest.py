@@ -25,6 +25,7 @@ The HTTP fallback tests use DISABLE_WEBRTC to force the browser to use Service W
 based decryption instead of WebRTC.
 """
 
+import base64
 import os
 import unittest
 import hashlib
@@ -42,6 +43,7 @@ from concurrent.futures import ThreadPoolExecutor
 from cryptography.hazmat.primitives import serialization
 
 from bases.crypto import CryptoInterface
+from bases.E2EE import CryptoHelper, E2EEManager, StreamDecryptor
 
 from tests.CoreTestBase import LOCAL_TEST_SERVER_URL
 from tests.ResumeTestBase import ResumeTestBase, ResumeBrowserTestBase
@@ -1148,6 +1150,56 @@ class E2EEUploadDownloadTest(E2EEUploadTestBase, ResumeTestBase):
 
         finally:
             self._terminateProcess()
+
+
+class E2EEManagerFileSizeTest(unittest.TestCase):
+    """The size in the AAD of a stream whose length is unknown while it is produced stays unknown.
+
+    Its first chunks are encrypted, and its first clients get the manifest, before the stream ends; the size the
+    reader reports afterwards must not change how later chunks (an HTTP resume, a late client) authenticate.
+    """
+
+    CHUNK_SIZE = 262144
+    UNKNOWN = -1
+
+    def setUp(self):
+        self.manager = E2EEManager(self.CHUNK_SIZE)
+
+    def testStreamOfUnknownSizeKeepsTheUnknownSizeAfterItEnded(self):
+        self.assertEqual(self.UNKNOWN, self.manager.resolveFileSize('stream.tar.gz', None))
+        self.assertEqual(self.UNKNOWN, self.manager.resolveFileSize('stream.tar.gz', 985521))
+
+    def testFileOfKnownSizeKeepsItsSize(self):
+        self.assertEqual(1024, self.manager.resolveFileSize('known.bin', 1024))
+        self.assertEqual(1024, self.manager.resolveFileSize('known.bin', 1024))
+
+    def testNamesAreIndependent(self):
+        self.manager.resolveFileSize('stream.tar.gz', None)
+
+        self.assertEqual(4096, self.manager.resolveFileSize('other.bin', 4096))
+
+    def testEveryWayToEncryptUsesTheResolvedSize(self):
+        self.manager.resolveFileSize('stream.tar.gz', None)
+
+        self.assertEqual(self.UNKNOWN, self.manager.createEncryptor('stream.tar.gz', 985521).fileSize)
+        self.assertEqual(self.UNKNOWN, self.manager.getContext('stream.tar.gz', 985521)['fileSize'])
+
+    def testChunkEncryptedAfterTheStreamEndedDecryptsForAClientToldTheUnknownSize(self):
+        # What the receiver of a stalled QUIC transfer meets: chunk 0 came before the end of the stream (the size
+        # unknown), the tail chunk is encrypted by the HTTP fallback after it (the size known now).
+        fileName = 'stream.tar.gz'
+        before = self.manager.createEncryptor(fileName, None, startChunkIndex=0)
+        before.encryptChunk(os.urandom(self.CHUNK_SIZE))
+
+        plaintext = os.urandom(199089)
+        after = self.manager.createEncryptor(fileName, 985521, startChunkIndex=1)
+        ciphertext = after.encryptChunk(plaintext)
+
+        tags = {entry['chunkIndex']: base64.b64decode(entry['tag']) for entry in self.manager.getTags('global')}
+        clientDecryptor = StreamDecryptor(
+            self.manager.contentKey, self.manager.nonceBase, fileName, CryptoHelper.normalizeFileSize(None)
+        )
+        self.assertEqual(plaintext, clientDecryptor.decryptChunk(1, ciphertext, tags[1]))
 
 
 if __name__ == '__main__':

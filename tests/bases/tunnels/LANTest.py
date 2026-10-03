@@ -40,6 +40,7 @@ import unittest
 from unittest import mock
 from urllib.parse import urlparse
 
+import ifaddr
 import requests
 
 from bases.Daemon import DaemonClient, DaemonSharedRuntime # isort:skip
@@ -229,11 +230,55 @@ class LANHostSelectionTest(EnvironmentTestCase):
                 with self.assertRaises(LANTunnelConfigurationError):
                     LANTunnelClient.resolveLANHost()
 
+    def _withoutRoute(self):
+        """No default route: only the interfaces are left to ask."""
+        return mock.patch.object(LANTunnelClient, '_selectHostByRoute', return_value=None)
+
     def testNoUsableAddressFailsFastWithHint(self):
-        with mock.patch.object(LANTunnelClient, '_selectHostByRoute', return_value=None), \
-                mock.patch.object(LANTunnelClient, '_selectHostByHostname', return_value=None):
+        with self._withoutRoute(), mock.patch.object(LANTunnelClient, '_listLANHosts', return_value=[]):
             with self.assertRaisesRegex(LANTunnelConfigurationError, 'FFL_LAN_HOST'):
                 LANTunnelClient.resolveLANHost()
+
+    def testWithoutDefaultRouteTheOnlyInterfaceAddressIsUsed(self):
+        """Two machines on a cable, an isolated LAN, a VM: a LAN address but no route out."""
+        with self._withoutRoute(), mock.patch.object(LANTunnelClient, '_listLANHosts', return_value=['10.211.0.1']):
+            self.assertEqual(LANTunnelClient.resolveLANHost(), '10.211.0.1')
+
+    def testDefaultRouteStillWinsOverInterfaces(self):
+        with mock.patch.object(LANTunnelClient, '_selectHostByRoute', return_value='192.168.0.7'),                 mock.patch.object(LANTunnelClient, '_listLANHosts', return_value=['10.211.0.1', '192.168.0.7']):
+            self.assertEqual(LANTunnelClient.resolveLANHost(), '192.168.0.7')
+
+    def testSeveralInterfaceAddressesAreListedNotGuessed(self):
+        """Guessing wrong (say a Docker bridge) would hand out a link nobody can reach."""
+        with self._withoutRoute(),                 mock.patch.object(LANTunnelClient, '_listLANHosts', return_value=['10.211.0.1', '172.17.0.1']):
+            with self.assertRaisesRegex(LANTunnelConfigurationError, r'10\.211\.0\.1.*172\.17\.0\.1.*FFL_LAN_HOST'):
+                LANTunnelClient.resolveLANHost()
+
+    def testHostnameLookupNeverPicksTheAddress(self):
+        """A hostname can resolve to any adapter (here a VirtualBox host-only network), which
+        would silently win over the interface check that exists to catch exactly this."""
+        hostnameResult = [(socket.AF_INET, socket.SOCK_STREAM, 0, '', ('192.168.56.1', 0))]
+        with self._withoutRoute(), mock.patch('socket.getaddrinfo', return_value=hostnameResult),                 mock.patch.object(LANTunnelClient, '_listLANHosts', return_value=['192.168.56.1', '192.168.0.149']):
+            with self.assertRaisesRegex(LANTunnelConfigurationError, r'192\.168\.56\.1.*192\.168\.0\.149.*FFL_LAN_HOST'):
+                LANTunnelClient.resolveLANHost()
+
+    def testListsOnlyUsableIPv4Addresses(self):
+        def adapter(name, *addresses):
+            return ifaddr.Adapter(name, name, [ifaddr.IP(address, 24, name) for address in addresses], 0)
+
+        adapters = [
+            adapter('lo', '127.0.0.1', ('::1', 0, 0)),
+            adapter('eth0', '192.168.1.5', ('fe80::1', 0, 2)),
+            adapter('direct', '169.254.7.7'),
+            adapter('bridge', '192.168.1.5'),
+            adapter('multicast', '224.0.0.1'),
+        ]
+        with mock.patch('bases.tunnels.LAN.ifaddr.get_adapters', return_value=adapters):
+            self.assertEqual(LANTunnelClient._listLANHosts(), ['192.168.1.5', '169.254.7.7'])
+
+    @requiresLAN
+    def testTheRealLANHostIsAmongTheInterfaceAddresses(self):
+        self.assertIn(LAN_HOST, LANTunnelClient._listLANHosts())
 
 
 class LANTunnelClientTest(EnvironmentTestCase):

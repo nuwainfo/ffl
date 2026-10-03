@@ -20,7 +20,7 @@
 from http import HTTPStatus
 from typing import Mapping, Optional
 
-from bases.E2EE import CryptoHelper, E2EE_PROTOCOL_VERSION
+from bases.E2EE import E2EE_PROTOCOL_VERSION
 from bases.Kernel import getLogger
 from bases.views import BaseController, BaseView, HTTPResult
 
@@ -41,7 +41,7 @@ class E2EEController(BaseController):
             'e2eeEnabled': True,
             'version': E2EE_PROTOCOL_VERSION,
             'fileName': fileName,
-            'fileSize': CryptoHelper.normalizeFileSize(fileSize),
+            'fileSize': self.session.e2eeManager.resolveFileSize(fileName, fileSize),
             'chunkSize': self.session.e2eeManager.chunkSize,
         }
         return self._buildJSONResult(manifest)

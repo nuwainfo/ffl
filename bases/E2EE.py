@@ -596,6 +596,8 @@ class E2EEManager:
         self.chunkSize = chunkSize
         self.encryptionMetaStorage = EncryptionMetaStorage()
         self.crypto = CryptoInterface()
+        self._unknownSizeFileNames = set()
+        self._fileSizeLock = threading.Lock()
 
         # Generate content key and nonce base (only once for all clients!)
         self.contentKey = os.urandom(32) # AES-256 key (Kc)
@@ -604,6 +606,33 @@ class E2EEManager:
         logger.debug(
             f"[E2EE] Generated keys - contentKey={len(self.contentKey)} bytes, nonceBase={len(self.nonceBase)} bytes"
         )
+
+    def resolveFileSize(self, fileName, fileSize):
+        """The file size that goes into the AAD and the commitment of every chunk of fileName.
+
+        A stream that is still being produced (stdin, a zip) has no size when its first chunks are encrypted and
+        its first clients are told the manifest.  The size becomes known when the stream ends, but the chunks
+        encrypted from then on (an HTTP resume after a QUIC stall, a client that arrives late) must authenticate
+        against the same size as the first ones, or they fail to decrypt.  So a name that was ever unknown
+        keeps the unknown size.
+
+        Args:
+            fileName: Original filename
+            fileSize: The size the reader has now (None while unknown)
+
+        Returns:
+            int: The size to use, CryptoHelper.UNKNOWN_FILE_SIZE for a stream of unknown size
+        """
+        normalizedFileSize = CryptoHelper.normalizeFileSize(fileSize)
+        with self._fileSizeLock:
+            if normalizedFileSize == CryptoHelper.UNKNOWN_FILE_SIZE:
+                self._unknownSizeFileNames.add(fileName)
+                return normalizedFileSize
+
+            if fileName in self._unknownSizeFileNames:
+                return CryptoHelper.UNKNOWN_FILE_SIZE
+
+            return normalizedFileSize
 
     def handleInit(self, clientPublicKeyPEM, fileName, fileSize):
         """Handle E2EE initialization request from client
@@ -620,7 +649,7 @@ class E2EEManager:
             dict: Response with encrypted content key, nonce base, and commitment tag
         """
         logger.debug(f"[E2EE] handleInit called for file={fileName}, size={fileSize}")
-        normalizedFileSize = CryptoHelper.normalizeFileSize(fileSize)
+        normalizedFileSize = self.resolveFileSize(fileName, fileSize)
 
         # Load client's public key
         clientPublicKey = self.crypto.loadRSAPublicKeyFromPEM(clientPublicKeyPEM)
@@ -661,7 +690,7 @@ class E2EEManager:
         if not self.contentKey or not self.nonceBase:
             raise RuntimeError("E2EE not initialized - call handleInit() first")
 
-        normalizedFileSize = CryptoHelper.normalizeFileSize(fileSize)
+        normalizedFileSize = self.resolveFileSize(fileName, fileSize)
         return StreamEncryptor(
             self.contentKey, self.nonceBase, fileName, normalizedFileSize, self.encryptionMetaStorage, self.chunkSize,
             startChunkIndex, saveTags, streamId
@@ -692,7 +721,7 @@ class E2EEManager:
         if not self.contentKey or not self.nonceBase:
             return None
 
-        normalizedFileSize = CryptoHelper.normalizeFileSize(fileSize)
+        normalizedFileSize = self.resolveFileSize(fileName, fileSize)
         return {
             'contentKey': self.contentKey,
             'nonceBase': self.nonceBase,
@@ -724,7 +753,7 @@ class E2EEManager:
                          f"contentKey={hasKey}, nonceBase={hasNonce}")
             raise RuntimeError("E2EE not initialized - call handleInit() first")
 
-        normalizedFileSize = CryptoHelper.normalizeFileSize(fileSize)
+        normalizedFileSize = self.resolveFileSize(fileName, fileSize)
         return WebRTCStreamEncryptor(
             contentKey=self.contentKey,
             nonceBase=self.nonceBase,

@@ -31,7 +31,9 @@ class DownloadCompleteController(BaseController):
 
     Handles two cases sharing the /complete endpoint:
     - WebRTC P2P: payload contains peerId, unblocks sendFile()'s completion wait
-    - HTTP relay:  payload contains downloadId, unblocks _waitForHTTPDownloadComplete()
+    - HTTP relay / P2P QUIC: payload contains downloadId, unblocks
+      _waitForHTTPDownloadComplete() (HTTP) or QUICFileSender._waitForClientComplete()
+      (QUIC, keyed by the share uid rather than a per-request id)
     """
 
     def notifyWebRTCIfPresent(self, data: dict, clientInfo: dict) -> Optional[str]:

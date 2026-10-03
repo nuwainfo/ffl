@@ -383,25 +383,36 @@ def getAvailablePort(port=None):
         return port
 
 
-def sendException(logger, e, action=None, errorPrefix="Oops, something went wrong"):
+def sendException(logger, e, action=None, errorPrefix="Oops, something went wrong", printFn=None):
+    """Report a fatal error to the user.
+
+    printFn: Where to send the human-readable message. Defaults to
+        flushPrint (stdout). Callers whose stdout is repurposed as a data
+        stream -- e.g. `download --stdout`, which pipes raw file bytes to
+        stdout for shell consumption -- MUST pass a stderr-writing callback
+        here, or the error text silently corrupts that data stream instead
+        of reaching the user.
+    """
+    printFn = printFn or flushPrint
+
     if e and errorPrefix:
-        flushPrint(f'{errorPrefix}: {e}')
+        printFn(f'{errorPrefix}: {e}')
     elif e:
-        flushPrint(f'{e}')
+        printFn(f'{e}')
     else: # only errorPrefix without e?
         logger.error(f'Incorrect argument: {errorPrefix=} {e=}')
 
     if action:
-        flushPrint(action)
+        printFn(action)
     else:
-        flushPrint(_('Please try again or try later.'))
+        printFn(_('Please try again or try later.'))
 
     # Get dynamic support URL based on GUI support and user level
     settingsGetter = SettingsGetter.getInstance()
     supportURL = settingsGetter.getSupportURL()
-    flushPrint(_('\nIf you still get the same problem, please contact us at {supportURL}.').format(
+    printFn(_('\nIf you still get the same problem, please contact us at {supportURL}.').format(
         supportURL=supportURL))
-    flushPrint(_('We will fix the problem as soon as possible.\n'))
+    printFn(_('We will fix the problem as soon as possible.\n'))
 
     logger.exception(e)
 

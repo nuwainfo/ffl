@@ -300,12 +300,13 @@ if 'Cosmopolitan' in platform.version():
     del sys.modules['sitecustomize']
     import sitecustomize # pylint: disable=import-error  # Reimport sitecustomize to apply cosmos patches.
 
-    installAs("ifaddr")
+    # installAs("ifaddr")
+    import _ifaddr_c # pylint: disable=import-error
+    sys.modules['ifaddr'] = _ifaddr_c
 
     # aiortc/aioice related patch for Cosmopolitan Libc.
     try:
-        from aioice import ice
-        import _ifaddr_c # pylint: disable=import-error
+        from aioice import ice        
         from aioice import ice
         ice.ifaddr = _ifaddr_c
 

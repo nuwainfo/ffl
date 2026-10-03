@@ -197,7 +197,10 @@ class DownloadProgressStore(DownloadRecordStore):
 
 
 class HTTPDownloadCompletionStore(DownloadRecordStore):
-    """Thread-safe ACK tracker for HTTP relay download completion.
+    """Thread-safe ACK tracker for download completion over the HTTPS control
+    plane -- shared by plain HTTP relay downloads (keyed by a per-request id)
+    and P2P/QUIC downloads (keyed by the share uid; see
+    bases.P2P.QUICFileSender._waitForClientComplete).
 
     The browser may legitimately send duplicate POST /complete requests when we
     add a Service Worker-side ACK as a reliability backstop while keeping the

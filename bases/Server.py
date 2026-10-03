@@ -491,11 +491,15 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
 
         self.send_response(HTTPStatus.OK)
 
-        if size is not None:
-            self.send_header("Content-Length", str(size))
-        else:
-            # Unknown size - use chunked transfer encoding
-            self.send_header("Transfer-Encoding", "chunked")
+        # A HEAD response never carries a body, regardless of what the
+        # corresponding GET would use for an unknown size -- Content-Length: 0
+        # is the only framing that survives every transport unambiguously. The
+        # Web tunnel strips Transfer-Encoding as hop-by-hop when relaying the
+        # response (see bases/tunnels/Web.py's _HOP_BY_HOP_HEADERS), which
+        # would otherwise leave the client with neither header and no signal
+        # that the (empty) body is already complete -- stalling it for a full
+        # read-timeout on every unknown-size share's very first protocol probe.
+        self.send_header("Content-Length", str(size) if size is not None else "0")
 
         args = parse_qs(self.path.split('?')[1]) if '?' in self.path else {}
         viewMode = self.parseURLBooleanParam(args.get('view', [None])[0]) is True

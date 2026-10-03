@@ -32,6 +32,8 @@ import ipaddress
 import os
 import socket
 
+import ifaddr
+
 from dataclasses import dataclass
 from typing import Optional
 
@@ -108,20 +110,38 @@ class LANTunnelClient:
         return None
 
     @classmethod
-    def _selectHostByHostname(cls):
-        try:
-            infos = socket.getaddrinfo(
-                socket.gethostname(), None, socket.AF_INET, socket.SOCK_STREAM
+    def _listLANHosts(cls):
+        """Usable IPv4 addresses of the local network interfaces.
+
+        ifaddr enumerates interfaces without native extensions, but reports no
+        up/down state, so an interface with no link is listed too; that is
+        one more reason several candidates are never guessed between.
+        """
+        hosts = []
+        for adapter in ifaddr.get_adapters():
+            for address in adapter.ips:
+                if address.is_IPv4 and cls._isUsableLANAddress(ipaddress.ip_address(address.ip)):
+                    hosts.append(address.ip)
+
+        return list(dict.fromkeys(hosts))
+
+    @classmethod
+    def _selectHostByInterfaces(cls):
+        """The address of the only usable interface, for a machine with no default route
+        (two computers on a cable, an isolated LAN, a VM).
+
+        With several candidates nothing says which network the receiver is on, and a
+        wrong guess (say a Docker bridge) would hand out a link nobody can reach, so
+        they are listed for the user to choose from instead.
+        """
+        hosts = cls._listLANHosts()
+        if len(hosts) > 1:
+            raise LANTunnelConfigurationError(
+                f'Found several LAN IPv4 addresses ({", ".join(hosts)}) and none is on the default route; '
+                f'set {cls.LAN_HOST_ENV}=<one of them>'
             )
-        except OSError:
-            return None
 
-        for info in infos:
-            address = ipaddress.ip_address(info[4][0])
-            if cls._isUsableLANAddress(address):
-                return str(address)
-
-        return None
+        return hosts[0] if hosts else None
 
     @classmethod
     def resolveLANHost(cls):
@@ -129,7 +149,7 @@ class LANTunnelClient:
         if configured:
             return cls._validateLANHost(configured)
 
-        host = cls._selectHostByRoute() or cls._selectHostByHostname()
+        host = cls._selectHostByRoute() or cls._selectHostByInterfaces()
         if host:
             return host
 
