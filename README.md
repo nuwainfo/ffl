@@ -5,17 +5,18 @@
 [![Downloads](https://img.shields.io/github/downloads/nuwainfo/ffl/total?style=flat-square)](https://github.com/nuwainfo/ffl/releases/latest)
 [![Docker Pulls](https://img.shields.io/docker/pulls/fastfilelink/ffl?style=flat-square)](https://hub.docker.com/r/fastfilelink/ffl)
 
-**FastFileLink CLI (ffl)** is an [*Actually Portable*](https://justine.lol/ape.html) secure file-delivery tool that turns files, folders, or streams into browser-ready HTTPS links with WebRTC P2P and relay fallback.
+**FastFileLink CLI (ffl)** is an [*Actually Portable*](https://justine.lol/ape.html) file-delivery tool that turns files, folders, or streams into shareable links, with native TCP/QUIC P2P between ffl clients, WebRTC for browsers, and HTTP(S) fallback.
 
-AFAIK, `ffl` is the only CLI file-transfer tool that does all of the following:
+`ffl` brings these capabilities together:
 
-- 📡 **Instant P2P WebRTC sharing** — Auto-fallback and cross-mode resume guarantees delivery.
+- 📡 **Direct P2P sharing** — Native TCP/QUIC and WebRTC, with automatic relay fallback and resume support when the source supports it.
 - 🧑‍💻 **Zero-install for recipients** — Download instantly via modern browsers, `curl`, or `ffl`, etc.
 - 📁 **Folder & batch transfers** — Stream TB-scale data or `stdin` directly without zip/encrypt first.
-- 🔐 **Zero-trust End-to-end encryption** — Ensures all relays and storage remain strictly zero-knowledge.
+- 🔐 **Optional end-to-end encryption** — Add `--e2ee` to protect file contents across direct transfers, relays, and optional server storage.
 - 🚀 **Smart Delivery & AI-Ready** — Verify recipients via OTP/PubKey, or empower AI agents via [MCP](https://github.com/nuwainfo/ffl-mcp).
 - 🧱 **Actually Portable Executable (APE)** + native builds for **Windows, Linux, macOS**. Embeddable.
 - 🧰 **Built-in & pluggable tunnels** (Cloudflare, ngrok, self-hosted) — Supports proxies like Tor.
+- 🏠 **LAN & continuous delivery** — Share locally with `default:lan`, or publish new delivery folders with `--watch` and receive them with `--follow`.
 - ☁️ **Optional temporary upload to server** (account required) when both sides can’t be online simultaneously.
 
 ⚡ At a glance: **Think `croc` or `magic-wormhole`, but the recipient uses a standard browser/HTTPS link — no software installation required.**
@@ -90,7 +91,7 @@ curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl/refs/heads/main/dist/i
 ```
 *Install for current user only:*
 ```bash
-FFL_PREFIX=$HOME/.local curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl/refs/heads/main/dist/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl/refs/heads/main/dist/install.sh | FFL_PREFIX="$HOME/.local" bash
 ```
 
 **Windows (PowerShell)**
@@ -125,21 +126,16 @@ curl.exe "https://github.com/nuwainfo/ffl/releases/latest/download/ffl.com" -o "
 
 ### Option 3: Build from source
 
-If you prefer to build from source (requires **conda** and **cargo**):
+To run the open-source CLI from a checkout (Python **3.12**; native transport wheels depend on your platform):
 
 ```bash
-# Linux
-./BuildCLI.sh linux
-
-# Mac
-./BuildCLI.sh darwin
-
-# Windows
 conda create -n ffl python=3.12
 conda activate ffl
 pip install -r requirements.txt
-.\BuildCLI.bat ffl
+python FFL.py --help
 ```
+
+Native packaging scripts live in `dist/BuildCLI.sh` and `dist/BuildCLI.bat` and are run from `dist/`. They assume the maintainer's `FileShare` directory layout and additional build tooling; they are not a standalone build recipe for an arbitrary checkout. For a ready-to-run open-source APE build, download `fflo.com` from the releases.
 
 ### 🔐 Verifying Integrity (Optional)
 
@@ -221,9 +217,9 @@ You’ll get a shareable link like:
 `https://4567.81.fastfilelink.com/abcd1234`
 
 * **Recipient:** Can download via Browser or CLI (e.g., `curl -o file.zip <URL>`).
-* **Method:** Prefers **WebRTC P2P**. If P2P fails, it automatically falls back to HTTPS relay via a tunnel (third‑party or our free unlimited tunnel).
+* **Method:** Current ffl clients negotiate direct **TCP/HTTP or UDP/QUIC**; browsers use **WebRTC**. HTTP(S) relay fallback is available when direct connectivity fails. Keep the sender running until delivery completes.
 
-> **Note:** Standard CLI tools like `curl` or `wget` use HTTPS only (Relay mode). If you want P2P speed on the receiving CLI, use `ffl` to download.
+> **Note:** `curl` and `wget` use HTTP(S), not ffl's P2P negotiation. Public links normally use a relay; LAN links connect directly. Use `ffl` or the browser download page for `--e2ee` shares so contents can be decrypted.
 
 > 💡Tip: Use `curl -JLO` or `wget --content-disposition` to automatically save with the correct filename.
 
@@ -235,13 +231,23 @@ You’ll get a shareable link like:
 ffl https://4567.81.fastfilelink.com/abcd1234
 ```
 
-* Tries **WebRTC P2P** first.
-* If NAT traversal fails, automatically resumes via HTTPS relay.
+* Negotiates native **TCP/QUIC P2P** when supported, with WebRTC and HTTP(S) fallback as available.
+* Can resume over HTTP(S) after direct-transfer failures. Use `--resume` when restarting an interrupted download; uncached streams have limited replay capability.
+
+### 🏠 Share on your local network
+
+```bash
+ffl ./models --preferred-tunnel default:lan --e2ee
+```
+
+This prints a local `http://<LAN-IP>:<port>/<id>` link and bypasses public tunnel routing. Both devices must be able to reach that LAN address; allow the listening port through your firewall. LAN mode is an explicit choice, **not the default**. Its link uses HTTP, so use a trusted network and `--e2ee` for file-content encryption; the page and metadata are not protected by HTTPS.
+
+Tunnel preferences persist. Restore normal internet sharing with `ffl --preferred-tunnel default`. For same-machine testing, use `default:loopback`.
 
 ### 🐳Docker:
 ```bash
 # -v mounts your current dir to /data inside the container
-docker run --rm --network host -v "$(pwd):/data" ffl myfile
+docker run --rm --network host -v "$(pwd):/data" fastfilelink/ffl myfile
 ```
 
 > **Note:**
@@ -287,13 +293,17 @@ Options (most useful ones):
 
   --exclude PATTERNS        Exclude files/folders by name, glob, or regex (e.g., '*.log,re:\.env$').
   --max-downloads N        Auto-shutdown after N downloads (P2P mode). 0 = unlimited
-  --timeout SECONDS        Auto-shutdown after idle timeout (P2P mode). 0 = no timeout
+  --timeout SECONDS        Auto-shutdown after timeout (P2P mode). 0 = no timeout
   --auth-user USERNAME     HTTP Basic Auth for downloads
   --auth-password PASSWORD HTTP Basic Auth for downloads
   --recipient-auth MODE    Recipient verification mode ('pickup', 'pubkey', 'pubkey+pickup', or 'email').  
   --alias ALIAS            Use custom alias as UID for sharing link
   --e2ee                   Enable end-to-end encryption
-  --preferred-tunnel {cloudflare,default,...} Set preferred tunnel for future runs
+  --preferred-tunnel NAME  Remember tunnel: default, default:lan, default:loopback,
+                           default:tcp, default:web, cloudflare, or a configured name
+  --watch                  Publish new direct child folders as separate deliveries
+  --watch-settle SECONDS   Wait for a new folder to stop changing (default: 5)
+  --stdin-cache {on,off}    Control stdin disk caching (default: on)
   --invite                 Open invite page in browser with the sharing link
   --qr [FILE]              Display QR code in terminal (default) or save to FILE (e.g., qr.png)
   --name FILENAME          Specify custom download filename 
@@ -314,9 +324,10 @@ ffl <URL>
 Options:
   --output PATH, -o PATH  Output file path (default: use filename from server)
   --resume                Resume incomplete download (like curl -C), otherwise overwrite existing file
+  --follow                Keep fetching new deliveries from a --watch collection
   --auth-user USERNAME    Username for HTTP Basic Authentication (default: 'ffl')
   --auth-password PASSWORD Password for HTTP Basic Authentication
-  --recipient-auth MODE   Recipient verification mode ('pickup', 'pubkey', 'pubkey+pickup', or 'email').    
+  --recipient-auth MODE   Recipient verification mode ('pickup', 'pubkey', or 'pubkey+pickup').
   --stdout                Write downloaded content to stdout instead of a file (useful for piping: | tar -xf -).
 ```
 
@@ -324,8 +335,7 @@ Options:
 
 ### 1. 🔒 End-to-end Encryption & Authentication
 
-Think of the tunnel as a “dumb pipe”: it just forwards traffic without keeping logs or peeking inside.  
-Enable E2EE if you want an extra layer of assurance — especially useful when falling back to relay mode  (i.e. using a relay tunnel) or when using the optional server upload feature.
+A tunnel forwards traffic; its operator may observe connection metadata and, without E2EE, file contents at the relay. E2EE is **off by default**. Enable it to protect file contents, especially when using relay fallback or optional server upload.
 
 Enable E2EE so even the relay server cannot see your data:
 
@@ -365,7 +375,7 @@ This prevents anonymous downloads even if the link leaks.
 
 #### 🕵️ Ultimate Privacy & Anonymity (Tor + E2EE)
 
-You can chain options to achieve a **Zero-Knowledge, Zero-Trust** transfer profile. This ensures that neither the relay server nor the recipient can trace your identity or access your data.
+You can combine a Tor proxy, authentication, and E2EE to reduce IP exposure and protect file contents. Authorized recipients can still read the delivered data; this is not a guarantee of anonymity.
 
 ```
 ffl --proxy "socks5h://127.0.0.1:9050" --auth-user tom --auth-password secret --e2ee myfile.bin
@@ -389,11 +399,10 @@ ffl --proxy "socks5h://127.0.0.1:9050" --auth-user tom --auth-password secret --
 > *(We provide this strict blocking for **free** specifically for **Tor** connections to ensure user safety.)*
 
 > **🛡️ MITM Protection & Relay Trust**
-> `ffl` guarantees **Zero-Knowledge** against passive relays. regarding Active MITM resistance, this feature is already standard in our Enterprise GUI and is currently being ported to this open-source CLI.
+> `--e2ee` protects file contents against passive relay observation. Do not assume this alone authenticates the sender against an active man-in-the-middle attack; see the CLI's security work below.
 > * **Track progress:** [Issue #4: Port Active MITM Resistance to CLI](https://github.com/nuwainfo/ffl/issues/4)
 >
-> **Don't trust us? You don't have to.**
-> While we guarantee the strict security and integrity of our default tunnel infrastructure, `ffl` is designed to be **infrastructure-agnostic**. If you have specific compliance requirements or prefer a different trust anchor, you can switch to third-party tunnels (like Cloudflare, Ngrok, etc.) at any time.
+> You can choose your own trust anchor by switching to a third-party or self-hosted tunnel.
 >
 > ```bash
 > ffl myfile.txt --preferred-tunnel cloudflare --e2ee
@@ -407,7 +416,7 @@ Moving beyond standard group passwords, `ffl` acts as a dedicated digital courie
 **1. Require a Signature (Recipient Verification)**
 Use the `--recipient-auth` flag to choose how the recipient proves their identity before downloading:
 * **`pickup` (One-Time PIN):** Require a 6-digit code. If you don't set a custom `--pickup-code`, `ffl` will automatically generate a random one for you. Perfect for single, verified client deliveries.
-* **`email` (OTP Verification):** The recipient must enter a One-Time Password sent to their inbox. (This mode is automatically implied if you provide a `--recipient-email`).
+* **`email` (OTP Verification):** The recipient must enter a One-Time Password sent to their inbox. This mode is implied by `--recipient-email` and requires an OTP API (configured with `--recipient-otp-api-base`, or supplied by an addon).
 * **`pubkey` (Zero-Trust Identity):** Verify using a long-term RSA Public Key (`.fflpub`). Only the person holding the corresponding private key can unlock the download. 
 
 ```bash
@@ -415,7 +424,7 @@ Use the `--recipient-auth` flag to choose how the recipient proves their identit
 ffl confidential.pdf --recipient-auth pickup
 
 # Example 2: Require an Email OTP (--recipient-auth email is implied)
-ffl confidential.pdf --recipient-email client@example.com,client2@example.com
+ffl confidential.pdf --recipient-email client@example.com --recipient-otp-api-base https://your-otp-server.example/api
 ```
 
 **2. Key Generation & Instant Secure Share**
@@ -474,7 +483,7 @@ echo "Download link: $LINK"
 The biggest challenge in automation is often passing the generated URL to the receiver. 
 You can solve this by creating a **Static URL** using a fixed tunnel and an alias.
 
-* **Fixed Tunnel:** Ensure your tunnel domain is constant and points to a specific local port (see [Using Tunnels](#3--using-tunnels)).
+* **Fixed Tunnel:** Ensure your tunnel domain is constant and points to a specific local port (see [Using Tunnels](#4--using-tunnels)).
 * **Fixed Alias:** Use `--alias` to set a fixed path.
 
 **Sender (CI Server):**
@@ -496,10 +505,29 @@ ffl download https://my-fixed-tunnel.com/nightly-build
 >
 > `ffl --alias nightly-build --auth-user dev --auth-password secret ...`
 
+**Continuous artifact delivery (`--watch` / `--follow`)**
+
+```bash
+# Sender: start watching an existing folder, then create a new child folder
+ffl ./outbox --watch --watch-settle 5 --e2ee
+# Now place a completed batch in ./outbox/build-001/ (use a new name per batch).
+
+# Receiver: use the printed collection URL; ./incoming must already exist
+ffl download <COLLECTION_URL> --follow --output ./incoming --resume
+```
+
+Only **new direct child folders** are published, once unchanged for the settle period (5 seconds by default). Existing folders are ignored at startup. Each delivery is a separate immutable share: do not modify it after publication. This is append-only delivery, not bidirectional sync or a mirror of edits/deletions. Keep the sender running; `--watch` does not support `--upload`. The receiver tracks completed deliveries in `.ffl-state` in the output directory; `--follow` cannot be combined with `--stdout`.
+
+**Background sharing**
+
+Use `ffl daemon` to start a background service, then run normal share commands. `ffl shares list` lists managed shares, `ffl shares stop <ID>` stops one, and `ffl daemon --stop` stops the service and its shares. With the Database addon enabled, `ffl shares history` shows past sharing activity.
+
 
 ### 4. 🚀 Using Tunnels
 
 `ffl` supports various tunnels for NAT traversal. By default, `ffl` comes with a built-in tunnel called `default`.
+
+The built-in tunnel can also be selected explicitly: `default:tcp` (Bore), `default:web` (web proxy), `default:lan` (local network), or `default:loopback` (this machine only). These select the link's routing, not a mandatory file-transfer protocol; native P2P negotiation is automatic.
 
 - **🌐 Supported Tunnels**
   
@@ -608,12 +636,12 @@ ffl download https://my-fixed-tunnel.com/nightly-build
 
   `ffl`'s default tunnel is maintained to be as fast, stable, and unrestricted as possible. However, during heavy usage by multiple users, you may still experience lag or slowdowns.
   
-  If this happens, we recommend switching to Cloudflare tunnel for better performance - in fact, we suggest using Cloudflare from the start, especially in fixed mode, for the most stable and fastest experience.
+  If this happens, try another tunnel or your own relay. Performance and provider limits depend on the route; no public relay can guarantee unlimited throughput.
 
   **🛡️ Self-Host Your Own Relay / Tunnel**
 
   For ultimate privacy or corporate compliance, you can self-host your own relay infrastructure using **sish**. This allows you to:
-  * **Full Data Control:** No traffic passes through any third-party infrastructure.
+  * **Relay Control:** Choose where relayed file traffic passes. NAT discovery may still use configured STUN/TURN services.
   * **Custom Branding:** Use your own domain (e.g., `https://share.yourcompany.com`).
   * **Enhanced Security:** Control your own TLS certificates and access policies.
 
@@ -629,7 +657,7 @@ ffl download https://my-fixed-tunnel.com/nightly-build
 
 ```bash
 # Example: Stream real-time events to a local JSONL file instead of a Webhook
-ffl --hook events.jsonl
+ffl ./artifacts --hook events.jsonl
 ```
 
 **Real-world Validation:**
@@ -657,7 +685,7 @@ ffl https://zh.wikipedia.org/static/images/icons/wikipedia.png -o wikipedia.png 
 ```
 
 If the URL is a **FastFileLink** link, `ffl` adds extra benefits:
-- Uses WebRTC when possible
+- Negotiates native TCP/QUIC P2P when supported, or WebRTC
 - Falls back to HTTPS relay if needed
 - Supports resume via `--resume` just like normal downloads
 
@@ -740,7 +768,7 @@ ffl logout    # Logout and clear credentials
 
 ### 🔒 Zero Telemetry by Default
 
-`ffl` does not collect usage data, hardware stats, or “phone home” in the background.
+The CLI disables diagnostic reporting by default. This does not mean normal internet sharing makes no external connections: tunnel setup, signaling, and NAT discovery can contact network services. Use `default:lan` for direct local-network sharing.
 
 While Sentry (error tracking) is included in the binary, **error reporting is strictly disabled by default for the CLI**. No crash logs or diagnostic data are sent to us unless you explicitly run with `--enable-reporting` to help debug a specific issue.
 
@@ -748,20 +776,16 @@ While Sentry (error tracking) is included in the binary, **error reporting is st
 
 ### 🌐 Decentralized by Design
 
-By default, `ffl` uses our community relay for WebRTC signaling. **But you're not locked in.**
+By default, `ffl` uses built-in public tunnel infrastructure to expose its link and signaling endpoints. **But you're not locked in.**
 
-If you use a third-party tunnel provider (Cloudflare, ngrok, bore, etc.), your connection happens entirely through that provider’s infrastructure:
-
-* No traffic is routed through FastFileLink’s servers
-* We do not log or see your usage
-* You can verify that `ffl` continues to work even if fastfilelink.com goes offline
+You can choose a third-party tunnel provider (Cloudflare, ngrok, bore, etc.) or your own tunnel. Direct P2P payloads travel between peers; fallback traffic passes through the selected relay. Discovery may also contact configured STUN/TURN servers. Cloud storage is only used when you explicitly choose `--upload`.
 
 > Your overall privacy will then depend on the tunnel provider, your network/ISP, and your local system configuration.
 
 ### 🏠 Self-Hosted Infrastructure
 If you require maximum privacy or need to comply with strict corporate policies, `ffl` supports using your own infrastructure:
 
-* Self-Hosted Tunnel: You can run your own relay server using **sish**. This ensures that even the encrypted metadata and traffic do not pass through any third-party tunnel services (like Cloudflare or ngrok).
+* Self-Hosted Tunnel: Run your own relay server using **sish** to control the relay route. Review STUN/TURN configuration too if you need to control all discovery infrastructure.
 * Private Relay: Control your own domain, TLS certificates, and access logs.
 
 👉 **Step-by-step guide:** [Self-host a sish tunnel for ffl](https://github.com/nuwainfo/ffl/wiki/Self%E2%80%90host-a-sish-tunnel)
@@ -770,7 +794,7 @@ If you require maximum privacy or need to comply with strict corporate policies,
 
 For maximum privacy and security, `ffl` provides:
 
-* **[End-to-End Encryption](#1--end-to-end-encryption--authentication)** — Relays (ours or third-party) cannot read your data
+* **[End-to-End Encryption](#1--end-to-end-encryption--authentication)** — Enable `--e2ee` to protect file contents from relays; connection metadata remains visible
 * **[Password Protection](#1--end-to-end-encryption--authentication)** — HTTP Basic Auth for download links
 * **[Tor Support](#%EF%B8%8F-ultimate-privacy--anonymity-tor--e2ee)** — Route traffic through Tor via SOCKS5 for IP-level anonymity
 
@@ -779,7 +803,7 @@ See [Features & Advanced Usage](#features--advanced-usage) for complete details.
 ## How it works & Motivation
 
 In short, `ffl` starts a small HTTP server on your machine, which also acts as a WebRTC signaling server.  
-Then it exposes that local server through a tunnel so that the outside world can reach it.  
+Then it exposes that local server through a tunnel so that the outside world can reach it, or directly on your LAN with `default:lan`. Native ffl receivers can negotiate TCP/QUIC; browser receivers use WebRTC, with HTTP(S) fallback when needed.
 
 ### Why build this?
 
@@ -825,21 +849,9 @@ Traditional cloud drives like Google Drive aren't ideal here, since they require
 A big driver behind the Cosmopolitan Libc / APE work was very simple:  
 I wanted a way to send my phone photos to my family easily, on almost any device 😅
 
-To get `ffl` running as an APE:
+The current WebRTC engine uses [ffl-datachannel](https://github.com/nuwainfo/ffl-datachannel), built on libdatachannel, libjuice, and usrsctp; it replaces the earlier aiortc implementation. Native TCP/QUIC transport is provided by [ffl-p2p](https://github.com/nuwainfo/ffl-p2p).
 
-- I removed all C-extension dependencies on `libffi` / `ctypes` and compiled them directly into the Python core.
-- I added abstraction layers around all crypto logic so that I can switch between `cryptography` and `python-mbedtls` cleanly.
-- The `cryptography` package depends on Rust, which is fundamentally incompatible with Cosmopolitan Libc, so I switched to an mbedTLS-based approach instead.
-- I replaced aiortc's DTLS implementation (originally based on `cryptography`) with `python-mbedtls` to ensure compatibility.
-- On Android, I ran the APE-flavored Python inside Termux and fixed a few strange networking behaviors.
-- After that, I could finally bundle the entire Python project into a single APE executable, thanks to [cosmofy 0.1](https://github.com/metaist/cosmofy/tree/0.1.0) which simplified the process.
-
-PS: Building a CLI with Python on Linux turned out to be surprisingly difficult. Glibc issues made it nearly impossible to package a truly small and reliable binary. Cosmopolitan Libc (APE) solved this perfectly: fast, portable, and lightweight.
-
-> **🛠️ A Note on Building APE:**
-> You might notice that the source code for the APE build process (e.g., `BuildAPE.sh`) is currently missing from this repo.
-> This is because the current build environment involves a lot of complex customizations, and the DTLS implementation is still a bit "hacky" and not elegant enough to share just yet.
-> I need some time to refactor and clean these parts up, and I plan to open-source the build tools gradually in the future.
+The APE foundation is being opened through [python-ape](https://github.com/bear0330/python-ape) and [pythoncosmofy](https://github.com/bear0330/pythoncosmofy). Release v4.2.2 updates its embedded OpenSSL to 3.6. See the [release notes](https://github.com/nuwainfo/ffl/releases) for platform and build changes; the APE packaging process is not fully contained in this repository.
 
 ---
 
