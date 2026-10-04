@@ -2,7 +2,7 @@ workflows:
   ffl-cli-arm:
     name: FFL CLI ARM64
     instance_type: mac_mini_m2
-    max_build_duration: 30
+    max_build_duration: 60
 
     environment:
       xcode: 16.4
@@ -10,8 +10,10 @@ workflows:
         - SVN
 
     scripts:
-      - name: Check macOS environment
+      - name: Verify macOS runner
         script: |
+          set -e
+
           echo "=== macOS ==="
           sw_vers
 
@@ -21,41 +23,119 @@ workflows:
           echo "=== Xcode ==="
           xcodebuild -version
 
-      - name: Install tools
+      - name: Install SVN and Rust
         script: |
           set -e
 
-          echo "=== Install SVN ==="
+          echo "=== SVN ==="
           if ! command -v svn >/dev/null 2>&1; then
             brew install subversion
           fi
           svn --version --quiet
 
-          echo "=== Install / check Rust ==="
+          echo "=== Rust ==="
           if ! command -v rustup >/dev/null 2>&1; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           fi
 
           export PATH="$HOME/.cargo/bin:$PATH"
-
           rustup default stable
           rustup target add aarch64-apple-darwin
 
-          echo "=== Rust versions ==="
           rustc --version
           cargo --version
           rustup show
 
-      - name: Test SVN access
+      - name: Install Miniconda and create fileshare environment
         script: |
           set -e
 
-          echo "=== Testing SVN access ==="
+          echo "=== Miniconda ==="
+          if [ ! -x "$HOME/miniconda3/bin/conda" ]; then
+            curl -fsSL \
+              -o /tmp/Miniconda3.sh \
+              https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-arm64.sh
 
-          svn info "$SVN_FILESHARE_URL" \
+            bash /tmp/Miniconda3.sh \
+              -b \
+              -p "$HOME/miniconda3"
+          fi
+
+          source "$HOME/miniconda3/etc/profile.d/conda.sh"
+          conda --version
+
+          if ! conda env list | awk '{print $1}' | grep -qx fileshare; then
+            echo "=== Creating fileshare conda environment ==="
+            conda create -y -n fileshare python=3.12
+          fi
+
+          conda activate fileshare
+          python --version
+          python -c 'import platform; print("Python arch:", platform.machine())'
+
+      - name: Checkout private SVN source
+        script: |
+          set -e
+
+          FFL_DIR="$HOME/FFL"
+
+          echo "=== Recreate $FFL_DIR ==="
+          rm -rf "$FFL_DIR"
+          mkdir -p "$FFL_DIR"
+
+          echo "=== Checkout FileShareServer ==="
+          svn checkout \
+            "$SVN_FILESHARE_SERVER_URL" \
+            "$FFL_DIR/FileShareServer" \
             --username "$SVN_USERNAME" \
             --password "$SVN_PASSWORD" \
             --non-interactive \
-            --trust-server-cert-failures=unknown-ca,cn-mismatch,expired,not-yet-valid,other
+            --no-auth-cache
 
-          echo "SVN access OK"
+          echo "=== Checkout FileShare ==="
+          svn checkout \
+            "$SVN_FILESHARE_URL" \
+            "$FFL_DIR/FileShare" \
+            --username "$SVN_USERNAME" \
+            --password "$SVN_PASSWORD" \
+            --non-interactive \
+            --no-auth-cache
+
+          echo "=== Checkout result ==="
+          test -d "$FFL_DIR/FileShare/.svn"
+          test -d "$FFL_DIR/FileShareServer/.svn"
+          test -f "$FFL_DIR/FileShare/tests/scripts/MacOSBuild.sh"
+
+          echo "FileShare revision:"
+          svn info "$FFL_DIR/FileShare" | grep -E '^(URL|Revision):'
+
+          echo "FileShareServer revision:"
+          svn info "$FFL_DIR/FileShareServer" | grep -E '^(URL|Revision):'
+
+      - name: Build CLI with MacOSBuild.sh
+        script: |
+          set -e
+
+          export PATH="$HOME/.cargo/bin:$PATH"
+
+          BUILD_SCRIPT="$HOME/FFL/FileShare/tests/scripts/MacOSBuild.sh"
+          chmod +x "$BUILD_SCRIPT"
+
+          echo "=== Running existing build entry point ==="
+          "$BUILD_SCRIPT" cli
+
+          echo "=== CLI artifacts ==="
+          ls -lah "$HOME/FFL/FileShare/dist/mac" || true
+
+          if [ ! -f "$HOME/FFL/FileShare/dist/mac/ffl_aarch64" ]; then
+            echo "ERROR: ffl_aarch64 was not produced"
+            exit 1
+          fi
+
+          echo "=== ARM64 binary info ==="
+          file "$HOME/FFL/FileShare/dist/mac/ffl_aarch64"
+          lipo -info "$HOME/FFL/FileShare/dist/mac/ffl_aarch64" || true
+          shasum -a 256 "$HOME/FFL/FileShare/dist/mac/ffl_aarch64"
+
+    artifacts:
+      - $HOME/FFL/FileShare/dist/mac/ffl_*
