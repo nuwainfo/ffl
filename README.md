@@ -1,11 +1,15 @@
 # FastFileLink CLI (ffl)
 
+### Transfer for humans and agents.
+
 [![License](https://img.shields.io/github/license/nuwainfo/ffl?style=flat-square)](./LICENSE)
 [![Release](https://img.shields.io/github/v/release/nuwainfo/ffl?style=flat-square)](https://github.com/nuwainfo/ffl/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/nuwainfo/ffl/total?style=flat-square)](https://github.com/nuwainfo/ffl/releases/latest)
 [![Docker Pulls](https://img.shields.io/docker/pulls/fastfilelink/ffl?style=flat-square)](https://hub.docker.com/r/fastfilelink/ffl)
 
-**FastFileLink CLI (ffl)** is an [*Actually Portable*](https://justine.lol/ape.html) file-delivery tool that turns files, folders, or streams into shareable links, with native TCP/QUIC P2P between ffl clients, WebRTC for browsers, and HTTP(S) fallback.
+**FastFileLink CLI (ffl)** is a file-delivery tool for people, scripts, and AI agents. Turn a file, folder, or stream into a link: a person opens it in a browser, another agent downloads it with the CLI or [MCP](https://github.com/nuwainfo/ffl-mcp). Native TCP/QUIC P2P, WebRTC, and HTTP(S) fallback connect both sides without a required cloud-storage upload or an account for direct sharing.
+
+Send a photo album to a friend, a build to a teammate, or a model checkpoint between local AI workers. **One transfer engine, from human handoff to agent pipeline**—available as an [*Actually Portable*](https://justine.lol/ape.html) executable and native builds.
 
 `ffl` brings these capabilities together:
 
@@ -13,7 +17,7 @@
 - 🧑‍💻 **Zero-install for recipients** — Download instantly via modern browsers, `curl`, or `ffl`, etc.
 - 📁 **Folder & batch transfers** — Stream TB-scale data or `stdin` directly without zip/encrypt first.
 - 🔐 **Optional end-to-end encryption** — Add `--e2ee` to protect file contents across direct transfers, relays, and optional server storage.
-- 🚀 **Smart Delivery & AI-Ready** — Verify recipients via OTP/PubKey, or empower AI agents via [MCP](https://github.com/nuwainfo/ffl-mcp).
+- 🚀 **Human & agent handoffs** — Browser links for people; CLI, JSON/events, and [MCP](https://github.com/nuwainfo/ffl-mcp) for agents. Verify recipients via pickup codes or public keys.
 - 🧱 **Actually Portable Executable (APE)** + native builds for **Windows, Linux, macOS**. Embeddable.
 - 🧰 **Built-in & pluggable tunnels** (Cloudflare, ngrok, self-hosted) — Supports proxies like Tor.
 - 🏠 **LAN & continuous delivery** — Share locally with `default:lan`, or publish new delivery folders with `--watch` and receive them with `--follow`.
@@ -40,6 +44,8 @@ https://github.com/user-attachments/assets/fe0d6bc6-3116-4633-9c42-41566fe5fd30
 </details>
 
 Workflows like this also pair naturally with tools such as [llamafile](https://github.com/mozilla-ai/llamafile).
+
+For local LLMs and agent workflows, the useful distinction is **moving the artifact itself without staging it in cloud storage**. Share datasets, generated reports, or checkpoints over LAN/P2P, pass the link through your existing orchestration, and let the next worker fetch the bytes. Direct sharing has no cloud-storage quota; practical limits are your network, disk, and how long the sender stays available. Add `--e2ee` for file-content privacy across relay fallback.
 
 ---
 
@@ -455,8 +461,9 @@ Customize the entire delivery experience to match your brand. You can use our Wh
 
 ### 3. 🤖 Automation Tips
 
-ffl is designed for many downloaders; you can always stop sharing with `Ctrl+C`.  
-But for automation / CI/CD or scripts, these flags help:
+For an agent-to-human handoff, share the generated report and return its browser link. For agent-to-agent delivery, start `ffl ./artifacts --e2ee --json handoff.json --hook events.jsonl`, pass the JSON `link` to the next worker, and have it run `ffl download <URL> --resume`. Your orchestrator owns link exchange and process lifetime; ffl handles the transfer.
+
+Use [ffl-mcp](https://github.com/nuwainfo/ffl-mcp) to expose transfers as agent tools, or the CLI directly from scripts and CI. Hosts that need deeper control can use [embedded mode and VFS](#5--for-developers-embedded-mode). You can stop foreground sharing with `Ctrl+C`.
 
 **Lifecycle Control & JSON Output**
 
