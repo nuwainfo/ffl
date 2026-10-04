@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#101714" />
+    <meta
+      name="description"
+      content="Transfer for humans and agents. Share files, folders, and streams with browser links, native TCP/QUIC P2P, and tools for AI workflows. No cloud-storage upload required."
+    />
+    <meta property="og:title" content="ffl — Transfer for humans and agents" />
+    <meta
+      property="og:description"
+      content="From a local file to the next person or agent. Browser links. Native P2P. Your infrastructure."
+    />
+    <meta property="og:type" content="website" />
+    <title>ffl — Transfer for humans and agents</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main" data-i18n="skip">Skip to content</a>
+    <header class="header wrap">
+      <a class="brand" href="#" aria-label="ffl — FastFileLink"
+        ><img src="./favicon.svg" alt="" width="34" height="34" /><span
+          >ffl<span class="brand-sub"> / CLI</span></span
+        ></a
+      >
+      <nav aria-label="Main" data-i18n-aria="navLabel">
+        <a href="#workflows" data-i18n="navWorkflows">Workflows</a>
+        <a href="#network" data-i18n="navNetwork">Your network</a>
+        <a href="https://github.com/nuwainfo/ffl/wiki" data-i18n="navDocs"
+          >Docs ↗</a
+        >
+      </nav>
+      <div class="header-actions">
+        <label class="sr-only" for="language" data-i18n="language"
+          >Language</label
+        >
+        <select id="language">
+          <option value="en">EN</option>
+          <option value="zh_hans">简体中文</option>
+          <option value="zh_hant">繁體中文</option>
+        </select>
+        <a class="header-cta" href="#install" data-i18n="navInstall"
+          >Get ffl <span aria-hidden="true">↗</span></a
+        >
+      </div>
+    </header>
+    <main id="main">
+      <section class="hero wrap" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">
+            <span class="status-dot"></span
+            ><span data-i18n="heroEyebrow"
+              >FASTFILELINK / THE DELIVERY LAYER</span
+            >
+          </p>
+          <h1 id="hero-title">
+            <span data-i18n="heroLine1">Transfer for</span><br /><span
+              data-i18n="heroLine2"
+              >humans</span
+            ><br /><span class="accent" data-i18n="heroLine3">and agents.</span>
+          </h1>
+          <p class="hero-desc" data-i18n="heroDesc">
+            Turn a file, folder, or stream into a link. Send it to a person with
+            a browser, or an agent with a job to finish. No cloud-storage upload
+            required.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#install"
+              ><span data-i18n="heroCta">Start transferring</span
+              ><span aria-hidden="true">↗</span></a
+            ><a class="text-link" href="https://github.com/nuwainfo/ffl"
+              ><span data-i18n="heroSource">Explore the source</span
+              ><span aria-hidden="true">↗</span></a
+            >
+          </div>
+          <p class="hero-note" data-i18n="heroNote">
+            Free direct sharing · No account required · Apache-2.0 core
+          </p>
+        </div>
+        <div
+          class="transfer-art"
+          role="img"
+          aria-label="A local artifact travels through ffl to a human's browser or another agent. Illustrative flow."
+          data-i18n-aria="diagramLabel"
+        >
+          <div class="art-top">
+            <span data-i18n="diagramTitle">ONE ARTIFACT. ANY NEXT STEP.</span
+            ><span class="art-cross" aria-hidden="true">+</span>
+          </div>
+          <div class="source-node">
+            <div class="node-icon" aria-hidden="true">▤</div>
+            <div>
+              <small data-i18n="diagramSource">ON YOUR MACHINE</small
+              ><strong>model.gguf</strong
+              ><span class="muted" data-i18n="diagramPayload"
+                >Your files. Your compute.</span
+              >
+            </div>
+            <span class="file-ext">FILE</span>
+          </div>
+          <div class="connector first" aria-hidden="true"><span></span></div>
+          <div class="engine">
+            <span class="engine-word"
+              >ffl<span class="engine-cursor">_</span></span
+            >
+            <div>
+              <span data-i18n="diagramEngine">A link is the handoff.</span
+              ><small>TCP / QUIC / WebRTC</small>
+            </div>
+            <span class="engine-arrow" aria-hidden="true">↓</span>
+          </div>
+          <div class="split-connectors" aria-hidden="true">
+            <i></i><b></b><b></b>
+          </div>
+          <div class="destinations">
+            <div class="destination">
+              <div class="destination-top">
+                <span aria-hidden="true">↗</span
+                ><small data-i18n="diagramHumanLabel">FOR HUMANS</small>
+              </div>
+              <strong data-i18n="diagramHuman">Open in a browser.</strong
+              ><span data-i18n="diagramHumanNote">Nothing to install.</span>
+            </div>
+            <div class="destination">
+              <div class="destination-top">
+                <span aria-hidden="true">&gt;_</span
+                ><small data-i18n="diagramAgentLabel">FOR AGENTS</small>
+              </div>
+              <strong data-i18n="diagramAgent">Fetch. Continue.</strong
+              ><span>CLI / MCP</span>
+            </div>
+          </div>
+          <div class="art-bottom">
+            <span class="status-dot"></span
+            ><span data-i18n="diagramFoot"
+              >Direct when possible. Relay when needed.</span
+            ><span class="demo-label" data-i18n="diagramDemo"
+              >Illustration</span
+            >
+          </div>
+        </div>
+      </section>
+      <div class="facts wrap">
+        <div>
+          <span class="fact-mark" aria-hidden="true">01 /</span
+          ><span data-i18n="fact1">No cloud staging for direct transfers</span>
+        </div>
+        <div>
+          <span class="fact-mark" aria-hidden="true">02 /</span
+          ><span data-i18n="fact2">Browser simplicity. CLI control.</span>
+        </div>
+        <div>
+          <span class="fact-mark" aria-hidden="true">03 /</span
+          ><span>Windows · Linux · macOS</span>
+        </div>
+      </div>
+
+      <section
+        id="workflows"
+        class="section wrap"
+        aria-labelledby="workflow-title"
+      >
+        <div class="section-heading">
+          <p class="eyebrow" data-i18n="workflowEyebrow">
+            01 / FROM OUTPUT TO OUTCOME
+          </p>
+          <h2 id="workflow-title" data-i18n="workflowTitle">
+            Made it? Move it.
+          </h2>
+          <p data-i18n="workflowDesc">
+            A photo album. A build artifact. A model checkpoint. The next step
+            starts with the same command.
+          </p>
+        </div>
+        <div class="workflow-layout">
+          <div
+            class="workflow-select"
+            role="group"
+            aria-label="Choose a workflow"
+            data-i18n-aria="workflowChoose"
+          >
+            <button
+              class="workflow-option active"
+              data-workflow="human"
+              aria-pressed="true"
+            >
+              <span class="option-index">01</span
+              ><span
+                ><strong data-i18n="humanTab">To a person</strong
+                ><small data-i18n="humanTeaser"
+                  >Make the handoff effortless.</small
+                ></span
+              ><span aria-hidden="true">↗</span>
+            </button>
+            <button
+              class="workflow-option"
+              data-workflow="agent"
+              aria-pressed="false"
+            >
+              <span class="option-index">02</span
+              ><span
+                ><strong data-i18n="agentTab">To another agent</strong
+                ><small data-i18n="agentTeaser"
+                  >Pass artifacts between workers.</small
+                ></span
+              ><span aria-hidden="true">↗</span>
+            </button>
+            <button
+              class="workflow-option"
+              data-workflow="lan"
+              aria-pressed="false"
+            >
+              <span class="option-index">03</span
+              ><span
+                ><strong data-i18n="lanTab">Across your LAN</strong
+                ><small data-i18n="lanTeaser"
+                  >Keep local AI workflows local.</small
+                ></span
+              ><span aria-hidden="true">↗</span>
+            </button>
+          </div>
+          <div class="terminal" aria-live="polite">
+            <div class="terminal-bar">
+              <span class="terminal-dots" aria-hidden="true">● ● ●</span
+              ><span id="terminal-title">human-handoff.sh</span
+              ><span class="terminal-tag" data-i18n="example">EXAMPLE</span>
+            </div>
+            <div class="terminal-body">
+              <p class="code-comment" id="workflow-comment">
+                # Share the folder. Send the printed link.
+              </p>
+              <div class="code-row">
+                <span class="prompt" aria-hidden="true">$</span>
+                <pre><code id="workflow-command">ffl ./photos --e2ee</code></pre>
+                <button
+                  class="copy icon-button"
+                  data-copy="workflow-command"
+                  aria-label="Copy command"
+                  data-i18n-aria="copy"
+                >
+                  ⧉
+                </button>
+              </div>
+              <div class="terminal-divider"></div>
+              <p class="code-comment" id="workflow-receive-label">
+                # The recipient opens the link in a browser.
+              </p>
+              <pre
+                class="receive-command"
+              ><code id="workflow-receive">https://&lt;your-share-link&gt;</code></pre>
+              <p class="terminal-explainer" id="workflow-note">
+                No recipient account or app. Keep the sender running until the
+                download finishes.
+              </p>
+            </div>
+          </div>
+        </div>
+        <div class="watch-strip">
+          <span class="watch-icon" aria-hidden="true">↻</span>
+          <div>
+            <h3 data-i18n="watchTitle">A pipeline that keeps delivering.</h3>
+            <p data-i18n="watchDesc">
+              Publish new, settled child folders with --watch. A receiver uses
+              --follow to pick up each delivery from one collection link. Ideal
+              for build batches and generated artifacts.
+            </p>
+            <a
+              class="text-link"
+              href="https://github.com/nuwainfo/ffl#3--automation-tips"
+              data-i18n="watchLink"
+              >See the watch / follow workflow ↗</a
+            >
+          </div>
+          <div class="watch-code">
+            <code>ffl ./outbox --watch --e2ee</code
+            ><small data-i18n="watchNote"
+              >New folders only. Append-only delivery, not folder
+              mirroring.</small
+            >
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="network"
+        class="network-section"
+        aria-labelledby="network-title"
+      >
+        <div class="wrap network-layout">
+          <div class="network-copy">
+            <p class="eyebrow" data-i18n="networkEyebrow">
+              02 / YOUR BYTES. YOUR ROUTE.
+            </p>
+            <h2 id="network-title" data-i18n="networkTitle">
+              Move the work.<br />Keep control.
+            </h2>
+            <p data-i18n="networkDesc">
+              Cloud storage shouldn’t be a prerequisite for handing off a file.
+              ffl connects the sender to the receiver, with a route that fits
+              your network.
+            </p>
+            <div
+              class="network-picker"
+              role="group"
+              aria-label="Choose a network route"
+              data-i18n-aria="routeChoose"
+            >
+              <button
+                data-route="internet"
+                class="active"
+                aria-pressed="true"
+                data-i18n="routeInternet"
+              >
+                Internet</button
+              ><button
+                data-route="local"
+                aria-pressed="false"
+                data-i18n="routeLocal"
+              >
+                Local network
+              </button>
+            </div>
+            <p class="route-note" id="route-note" data-i18n="routeInternetNote">
+              Direct TCP/QUIC between ffl clients; WebRTC for browsers. Public
+              signaling and relay services may be used. HTTPS relay fallback
+              helps when direct connections fail.
+            </p>
+          </div>
+          <div class="route-panel">
+            <div class="route-endpoints">
+              <span data-i18n="routeSender">Your machine</span
+              ><span data-i18n="routeReceiver">Their machine</span>
+            </div>
+            <div class="route-line">
+              <span class="route-computer" aria-hidden="true">&gt;_</span
+              ><span class="route-track"
+                ><span id="route-protocol">P2P</span
+                ><i aria-hidden="true"></i></span
+              ><span class="route-computer" aria-hidden="true">↓</span>
+            </div>
+            <div
+              class="route-fallback"
+              id="route-fallback"
+              data-i18n="routeFallback"
+            >
+              ↳ HTTP(S) relay when needed
+            </div>
+            <div class="route-detail">
+              <strong data-i18n="privacyTitle"
+                >Privacy is a choice you can see.</strong
+              >
+              <p id="privacy-note" data-i18n="privacyInternet">
+                Add --e2ee to encrypt file contents across relay fallback.
+                Connection metadata remains visible. Direct sharing needs both
+                ends online; cloud upload is a separate, optional feature.
+              </p>
+            </div>
+            <code id="route-command">ffl ./artifacts --e2ee</code>
+          </div>
+        </div>
+      </section>
+
+      <section id="agents" class="section wrap" aria-labelledby="agents-title">
+        <div class="section-heading agents-heading">
+          <p class="eyebrow" data-i18n="agentsEyebrow">
+            03 / BUILT FOR THE NEXT WORKER
+          </p>
+          <h2 id="agents-title" data-i18n="agentsTitle">
+            Your agents make things.<br />Give them a way to deliver.
+          </h2>
+          <p data-i18n="agentsDesc">
+            Move a local model, a dataset, or a generated report between
+            machines without a cloud bucket or a shared filesystem. Pass a link
+            through your orchestrator; ffl carries the artifact.
+          </p>
+        </div>
+        <div class="integration-grid">
+          <article>
+            <span class="integration-symbol" aria-hidden="true">&gt;_</span>
+            <p class="eyebrow">CLI + JSON</p>
+            <h3 data-i18n="cliTitle">Fits the tools you run.</h3>
+            <p data-i18n="cliDesc">
+              Share files or stdin. Read the link from --json, track progress
+              with --hook, and stream downloads to --stdout. Native TCP/QUIC
+              helps ffl clients move large payloads directly.
+            </p>
+            <a
+              href="https://github.com/nuwainfo/ffl#3--automation-tips"
+              class="text-link"
+              data-i18n="cliLink"
+              >Automate with the CLI ↗</a
+            >
+          </article>
+          <article>
+            <span class="integration-symbol" aria-hidden="true">⌘</span>
+            <p class="eyebrow">MCP</p>
+            <h3 data-i18n="mcpTitle">A transfer tool for your agent.</h3>
+            <p data-i18n="mcpDesc">
+              Connect the companion ffl-mcp server to an MCP-capable host. Let
+              agents share outputs and download inputs through tools, then hand
+              the same link to a human.
+            </p>
+            <a
+              href="https://github.com/nuwainfo/ffl-mcp"
+              class="text-link"
+              data-i18n="mcpLink"
+              >Connect ffl-mcp ↗</a
+            >
+          </article>
+          <article>
+            <span class="integration-symbol" aria-hidden="true">{ }</span>
+            <p class="eyebrow">EMBED + VFS</p>
+            <h3 data-i18n="embedTitle">The engine inside your app.</h3>
+            <p data-i18n="embedDesc">
+              Use structured events and host-provided file sources to integrate
+              transfers into your own application. Your app owns the interface
+              and lifecycle; ffl handles delivery.
+            </p>
+            <a
+              href="https://github.com/nuwainfo/ffl/wiki/Embedded-Mode-%26-Event-Hooks"
+              class="text-link"
+              data-i18n="embedLink"
+              >Explore embedded mode ↗</a
+            >
+          </article>
+        </div>
+      </section>
+
+      <section
+        id="install"
+        class="install-section wrap"
+        aria-labelledby="install-title"
+      >
+        <div>
+          <p class="eyebrow" data-i18n="installEyebrow">
+            04 / ONE COMMAND AWAY
+          </p>
+          <h2 id="install-title" data-i18n="installTitle">
+            Your next handoff<br />starts here.
+          </h2>
+          <p data-i18n="installDesc">
+            Install the CLI on the sender. Your recipient can just open the
+            link.
+          </p>
+          <a
+            class="text-link"
+            href="https://github.com/nuwainfo/ffl/releases/latest"
+            data-i18n="installRelease"
+            >All binaries, checksums & signatures ↗</a
+          >
+        </div>
+        <div class="install-terminal">
+          <div
+            class="os-picker"
+            role="group"
+            aria-label="Choose your operating system"
+            data-i18n-aria="osChoose"
+          >
+            <button data-os="unix" class="active" aria-pressed="true">
+              Linux / macOS</button
+            ><button data-os="windows" aria-pressed="false">Windows</button
+            ><button data-os="ape" aria-pressed="false">APE</button>
+          </div>
+          <div class="install-code">
+            <small id="install-shell">BASH</small>
+            <pre><code id="install-command">curl -fsSL https://fastfilelink.com/install.sh | bash</code></pre>
+            <button
+              class="button copy"
+              data-copy="install-command"
+              data-i18n="copyInstall"
+            >
+              Copy install command
+            </button>
+          </div>
+          <p id="install-note" data-i18n="installUnixNote">
+            Native builds: Linux x86_64; macOS Intel and Apple Silicon. For
+            Linux ARM64, use APE.
+          </p>
+          <div class="first-transfer">
+            <span data-i18n="installThen">Then share something:</span
+            ><code>ffl ./hello.txt --e2ee</code>
+          </div>
+        </div>
+      </section>
+
+      <section class="section wrap faq" aria-labelledby="faq-title">
+        <div>
+          <p class="eyebrow" data-i18n="faqEyebrow">BEFORE YOU SEND</p>
+          <h2 id="faq-title" data-i18n="faqTitle">The useful details.</h2>
+        </div>
+        <div class="faq-items">
+          <details>
+            <summary data-i18n="faq1Q">
+              Is there a file-size limit or a cloud quota?
+            </summary>
+            <p data-i18n="faq1A">
+              Direct sharing has no cloud-storage quota and requires no account.
+              Real limits are your network, filesystem, receiver, and sender
+              availability. Relay providers may impose their own limits.
+              Optional server upload has separate account and plan limits.
+            </p>
+          </details>
+          <details>
+            <summary data-i18n="faq2Q">
+              Does the sender need to stay online?
+            </summary>
+            <p data-i18n="faq2A">
+              Yes, for direct and live relayed sharing. Keep ffl and the source
+              files available until the receiver finishes. If both sides cannot
+              be online together, optional --upload stores the file temporarily
+              on a server and requires an account and the Upload addon.
+            </p>
+          </details>
+          <details>
+            <summary data-i18n="faq3Q">
+              Is every transfer end-to-end encrypted?
+            </summary>
+            <p data-i18n="faq3A">
+              E2EE is opt-in: add --e2ee for file-content encryption across
+              direct and relay paths, and receive with ffl or its browser page.
+              Metadata remains visible, and E2EE alone is not a guarantee
+              against active man-in-the-middle attacks. LAN links use HTTP; use
+              them on trusted networks. See the README for authentication and
+              the security model.
+            </p>
+          </details>
+          <details>
+            <summary data-i18n="faq4Q">
+              Is ffl an agent framework or a sync drive?
+            </summary>
+            <p data-i18n="faq4A">
+              ffl is the transfer layer. Your agent host or orchestrator decides
+              what to send, exchanges the link, and manages the process. --watch
+              publishes new direct child folders after they settle; existing
+              folders and later edits are not mirrored. --follow receives each
+              new delivery.
+            </p>
+          </details>
+        </div>
+      </section>
+    </main>
+    <footer class="wrap">
+      <div class="footer-main">
+        <a class="brand" href="#"
+          ><img src="./favicon.svg" alt="" width="30" height="30" />ffl</a
+        >
+        <p data-i18n="footerTagline">
+          From your machine.<br />To whatever comes next.
+        </p>
+        <a class="text-link" href="#install" data-i18n="footerCta"
+          >Make your first transfer ↗</a
+        >
+      </div>
+      <div class="footer-bottom">
+        <span data-i18n="footerName">FastFileLink CLI · Apache-2.0 core</span>
+        <div>
+          <a href="https://github.com/nuwainfo/ffl">GitHub ↗</a
+          ><a
+            href="https://github.com/nuwainfo/ffl/releases"
+            data-i18n="footerReleases"
+            >Releases ↗</a
+          ><a
+            href="https://github.com/nuwainfo/ffl/blob/main/SECURITY.md"
+            data-i18n="footerSecurity"
+            >Security ↗</a
+          ><a href="https://fastfilelink.com" data-i18n="footerProduct"
+            >FastFileLink ↗</a
+          >
+        </div>
+      </div>
+    </footer>
+    <div id="copy-status" role="status" aria-live="polite"></div>
+    <noscript
+      ><p class="noscript">
+        This page works in English without JavaScript. Enable JavaScript for
+        language switching and interactive examples. / 请启用 JavaScript
+        切换语言。 / 請啟用 JavaScript 切換語言。
+      </p></noscript
+    >
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

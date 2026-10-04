@@ -27,6 +27,7 @@ Send a photo album to a friend, a build to a teammate, or a model checkpoint bet
 > 📊 **How does it compare to other tools?** See our [Comparison Guide](https://github.com/nuwainfo/ffl/wiki/Comparison-with-Other-File-Transfer-Tools)
 
 👉 **Official site:** <https://fastfilelink.com>  
+🛠️ **CLI website:** [Source, local preview, and GitHub Pages deployment](docs/site/README.md) — English, 简体中文, 繁體中文.
 
 This simple demo shows how I sent `ffl.com` from **Windows (x64)** to **Android (arm64)** and **used it directly** to transfer photos back.
 
@@ -275,8 +276,9 @@ For full help: `ffl --help` or `ffl download --help`
 These options work for both **sharing** and **downloading**:
 
 ```
-  --proxy PROXY         Proxy server for all outbound connections.
-                        Supports SOCKS5 (default) and HTTP/HTTPS.
+  --proxy PROXY         Proxy for supported outbound connections.
+                        SOCKS5 (default): tunnel and HTTP requests.
+                        HTTP/HTTPS proxies: HTTP requests only.
                         Formats:
                         - 127.0.0.1:9050 (defaults to SOCKS5, e.g., for Tor)
                         - socks5://user:pass@host:port
@@ -443,7 +445,7 @@ ffl keygen --name clientA --share --pickup-code 123456
 
 **3. Proof of Delivery & Package Integrity**
 Want to know exactly when your file lands and ensure it wasn't tampered with?
-* **Receipts:** Use `--receipt` to get an automatic email notification the moment the download finishes. Add `--receipt-confirm` to prompt the receiver with a dialog to explicitly acknowledge receipt.
+* **Receipts:** In builds with the Features addon and an eligible non-free account, use `--receipt` for email notification when a download finishes. Add `--receipt-confirm` to ask the receiver to acknowledge receipt.
 * **Auto-Checksum:** Upon completion, a strict checksum verification is automatically performed on the receiver's end—**whether they download via the `ffl` CLI or a standard web browser**—guaranteeing the file wasn't corrupted in transit.
 * **Manual Verification:** For advanced automation, you can query the file's metadata via the `/checksum` endpoint and verify it manually using standard tools like `b2sum`.
 
@@ -456,7 +458,7 @@ echo "<checksum_from_api>  myfile.zip" | b2sum -c -
 ```
 
 **4. White-label Delivery Experience**
-Customize the entire delivery experience to match your brand. You can use our White-label features to display your own company logo and branding on the recipient's download page, providing a highly professional and seamless file-receiving experience for your clients. 📖 **Learn more:** [White-label Configuration](https://github.com/nuwainfo/ffl/wiki/White-label-Configuration)
+With the Brand addon (not included in `fflo.com`), customize the recipient's download page with your company logo and branding. 📖 **Learn more:** [White-label Configuration](https://github.com/nuwainfo/ffl/wiki/White-label-Configuration)
 
 
 ### 3. 🤖 Automation Tips
@@ -659,7 +661,7 @@ The built-in tunnel can also be selected explicitly: `default:tcp` (Bore), `defa
 
 `ffl` is designed not just as a standalone tool, but as a robust engine that can be embedded into other applications. Our "Embedded Mode" provides the necessary plumbing to integrate secure P2P transfers into your own software.
 
-* **Virtual File System (`--vfs`)**: Map abstract sources (like Android's `content://` providers) to internal `vfs://` URIs. This allows `ffl` to serve content from non-standard sources as if they were regular local files.
+* **Virtual File System (`--vfs` / `vfs://`)**: `--vfs` exposes a local source through a VFS server. Embedded hosts can also implement the VFS protocol for sources such as Android's `content://` providers and pass a `vfs://` URI to ffl for sharing.
 * **Event Hooks (`--hook`)**: Monitor transfer progress, connection status, and errors in real-time. While the standard usage takes a **Webhook URL** to POST events, you can also provide a **local file path** to stream events as JSON Lines (JSONL)—perfect if you want to parse logs directly without setting up a dedicated server.
 
 ```bash
