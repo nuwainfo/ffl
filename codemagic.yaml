@@ -52,7 +52,7 @@ workflows:
 
           echo "=== Testing SVN access ==="
 
-          svn info "$SVN_URL" \
+          svn info "$SVN_FILESHARE_URL" \
             --username "$SVN_USERNAME" \
             --password "$SVN_PASSWORD" \
             --non-interactive \
