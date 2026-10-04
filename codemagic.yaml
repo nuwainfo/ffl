@@ -16,17 +16,13 @@ workflows:
           echo "=== Architecture ==="
           uname -m
 
-          echo "=== Hardware ==="
-          sysctl -n machdep.cpu.brand_string || true
-
           echo "=== Xcode ==="
           xcodebuild -version
 
-          echo "=== Python ==="
-          python3 --version
+      - name: Install SVN
+        script: |
+          echo "=== Installing Subversion ==="
+          brew install subversion
 
-          echo "=== Git ==="
-          git --version
-
-          echo "=== SVN ==="
-          svn --version --quiet || true
+          echo "=== SVN version ==="
+          svn --version --quiet
