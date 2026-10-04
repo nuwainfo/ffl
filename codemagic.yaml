@@ -137,5 +137,98 @@ workflows:
           lipo -info "$HOME/FFL/FileShare/dist/mac/ffl_aarch64" || true
           shasum -a 256 "$HOME/FFL/FileShare/dist/mac/ffl_aarch64"
 
+      - name: Test built FFL with real download
+        script: |
+          set -euo pipefail
+
+          FFL_BIN="$HOME/FFL/FileShare/dist/mac/ffl_aarch64"
+          SHARE_FILE="/tmp/ffl_aarch64"
+          SHARE_JSON="/tmp/ffl-share.json"
+
+          echo "=== Verify built binary ==="
+
+          if [ ! -x "$FFL_BIN" ]; then
+            echo "ERROR: FFL binary not found or not executable:"
+            echo "$FFL_BIN"
+            exit 1
+          fi
+
+          file "$FFL_BIN"
+          "$FFL_BIN" --version
+
+          echo
+          echo "=== SHA256 ==="
+          shasum -a 256 "$FFL_BIN"
+
+          # Share a byte-for-byte copy instead of the currently running executable itself.
+          cp "$FFL_BIN" "$SHARE_FILE"
+          chmod +x "$SHARE_FILE"
+
+          rm -f "$SHARE_JSON"
+
+          echo
+          echo "=== Starting FFL self-test server ==="
+
+          "$FFL_BIN" "$SHARE_FILE" \
+            --json "$SHARE_JSON" \
+            --max-downloads 1 &
+
+          FFL_PID=$!
+
+          echo "Waiting for FFL to generate download URL..."
+
+          WAIT_COUNT=0
+          while [ ! -s "$SHARE_JSON" ]; do
+            if ! kill -0 "$FFL_PID" 2>/dev/null; then
+              echo "ERROR: FFL terminated before generating a link."
+              wait "$FFL_PID"
+              exit 1
+            fi
+
+            WAIT_COUNT=$((WAIT_COUNT + 1))
+
+            if [ "$WAIT_COUNT" -ge 60 ]; then
+              echo "ERROR: Timed out waiting for download link."
+              kill "$FFL_PID" 2>/dev/null || true
+              wait "$FFL_PID" 2>/dev/null || true
+              exit 1
+            fi
+
+            sleep 1
+          done
+
+          DOWNLOAD_URL="$(
+            python3 - "$SHARE_JSON" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          print(data["link"])
+          PY
+          )"
+
+          echo
+          echo "============================================================"
+          echo "FFL BUILD TEST READY"
+          echo
+          echo "CLICK THIS LINK TO DOWNLOAD THE JUST-BUILT BINARY:"
+          echo
+          echo "$DOWNLOAD_URL"
+          echo
+          echo "Waiting for exactly one successful download..."
+          echo "The build will continue automatically after the download."
+          echo "============================================================"
+          echo
+
+          wait "$FFL_PID"
+
+          echo
+          echo "============================================================"
+          echo "✅ FFL REAL DOWNLOAD TEST PASSED"
+          echo "The newly built binary successfully served one download."
+          echo "============================================================"          
+
     artifacts:
       - $HOME/FFL/FileShare/dist/mac/ffl_*
