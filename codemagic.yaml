@@ -1,0 +1,296 @@
+workflows:
+  ffl-cli-macos:
+    name: FFL CLI ARM64 + x86_64
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+
+    environment:
+      xcode: 16.4
+      groups:
+        - SVN
+
+    scripts:
+      - name: Verify macOS runner
+        script: |
+          set -euo pipefail
+
+          echo "=== macOS ==="
+          sw_vers
+
+          echo "=== Native architecture ==="
+          uname -m
+
+          echo "=== Xcode ==="
+          xcodebuild -version
+
+      - name: Install SVN, Rust and Rosetta
+        script: |
+          set -euo pipefail
+
+          echo "=== SVN ==="
+          if ! command -v svn >/dev/null 2>&1; then
+            brew install subversion
+          fi
+          svn --version --quiet
+
+          echo "=== Rust ==="
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          fi
+
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustup default stable
+          rustup target add aarch64-apple-darwin
+          rustup target add x86_64-apple-darwin
+
+          rustc --version
+          cargo --version
+          rustup show
+
+          echo "=== Rosetta 2 ==="
+          if ! /usr/sbin/pkgutil --pkg-info com.apple.pkg.RosettaUpdateAuto >/dev/null 2>&1; then
+            sudo /usr/sbin/softwareupdate --install-rosetta --agree-to-license
+          else
+            echo "Rosetta package is already installed."
+          fi
+
+          echo "Native uname: $(uname -m)"
+          echo "Translated uname: $(/usr/bin/arch -x86_64 /usr/bin/uname -m)"
+
+          if [ "$(/usr/bin/arch -x86_64 /usr/bin/uname -m)" != "x86_64" ]; then
+            echo "ERROR: Rosetta x86_64 execution is not available"
+            exit 1
+          fi
+
+      - name: Install Miniconda and create fileshare environment
+        script: |
+          set -euo pipefail
+
+          echo "=== Miniconda ARM64 host environment ==="
+          if [ ! -x "$HOME/miniconda3/bin/conda" ]; then
+            curl -fsSL \
+              -o /tmp/Miniconda3.sh \
+              https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-arm64.sh
+
+            bash /tmp/Miniconda3.sh \
+              -b \
+              -p "$HOME/miniconda3"
+          fi
+
+          source "$HOME/miniconda3/etc/profile.d/conda.sh"
+          conda --version
+
+          if ! conda env list | awk '{print $1}' | grep -qx fileshare; then
+            echo "=== Creating fileshare conda environment ==="
+            conda create -y -n fileshare python=3.12
+          fi
+
+          conda activate fileshare
+          python --version
+          python -c 'import platform; print("Python arch:", platform.machine())'
+
+      - name: Checkout private SVN source
+        script: |
+          set -euo pipefail
+
+          FFL_DIR="$HOME/FFL"
+
+          echo "=== Recreate $FFL_DIR ==="
+          rm -rf "$FFL_DIR"
+          mkdir -p "$FFL_DIR"
+
+          echo "=== Checkout FileShareServer ==="
+          svn checkout \
+            "$SVN_FILESHARE_SERVER_URL" \
+            "$FFL_DIR/FileShareServer" \
+            --username "$SVN_USERNAME" \
+            --password "$SVN_PASSWORD" \
+            --non-interactive \
+            --no-auth-cache
+
+          echo "=== Checkout FileShare ==="
+          svn checkout \
+            "$SVN_FILESHARE_URL" \
+            "$FFL_DIR/FileShare" \
+            --username "$SVN_USERNAME" \
+            --password "$SVN_PASSWORD" \
+            --non-interactive \
+            --no-auth-cache
+
+          echo "=== Checkout result ==="
+          test -d "$FFL_DIR/FileShare/.svn"
+          test -d "$FFL_DIR/FileShareServer/.svn"
+          test -f "$FFL_DIR/FileShare/tests/scripts/MacOSBuild.sh"
+
+          echo "FileShare revision:"
+          svn info "$FFL_DIR/FileShare" | grep -E '^(URL|Revision):'
+
+          echo "FileShareServer revision:"
+          svn info "$FFL_DIR/FileShareServer" | grep -E '^(URL|Revision):'
+
+      - name: Build ARM64 and x86_64 CLI with MacOSBuild.sh
+        script: |
+          set -euo pipefail
+
+          export PATH="$HOME/.cargo/bin:$PATH"
+
+          BUILD_SCRIPT="$HOME/FFL/FileShare/tests/scripts/MacOSBuild.sh"
+          chmod +x "$BUILD_SCRIPT"
+
+          echo "=== Running existing build entry point ==="
+          "$BUILD_SCRIPT" cli
+
+          ARM_BIN="$HOME/FFL/FileShare/dist/mac/ffl_aarch64"
+          X86_BIN="$HOME/FFL/FileShare/dist/mac/ffl_x86_64"
+
+          echo "=== CLI artifacts ==="
+          ls -lah "$HOME/FFL/FileShare/dist/mac"
+
+          for bin in "$ARM_BIN" "$X86_BIN"; do
+            if [ ! -x "$bin" ]; then
+              echo "ERROR: CLI artifact missing or not executable: $bin"
+              exit 1
+            fi
+          done
+
+          echo "=== ARM64 binary info ==="
+          file "$ARM_BIN"
+          lipo -info "$ARM_BIN"
+          shasum -a 256 "$ARM_BIN"
+
+          echo "=== x86_64 binary info ==="
+          file "$X86_BIN"
+          lipo -info "$X86_BIN"
+          shasum -a 256 "$X86_BIN"
+
+          echo "=== Native ARM64 startup test ==="
+          "$ARM_BIN" --version
+
+          echo "=== Rosetta x86_64 startup test ==="
+          /usr/bin/arch -x86_64 "$X86_BIN" --version
+
+      - name: Test ARM64 and x86_64 FFL with real downloads
+        script: |
+          set -euo pipefail
+
+          ARM_BIN="$HOME/FFL/FileShare/dist/mac/ffl_aarch64"
+          X86_BIN="$HOME/FFL/FileShare/dist/mac/ffl_x86_64"
+
+          test_real_download() {
+            local label="$1"
+            local arch_mode="$2"
+            local ffl_bin="$3"
+            local test_number="$4"
+
+            local safe_label
+            safe_label="$(echo "$label" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_')"
+            local share_file="/tmp/ffl_${safe_label}"
+            local share_json="/tmp/ffl_share_${safe_label}.json"
+
+            echo
+            echo "============================================================"
+            echo "FFL REAL DOWNLOAD TEST $test_number/2: $label"
+            echo "============================================================"
+
+            if [ ! -x "$ffl_bin" ]; then
+              echo "ERROR: FFL binary not found or not executable: $ffl_bin"
+              exit 1
+            fi
+
+            file "$ffl_bin"
+            shasum -a 256 "$ffl_bin"
+
+            if [ "$arch_mode" = "x86_64" ]; then
+              echo "=== Verify x86_64 process through Rosetta ==="
+              /usr/bin/arch -x86_64 "$ffl_bin" --version
+            else
+              echo "=== Verify native ARM64 process ==="
+              "$ffl_bin" --version
+            fi
+
+            # Share a byte-for-byte copy instead of the running executable itself.
+            cp "$ffl_bin" "$share_file"
+            chmod +x "$share_file"
+            rm -f "$share_json"
+
+            echo "=== Starting $label FFL self-test server ==="
+
+            if [ "$arch_mode" = "x86_64" ]; then
+              /usr/bin/arch -x86_64 "$ffl_bin" "$share_file" \
+                --json "$share_json" \
+                --max-downloads 1 &
+            else
+              "$ffl_bin" "$share_file" \
+                --json "$share_json" \
+                --max-downloads 1 &
+            fi
+
+            local ffl_pid=$!
+            local wait_count=0
+
+            echo "Waiting for FFL to generate download URL..."
+
+            while [ ! -s "$share_json" ]; do
+              if ! kill -0 "$ffl_pid" 2>/dev/null; then
+                echo "ERROR: $label FFL terminated before generating a link."
+                wait "$ffl_pid"
+                exit 1
+              fi
+
+              wait_count=$((wait_count + 1))
+
+              if [ "$wait_count" -ge 60 ]; then
+                echo "ERROR: Timed out waiting for $label download link."
+                kill "$ffl_pid" 2>/dev/null || true
+                wait "$ffl_pid" 2>/dev/null || true
+                exit 1
+              fi
+
+              sleep 1
+            done
+
+            local download_url
+            download_url="$(
+              python3 - "$share_json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          print(data["link"])
+          PY
+            )"
+
+            echo
+            echo "============================================================"
+            echo "FFL $label BUILD TEST READY ($test_number/2)"
+            echo
+            echo "CLICK THIS LINK TO DOWNLOAD THE JUST-BUILT $label BINARY:"
+            echo
+            echo "$download_url"
+            echo
+            echo "Waiting for exactly one successful download..."
+            echo "--max-downloads 1 will stop FFL after the download completes."
+            echo "============================================================"
+            echo
+
+            wait "$ffl_pid"
+
+            echo
+            echo "============================================================"
+            echo "✅ FFL $label REAL DOWNLOAD TEST PASSED"
+            echo "============================================================"
+          }
+
+          test_real_download "ARM64" "arm64" "$ARM_BIN" "1"
+          test_real_download "x86_64" "x86_64" "$X86_BIN" "2"
+
+          echo
+          echo "============================================================"
+          echo "✅ BOTH macOS CLI ARCHITECTURES PASSED"
+          echo "============================================================"
+
+    artifacts:
+      - $HOME/FFL/FileShare/dist/mac/ffl_aarch64
+      - $HOME/FFL/FileShare/dist/mac/ffl_x86_64
