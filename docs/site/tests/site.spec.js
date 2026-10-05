@@ -8,6 +8,7 @@ const languages = {
   zh_hans: { resource: hans, html: "zh-Hans" },
   zh_hant: { resource: hant, html: "zh-Hant" },
 };
+const siteBaseURL = `http://127.0.0.1:${process.env.FFL_SITE_PORT || 4173}/ffl/`;
 
 test("all locales have complete, nonempty resources", () => {
   for (const { resource } of Object.values(languages)) {
@@ -98,9 +99,7 @@ for (const [language, { resource, html }] of Object.entries(languages)) {
     );
     await page.locator("summary").first().click();
     await expect(page.locator("details").first()).toHaveAttribute("open", "");
-    expect(
-      requests.every((url) => url.startsWith("http://127.0.0.1:4173/ffl/")),
-    ).toBe(true);
+    expect(requests.every((url) => url.startsWith(siteBaseURL))).toBe(true);
     expect(errors).toEqual([]);
   });
 }
@@ -134,7 +133,7 @@ test("browser language, aliases, invalid query, and blocked storage", async ({
       throw new Error("disabled");
     };
   });
-  await page.goto("http://127.0.0.1:4173/ffl/?lang=invalid");
+  await page.goto(`${siteBaseURL}?lang=invalid`);
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-Hant");
   await page.goto("?lang=zh-CN");
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-Hans");
@@ -219,7 +218,7 @@ test("English content and install links remain useful without JavaScript", async
 }) => {
   const context = await browser.newContext({ javaScriptEnabled: false });
   const page = await context.newPage();
-  await page.goto("http://127.0.0.1:4173/ffl/");
+  await page.goto(siteBaseURL);
   await expect(page.locator("h1")).toContainText("Transfer for");
   await expect(page.locator("#install-command")).toContainText(
     "https://fastfilelink.com/install.sh",

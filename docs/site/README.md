@@ -16,7 +16,7 @@ npm run build
 npm run preview
 ```
 
-The build uses relative asset URLs (`--base=./`), so the same output works at a domain root, a GitHub project URL such as `https://nuwainfo.github.io/ffl/`, or another subdirectory. Serve the output over HTTP(S), not `file://`.
+The build uses relative asset URLs (`--base=./`), so the same output works at a domain root, a GitHub project URL such as `https://nuwainfo.github.io/ffl/`, or another subdirectory. Serve the output over HTTP(S), not `file://`. For quick source review, `python -m http.server` also works after `npm ci`: the source page includes an import map for its installed i18next dependency. Deploy `dist/`, not `node_modules`.
 
 ## Deploy to GitHub Pages
 
@@ -41,7 +41,7 @@ npx playwright install chromium
 npm test
 ```
 
-Tests build the production site and serve it under `/ffl/`, exercising all three languages, mobile layouts, command selection/copying, fallback behavior, and local links. On a machine with Microsoft Edge installed, use `FFL_SITE_BROWSER=msedge` to avoid a browser download. For PowerShell: `$env:FFL_SITE_BROWSER='msedge'; npm test`.
+Tests build the production site and serve it under `/ffl/`, exercising all three languages, mobile layouts, command selection/copying, fallback behavior, and local links. On a machine with Microsoft Edge installed, use `FFL_SITE_BROWSER=msedge` to avoid a browser download. For PowerShell: `$env:FFL_SITE_BROWSER='msedge'; npm test`. If port 4173 is already used, set `FFL_SITE_PORT`, for example `$env:FFL_SITE_PORT=4174; npm test`.
 
 ## Content basis and positioning
 

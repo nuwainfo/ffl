@@ -1,7 +1,7 @@
 import i18next from "i18next";
-import en from "./locales/en.json";
-import zh_hans from "./locales/zh_hans.json";
-import zh_hant from "./locales/zh_hant.json";
+import en from "./locales/en.json" with { type: "json" };
+import zh_hans from "./locales/zh_hans.json" with { type: "json" };
+import zh_hant from "./locales/zh_hant.json" with { type: "json" };
 
 const resources = { en, zh_hans, zh_hant };
 const htmlLanguages = { en: "en", zh_hans: "zh-Hans", zh_hant: "zh-Hant" };
