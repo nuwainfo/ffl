@@ -1,61 +1,88 @@
 # ffl CLI website
 
-A static, responsive site positioning ffl as **Transfer for humans and agents**.
-Source and build output stay under `docs/site`; the site does not use the CLI's download-page templates.
+A static, responsive site for **Transfer for humans and agents**, built around the README's
+"digital courier" idea: a file handoff is a parcel with a waybill. It is published to GitHub Pages
+automatically; see [Deploy](#deploy).
 
-## Develop and build
+## What's on the page
 
-Requires Node.js 22.12+ or 24 and npm.
+- **Explainer film.** A 40-second film drawn in SVG and driven by one GSAP timeline
+  (`src/film.js`). It plays on the page with chapters, a pause button, a stage title that opens each
+  chapter, a caption, and a text transcript, and it is translated like the rest of the page. The
+  same timeline exports to MP4.
+- **Identity.** A routing-ultramarine field at the top, white label stock, ballpoint-ink text, and
+  a stamp red kept for "Delivered". Archivo (variable width) and Martian Mono, bundled locally via
+  Fontsource; no CDN, external fonts, analytics, or API keys.
+- **Viewer choices.** Theme (match system, light, dark) and page color (blue, green, violet,
+  graphite). Both are remembered in the browser when storage is available and applied before first
+  paint.
+- **Honest copy.** Caveats stay next to their claims: opt-in E2EE, visible metadata, the sender
+  must stay online, LAN links use HTTP, receipts need an account.
+
+## Film script
+
+| Chapter | Time | What happens |
+| --- | --- | --- |
+| The detour | 0–6.5s | Upload, wait, share, download, clean up through a cloud bucket. Crossed out. |
+| One command | 6.5–13s | `ffl ./checkpoint --e2ee` prints a waybill: link, contents, route, encryption. |
+| To a person | 13–19.5s | The link opens in a browser; WebRTC transfer; checksum verified. |
+| To an agent | 19.5–26.5s | `handoff.json` passes the link to worker-b; `ffl download --resume`; real hook event names; the job continues. |
+| Your route | 26.5–33.5s | Direct path blocked; HTTPS relay carries an encrypted parcel. |
+| Delivered | 33.5–40s | The stamp lands; end card with the install command. |
+
+With `prefers-reduced-motion`, the film doesn't autoplay; it shows the "Delivered" frame until
+someone presses Play.
+
+## Develop, test, export
+
+Requires Node.js 22.12+ or 24.
 
 ```sh
 cd docs/site
 npm ci
 npm run dev
-# Production output: docs/site/dist
-npm run build
+npm run build          # -> dist/, relative asset URLs, deploy anywhere
 npm run preview
 ```
 
-The build uses relative asset URLs (`--base=./`), so the same output works at a domain root, a GitHub project URL such as `https://nuwainfo.github.io/ffl/`, or another subdirectory. Serve the output over HTTP(S), not `file://`. For quick source review, `python -m http.server` also works after `npm ci`: the source page includes an import map for its installed i18next dependency. Deploy `dist/`, not `node_modules`.
-
-## Deploy to GitHub Pages
-
-1. In the repository's **Settings → Pages**, select **GitHub Actions** as the source.
-2. Run **Deploy CLI site to GitHub Pages** from the Actions tab.
-3. The workflow builds and publishes only `docs/site/dist`. Its deployment output gives the actual URL.
-
-The workflow is manual so commits do not automatically replace an existing Pages site. No deployment has to be performed to develop or review this site. You can also upload the contents of `dist/` to any static host.
-
-## Languages and behavior
-
-- i18next resources: `src/locales/en.json`, `zh_hans.json`, `zh_hant.json`.
-- Language precedence: `?lang=` → stored choice → browser language → English. Accepts aliases such as `zh-TW` and `zh-CN`; HTML uses standard `zh-Hant` / `zh-Hans` tags.
-- The switcher updates content, accessible labels, page title, description, and share metadata. Choice persists when browser storage is available.
-- All runtime assets and translations are bundled locally. No CDN scripts, external fonts, analytics, or API keys.
-- Static English content and links remain usable without JavaScript. Interactive examples, copy buttons, and language switching need JavaScript.
-
-## Verify
+For quick source review without Vite, `python -m http.server` also works after `npm ci`: the page
+includes an import map for its installed dependencies.
 
 ```sh
 npx playwright install chromium
 npm test
+# Windows with Edge installed: $env:FFL_SITE_BROWSER='msedge'; npm test
+# Port 4174 busy: $env:FFL_SITE_PORT=4175; npm test
 ```
 
-Tests build the production site and serve it under `/ffl/`, exercising all three languages, mobile layouts, command selection/copying, fallback behavior, and local links. On a machine with Microsoft Edge installed, use `FFL_SITE_BROWSER=msedge` to avoid a browser download. For PowerShell: `$env:FFL_SITE_BROWSER='msedge'; npm test`. If port 4173 is already used, set `FFL_SITE_PORT`, for example `$env:FFL_SITE_PORT=4174; npm test`.
+Tests build the production site and serve it under `/ffl/`, covering all three languages, layouts
+from 1440px to 320px, the film controls and stage titles, theme and color choices, tabs, and copy
+buttons.
 
-## Content basis and positioning
+Export the film (requires `ffmpeg` on PATH):
 
-The promise is a practical handoff: a person opens a browser link; an agent can fetch the same artifact through the CLI or companion MCP server. Local models, generated outputs, and CI batches do not need cloud-storage staging. ffl remains the transfer engine, while the caller owns orchestration and process lifetime.
+```sh
+npm run build
+npm run film -- --lang en,zh_hant,zh_hans          # film-out/ffl-explainer-<lang>.mp4
+npm run film -- --lang en --theme dark --fps 60
+```
 
-Claims were checked against source and releases through v4.2.2:
+The exporter loads `?film=record`, seeks the timeline frame by frame through `window.fflFilm`, and
+pipes PNG frames to ffmpeg (H.264, 1920×1080), about a minute per language at 30 fps. Output is
+ignored by git; upload the MP4 to a release or the README.
 
-| Claim                                                          | Source of truth                                                                                                                                                                                                     |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Native TCP/QUIC, browser WebRTC, fallback/resume               | `bases/P2P.py`, `bases/Download.py`, `bases/WebRTC.py`; [v4.2.2](https://github.com/nuwainfo/ffl/releases/tag/v4.2.2)                                                                                               |
-| Explicit LAN mode; HTTP link, not default behavior             | `bases/tunnels/LAN.py`, `bases/Settings.py`, `addons/Tunnels.py`; [v4.2.1](https://github.com/nuwainfo/ffl/releases/tag/v4.2.1)                                                                                     |
-| Only new, settled direct child folders; append-only collection | `bases/Collection.py`, `bases/Share.py`, `CollectionDownloadFollower` in `bases/Download.py`; [v4.2.0](https://github.com/nuwainfo/ffl/releases/tag/v4.2.0)                                                         |
-| JSON output, hooks, VFS                                        | `bases/Share.py`, `bases/Hook.py`, `bases/VFS.py`; [embedded guide](https://github.com/nuwainfo/ffl/wiki/Embedded-Mode-%26-Event-Hooks), [VFS guide](https://github.com/nuwainfo/ffl/wiki/VFS-Implementation-Guide) |
-| MCP is a companion integration                                 | [ffl-mcp](https://github.com/nuwainfo/ffl-mcp)                                                                                                                                                                      |
-| Install commands and build platforms                           | `dist/install.sh`, `dist/install.ps1`, release assets                                                                                                                                                               |
+## Languages
 
-Avoid absolute speed, anonymity, unlimited relay, or guaranteed-delivery claims. E2EE is opt-in, metadata remains visible, and ordinary internet sharing may use signaling/relay infrastructure. Direct sharing requires sender availability. `--upload` is separate and requires an account and addon. The site distinguishes these conditions near the relevant benefit, not just in the FAQ.
+`?lang=` → stored choice → browser language → English. Accepts aliases such as `zh-TW` and
+`zh-CN`; HTML uses `zh-Hant` / `zh-Hans`. Resources are in `src/locales/{en,zh_hans,zh_hant}.json`,
+including every word inside the film.
+
+## Deploy
+
+`.github/workflows/cli-site-pages.yml` runs on every push to `main` that touches `docs/site/`
+(and can be started by hand from the Actions tab). It installs dependencies, runs the Playwright
+tests, builds, and publishes `docs/site/dist` to GitHub Pages. A failing test stops the deploy.
+
+One-time setup: in the repository's **Settings → Pages**, set **Source** to **GitHub Actions**.
+The site is then served at `https://<owner>.github.io/<repo>/` (for this repository,
+`https://nuwainfo.github.io/ffl/`).

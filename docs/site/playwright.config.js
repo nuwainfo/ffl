@@ -1,6 +1,6 @@
 import { defineConfig } from "@playwright/test";
 
-const sitePort = Number(process.env.FFL_SITE_PORT || 4173);
+const sitePort = Number(process.env.FFL_SITE_PORT || 4174);
 const baseURL = `http://127.0.0.1:${sitePort}/ffl/`;
 
 export default defineConfig({
