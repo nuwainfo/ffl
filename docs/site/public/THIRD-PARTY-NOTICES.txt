@@ -1,4 +1,5 @@
-This site's browser bundle includes i18next and Vite's module-preload helper.
+This site's browser bundle includes i18next, GSAP, the Archivo and Martian Mono fonts,
+and Vite's module-preload helper.
 
 i18next: Copyright (c) 2011-present i18next
 Vite: Copyright (c) 2019-present, VoidZero Inc. and Vite contributors
@@ -22,3 +23,13 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+GSAP 3.15.0 (gsap, MotionPathPlugin): Copyright (c) 2008-present, GreenSock / Webflow.
+Distributed under the GSAP Standard "no charge" license:
+https://gsap.com/standard-license
+
+Archivo: Copyright 2020 The Archivo Project Authors (https://github.com/Omnibus-Type/Archivo)
+Martian Mono: Copyright 2021 The Martian Mono Project Authors (https://github.com/evilmartians/mono)
+Both fonts are distributed under the SIL Open Font License, Version 1.1:
+https://openfontlicense.org
+Font files are bundled from the @fontsource-variable packages.

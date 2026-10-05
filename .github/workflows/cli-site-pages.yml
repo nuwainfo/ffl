@@ -1,7 +1,13 @@
 name: Deploy CLI site to GitHub Pages
 
-# Opt-in deployment: enable Pages (GitHub Actions source), then run this workflow.
+# Publishes docs/site on every push to main that changes it; can also be run by hand.
+# One-time setup: Settings -> Pages -> Source: GitHub Actions.
 on:
+  push:
+    branches: [main]
+    paths:
+      - docs/site/**
+      - .github/workflows/cli-site-pages.yml
   workflow_dispatch:
 
 permissions:
@@ -14,6 +20,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs/site
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,9 +31,15 @@ jobs:
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
       - run: npm ci
-        working-directory: docs/site
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-results
+          path: docs/site/test-results
+          retention-days: 7
       - run: npm run build
-        working-directory: docs/site
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs/site/dist
