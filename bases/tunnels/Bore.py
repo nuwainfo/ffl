@@ -26,9 +26,6 @@ import asyncio
 import concurrent.futures
 import json
 import os
-import socket
-import ssl
-import threading
 import traceback
 import uuid
 
@@ -39,7 +36,7 @@ from typing import Optional
 
 from bases.Kernel import getLogger
 
-from . import Socks5ProxySupport, TunnelCandidate
+from . import TunnelCandidate, TunnelDialer, TunnelSSLContext
 
 # Configure logging
 logger = getLogger(__name__)
@@ -54,32 +51,6 @@ DEFAULT_CONTROL_IDLE_TIMEOUT = int(os.getenv("BORE_CONTROL_IDLE_TIMEOUT", "90"))
 
 BORE_DEBUG = os.getenv('BORE_DEBUG', False)
 BORE_VERBOSE = os.getenv('BORE_VERBOSE', False)
-
-class _SSLContextCache:
-    # ssl.create_default_context() loads the system trust store on first call.
-    # Cost varies by platform (~200ms Windows cert store, ~50ms Linux/macOS CA bundle).
-    # Caching it here means the cost is paid once per process, and warmSSLContext()
-    # can pay it early from a background thread.
-    _ctx = None
-    _lock = threading.Lock()
-
-    @classmethod
-    def get(cls):
-        if cls._ctx is None:
-            with cls._lock:
-                if cls._ctx is None:
-                    cls._ctx = ssl.create_default_context()
-        return cls._ctx
-
-    @classmethod
-    def warm(cls):
-        cls.get()
-
-
-def warmSSLContext():
-    """Pre-create the shared SSL context. Call from a background thread to pay the cost early."""
-    _SSLContextCache.warm()
-
 
 
 
@@ -185,7 +156,7 @@ class ControlConnectionStaleError(ConnectionError):
     """Raised when the control channel stops delivering frames for too long."""
 
 
-class BoreClient(Socks5ProxySupport):
+class BoreClient:
     """Python implementation of the bore client."""
 
     def __init__(
@@ -219,6 +190,7 @@ class BoreClient(Socks5ProxySupport):
         self.connectionLock = asyncio.Lock() # Add a lock for connection handling
         self.runningTasks = set() # Task management per instance
         self.proxyConfig = proxyConfig # Store proxy configuration
+        self.dialer = TunnelDialer.fromProxyConfig(proxyConfig)
         self.tokenProvider = tokenProvider
         self.controlIdleTimeout = max(0, DEFAULT_CONTROL_IDLE_TIMEOUT)
 
@@ -239,7 +211,7 @@ class BoreClient(Socks5ProxySupport):
         self._skipInitialRefresh = self.secret is not None
 
         # Use the shared SSL context (created once; Windows cert store load ~200ms).
-        self._sslCtx = _SSLContextCache.get()
+        self._sslCtx = TunnelSSLContext.shared()
 
         # Pre-connected TCP socket injected by the prefetch path to skip the TCP
         # RTT inside connect().  Consumed once; reconnects do a fresh TCP connect.
@@ -356,17 +328,13 @@ class BoreClient(Socks5ProxySupport):
 
     @classmethod
     def openTcpConnectionBlocking(cls, host, port, proxyConfig=None, timeout=NETWORK_TIMEOUT):
-        """Establish a TCP connection (optionally via SOCKS5 proxy) in blocking mode.
+        """Establish a TCP connection (directly or via the configured proxy) in blocking mode.
 
         Returns a socket ready for asyncio adoption via open_connection(sock=..., ssl=...).
         Returns None on failure so callers can fall back to a normal connect().
         """
         try:
-            proxy = cls.resolveSocks5Proxy(proxyConfig)
-            if proxy:
-                return cls._connectViaSocks5Blocking(*proxy, host, port, timeout)
-
-            return socket.create_connection((host, port), timeout=timeout)
+            return TunnelDialer.fromProxyConfig(proxyConfig).dial(host, port, timeout)
         except Exception as e:
             logger.debug(f"TCP pre-connect to {host}:{port} failed: {e}")
             return None
@@ -375,84 +343,11 @@ class BoreClient(Socks5ProxySupport):
         """Inject a pre-connected TCP socket to skip the TCP RTT in connect()."""
         self._preTcpSocket = sock
 
-    @classmethod
-    def _connectViaSocks5Blocking(cls, proxyHost, proxyPort, destHost, destPort, timeout):
-        """
-        Establish connection to destHost:destPort via SOCKS5 proxy using blocking I/O.
-        This function runs in a thread executor to avoid blocking the event loop.
-
-        Args:
-            proxyHost: SOCKS5 proxy host
-            proxyPort: SOCKS5 proxy port
-            destHost: Destination host to connect to
-            destPort: Destination port to connect to
-            timeout: Connection timeout in seconds
-
-        Returns a non-blocking socket connected to destHost:destPort.
-        Raises ConnectionError (an OSError subclass) if the SOCKS5 handshake fails.
-        """
-        logger.info(f"Connecting to {destHost}:{destPort} via SOCKS5 proxy {proxyHost}:{proxyPort}")
-        sock = cls._connectSocks5(proxyHost, proxyPort, destHost, destPort, timeout, nonBlocking=True)
-        logger.debug("SOCKS5 connection established to %s:%s", destHost, destPort)
-        return sock
-
-    async def _openTlsConnection(self, host, port, sslCtx, serverHostname=None, timeout=None):
-        """
-        Establish TLS connection to host:port, optionally via SOCKS5 proxy.
-
-        Priority order for proxy configuration:
-        1. self.proxyConfig (from --proxy CLI argument)
-        2. FFL_TUNNEL_SOCKS5 environment variable
-        3. No proxy (direct connection)
-
-        Returns (reader, writer) tuple compatible with asyncio streams.
-        """
-        proxy = self._getSocks5Proxy()
-        proxyHost, proxyPort = proxy if proxy else (None, None)
-        if proxy:
-            logger.debug("Using SOCKS5 proxy: %s:%s", proxyHost, proxyPort)
-
-        if not proxyHost:
-            # No proxy configured - use standard asyncio connection
-            return await asyncio.wait_for(
-                asyncio.open_connection(
-                    host,
-                    port,
-                    ssl=sslCtx,
-                    server_hostname=serverHostname,
-                ),
-                timeout,
-            )
-
-        # SOCKS5 proxy configured - establish connection via proxy
-        loop = asyncio.get_running_loop()
-
-        # Run blocking SOCKS5 handshake in thread pool to avoid blocking event loop
-        sock = await loop.run_in_executor(
-            None,
-            self._connectViaSocks5Blocking,
-            proxyHost,
-            proxyPort,
-            host,
-            port,
-            timeout,
-        )
-
-        # Wrap existing socket with TLS and create asyncio streams
-        return await asyncio.wait_for(
-            asyncio.open_connection(
-                sock=sock,
-                ssl=sslCtx,
-                server_hostname=serverHostname,
-            ),
-            timeout,
-        )
-
     async def connect(self):
         """
         Establish secure control channel via TLS to 0.<domain>:443
         For security, all connections use HTTPS/TLS encryption.
-        Optionally uses SOCKS5 proxy if FFL_TUNNEL_SOCKS5 is configured.
+        Goes through the configured proxy, if any (see TunnelDialer).
         """
         self.lastConnectError = None
         try:
@@ -469,7 +364,7 @@ class BoreClient(Socks5ProxySupport):
 
             logger.info(f"Connecting to {self.controlHost}:{self.controlPort}...")
 
-            # 1. Establish secure TLS connection (always HTTPS, optionally via SOCKS5).
+            # 1. Establish secure TLS connection (always HTTPS, optionally via a proxy).
             #    When a pre-connected TCP socket was injected by the prefetch path,
             #    adopt it directly (skipping the TCP RTT) and only do the TLS handshake.
             try:
@@ -486,7 +381,7 @@ class BoreClient(Socks5ProxySupport):
                     )
                     logger.debug("Using pre-connected TCP socket (TCP RTT already paid)")
                 else:
-                    reader, writer = await self._openTlsConnection(
+                    reader, writer = await self.dialer.openStream(
                         self.controlHost,
                         self.controlPort,
                         self._sslCtx,
@@ -604,9 +499,9 @@ class BoreClient(Socks5ProxySupport):
             port = self._getConnectionPort()
             logger.info(f"Data-channel {connectionId}: connecting to {host}:{port}")
 
-            # 1. Establish secure data channel connection (always HTTPS, optionally via SOCKS5)
+            # 1. Establish secure data channel connection (always HTTPS, optionally via a proxy)
             try:
-                remoteReader, remoteWriter = await self._openTlsConnection(
+                remoteReader, remoteWriter = await self.dialer.openStream(
                     host,
                     port,
                     self._sslCtx,
@@ -823,7 +718,7 @@ class BoreTunnelCandidate(TunnelCandidate):
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
             tokenFuture = executor.submit(tokenGetter, domain=self.domain)
             tcpFuture = executor.submit(BoreClient.openTcpConnectionBlocking, self.probeHost, HTTPS_PORT, proxyConfig)
-            executor.submit(warmSSLContext)
+            executor.submit(TunnelSSLContext.warm)
 
         self.secret = tokenFuture.result()
         self.preSock = tcpFuture.result()

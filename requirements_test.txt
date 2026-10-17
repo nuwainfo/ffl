@@ -12,6 +12,9 @@ pywinauto
 # CorePatched
 requests_mock
 
+# ProxyTestServer (runs mitmproxy in an isolated uv tool environment)
+uv
+
 # TestServer
 flask
 pyseto

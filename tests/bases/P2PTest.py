@@ -391,6 +391,35 @@ class P2PTest(FastFileLinkTestBase):
         )
         self._verifyDownloadedFile(outputPath)
 
+    def testP2PQUICPreflightFailureFallsBackToWebRTC(self):
+        """A failure while preparing the QUIC download (metadata, output path,
+        resume lookup), before any byte is received, must fall back like any
+        other connection failure instead of aborting the whole download."""
+        shareLink = self._startFastFileLink(p2p=True, timeout=60)
+
+        rawBytes, stderrOutput = self._downloadWithCore(
+            shareLink,
+            stdoutMode=True,
+            extraEnvVars={
+                'P2P_TRANSPORT_PREFERENCE': 'udp',
+                'P2P_CLI_SIMULATE_QUIC_PREFLIGHT_FAILURE': 'True',
+            },
+        )
+
+        outputPath = os.path.join(self.tempDir, 'p2p-quic-preflight-fallback.bin')
+        with open(outputPath, 'wb') as f:
+            f.write(rawBytes)
+
+        self.assertIn(
+            'Using P2P UDP/QUIC download...', stderrOutput,
+            f'Download did not attempt the direct P2P UDP/QUIC path first:\n{stderrOutput}',
+        )
+        self.assertIn(
+            'Attempting WebRTC download...', stderrOutput,
+            f'No bytes were written yet, so WebRTC should be tried next:\n{stderrOutput}',
+        )
+        self._verifyDownloadedFile(outputPath)
+
     def testDisabledFallbackPreventsHTTPDownload(self):
         context = {
             'urlInfo': SimpleNamespace(isGenericURL=False, supportsWebRTC=True),

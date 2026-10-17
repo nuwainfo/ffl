@@ -60,7 +60,7 @@ from typing import Optional
 from bases.Kernel import getLogger
 from bases.Utils import ENABLE_PY312_WORKAROUND
 
-from . import _receiveExactly, Socks5ProxySupport, TunnelCandidate
+from . import SocketReader, TunnelCandidate, TunnelDialer, TunnelSSLContext
 
 
 logger = getLogger(__name__)
@@ -1277,7 +1277,7 @@ class _TunnelLane(_HeartbeatedSocket):
                 logger.debug('Failed to close local connection during Web tunnel lane cleanup: %s', e)
 
 
-class WebTunnelClient(_HeartbeatedSocket, Socks5ProxySupport):
+class WebTunnelClient(_HeartbeatedSocket):
     """Owns the control connection and the pool of data lanes relaying a
     localhost HTTP server through the Web tunnel relay.
 
@@ -1383,6 +1383,7 @@ class WebTunnelClient(_HeartbeatedSocket, Socks5ProxySupport):
         self.chunkSize = min(chunkSize or self._getChunkSize(), self._MAX_FRAME_DATA)
         self.firstDataSize = self._getFirstDataSize(firstDataSize)
         self.proxyConfig = proxyConfig
+        self.dialer = TunnelDialer.fromProxyConfig(proxyConfig)
         self.remoteHost = urllib.parse.urlparse(self.agentURL).hostname or 'Web'
         self.laneCount = self._getLaneCount(laneCount)
         
@@ -1432,17 +1433,6 @@ class WebTunnelClient(_HeartbeatedSocket, Socks5ProxySupport):
             localPathPrefix = localPathPrefix.rstrip('/') or '/'
             
         return localPathPrefix
-
-    @staticmethod
-    def _receiveHTTPHeaders(sock):
-        data = bytearray()
-        while b'\r\n\r\n' not in data:
-            if len(data) > 64 * 1024:
-                raise ConnectionError('Web tunnel WebSocket upgrade response headers are too large')
-
-            data.extend(_receiveExactly(sock, 1))
-
-        return bytes(data[:-4])
 
     @staticmethod
     def _requestHeaderValue(requestData, name):
@@ -1718,7 +1708,7 @@ class WebTunnelClient(_HeartbeatedSocket, Socks5ProxySupport):
             )
 
             rawSocket.sendall(request.encode('ascii'))
-            responseHead = self._receiveHTTPHeaders(rawSocket)
+            responseHead = SocketReader(rawSocket).readHTTPHead()
             statusLine, *headerLines = responseHead.decode('iso-8859-1').split('\r\n')
 
             if not statusLine.startswith('HTTP/') or ' 101 ' not in f' {statusLine} ':
@@ -1744,22 +1734,20 @@ class WebTunnelClient(_HeartbeatedSocket, Socks5ProxySupport):
 
     def _connectSocket(self, parsedURL, timeout):
         port = parsedURL.port or http.client.HTTPS_PORT
-        proxy = self._getSocks5Proxy()
-        rawSocket = self._connectSocks5(*proxy, parsedURL.hostname, port, timeout) if proxy else socket.create_connection(
-            (parsedURL.hostname, port), timeout=timeout
-        )
-        context = ssl.create_default_context()
+        rawSocket = self.dialer.dial(parsedURL.hostname, port, timeout)
+
+        # Same workaround bases.Utils.StallResilientAdapter applies to the
+        # requests-based upload/download path: Python 3.12 + OpenSSL 3.x has a
+        # documented SSLEOFError/stall issue specific to TLS 1.3, and this
+        # connection -- one per lane, held open and read from for as long as
+        # the lane lives -- is exactly the kind of long-lived TLS connection
+        # that issue affects. Forcing TLS 1.2 avoids it entirely; this
+        # control/lane WebSocket has no other reason to require 1.3.
+        pinnedVersion = None
         if sys.version_info >= (3, 12) and ENABLE_PY312_WORKAROUND:
-            # Same workaround bases.Utils.StallResilientAdapter applies to
-            # the requests-based upload/download path: Python 3.12 +
-            # OpenSSL 3.x has a documented SSLEOFError/stall issue specific
-            # to TLS 1.3, and this connection -- one per lane, held open and
-            # read from for as long as the lane lives -- is exactly the kind
-            # of long-lived TLS connection that issue affects. Forcing TLS
-            # 1.2 avoids it entirely; this control/lane WebSocket has no
-            # other reason to require 1.3.
-            context.minimum_version = ssl.TLSVersion.TLSv1_2
-            context.maximum_version = ssl.TLSVersion.TLSv1_2
+            pinnedVersion = ssl.TLSVersion.TLSv1_2
+
+        context = TunnelSSLContext.shared(pinnedVersion)
         return context.wrap_socket(rawSocket, server_hostname=parsedURL.hostname)
 
     async def listen(self):

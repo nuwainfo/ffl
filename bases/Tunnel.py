@@ -30,7 +30,7 @@ import requests
 
 from bases.Kernel import getLogger, FFLEvent
 from bases.Settings import NetworkPolicy, SettingsGetter
-from bases.tunnels import TunnelCandidate, createTunnelClient, resolveTunnelCandidate
+from bases.tunnels import TunnelDialer, createTunnelClient, resolveTunnelCandidate
 
 logger = getLogger(__name__)
 
@@ -220,11 +220,11 @@ class TunnelRunner:
         this baseline implementation is only used when no such addon is
         available, and defaults to bore.
         """
-        return resolveTunnelCandidate(tunnelType=self.forcedTunnelType)
+        return resolveTunnelCandidate(tunnelType=self.forcedTunnelType, proxyConfig=self.proxyConfig)
 
     def matchesForcedType(self, candidate):
         """Whether `candidate` is of the forced tunnel type (always true when none is forced)."""
-        return self.forcedTunnelType in (None, TunnelCandidate.resolveType(candidate.domain, type=candidate.type))
+        return self.forcedTunnelType in (None, candidate.resolvedType)
 
     def _getResolvedTunnel(self):
         if self._resolved is None:
@@ -254,8 +254,7 @@ class TunnelRunner:
     @property
     def resolvedType(self):
         """The type ('bore', 'web', 'lan', ...) of the tunnel this runner resolved."""
-        resolved = self._getResolvedTunnel()
-        return TunnelCandidate.resolveType(resolved.domain, type=resolved.type)
+        return self._getResolvedTunnel().resolvedType
 
     @property
     def networkPolicy(self):
@@ -273,26 +272,9 @@ class TunnelRunner:
         Get proxy information for display purposes
 
         Returns:
-            str: Proxy info string (e.g., "socks5h://127.0.0.1:9150") or None if no proxy
+            str: Proxy URL without its password (e.g., "socks5h://127.0.0.1:9150") or None if no proxy
         """
-        # Check proxyConfig from --proxy argument (highest priority)
-        if self.proxyConfig and self.proxyConfig['type'] == 'socks5':
-            username = self.proxyConfig.get('username')
-            protocol = self.proxyConfig['protocol']
-            if username:
-                # Don't show password in output
-                host = self.proxyConfig['host']
-                port = self.proxyConfig['port']
-                return f"{protocol}://{username}@{host}:{port}"
-            else:
-                return f"{protocol}://{self.proxyConfig['host']}:{self.proxyConfig['port']}"
-
-        # Check FFL_TUNNEL_SOCKS5 environment variable (fallback)
-        socks5Env = os.environ.get('FFL_TUNNEL_SOCKS5')
-        if socks5Env:
-            return f"socks5h://{socks5Env} (from FFL_TUNNEL_SOCKS5)"
-
-        return None
+        return TunnelDialer.fromProxyConfig(self.proxyConfig).displayURL
 
     def createClient(self, port, uid=None, **kwargs):
         """

@@ -39,7 +39,7 @@ from unittest import mock
 import requests
 
 from bases.Tunnel import AsyncTunnelThread, TunnelRunner, fetchTunnelToken # isort:skip
-from bases.tunnels import TunnelCandidate
+from bases.tunnels import Socks5ProxyDialer, TunnelCandidate, TunnelSSLContext
 from bases.tunnels.Web import (
     WebTunnelCandidate, WebTunnelClient, WebTunnelConfigurationError,
     _HeartbeatedSocket, _LaneRequestState, _TunnelLane, _WebSocketConnection,
@@ -59,6 +59,7 @@ class _FakeSSLContext:
         self.minimum_version = None
         self.maximum_version = None
         self.wrap_socket = mock.Mock(return_value=mock.Mock())
+        self.load_verify_locations = mock.Mock() # CA bundles named by the environment (TunnelSSLContext)
 
 
 class _FakeConnection:
@@ -163,7 +164,7 @@ def _mockedWebSocketUpgradeHandshake(client):
     rawSocket = mock.Mock()
     with mock.patch.object(client, '_connectSocket', return_value=rawSocket), \
          mock.patch('bases.tunnels.Web.secrets.token_bytes', return_value=b'0' * 16), \
-         mock.patch.object(client, '_receiveHTTPHeaders', return_value=(
+         mock.patch('bases.tunnels.Web.SocketReader.readHTTPHead', return_value=(
              f'HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Accept: {accept}'
          ).encode('ascii')):
         yield rawSocket
@@ -260,14 +261,16 @@ class WebTunnelConfigurationTest(unittest.TestCase):
             client = TunnelRunner(1024, proxyConfig=proxyConfig).createClient(8080, uid='share-id')
 
         self.assertEqual(proxyConfig, client.proxyConfig)
-        self.assertEqual(('127.0.0.1', 9150), client._getSocks5Proxy())
+        self.assertIsInstance(client.dialer, Socks5ProxyDialer)
+        self.assertEqual(('127.0.0.1', 9150), (client.dialer.host, client.dialer.port))
 
     def testWebTypeUsesSocksEnvironmentFallback(self):
         with mock.patch.dict(os.environ, {
             'FFL_TUNNEL_SOCKS5': '127.0.0.1:9050',
         }, clear=False):
             client = _newClient()
-            self.assertEqual(('127.0.0.1', 9050), client._getSocks5Proxy())
+            self.assertIsInstance(client.dialer, Socks5ProxyDialer)
+            self.assertEqual(('127.0.0.1', 9050), (client.dialer.host, client.dialer.port))
 
     def testRequestHeaderFilteringRemovesHopByHopAndContentLength(self):
         client = _newClient()
@@ -358,6 +361,7 @@ class WebTunnelRelayTest(unittest.TestCase):
 
         with mock.patch('bases.tunnels.Web.socket.create_connection', return_value=rawSocket), \
              mock.patch('bases.tunnels.Web.ssl.create_default_context', return_value=fakeContext), \
+             mock.patch.object(TunnelSSLContext, '_shared', {}), \
              mock.patch('bases.tunnels.Web.sys.version_info', (3, 12, 0)), \
              mock.patch('bases.tunnels.Web.ENABLE_PY312_WORKAROUND', True):
             client._connectSocket(parsedURL, 5)
@@ -374,12 +378,27 @@ class WebTunnelRelayTest(unittest.TestCase):
 
         with mock.patch('bases.tunnels.Web.socket.create_connection', return_value=rawSocket), \
              mock.patch('bases.tunnels.Web.ssl.create_default_context', return_value=fakeContext), \
+             mock.patch.object(TunnelSSLContext, '_shared', {}), \
              mock.patch('bases.tunnels.Web.sys.version_info', (3, 12, 0)), \
              mock.patch('bases.tunnels.Web.ENABLE_PY312_WORKAROUND', False):
             client._connectSocket(parsedURL, 5)
 
         self.assertIsNone(fakeContext.minimum_version)
         self.assertIsNone(fakeContext.maximum_version)
+
+    def testConnectSocketReusesOneTLSContextAcrossConnections(self):
+        """Every control and lane connection shares one context: loading the
+        trust store and CA bundles is paid once per process, not per lane."""
+        client = _newClient()
+        parsedURL = urllib.parse.urlsplit(client.agentURL)
+
+        with mock.patch('bases.tunnels.Web.socket.create_connection', return_value=mock.Mock()), \
+             mock.patch('bases.tunnels.Web.ssl.create_default_context', return_value=_FakeSSLContext()) as createContext, \
+             mock.patch.object(TunnelSSLContext, '_shared', {}):
+            for _connection in range(3):
+                client._connectSocket(parsedURL, 5)
+
+        self.assertEqual(1, createContext.call_count)
 
     def testWebSocketUpgradePerformsHandshakeAndReturnsConnection(self):
         client = _newClient()

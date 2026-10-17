@@ -27,6 +27,7 @@ import socket
 import ssl
 import sys
 import urllib.parse
+import urllib.request
 import webbrowser
 
 from dataclasses import dataclass, fields, is_dataclass
@@ -567,6 +568,34 @@ def parseProxyString(proxyString: Optional[str]) -> Optional[ProxyConfig]:
         'username': username,
         'password': password
     }
+
+
+def parseEnvironmentProxy() -> Optional[ProxyConfig]:
+    """
+    Proxy configuration from the standard proxy settings `requests` already
+    uses for HTTP calls (HTTPS_PROXY, else ALL_PROXY; on Windows/macOS the
+    system proxy settings when no variable is set), so the connections
+    `requests` does not make -- tunnels -- go through the same proxy.
+
+    A value without a scheme is an HTTP proxy, as curl and requests treat it.
+    The environment itself is left untouched (unlike setupProxyEnvironment()).
+
+    Returns:
+        ProxyConfig: Normalized proxy configuration, or None when no proxy is set
+    """
+    proxies = urllib.request.getproxies()
+    proxyString = proxies.get('https') or proxies.get('all')
+    if not proxyString:
+        return None
+
+    if "://" not in proxyString:
+        proxyString = f"http://{proxyString}"
+
+    proxyConfig = parseProxyString(proxyString)
+    if proxyConfig:
+        logger.info(f"Using proxy from environment for tunnel connections: {proxyConfig['host']}:{proxyConfig['port']}")
+
+    return proxyConfig
 
 
 def setupProxyEnvironment(proxyConfig: Optional[ProxyConfig]) -> None:

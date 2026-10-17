@@ -2808,7 +2808,12 @@ class WebRTCManager {
                 }
 
                 this.log("ICE", `Remote candidate: ${cand.candidate?.substring(0,50)}...`);
-                await pcRef.addIceCandidate(cand);            // Add to ICE agent
+                try {
+                    await pcRef.addIceCandidate(cand);
+                } catch (addError) {
+                    this.log("ICE", `Failed to add remote candidate: ${addError}`);
+                    continue;
+                }
             } catch (err) {
                 this.log("ICE", `Polling error: ${err}`);
                 break;

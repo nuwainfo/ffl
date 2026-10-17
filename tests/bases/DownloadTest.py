@@ -20,8 +20,11 @@
 import os
 import json
 import time
+import threading
 import unittest
+import http.server
 
+from bases.Download import FFLDownloader
 from ..CoreTestBase import FastFileLinkTestBase
 
 
@@ -748,6 +751,187 @@ class DownloadTest(FastFileLinkTestBase):
         )
 
         self._verifyDownloadedFile(downloadedPath)
+
+    def testZeroByteFileWebRTCDownload(self):
+        """A zero-byte share downloaded over WebRTC must produce an (empty) output file.
+
+        Regression test: the WebRTC path treated "0 bytes on disk >= size 0" as 'File already downloaded'
+        and reported success without ever creating the output file.
+        """
+        self.testFilePath = os.path.join(self.tempDir, "empty.bin")
+        open(self.testFilePath, 'wb').close()
+        self.originalFileHash = self.getFileHash(self.testFilePath)
+        self.originalFileSize = 0
+
+        shareLink = self._startFastFileLink(p2p=True)
+
+        outputPath = os.path.join(self.tempDir, "empty_download.bin")
+        # DISABLE_P2P skips the direct P2P transport so the download goes through WebRTC
+        self._downloadWithCore(shareLink, outputPath=outputPath, extraEnvVars={"DISABLE_P2P": "True"})
+
+        self.assertTrue(os.path.exists(outputPath), "Download reported success but wrote no file")
+        self.assertEqual(os.path.getsize(outputPath), 0)
+
+
+class UploadLinkDownloadTest(FastFileLinkTestBase):
+    """Download a real uploaded-file link (https://0.0.fastfilelink.com/UID) with FFL.py --cli download.
+
+    Regression test: the upload server sits behind nginx, which answers HEAD with Content-Length: 0
+    and drops every FFL-* header (only GET carries them). The downloader never learned the link was
+    'HTTP+Upload', tried WebRTC with a file size of 0, and the WebRTC path declared the file
+    "already downloaded" -- printing "Downloaded: download.bin" without ever writing a file.
+    """
+
+    PICKUP_CODE = '246810'
+    WRONG_PICKUP_CODE = '000000'
+    PARTIAL_FILE_SIZE = 1024
+
+    def __init__(self, methodName='runTest'):
+        super().__init__(methodName, fileSizeBytes=64 * 1024)
+
+    def _uploadWithPickupCode(self):
+        return self._startFastFileLink(p2p=False, extraArgs=["--pickup-code", self.PICKUP_CODE])
+
+    def testUploadLinkDownloadsFile(self):
+        shareLink = self._startFastFileLink(p2p=False)
+
+        outputPath = os.path.join(self.tempDir, "upload_download.bin")
+        downloadedPath = self._downloadWithCore(shareLink, outputPath=outputPath)
+
+        self._verifyDownloadedFile(downloadedPath)
+
+    def testUploadLinkDownloadUsesServerFileName(self):
+        """Without -o the file is saved under the uploaded name, not the 'download.bin' fallback."""
+        shareLink = self._startFastFileLink(p2p=False)
+
+        downloadDir = os.path.join(self.tempDir, "downloads")
+        os.makedirs(downloadDir)
+        downloadedPath = self._downloadWithCore(shareLink, outputPath=downloadDir)
+
+        self.assertEqual(os.path.basename(downloadedPath), os.path.basename(self.testFilePath))
+        self._verifyDownloadedFile(downloadedPath)
+
+    def testUploadLinkIsDetectedAsUpload(self):
+        shareLink = self._startFastFileLink(p2p=False)
+
+        downloader = FFLDownloader(loggerCallback=lambda _text: None)
+        try:
+            urlInfo = downloader._extractURLInfo(shareLink)
+        finally:
+            downloader.close()
+
+        self.assertFalse(urlInfo.isGenericURL)
+        self.assertTrue(urlInfo.isUploadMode, "FFL-Mode: HTTP+Upload is only visible on GET, not nginx's HEAD")
+        self.assertFalse(urlInfo.supportsWebRTC, "Uploaded files have no WebRTC peer")
+
+    def testWrongPickupCodeLeavesNoEmptyFile(self):
+        """A download rejected before any byte arrives (wrong pickup code -> 401) must not leave an empty file."""
+        shareLink = self._uploadWithPickupCode()
+
+        outputPath = os.path.join(self.tempDir, "rejected_download.bin")
+        with self.assertRaisesRegex(AssertionError, "401"):
+            self._downloadWithCore(
+                shareLink, outputPath=outputPath, extraArgs=["--pickup-code", self.WRONG_PICKUP_CODE]
+            )
+        self.assertFalse(os.path.exists(outputPath), "A rejected download must not leave an empty output file")
+
+        downloadedPath = self._downloadWithCore(
+            shareLink, outputPath=outputPath, extraArgs=["--pickup-code", self.PICKUP_CODE]
+        )
+        self._verifyDownloadedFile(downloadedPath)
+
+    def testWrongPickupCodeKeepsPartialFileForResume(self):
+        """Guard against overcorrecting: bytes from an earlier attempt must survive a rejected resume."""
+        shareLink = self._uploadWithPickupCode()
+
+        outputPath = os.path.join(self.tempDir, "partial_download.bin")
+        with open(self.testFilePath, 'rb') as source, open(outputPath, 'wb') as partial:
+            partial.write(source.read(self.PARTIAL_FILE_SIZE))
+        partialHash = self.getFileHash(outputPath)
+
+        with self.assertRaisesRegex(AssertionError, "401"):
+            self._downloadWithCore(
+                shareLink, outputPath=outputPath, extraArgs=["--resume", "--pickup-code", self.WRONG_PICKUP_CODE]
+            )
+        self.assertEqual(self.getFileHash(outputPath), partialHash, "The partial file must be kept for resume")
+
+        downloadedPath = self._downloadWithCore(
+            shareLink, outputPath=outputPath, extraArgs=["--resume", "--pickup-code", self.PICKUP_CODE]
+        )
+        self._verifyDownloadedFile(downloadedPath)
+
+    def testUploadLinkResumesPartialFile(self):
+        """--resume continues an uploaded-file download from the bytes already on disk (a Range request).
+
+        Regression test: Caddy applied the Range to its download.html template instead of the file, answering
+        500 or a slice of the template's HTML.
+        """
+        shareLink = self._startFastFileLink(p2p=False)
+
+        outputPath = os.path.join(self.tempDir, "resumed_download.bin")
+        with open(self.testFilePath, 'rb') as source, open(outputPath, 'wb') as partial:
+            partial.write(source.read(self.PARTIAL_FILE_SIZE))
+
+        downloadedPath = self._downloadWithCore(shareLink, outputPath=outputPath, extraArgs=["--resume"])
+        self._verifyDownloadedFile(downloadedPath)
+
+
+class CatchAllHTTPHandler(http.server.BaseHTTPRequestHandler):
+    """A real server answering 200 on every path, like a single page app; only FILE_PATH serves the file."""
+
+    FILE_PATH = '/files/report.txt'
+    FILE_CONTENT = b'generic url download\n'
+    PAGE_CONTENT = b'<html>single page app</html>'
+
+    requestedPaths = []
+
+    def _sendResponse(self, includeBody):
+        self.requestedPaths.append(self.path)
+        isFile = self.path == self.FILE_PATH
+        body = self.FILE_CONTENT if isFile else self.PAGE_CONTENT
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain' if isFile else 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        if includeBody:
+            self.wfile.write(body)
+
+    def do_HEAD(self):
+        self._sendResponse(includeBody=False)
+
+    def do_GET(self):
+        self._sendResponse(includeBody=True)
+
+    def log_message(self, format, *args):
+        pass
+
+
+class GenericURLDownloadTest(FastFileLinkTestBase):
+    """/status only exists on FFL servers. A generic server answering 200 on every path used to crash
+    the download with "'str' object has no attribute 'get'" when the client polled <url>/status."""
+
+    def setUp(self):
+        super().setUp()
+        CatchAllHTTPHandler.requestedPaths = []
+        self.httpServer = http.server.ThreadingHTTPServer(('127.0.0.1', 0), CatchAllHTTPHandler)
+        threading.Thread(target=self.httpServer.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.httpServer.shutdown()
+        self.httpServer.server_close()
+        super().tearDown()
+
+    def testCatchAllServerDownloadDoesNotPollStatus(self):
+        fileURL = f"http://127.0.0.1:{self.httpServer.server_port}{CatchAllHTTPHandler.FILE_PATH}"
+
+        outputPath = os.path.join(self.tempDir, "report.txt")
+        downloadedPath = self._downloadWithCore(fileURL, outputPath=outputPath)
+
+        with open(downloadedPath, 'rb') as f:
+            self.assertEqual(f.read(), CatchAllHTTPHandler.FILE_CONTENT)
+        requestedPaths = CatchAllHTTPHandler.requestedPaths
+        self.assertFalse(any(path.endswith('/status') for path in requestedPaths),
+                         f"Generic URLs have no /status endpoint, requested: {requestedPaths}")
 
 
 if __name__ == '__main__':

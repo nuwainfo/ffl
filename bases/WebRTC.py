@@ -451,9 +451,9 @@ class WebRTCManager(AsyncLoopExceptionMixin):
             if cand is None:
                 q.append({"candidate": "end-of-candidates"})
             else:
-                # Use built-in to_sdp() for consistent serialization
+                # to_sdp() omits the candidate: prefix. Browsers require it.
                 q.append({
-                    "candidate": cand.to_sdp(),
+                    "candidate": self.formatBrowserIceCandidate(cand.to_sdp()),
                     "sdpMid": cand.sdpMid,
                     "sdpMLineIndex": cand.sdpMLineIndex,
                 })
@@ -537,6 +537,22 @@ class WebRTCManager(AsyncLoopExceptionMixin):
             await self._addIceCandidate(pc, pendingCandidates.popleft())
 
         return "OK"
+
+    @staticmethod
+    def formatBrowserIceCandidate(candidateSDP: str) -> str:
+        """Return an ICE candidate line a browser can pass to addIceCandidate.
+
+        ffl-datachannel keeps the line without a ``candidate:`` prefix, matching
+        aiortc. Chrome, Firefox, and Safari reject that form.
+        """
+        line = candidateSDP.strip()
+        if line.startswith('a='):
+            line = line[2:]
+
+        if line == 'end-of-candidates' or line.startswith('candidate:'):
+            return line
+
+        return f'candidate:{line}'
 
     async def _addIceCandidate(self, pc: RTCPeerConnection, data: Dict[str, Any]):
         """Parse and add one browser ICE candidate after remote SDP is available."""
@@ -1018,6 +1034,7 @@ class WebRTCManager(AsyncLoopExceptionMixin):
                         totalBytes=fileSize,
                         percentage=percentage,
                         speed=speed,
+                        connectionType=TransferTransport.WEBRTC.value,
                     )
 
             # Bound the outstanding application queue before EOF. The ordered
@@ -1047,7 +1064,8 @@ class WebRTCManager(AsyncLoopExceptionMixin):
                 peerId=peerId,
                 bytesTransferred=sent,
                 duration=duration,
-                averageSpeed=averageSpeed
+                averageSpeed=averageSpeed,
+                connectionType=TransferTransport.WEBRTC.value,
             )
 
             # Calculate final statistics
@@ -1684,8 +1702,8 @@ class WebRTCDownloadMixin(AsyncLoopExceptionMixin):
         resumePosition = self._handleResumeLogic(finalOutputPath, fileSize, resume)
         verifyChecksum = self._shouldVerifyChecksum(urlInfo, resumePosition)
 
-        # File already complete (skip check for unknown size)
-        if self._isKnownSize(fileSize) and resumePosition >= fileSize:
+        # File already complete (skip check for unknown/unreliable sizes, same as the HTTP path)
+        if self._isPositiveSize(fileSize) and resumePosition >= fileSize:
             return self._finishAlreadyComplete(fileSize, resumePosition, finalOutputPath)
 
         if resumePosition > 0 and self._isPositiveSize(fileSize):

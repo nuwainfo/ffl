@@ -105,19 +105,21 @@ createPythonTarGz() {
 
     export PYTHONIOENCODING=utf-8
 
+    requirementsFile="$parentDir/REQUIREMENTS.txt"
+
     if [ "$OS" = "linux" ]; then
-        cp ../REQUIREMENTS.txt ../REQUIREMENTS.txt.bak
-        grep -vi -e "pyinstaller" ../REQUIREMENTS.txt > ../REQUIREMENTS.txt.tmp 
-        sed -ie "s/wxPython.*//g" ../REQUIREMENTS.txt.tmp
-        mv ../REQUIREMENTS.txt.tmp ../REQUIREMENTS.txt
+        cp "$requirementsFile" "$requirementsFile.bak"
+        grep -vi -e "pyinstaller" "$requirementsFile" > "$requirementsFile.tmp"
+        sed -ie "s/wxPython.*//g" "$requirementsFile.tmp"
+        mv "$requirementsFile.tmp" "$requirementsFile"
     fi
 
-    python3 -m pip install -r ../REQUIREMENTS.txt 
+    python3 -m pip install -r "$requirementsFile"
     # Used only for DistUtil.py not bundled in final executable.
     python3 -m pip install conda-pack setuptools wheel pip
 
     if [ "$OS" = "linux" ]; then
-        mv ../REQUIREMENTS.txt.bak ../REQUIREMENTS.txt
+        mv "$requirementsFile.bak" "$requirementsFile"
     fi
 
     createWheel # FileShare
@@ -251,13 +253,17 @@ if [ "$OS" = "darwin" ]; then
     step "Copy server static"
     copyServerStatic
 
-    step "Create Python env (darwin native)"
+    step "Create Python env (darwin arm64)"
     createPythonTarGz "aarch"
 
-
-    step "Build app (darwin aarch64)"
+    step "Build app (darwin arm64)"
     createApp "aarch"
 
+    step "Create Python env (darwin x86_64)"
+    createPythonTarGz "x86_64"
+
+    step "Build app (darwin x86_64)"
+    createApp "x86_64"
 
     step "Cleanup"
     cleanEnvironment

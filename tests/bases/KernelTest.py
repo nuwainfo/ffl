@@ -24,7 +24,7 @@ import json
 import shutil
 from unittest.mock import patch, MagicMock
 
-from bases.Kernel import EventService, EventTiming, AddonsManager, StorageLocator
+from bases.Kernel import EventService, EventTiming, AddonsManager, StorageLocator, FFLEvent
 
 
 class EventServiceTest(unittest.TestCase):
@@ -685,6 +685,52 @@ class AddonsManagerTest(unittest.TestCase):
         self.addonsManager._extendAddonSearchPaths()
 
         self.assertIn(customAddonFolder, mockAddonsModule.__path__)
+
+
+class IntegratedTransferEventTest(unittest.TestCase):
+    """HTTP, WebRTC and P2P transfer events all reach the integrated transfer events."""
+
+    INTEGRATED_EVENTS = (
+        FFLEvent.transferStarted,
+        FFLEvent.transferProgress,
+        FFLEvent.transferCompleted,
+        FFLEvent.transferFailed,
+    )
+
+    def setUp(self):
+        for integratedEvent in self.INTEGRATED_EVENTS:
+            integratedEvent.connectSources()
+
+        self.received = []
+
+    def _record(self, **eventData):
+        self.received.append(eventData)
+
+    def testEverySourceEventReachesItsIntegratedEvent(self):
+        for integratedEvent in self.INTEGRATED_EVENTS:
+            for sourceEvent in integratedEvent.sources:
+                with self.subTest(source=sourceEvent.key, integrated=integratedEvent.key):
+                    self.received.clear()
+                    integratedEvent.subscribe(self._record)
+                    try:
+                        sourceEvent.trigger(downloadId='dl-1', connectionType='http')
+                    finally:
+                        integratedEvent.unsubscribe(self._record)
+
+                    self.assertEqual(1, len(self.received))
+                    self.assertEqual('dl-1', self.received[0]['downloadId'])
+
+    def testWebRTCPeerIdBecomesDownloadIdAndClientInfoDefaults(self):
+        FFLEvent.transferCompleted.subscribe(self._record)
+        try:
+            FFLEvent.webrtcTransferCompleted.trigger(peerId='peer-1', bytesTransferred=5, connectionType='webrtc')
+        finally:
+            FFLEvent.transferCompleted.unsubscribe(self._record)
+
+        self.assertEqual('peer-1', self.received[0]['downloadId'])
+        self.assertEqual('peer-1', self.received[0]['peerId'])
+        self.assertEqual({}, self.received[0]['clientInfo'])
+        self.assertEqual('webrtc', self.received[0]['connectionType'])
 
 
 if __name__ == '__main__':

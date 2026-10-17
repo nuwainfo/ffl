@@ -98,6 +98,28 @@ class Downloader(ABC):
     def _isPositiveSize(fileSize: int) -> bool:
         """Check if file size is known and positive (> 0)"""
         return fileSize is not None and fileSize > 0
+        
+    @staticmethod
+    def _getDownloadAuthValues(downloadAuth):
+        downloadAuth = downloadAuth or DownloadAuth()
+        return (
+            downloadAuth.httpAuth.asCredentials(),
+            downloadAuth.pickupCode,
+            downloadAuth.recipientPrivateKey,
+            downloadAuth.encryptionKey,
+        )
+    
+    @staticmethod
+    def _isFastFileLinkServer(head) -> bool:
+        """True when the response comes from a FastFileLink P2P server (bases/Server.py)"""
+        return head.get('Server', '').startswith('FFL Server/') or bool(head.get('FFL-Server', ''))
+        
+    @staticmethod
+    def _removeEmptyOutputFile(filePath: str):
+        """Remove an output file left empty by a failed transfer (stdout is never touched)."""
+        if filePath != "-" and os.path.isfile(filePath) and os.path.getsize(filePath) == 0:
+            os.remove(filePath)
+            logger.debug(f"Removed empty output file after failed download: {filePath}")        
 
     def __init__(self, loggerCallback: Callable = print, progressCallback: Optional[Callable] = None,
                  urlInfoCallback: Optional[Callable] = None, transportCallback: Optional[Callable] = None):
@@ -128,17 +150,7 @@ class Downloader(ABC):
 
     def _raiseIfCancelled(self):
         if self._cancelEvent.is_set():
-            raise InterruptedError('Download paused')
-
-    @staticmethod
-    def _getDownloadAuthValues(downloadAuth):
-        downloadAuth = downloadAuth or DownloadAuth()
-        return (
-            downloadAuth.httpAuth.asCredentials(),
-            downloadAuth.pickupCode,
-            downloadAuth.recipientPrivateKey,
-            downloadAuth.encryptionKey,
-        )
+            raise InterruptedError('Download paused')  
 
     def _updateProgressStatus(self, progress, description):
         """Update progress bar description and refresh display"""
@@ -531,23 +543,23 @@ class Downloader(ABC):
         """Make HTTP HEAD request to get headers using requests library
 
         Automatically handles Caddy quirk where HEAD returns Content-Length: 0
-        by retrying with GET when detected.
+        by retrying with GET when detected. Not keyed on a Caddy Server header: the upload
+        server's nginx front replaces it and also drops every FFL-* header from HEAD.
+        A FastFileLink P2P server's HEAD is authoritative (Content-Length: 0 there means an
+        unknown size, e.g. stdin), and a GET would start its one-shot stream.
         """
         response = requests.head(url, headers=headers or {}, timeout=10)
         response.raise_for_status()
         head = response.headers
 
-        # Check if Caddy returns Content-Length: 0 (Caddy quirk with HEAD requests)
-        serverHeader = head.get('Server', '')
-        contentLength = head.get('Content-Length', '')
-        isCaddyWithZeroLength = ('Caddy' in serverHeader and contentLength == '0')
-
-        # If Caddy returns Content-Length: 0, retry with GET to get proper headers
-        if isCaddyWithZeroLength:
-            logger.debug("Caddy returned Content-Length: 0 for HEAD, retrying with GET")
-            response = requests.get(url, headers=headers or {}, timeout=10, stream=True)
-            head = response.headers
+        # If HEAD returns Content-Length: 0, retry with GET to get proper headers
+        if head.get('Content-Length', '') == '0' and not self._isFastFileLinkServer(head):
+            logger.debug("HEAD returned Content-Length: 0, retrying with GET")
+            # Behave like the HEAD it replaces: no redirects, and a rejection (e.g. wrong pickup code) raises
+            response = requests.get(url, headers=headers or {}, timeout=10, stream=True, allow_redirects=False)
             response.close() # Close immediately after getting headers
+            response.raise_for_status()
+            head = response.headers
 
         return head # Return CaseInsensitiveDict for case-insensitive header access
 
@@ -706,12 +718,18 @@ class Downloader(ABC):
 
             # Check if this is a FastFileLink server
             isFastFileLinkDomain = 'fastfilelink.com' in domain
-            serverHeader = head.get('Server', '')
-            fflServerHeader = head.get('FFL-Server', '')
             fflMode = head.get('FFL-Mode', '')
-            isFastFileLinkServer = serverHeader.startswith('FFL Server/') or bool(fflServerHeader)
+            isFastFileLinkServer = self._isFastFileLinkServer(head)
 
-            if not isFastFileLinkDomain and not isFastFileLinkServer and not fflMode:
+            if isFastFileLinkDomain and not isFastFileLinkServer and not fflMode:
+                # The domain alone is not proof: other pages on it (e.g. https://fastfilelink.com/robots.txt) are
+                # not shares. Upload shares sit behind nginx whose HEAD carries no FFL headers, so probe /checksum.
+                checksumResponse = requests.get(self._buildURL(baseURL, "checksum"), headers=headers, timeout=15)
+                isJSON = 'application/json' in checksumResponse.headers.get('Content-Type', '')
+                if not checksumResponse.ok or not isJSON:
+                    #  fall through to generic URL handling
+                    raise requests.exceptions.RequestException("Not a FastFileLink share")
+            elif not isFastFileLinkDomain and not isFastFileLinkServer and not fflMode:
                 # Not a FastFileLink server? TRY /download:
                 head = self._sendHTTPHead(f"{baseURL.rstrip('/')}/download", headers)
                 fflMode = head.get('FFL-Mode', '')
@@ -1046,9 +1064,12 @@ class HTTPDownloader(Downloader):
                 metadataURL, headers, isGenericURL=urlInfo.isGenericURL
             )
         except requests.exceptions.HTTPError as e:
-            if e.response and e.response.status_code == 404:
+            # A Response is falsy for 4xx/5xx, so compare with None
+            statusCode = e.response.status_code if e.response is not None else 'error'
+            if statusCode == 404:
                 raise RuntimeError("File not found or expired")
-            raise RuntimeError(f"Failed to get file metadata: HTTP {e.response.status_code if e.response else 'error'}")
+                
+            raise RuntimeError(f"Failed to get file metadata: HTTP {statusCode}")
         except Exception as e:
             raise RuntimeError(f"Failed to get file metadata: {e}")
 
@@ -1118,7 +1139,8 @@ class HTTPDownloader(Downloader):
                 statusStopEvent.set()
                 raise serverError
 
-            if not synchronous:
+            # Generic URLs have no /status endpoint to ask
+            if not synchronous or urlInfo.isGenericURL:
                 return
 
             serverError = self._fetchServerErrorFromStatus(urlInfo.baseURL, statusHeaders)
@@ -1131,18 +1153,20 @@ class HTTPDownloader(Downloader):
         statusStopEvent = threading.Event()
         statusErrorQueue = deque()
         statusHeaders = self._makeHeaders(credentials, authExtra)
-        self._startStatusPollingThread(
-            urlInfo.baseURL,
-            statusHeaders,
-            statusStopEvent,
-            statusErrorQueue,
-            onError=closeActiveResponseOnServerError
-        )
+        if not urlInfo.isGenericURL:
+            self._startStatusPollingThread(
+                urlInfo.baseURL,
+                statusHeaders,
+                statusStopEvent,
+                statusErrorQueue,
+                onError=closeActiveResponseOnServerError
+            )
 
         serverDownloadId = None
         totalDownloaded = resumePosition
         checksumState = self._createTransferChecksumState(verifyChecksum, checksumAlgorithm)
         streamResumeAttempts = 0
+        transferCompleted = False
         try:
             mode = 'ab' if resumePosition > 0 else 'wb'
             ctx = contextlib.nullcontext(sys.stdout.buffer) if finalOutputPath == "-" else open(finalOutputPath, mode)
@@ -1245,6 +1269,7 @@ class HTTPDownloader(Downloader):
                         )
                         time.sleep(delay)
 
+            transferCompleted = True
         except requests.exceptions.RequestException as e:
             if statusErrorQueue:
                 serverError = statusErrorQueue[0]
@@ -1292,6 +1317,11 @@ class HTTPDownloader(Downloader):
             self._activeHTTPResponse = None
             statusStopEvent.set()
             session.close() # Clean up session resources
+
+            # A transfer rejected before its first byte (e.g. wrong pickup code) must not leave the empty file
+            # it opened. Partial files from an earlier attempt (resumePosition > 0) are kept for resume.
+            if not transferCompleted and resumePosition == 0 and totalDownloaded == 0:
+                self._removeEmptyOutputFile(finalOutputPath)
 
         # Verify final file size (skip for stdout and generic URLs and unknown sizes)
         if finalOutputPath == "-":

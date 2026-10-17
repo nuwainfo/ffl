@@ -140,8 +140,9 @@ def setupSettings(logger):
     # Detect execution environment (PyInstaller, PyApp, Cosmopolitan, or pure Python)
     exeMode, baseDir, exePath = detectExecutionEnvironment()
 
+    # Keep a CA bundle the environment already chose (e.g. one trusting a TLS-intercepting proxy)
     if platform.system().lower() != 'windows':
-        os.environ["SSL_CERT_FILE"] = certifi.where()
+        os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 
     staticRoot = os.path.join(baseDir, DEFAULT_STATIC_ROOT)
 

@@ -28,11 +28,15 @@ import tempfile
 
 import requests
 
+from unittest import mock
 from urllib.parse import urlparse
 
-from bases.CLI import DEFAULT_AUTH_USER_NAME, ShareCLIArgumentAdapter, configureCLIParser
+from bases.CLI import DEFAULT_AUTH_USER_NAME, ShareCLIArgumentAdapter, configureCLIParser, handleProxyArgument
 from bases.Settings import DEFAULT_UPLOAD_DURATION
+from bases.tunnels.Web import WebTunnelCandidate
+from ..CorePatched import DirectEgressBlocker
 from ..CoreTestBase import FastFileLinkTestBase, LOCAL_TEST_SERVER_URL
+from ..ProxyTestServer import LocalTunnelProxy
 
 
 class ShareCLIArgumentAdapterTest(unittest.TestCase):
@@ -87,6 +91,156 @@ class ShareCLIArgumentAdapterTest(unittest.TestCase):
         self.assertNotIn('cli', shareConfig)
         self.assertNotIn('command', shareConfig)
         self.assertNotIn('logLevel', shareConfig)
+
+
+class ProxyArgumentTest(unittest.TestCase):
+    """The tunnel proxy comes from --proxy, else from the standard proxy
+    environment variables that requests already honours."""
+
+    PROXY_ENV_VARS = ('HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy')
+
+    def _resolveProxyConfig(self, proxyArgument=None, **environment):
+        with mock.patch.dict(os.environ):
+            for name in self.PROXY_ENV_VARS:
+                os.environ.pop(name, None)
+            os.environ.update(environment)
+
+            result = handleProxyArgument(proxyArgument, {'exitCode': None, 'proxyConfig': None})
+            return result['proxyConfig'], dict(os.environ)
+
+    def testEnvironmentHTTPSProxyBecomesTunnelProxy(self):
+        proxyConfig, _environment = self._resolveProxyConfig(HTTPS_PROXY='http://alice:secret@10.0.0.8:3128')
+
+        self.assertIsNotNone(proxyConfig)
+        self.assertEqual('http', proxyConfig['type'])
+        self.assertEqual(('10.0.0.8', 3128), (proxyConfig['host'], proxyConfig['port']))
+        self.assertEqual(('alice', 'secret'), (proxyConfig['username'], proxyConfig['password']))
+
+    def testSchemelessEnvironmentProxyIsHTTP(self):
+        proxyConfig, _environment = self._resolveProxyConfig(HTTPS_PROXY='10.0.0.8:3128')
+
+        self.assertIsNotNone(proxyConfig)
+        self.assertEqual('http', proxyConfig['type'])
+
+    def testEnvironmentProxyLeavesNoProxyUntouched(self):
+        _proxyConfig, environment = self._resolveProxyConfig(HTTPS_PROXY='http://10.0.0.8:3128', NO_PROXY='corp.local')
+
+        self.assertEqual('corp.local', environment['NO_PROXY'])
+
+    def testExplicitProxyOverridesEnvironment(self):
+        proxyConfig, _environment = self._resolveProxyConfig('socks5://127.0.0.1:9050', HTTPS_PROXY='http://10.0.0.8:3128')
+
+        self.assertEqual('socks5', proxyConfig['type'])
+        self.assertEqual(9050, proxyConfig['port'])
+
+
+class ProxyEndToEndTestBase(FastFileLinkTestBase):
+    """Shares from a sandbox whose only way out is a local proxy: the FFL
+    process may not open any direct non-loopback TCP connection (see
+    tests/CorePatched.py DirectEgressBlocker), so the share link only appears
+    if tunnel selection *and* the tunnel itself go through the proxy."""
+
+    INTERCEPT_TLS = False
+
+    def setUp(self):
+        super().setUp()
+        self.proxy = LocalTunnelProxy(interceptTLS=self.INTERCEPT_TLS).start()
+
+    def tearDown(self):
+        super().tearDown()
+        self.proxy.stop()
+
+    def _shareThroughProxy(self, preferredTunnel, proxyURL=None, extraEnvVars=None):
+        envVars = {DirectEgressBlocker.ENV_VAR: 'True', 'FFL_TUNNEL_SOCKS5': ''}
+        envVars.update(extraEnvVars or {})
+        extraArgs = ['--proxy', proxyURL] if proxyURL else None
+
+        shareLink = self._startFastFileLink(
+            p2p=True, extraArgs=extraArgs, extraEnvVars=envVars, preferredTunnel=preferredTunnel, timeout=90
+        )
+
+        downloadedFilePath = self._getDownloadedFilePath()
+        self.downloadFileWithRequests(shareLink, downloadedFilePath)
+        self._verifyDownloadedFile(downloadedFilePath)
+        return urlparse(shareLink).hostname
+
+    def _assertRelayDialedThroughProxy(self, relayHost):
+        # The latency race probes each candidate once; any further CONNECT is the tunnel itself.
+        connectCount = self.proxy.targets.count((relayHost, 443))
+        self.assertGreater(
+            connectCount, 1, f"{relayHost} was not dialed through the proxy beyond its latency probe: "
+            f"{self.proxy.targets}"
+        )
+
+    def _assertBoreTunnelProxied(self, linkHost):
+        # A bore link is https://<publicPort>.<domain>/ and its control connection dials 0.<domain>.
+        self._assertRelayDialedThroughProxy('0.' + linkHost.split('.', 1)[1])
+
+
+class TunnelProxyEndToEndTest(ProxyEndToEndTestBase):
+    """A pass-through proxy: TLS stays end to end between FFL and the relay."""
+
+    def testHTTPProxyCarriesBoreTunnel(self):
+        linkHost = self._shareThroughProxy('default:tcp', proxyURL=self.proxy.httpURL)
+
+        self._assertBoreTunnelProxied(linkHost)
+
+    def testHTTPProxyCarriesWebTunnel(self):
+        linkHost = self._shareThroughProxy('default:web', proxyURL=self.proxy.httpURL)
+
+        self.assertIn(linkHost, WebTunnelCandidate.WEB_DOMAINS)
+        self._assertRelayDialedThroughProxy(linkHost)
+
+    def testHTTPProxyPrefersWebTunnelByDefault(self):
+        linkHost = self._shareThroughProxy('default', proxyURL=self.proxy.httpURL)
+
+        self.assertIn(linkHost, WebTunnelCandidate.WEB_DOMAINS)
+        self._assertRelayDialedThroughProxy(linkHost)
+
+    def testSocks5ProxyCarriesBoreTunnel(self):
+        linkHost = self._shareThroughProxy('default:tcp', proxyURL=self.proxy.socks5URL)
+
+        self._assertBoreTunnelProxied(linkHost)
+
+    def testEnvironmentHTTPSProxyCarriesBoreTunnel(self):
+        environment = {
+            'HTTPS_PROXY': self.proxy.httpURL,
+            'HTTP_PROXY': self.proxy.httpURL,
+            'NO_PROXY': 'localhost,127.0.0.1',
+        }
+        linkHost = self._shareThroughProxy('default:tcp', extraEnvVars=environment)
+
+        self._assertBoreTunnelProxied(linkHost)
+
+
+class InterceptingProxyEndToEndTest(ProxyEndToEndTestBase):
+    """A TLS-intercepting proxy, as in many corporate networks and AI sandboxes:
+    it re-signs every certificate with its own CA. The environment trusts that
+    CA through REQUESTS_CA_BUNDLE (which `requests`, i.e. FFL's API calls,
+    honours), so the tunnel's TLS must trust it too -- without ever disabling
+    certificate verification."""
+
+    INTERCEPT_TLS = True
+
+    def _shareThroughInterceptingProxy(self, preferredTunnel):
+        environment = {
+            'HTTPS_PROXY': self.proxy.httpURL,
+            'HTTP_PROXY': self.proxy.httpURL,
+            'NO_PROXY': 'localhost,127.0.0.1',
+            'REQUESTS_CA_BUNDLE': self.proxy.caCertPath,
+        }
+        return self._shareThroughProxy(preferredTunnel, extraEnvVars=environment)
+
+    def testInterceptingProxyCarriesWebTunnelWhenItsCAIsTrusted(self):
+        linkHost = self._shareThroughInterceptingProxy('default:web')
+
+        self.assertIn(linkHost, WebTunnelCandidate.WEB_DOMAINS)
+        self._assertRelayDialedThroughProxy(linkHost)
+
+    def testInterceptingProxyCarriesBoreTunnelWhenItsCAIsTrusted(self):
+        linkHost = self._shareThroughInterceptingProxy('default:tcp')
+
+        self._assertBoreTunnelProxied(linkHost)
 
 
 class CLITest(FastFileLinkTestBase):
@@ -1198,8 +1352,8 @@ class MultiFileShareTest(FastFileLinkTestBase):
             f.write(os.urandom(32 * 1024))
         self.originalFileSize = -1
 
-    def _downloadAndVerifyZip(self, shareLink, expectedBasenames):
-        """Download the shared ZIP and assert all expected filenames are present."""
+    def _downloadAndVerifyZip(self, shareLink, expectedBasenames, unexpectedBasenames=()):
+        """Download the shared ZIP and assert expected filenames are present and unexpected ones absent."""
         downloadedPath = self._getDownloadedFilePath("multi_share.zip")
         self.downloadFileWithRequests(shareLink, downloadedPath)
         self.assertTrue(os.path.exists(downloadedPath), "Downloaded ZIP should exist")
@@ -1208,6 +1362,72 @@ class MultiFileShareTest(FastFileLinkTestBase):
             for expected in expectedBasenames:
                 self.assertIn(expected, basenames,
                     f"Expected '{expected}' in ZIP contents, got: {sorted(basenames)}")
+            for unexpected in unexpectedBasenames:
+                self.assertNotIn(unexpected, basenames,
+                    f"Unexpected '{unexpected}' in ZIP contents, got: {sorted(basenames)}")
+
+    def _createWildcardDir(self, fileContents):
+        """Create a directory holding the given {name: bytes} files and return its path."""
+        wildcardDir = os.path.join(self.tempDir, "wildcard_share")
+        os.makedirs(wildcardDir)
+        for name, content in fileContents.items():
+            with open(os.path.join(wildcardDir, name), 'wb') as f:
+                f.write(content)
+
+        return wildcardDir
+
+    def _startFastFileLinkWithPattern(self, pattern, **kwargs):
+        """Share a literal (unexpanded) wildcard pattern as the first positional argument."""
+        savedTestFilePath = self.testFilePath
+        self.testFilePath = pattern
+        try:
+            return self._startFastFileLink(p2p=True, **kwargs)
+        finally:
+            self.testFilePath = savedTestFilePath
+
+    def testShareWildcardExpandsToMultipleFiles(self):
+        """A literal *.txt pattern (no shell expansion) is expanded by FFL itself."""
+        wildcardDir = self._createWildcardDir({
+            'alpha.txt': b'alpha',
+            'beta.txt': b'beta',
+            'gamma.bin': b'gamma',
+        })
+
+        shareLink = self._startFastFileLinkWithPattern(os.path.join(wildcardDir, '*.txt'))
+        self._downloadAndVerifyZip(shareLink, ['alpha.txt', 'beta.txt'], unexpectedBasenames=['gamma.bin'])
+
+    def testShareWildcardCombinedWithExplicitFile(self):
+        """A wildcard and an explicit path can be mixed in one command."""
+        wildcardDir = self._createWildcardDir({'alpha.txt': b'alpha', 'beta.txt': b'beta'})
+
+        shareLink = self._startFastFileLinkWithPattern(
+            os.path.join(wildcardDir, '*.txt'), extraArgs=[self.testFile3]
+        )
+        self._downloadAndVerifyZip(shareLink, ['alpha.txt', 'beta.txt', os.path.basename(self.testFile3)])
+
+    def testShareWildcardMatchingSingleFileSharesFileDirectly(self):
+        """A pattern matching exactly one file is shared as that file, not as a ZIP."""
+        wildcardDir = self._createWildcardDir({'only.txt': b'only content', 'other.bin': b'other'})
+
+        shareLink = self._startFastFileLinkWithPattern(os.path.join(wildcardDir, '*.txt'))
+
+        downloadedPath = self._getDownloadedFilePath("only.txt")
+        self.downloadFileWithRequests(shareLink, downloadedPath)
+        with open(downloadedPath, 'rb') as f:
+            self.assertEqual(b'only content', f.read())
+
+    def testShareWildcardWithoutMatchFailsFast(self):
+        """A pattern matching nothing is rejected with a clear error and no share link."""
+        wildcardDir = self._createWildcardDir({'alpha.bin': b'alpha'})
+        pattern = os.path.join(wildcardDir, '*.txt')
+
+        captureOutput = {}
+        with self.assertRaises(AssertionError):
+            self._startFastFileLinkWithPattern(pattern, captureOutputIn=captureOutput)
+
+        output = self._updateCapturedOutput(captureOutput)
+        self.assertIn('no files match pattern', output)
+        self.assertIn(pattern, output)
 
     def testShareMultipleFilesViaArgs(self):
         """Test sharing multiple files as additional CLI positional arguments."""

@@ -18,6 +18,7 @@
 # limitations under the License.
 
 import argparse
+import glob
 import json
 import os
 import logging
@@ -30,7 +31,9 @@ from bases.Kernel import (
     LOG_LEVEL_MAPPING, PUBLIC_VERSION, PUBLIC_REVISION, getLogger, FFLEvent, configureGlobalLogLevel, AddonsManager
 )
 from bases.Settings import DEFAULT_AUTH_USER_NAME, DEFAULT_UPLOAD_DURATION, SettingsGetter
-from bases.Utils import flushPrint, checkVersionCompatibility, getEnv, parseProxyString, setupProxyEnvironment
+from bases.Utils import (
+    flushPrint, checkVersionCompatibility, getEnv, parseEnvironmentProxy, parseProxyString, setupProxyEnvironment
+)
 from bases.Hook import HookEventForwarder
 from bases.Daemon import ProcessDaemonManager
 from bases.Upgrade import performUpgrade
@@ -414,8 +417,8 @@ def configureCLIParser():
             "Proxy server for all outbound connections. "
             "Formats: [user:pass@]host:port (defaults to SOCKS5), "
             "socks5[h]://[user:pass@]host:port, http[s]://[user:pass@]host:port. "
-            "SOCKS5 proxies work for both tunnel and HTTP requests. "
-            "HTTP proxies only work for HTTP requests (not tunnel)"
+            "Both SOCKS5 and HTTP (CONNECT) proxies carry tunnel and HTTP requests. "
+            "Defaults to the HTTPS_PROXY/ALL_PROXY environment variables"
         ),
         metavar="PROXY",
         dest="proxy"
@@ -674,6 +677,8 @@ def handleHookArgument(hook, result=None):
 
 def handleProxyArgument(proxy, result):
     if not proxy:
+        # requests already honours the proxy environment; hand it to the tunnel flow too
+        result['proxyConfig'] = parseEnvironmentProxy()
         return result
 
     proxyConfig = parseProxyString(proxy)
@@ -794,8 +799,7 @@ def _handleKeygenCommand(args, shareSubparser):
         except OSError as e:
             logger.warning(f"Failed to delete private key {privPath}: {e}")
 
-    FFLEvent.downloadCompleted.subscribe(deletePrivKeyAfterDownload)
-    FFLEvent.webrtcTransferCompleted.subscribe(deletePrivKeyAfterDownload)
+    FFLEvent.transferCompleted.subscribe(deletePrivKeyAfterDownload)
 
     flushPrint(_('Sharing private key (download once, then auto-deleted).'))
     if not args.recipientAuth:
@@ -971,6 +975,45 @@ def preprocessArguments(argv, commandNames, shareSubparser, globalsParent):
     return argv
 
 
+class SharePathGlobber:
+    """Expands shell-style wildcards in share path arguments, for shells (cmd, PowerShell)
+    that pass patterns like `*.txt` through literally."""
+
+    WILDCARD_CHARS = frozenset('*?[')
+    NON_PATH_PREFIXES = ('@', 'vfs://')
+
+    @classmethod
+    def _isPattern(cls, path):
+        if path == '-' or path.startswith(cls.NON_PATH_PREFIXES):
+            return False
+
+        # An existing path wins, so names like "report[1].txt" are still shareable
+        if os.path.exists(path):
+            return False
+
+        return any(char in path for char in cls.WILDCARD_CHARS)
+
+    @classmethod
+    def expand(cls, paths):
+        """Return paths with every wildcard pattern replaced by its sorted matches.
+        Returns None and prints an error message if a pattern matches nothing."""
+        expanded = []
+        for path in paths:
+            if not cls._isPattern(path):
+                expanded.append(path)
+                continue
+
+            matches = sorted(glob.glob(path))
+            if not matches:
+                flushPrint(_('Error: no files match pattern: {pattern}').format(pattern=path))
+                return None
+
+            logger.debug(f"Expanded wildcard: {path} → {len(matches)} paths")
+            expanded.extend(matches)
+
+        return expanded
+
+
 def _expandFileList(fileListPath: str):
     """
     Read paths from a filelist file, return list of absolute paths.
@@ -1044,7 +1087,12 @@ def validateShareArguments(args):
     #   1 item, starts with '@' → expand filelist → list[str]
     #   1 item, normal path    → str  (unchanged, single-file fast path)
     #   2+ items               → list[str] of absolute paths
+    # Wildcards (e.g. *.txt) are expanded first, so a pattern matching one file takes the single-file path.
     files = args.file if isinstance(args.file, list) else ([args.file] if args.file else [])
+    files = SharePathGlobber.expand(files)
+    if files is None:
+        return 1
+
     if len(files) == 0:
         args.file = None
     elif len(files) == 1:

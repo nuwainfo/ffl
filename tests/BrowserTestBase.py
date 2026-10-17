@@ -55,6 +55,8 @@ class BrowserTestBase(FastFileLinkTestBase):
     """Base class for browser-based download tests (Chrome, Firefox)"""
 
     USE_BLOB_THRESHOLD = 10 * 1024 * 1024 # 10MB, see static/index.html USE_BLOB_THRESHOLD
+    # Pinned so server-localized text (e.g. OTP email subject "[FastFileLink] ...") does not depend on the host OS locale.
+    BROWSER_LANGUAGE = "en-US"
     FIREFOX_CONSOLE_LOG_MAX = int(os.getenv("FFL_FIREFOX_CONSOLE_LOG_MAX", "400"))
     FIREFOX_DRIVER_START_ATTEMPTS = max(1, int(os.getenv("FFL_FIREFOX_DRIVER_START_ATTEMPTS", "20")))
     FIREFOX_DRIVER_START_RETRY_DELAY_SECONDS = max(
@@ -196,7 +198,8 @@ class BrowserTestBase(FastFileLinkTestBase):
             "download.directory_upgrade": True,
             "safebrowsing.enabled": True,
             "safebrowsing.disable_download_protection": True,
-            "profile.default_content_setting_values.automatic_downloads": 1
+            "profile.default_content_setting_values.automatic_downloads": 1,
+            "intl.accept_languages": self.BROWSER_LANGUAGE,
         }
 
         useStandardChromeDriver = self._shouldUseStandardChromeDriver()
@@ -217,6 +220,7 @@ class BrowserTestBase(FastFileLinkTestBase):
         if self._isHeadlessEnabled():
             options.add_argument('--headless')
             
+        options.add_argument(f'--lang={self.BROWSER_LANGUAGE}')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-gpu')
@@ -544,6 +548,7 @@ class BrowserTestBase(FastFileLinkTestBase):
         firefoxOptions.binary_location = firefoxBinary
         print(f"[Test] Using Firefox binary: {firefoxBinary}")
 
+        firefoxOptions.set_preference("intl.accept_languages", self.BROWSER_LANGUAGE)
         firefoxOptions.set_preference("browser.download.folderList", 2)
         firefoxOptions.set_preference("browser.download.manager.showWhenStarting", False)
         firefoxOptions.set_preference("browser.download.dir", downloadDir)

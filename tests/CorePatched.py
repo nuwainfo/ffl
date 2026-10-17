@@ -30,6 +30,8 @@ import re
 import logging
 import tempfile
 import datetime
+import ipaddress
+import socket
 
 import requests
 import requests_mock
@@ -343,6 +345,49 @@ def writeDebugLog(message):
         print(f"[DEBUG_ERROR] Failed to write debug log: {e}")
 
 
+class DirectEgressBlocker:
+    """Simulates a sandbox whose only way out is a proxy: every direct TCP
+    connect to a non-loopback address is refused, while loopback (the local
+    server, and a test proxy listening on 127.0.0.1) stays reachable.
+
+    Enabled with FFL_TEST_BLOCK_DIRECT_EGRESS=True. Only SOCK_STREAM sockets
+    are blocked, so UDP tricks such as local-address detection keep working.
+    """
+
+    ENV_VAR = 'FFL_TEST_BLOCK_DIRECT_EGRESS'
+
+    @staticmethod
+    def _isLoopback(address):
+        try:
+            return ipaddress.ip_address(address[0]).is_loopback
+        except ValueError:
+            return address[0] == 'localhost'
+
+    @classmethod
+    def install(cls):
+        if os.getenv(cls.ENV_VAR) != 'True':
+            return
+
+        originalConnect = socket.socket.connect
+        originalConnectEx = socket.socket.connect_ex
+
+        def guard(sock, address):
+            if sock.type == socket.SOCK_STREAM and not cls._isLoopback(address):
+                raise ConnectionRefusedError(f"Direct egress to {address} blocked by {cls.ENV_VAR}")
+
+        def connect(sock, address):
+            guard(sock, address)
+            return originalConnect(sock, address)
+
+        def connectEx(sock, address):
+            guard(sock, address)
+            return originalConnectEx(sock, address)
+
+        socket.socket.connect = connect
+        socket.socket.connect_ex = connectEx
+        logger.info("Direct (non-loopback) TCP egress is blocked")
+
+
 def main():
     """Main entry point that optionally applies FastFileLink API instability simulation"""
     writeDebugLog(f"[CorePatched] Starting with args: {sys.argv}")
@@ -361,6 +406,7 @@ def main():
         setupLogger(simLogLevel)
         writeDebugLog(f"[CorePatched] Logger setup complete")
 
+        DirectEgressBlocker.install()
         simulator = FastFileLinkApiSimulator(failureRate, maxConsecutiveFailures)
         mocker = simulator.setupMocker()
         writeDebugLog(f"[CorePatched] Simulator setup complete, mocker active: {mocker is not None}")

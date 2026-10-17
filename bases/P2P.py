@@ -173,7 +173,7 @@ class QUICFileSender:
                     speed = int(max(0, logicalTransferred - offset) / duration) if duration > 0 else 0
                     percentage = (logicalTransferred * 100.0 / size) if size and size > 0 else 0
                     
-                    FFLEvent.downloadProgress.trigger(
+                    FFLEvent.p2pTransferProgress.trigger(
                         shareId=self.session.uid,
                         downloadId=transferState.downloadId,
                         bytesTransferred=logicalTransferred,
@@ -226,7 +226,7 @@ class QUICFileSender:
             def chunks(offset):
                 transferState.progress = self._createProgress(size, offset)
                 
-                FFLEvent.downloadStarted.trigger(
+                FFLEvent.p2pTransferStarted.trigger(
                     timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                     shareId=self.session.uid,
                     downloadId=transferState.downloadId,
@@ -257,7 +257,7 @@ class QUICFileSender:
                 )
             completed = True
 
-            FFLEvent.downloadCompleted.trigger(
+            FFLEvent.p2pTransferCompleted.trigger(
                 shareId=self.session.uid,
                 downloadId=transferState.downloadId,
                 bytesTransferred=bytesTransferred,
@@ -285,7 +285,7 @@ class QUICFileSender:
                 
             return result
         except Exception as error:
-            FFLEvent.downloadFailed.trigger(
+            FFLEvent.p2pTransferFailed.trigger(
                 shareId=self.session.uid,
                 downloadId=transferState.downloadId,
                 reason='p2p-quic-failed',
@@ -322,6 +322,7 @@ class P2PDownloadMixin:
         self.p2pQUICReadTimeout = getEnv('P2P_QUIC_READ_TIMEOUT', 600)
         self.p2pTransportPreference = getEnv('P2P_TRANSPORT_PREFERENCE', 'auto')
         self.debugSimulateQUICFailure = getEnv('P2P_CLI_SIMULATE_QUIC_FAILURE', False)
+        self.debugSimulateQUICPreflightFailure = getEnv('P2P_CLI_SIMULATE_QUIC_PREFLIGHT_FAILURE', False)
         self.debugQUICFailureAfterBytes = getEnv('P2P_CLI_QUIC_FAILURE_AFTER_BYTES', 50000)
         self.debugQUICFailureDelaySeconds = getEnv('P2P_CLI_QUIC_FAILURE_DELAY_SECONDS', 0)
 
@@ -343,6 +344,12 @@ class P2PDownloadMixin:
 
         time.sleep(self.debugQUICFailureDelaySeconds)
         raise RuntimeError(f'Debug: Simulated QUIC transfer failure at {bytesWritten} bytes')
+
+    def _maybeSimulateQUICPreflightFailure(self):
+        """Test hook: fail the way metadata/output-path/resume setup would,
+        before any QUIC byte could be received."""
+        if self.debugSimulateQUICPreflightFailure:
+            raise RuntimeError('Debug: Simulated QUIC pre-flight failure')
 
     def _downloadViaQUIC(
         self,
@@ -366,52 +373,59 @@ class P2PDownloadMixin:
         also preserves the existing unaligned-resume behavior.
         """
         self._notifyTransport(TransferTransport.P2P_QUIC.value)
-        
-        authExtra = {}
-        if pickupCode:
-            authExtra['X-FFL-Pickup'] = pickupCode
-        if proof:
-            authExtra['X-FFL-Proof'] = proof
-            
-        headers = self._makeHeaders(credentials, authExtra if authExtra else None)
 
-        # Metadata/auth stay on the original public HTTPS URL.  Do not perform
-        # HEAD against the direct UDP path; it is intentionally not HTTP/3.
-        fileSize, fileName, _metadataHeaders = self._getRemoteMetadata(
-            urlInfo.baseURL, headers, isGenericURL=False
-        )
-        finalOutputPath = self._resolveOutputPath(outputPath, fileName)
-        resumePosition = self._handleResumeLogic(finalOutputPath, fileSize, resume)
-        verifyChecksum = self._shouldVerifyChecksum(urlInfo, resumePosition)
-
-        if self._isPositiveSize(fileSize) and resumePosition >= fileSize:
-            return self._finishAlreadyComplete(fileSize, resumePosition, finalOutputPath)
-
-        if resumePosition > 0 and self._isPositiveSize(fileSize):
-            self.loggerCallback(_("Resuming download from {resumePos} / {totalSize}").format(
-                resumePos=formatSize(resumePosition), totalSize=formatSize(fileSize)
-            ))
-
-        progress = self._ensureProgress(fileSize, _("P2P QUIC download"), resumePosition)
-        checksumState = self._createTransferChecksumState(verifyChecksum, checksumAlgorithm)
-        client = QUICFileClient(connection.transport)
-        totalDownloaded = resumePosition
-
-        # The HTTP decryptor is intentional: QUIC transports the exact same
-        # encrypted chunk payload as HTTP, while tag fetching remains HTTPS.
-        streamDecryptor = (
-            self.e2eeClient.createHTTPDecryptor(e2eeContext, resumePosition)
-            if e2eeContext else None
-        )
-
-        mode = 'ab' if resumePosition > 0 else 'wb'
-        outputContext = (
-            contextlib.nullcontext(sys.stdout.buffer)
-            if finalOutputPath == '-'
-            else open(finalOutputPath, mode)
-        )
+        # Anything failing before the first received byte must fall back too, so
+        # the whole setup is guarded, not just the transfer loop.
+        totalDownloaded = 0
+        client = None
 
         try:
+            self._maybeSimulateQUICPreflightFailure()
+
+            authExtra = {}
+            if pickupCode:
+                authExtra['X-FFL-Pickup'] = pickupCode
+            if proof:
+                authExtra['X-FFL-Proof'] = proof
+            
+            headers = self._makeHeaders(credentials, authExtra if authExtra else None)
+
+            # Metadata/auth stay on the original public HTTPS URL.  Do not perform
+            # HEAD against the direct UDP path; it is intentionally not HTTP/3.
+            fileSize, fileName, _metadataHeaders = self._getRemoteMetadata(
+                urlInfo.baseURL, headers, isGenericURL=False
+            )
+            finalOutputPath = self._resolveOutputPath(outputPath, fileName)
+            resumePosition = self._handleResumeLogic(finalOutputPath, fileSize, resume)
+            verifyChecksum = self._shouldVerifyChecksum(urlInfo, resumePosition)
+
+            if self._isPositiveSize(fileSize) and resumePosition >= fileSize:
+                return self._finishAlreadyComplete(fileSize, resumePosition, finalOutputPath)
+
+            if resumePosition > 0 and self._isPositiveSize(fileSize):
+                self.loggerCallback(_("Resuming download from {resumePos} / {totalSize}").format(
+                    resumePos=formatSize(resumePosition), totalSize=formatSize(fileSize)
+                ))
+
+            progress = self._ensureProgress(fileSize, _("P2P QUIC download"), resumePosition)
+            checksumState = self._createTransferChecksumState(verifyChecksum, checksumAlgorithm)
+            client = QUICFileClient(connection.transport)
+            totalDownloaded = resumePosition
+
+            # The HTTP decryptor is intentional: QUIC transports the exact same
+            # encrypted chunk payload as HTTP, while tag fetching remains HTTPS.
+            streamDecryptor = (
+                self.e2eeClient.createHTTPDecryptor(e2eeContext, resumePosition)
+                if e2eeContext else None
+            )
+
+            mode = 'ab' if resumePosition > 0 else 'wb'
+            outputContext = (
+                contextlib.nullcontext(sys.stdout.buffer)
+                if finalOutputPath == '-'
+                else open(finalOutputPath, mode)
+            )
+
             self._maybeSimulateQUICFailure(totalDownloaded)
 
             with outputContext as output:
@@ -470,7 +484,8 @@ class P2PDownloadMixin:
             self._finishProgress(complete=False)
             raise P2PQUICFallbackError(error, totalDownloaded) from error
         finally:
-            client.close()
+            if client:
+                client.close()
 
     def downloadFile(self, url, outputPath=None, resume=False, downloadAuth=None):
         self._validateOutputPath(outputPath)

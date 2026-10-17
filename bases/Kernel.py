@@ -45,9 +45,9 @@ from signalslot import Signal
 from sentry_sdk.integrations.logging import SentryHandler, LoggingIntegration
 from sentry_sdk.integrations import atexit as sentryAtexit
 
-PUBLIC_VERSION = '4.2.2'
+PUBLIC_VERSION = '4.2.3'
 
-PUBLIC_REVISION = "$Revision: 20027 $"[11:-2] # UPDATE: flag to update this!
+PUBLIC_REVISION = "$Revision: 20101 $"[11:-2] # UPDATE: flag to update this!
 
 # Map string levels to logging constants for standard level names
 LOG_LEVEL_MAPPING = {'DEBUG': logging.DEBUG, 'INFO': logging.INFO, 'WARNING': logging.WARNING, 'ERROR': logging.ERROR}
@@ -518,22 +518,41 @@ class EventService(Singleton):
         elif not isinstance(excludeNames, set):
             excludeNames = set(excludeNames)
 
-        for name in dir(eventClass):
-            if name in excludeNames:
-                continue
+        events = [
+            getattr(eventClass, name) for name in dir(eventClass)
+            if name not in excludeNames and isinstance(getattr(eventClass, name), Event)
+        ]
+        for event in events:
+            self.register(event.key)
 
-            attr = getattr(eventClass, name)
-            if isinstance(attr, Event):
-                self.register(attr.key)
+        # Sources subscribe only after every event is registered.
+        for event in events:
+            event.connectSources()
 
 
 class Event:
-    """ Simple Event wrapper"""
+    """Simple Event wrapper.
 
-    def __init__(self, key):
+    An event may be declared as the integration of other events: it then
+    re-triggers every event of `sources` (payload passed through `normalize`
+    when given), so subscribers need not know which source fired.
+    """
+
+    def __init__(self, key, sources=(), normalize=None):
         self.key = key
+        self.sources = tuple(sources)
+        self.normalize = normalize
 
         self.eventService = EventService.getInstance()
+
+    def connectSources(self):
+        """Link this event to its sources (all must be registered). Idempotent;
+        also restores the links after subscriptions were cleared."""
+        for source in self.sources:
+            source.subscribe(self._relay)
+
+    def _relay(self, **eventData):
+        self.trigger(**(self.normalize(eventData) if self.normalize else eventData))
 
     def subscribe(self, observer, timing=EventTiming.AFTER, index=-1):
         return self.eventService.subscribe(self.key, observer, timing=timing, index=index)
@@ -1413,13 +1432,18 @@ class FFLEvent:
     # Backward-compat aliases
     serverTimeout = sessionTimeout
 
-    # Download events (P2P server side)
+    # HTTP download events: fired only by the HTTP download handler (bases/Server.py).
+    # WebRTC and direct P2P transfers have their own sets below; subscribe to the
+    # integrated transfer* set to observe all three.
     downloadStarted = Event('/download/create')
     downloadProgress = Event('/download/progress')
     downloadCompleted = Event('/download/complete')
     downloadFailed = Event('/download/fail')
     maxDownloadsReached = Event('/download/limit/reach')
     receiptCreated = Event('/receipt/create')
+
+    # Link preview / unfurl bot served metadata only (no download counted)
+    previewServed = Event('/preview/serve')
 
     # WebRTC events
     webrtcOfferReceived = Event('/webrtc/offer/create')
@@ -1430,6 +1454,48 @@ class FFLEvent:
     webrtcTransferCompleted = Event('/webrtc/transfer/complete')
     webrtcFailed = Event('/webrtc/fail')
     webrtcDisconnected = Event('/webrtc/disconnect')
+
+    # Direct P2P transfer events (TCP/QUIC, bases/P2P.py)
+    p2pTransferStarted = Event('/p2p/transfer/create')
+    p2pTransferProgress = Event('/p2p/transfer/progress')
+    p2pTransferCompleted = Event('/p2p/transfer/complete')
+    p2pTransferFailed = Event('/p2p/transfer/fail')
+
+    # Integrated transfer events: each re-triggers its HTTP, WebRTC and P2P
+    # source events with downloadId (WebRTC's peerId) and clientInfo always
+    # present. Subscribe here instead of to the three sets; never trigger directly.
+    class TransferEventPayload:
+        """Normalizes HTTP, WebRTC and P2P transfer payloads for the integrated transfer events."""
+
+        @staticmethod
+        def normalize(eventData):
+            normalized = dict(eventData)
+            if 'downloadId' not in normalized and 'peerId' in normalized:
+                normalized['downloadId'] = normalized['peerId']
+
+            normalized.setdefault('clientInfo', {})
+            return normalized
+
+    transferStarted = Event(
+        '/transfer/create',
+        sources=(downloadStarted, webrtcTransferStarted, p2pTransferStarted),
+        normalize=TransferEventPayload.normalize,
+    )
+    transferProgress = Event(
+        '/transfer/progress',
+        sources=(downloadProgress, webrtcTransferProgress, p2pTransferProgress),
+        normalize=TransferEventPayload.normalize,
+    )
+    transferCompleted = Event(
+        '/transfer/complete',
+        sources=(downloadCompleted, webrtcTransferCompleted, p2pTransferCompleted),
+        normalize=TransferEventPayload.normalize,
+    )
+    transferFailed = Event(
+        '/transfer/fail',
+        sources=(downloadFailed, webrtcFailed, p2pTransferFailed),
+        normalize=TransferEventPayload.normalize,
+    )
 
     # E2EE events
     e2eeKeyGenerated = Event('/e2ee/key/create')

@@ -41,6 +41,74 @@ from ..BrowserTestBase import BrowserTestBase
 from ..CoreTestBase import FastFileLinkTestBase
 
 
+class PreviewBotUserAgentTest(unittest.TestCase):
+    """Link preview bots must be served index.html only: no file bytes, no download accounting."""
+
+    PREVIEW_UAS = [
+        'GrokBot-LinkPreview/1.0',
+        'Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)',
+        'Slackbot 1.0 (+https://api.slack.com/robots)',
+        'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+        'Twitterbot/1.0',
+        'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)',
+        'TelegramBot (like TwitterBot)',
+        'LinkedInBot/1.0 (compatible; Mozilla/5.0; Apache-HttpClient +http://www.linkedin.com)',
+        'Mozilla/5.0 (Windows NT 6.1; WOW64) SkypeUriPreview Preview/0.5',
+        'Mozilla/5.0 (Linux; Android 10) SomeNewApp-Preview/2.0',
+        'line-poker/1.0',
+    ]
+    REAL_UAS = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:157.0) Gecko/20100101 Firefox/157.0',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36',
+        'curl/8.5.0',
+        'python-requests/2.32.0',
+        'Mozilla/5.0 (Windows NT 10.0; Microsoft Windows 10.0.19045; en-US) WindowsPowerShell/5.1',
+    ]
+
+    def _handler(self, userAgent, command='GET'):
+        handler = object.__new__(DownloadHandler)
+        handler.headers = {'User-Agent': userAgent} if userAgent is not None else {}
+        handler.command = command
+        return handler
+
+    def testPreviewBotsDetected(self):
+        for userAgent in self.PREVIEW_UAS:
+            with self.subTest(userAgent=userAgent):
+                handler = self._handler(userAgent)
+                self.assertTrue(handler._isPreviewBotRequest())
+                self.assertEqual(handler._determineRedirectPath(), '/static/index.html')
+
+    def testRealClientsNotPreviewBots(self):
+        for userAgent in self.REAL_UAS:
+            with self.subTest(userAgent=userAgent):
+                self.assertFalse(self._handler(userAgent)._isPreviewBotRequest())
+
+    def testMatchingIsCaseInsensitive(self):
+        self.assertTrue(self._handler('GROKBOT-LINKPREVIEW/1.0')._isPreviewBotRequest())
+
+    def testDownloadServesPreviewOnly(self):
+        for command, handlerName, args in (('GET', '_handleDownload', ({},)), ('HEAD', '_handleDownloadHead', ())):
+            with self.subTest(command=command):
+                handler = self._handler('GrokBot-LinkPreview/1.0', command)
+                handler.session = mock.Mock(uid='abc')
+                handler.date_time_string = lambda: 'now'
+                handler._handleStaticIndex = mock.Mock()
+                handler._handleDefaultHead = mock.Mock()
+                handler._handleStartDownloadActions = mock.Mock()
+                handler._getFileInfo = mock.Mock()
+
+                with mock.patch('bases.Server.FFLEvent') as eventMock:
+                    getattr(handler, handlerName)(*args)
+
+                eventMock.previewServed.trigger.assert_called_once()
+                eventMock.downloadStarted.trigger.assert_not_called()
+                handler._handleStartDownloadActions.assert_not_called()
+                handler._getFileInfo.assert_not_called()
+                served = handler._handleStaticIndex if command == 'GET' else handler._handleDefaultHead
+                served.assert_called_once()
+                self.assertEqual(handler.path, '/static/index.html')
+
+
 class LogicalDownloadRequestStoreTest(unittest.TestCase):
     """Unit tests for same-dl overlap tracking independent of HTTP plumbing."""
 

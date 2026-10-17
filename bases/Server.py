@@ -227,10 +227,25 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
             ["mozilla"],
         ],
 
-        # Preview/crawlers (currently also redirected to index)
+        # Link preview / unfurl crawlers. They are served index.html (OG tags) only, never the
+        # file bytes, and never count as a download. Matched before BROWSER because many of them
+        # also carry "Mozilla" in their UA. The generic tokens (preview, linkexpanding, ...)
+        # catch bots not listed by name; extend this list as new ones appear.
         "PREVIEW_BOTS": [
             ["facebookexternalhit"],
             ["line-"],
+            ["grokbot"],
+            ["slackbot"],
+            ["twitterbot"],
+            ["discordbot"],
+            ["telegrambot"],
+            ["linkedinbot"],
+            ["skypeuripreview"],
+            ["preview"],
+            ["linkexpanding"],
+            ["unfurl"],
+            ["crawler"],
+            ["spider"],
         ],
     }
 
@@ -443,36 +458,56 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
         return path, name, size, ctype, reader
 
     # HEAD handlers
+    def _matchUserAgentRule(self, ruleName):
+        """Whether the request User-Agent matches any token group (all tokens, case-insensitive) of the rule."""
+        userAgentLower = self.headers.get("User-Agent", "").lower()
+
+        return any(
+            all(token.lower() in userAgentLower for token in group) for group in self.UA_RULES[ruleName]
+        )
+
+    def _isPreviewBotRequest(self):
+        """Whether the current request comes from a link preview / unfurl bot (judged by its User-Agent).
+
+        Direct download and in-app rules take priority, same as in _determineRedirectPath.
+        """
+        return (
+            self._matchUserAgentRule("PREVIEW_BOTS") and not self._matchUserAgentRule("DIRECT_DOWNLOAD")
+            and not self._matchUserAgentRule("IN_APP")
+        )
+
+    def _servePreviewOnly(self, handler, *handlerArgs):
+        """Serve index.html (metadata/OG tags) to a link preview bot: no file bytes, no download accounting."""
+        FFLEvent.previewServed.trigger(
+            timestamp=self.date_time_string(),
+            shareId=self.session.uid,
+            clientInfo={
+                'userAgent': self.headers.get('User-Agent', 'Unknown'),
+                'domain': self.headers.get('Host', 'Unknown')
+            },
+            method=self.command
+        )
+        self.path = "/static/index.html"
+        handler(*handlerArgs)
+
     def _determineRedirectPath(self):
-        userAgent = self.headers.get("User-Agent", "")
-        if not userAgent:
+        if not self.headers.get("User-Agent", ""):
             return "/download"
 
-        userAgentLower = userAgent.lower()
-
-        def matchAll(tokens):
-            # Convert tokens to lowercase as well, to avoid issues if rules contain uppercase
-            return all(t.lower() in userAgentLower for t in tokens)
-
-        def matchAny(listOfTokenGroups):
-            return any(matchAll(group) for group in listOfTokenGroups)
-
         # 1) Direct download
-        if matchAny(self.UA_RULES["DIRECT_DOWNLOAD"]):
+        if self._matchUserAgentRule("DIRECT_DOWNLOAD"):
             return "/download"
 
         # 2) In-app whitelist
-        if matchAny(self.UA_RULES["IN_APP"]):
+        if self._matchUserAgentRule("IN_APP"):
             return "/static/index.html"
 
-        # 3) Preview bots (decide whether to treat as index; currently follows original behavior: go to index)
-        if matchAny(self.UA_RULES["PREVIEW_BOTS"]):
+        # 3) Preview bots (served index.html only, see _servePreviewOnly)
+        if self._matchUserAgentRule("PREVIEW_BOTS"):
             return "/static/index.html"
 
         # 4) General browsers
-        isBrowser = matchAny(self.UA_RULES["BROWSER"])
-
-        return "/static/index.html" if isBrowser else "/download"
+        return "/static/index.html" if self._matchUserAgentRule("BROWSER") else "/download"
 
     def _handleHeadRedirect(self):
         """Handle redirect by determining path and calling appropriate handler"""
@@ -487,6 +522,10 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Redirect handler not found")
 
     def _handleDownloadHead(self):
+        if self._isPreviewBotRequest():
+            self._servePreviewOnly(self._handleDefaultHead)
+            return
+
         path, name, size, ctype, reader = self._getFileInfo()
 
         self.send_response(HTTPStatus.OK)
@@ -822,6 +861,10 @@ class DownloadHandler(AuthMixin, ViewsMixin, SessionSSEMixin, SimpleHTTPRequestH
         return True
 
     def _handleDownload(self, args):
+        if self._isPreviewBotRequest():
+            self._servePreviewOnly(self._handleStaticIndex, args)
+            return
+
         if not self._checkViewAccess(self.path, args):
             return
 
