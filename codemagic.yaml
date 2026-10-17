@@ -120,7 +120,7 @@ workflows:
           echo "=== Checkout result ==="
           test -d "$FFL_DIR/FileShare/.svn"
           test -d "$FFL_DIR/FileShareServer/.svn"
-          test -f "$FFL_DIR/FileShare/tests/scripts/MacOSBuild.sh"
+          test -f "$FFL_DIR/FileShare/scripts/MacOSBuild.sh"
 
           echo "FileShare revision:"
           svn info "$FFL_DIR/FileShare" | grep -E '^(URL|Revision):'
@@ -134,7 +134,7 @@ workflows:
 
           export PATH="$HOME/.cargo/bin:$PATH"
 
-          BUILD_SCRIPT="$HOME/FFL/FileShare/tests/scripts/MacOSBuild.sh"
+          BUILD_SCRIPT="$HOME/FFL/FileShare/scripts/MacOSBuild.sh"
           chmod +x "$BUILD_SCRIPT"
 
           echo "=== Running existing build entry point ==="
