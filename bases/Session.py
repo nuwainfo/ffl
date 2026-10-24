@@ -26,12 +26,13 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler
-from typing import Any, Optional
+from typing import Optional
 
 from bases.Auth import RecipientAuth
 from bases.Checksum import TransferChecksumStore
 from bases.E2EE import E2EEManager
 from bases.Kernel import getLogger
+from bases.P2P import P2PPublications
 from bases.Settings import NetworkPolicy
 from bases.Readers import SourceReader
 from bases.Share import ShareSession, ShareStatus
@@ -199,8 +200,7 @@ class DownloadProgressStore(DownloadRecordStore):
 class HTTPDownloadCompletionStore(DownloadRecordStore):
     """Thread-safe ACK tracker for download completion over the HTTPS control
     plane -- shared by plain HTTP relay downloads (keyed by a per-request id)
-    and P2P/QUIC downloads (keyed by the share uid; see
-    bases.P2P.QUICFileSender._waitForClientComplete).
+    and P2P/QUIC downloads (keyed by bases.P2P.P2PTransferIdentity).
 
     The browser may legitimately send duplicate POST /complete requests when we
     add a Service Worker-side ACK as a reliability backstop while keeping the
@@ -361,7 +361,7 @@ class ServerSession(ShareSession):
     logicalDownloadRequestStore: Optional[LogicalDownloadRequestStore] = None
     httpDownloadCompletionStore: Optional[HTTPDownloadCompletionStore] = None
     eventHub: Optional[EventHub] = None
-    p2pPublishers: dict[str, Any] = field(default_factory=dict)
+    p2pPublications: P2PPublications = field(default_factory=P2PPublications)
     lastError: Optional[dict[str, Optional[str]]] = None
     _debugUserAgentSessions: set[str] = field(default_factory=set)
 
@@ -371,10 +371,7 @@ class ServerSession(ShareSession):
         self.networkPolicy = networkPolicy
 
     def stop(self):
-        for publisher in self.p2pPublishers.values():
-            publisher.close()
-            
-        self.p2pPublishers.clear()
+        self.p2pPublications.close()
 
         if self.webRTC:
             try:

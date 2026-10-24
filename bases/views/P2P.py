@@ -17,6 +17,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from dataclasses import asdict, replace
 from http import HTTPStatus
 
 from bases.P2P import (
@@ -31,46 +32,50 @@ from bases.views import BaseController, BaseView, HTTPResult
 
 
 class P2PController(BaseController):
-    def _newPublisher(self, port, host, server=None):
-        if not isP2PAvailable() or not self.session.config.defaultWebRTC:
-            return None
-
-        settingsGetter = SettingsGetter.getInstance()
-        localHosts = settingsGetter.directConnectionHosts
+    def _resolveTCPEndpoints(self, port, host, portMappingEnabled, useTLS):
+        localHosts = SettingsGetter.getInstance().directConnectionHosts
         if localHosts is None:
             localHosts = [host] if host not in {'', '0.0.0.0', '::'} else None
 
-        portMappingEnabled = settingsGetter.portMappingEnabled
-        udpHandler = QUICFileSender(self.session, server=server)
-        
-        return P2PPublisher(
+        return self.session.p2pPublications.tcpEndpoints.resolve(
+            port, localHosts, f'/{self.session.uid}', portMappingEnabled, useTLS
+        )
+
+    def createOffer(self, port, host, directTLSIdentity, server=None):
+        if not isP2PAvailable() or not self.session.config.defaultWebRTC:
+            return None
+
+        # Downloaders probe direct endpoints with their auth headers, so the
+        # endpoints are TLS, pinned by the fingerprint this (HTTPS) offer carries.
+        tcpCertificateFingerprint = directTLSIdentity.sha256Fingerprint if directTLSIdentity else None
+        portMappingEnabled = SettingsGetter.getInstance().portMappingEnabled
+        # Per-downloader publishers carry only ICE/QUIC; the share owns its TCP endpoints.
+        publisher = P2PPublisher(
             port,
             configuration=P2PConfiguration.createICEConfiguration(),
             useUDPPortMapping=portMappingEnabled,
-            useTCPPortMapping=portMappingEnabled,
-            tcpPath=f'/{self.session.uid}',
-            tcpLocalHosts=localHosts,
-            udpHandler=udpHandler,
+            useTCPPortMapping=False,
+            tcpLocalHosts=[],
+        )
+        offer = self.session.p2pPublications.open(publisher, QUICFileSender(self.session, server=server))
+        offer = replace(
+            offer,
+            tcpEndpoints=self._resolveTCPEndpoints(
+                port, host, portMappingEnabled, useTLS=tcpCertificateFingerprint is not None
+            ),
+            tcpCertificateFingerprint=tcpCertificateFingerprint,
         )
 
-    def createOffer(self, port, host, server=None):
-        publisher = self._newPublisher(port, host, server=server)
-        if publisher is None:
-            return None
-            
-        offer = publisher.createOffer()
-        self.session.p2pPublishers[offer.sessionId] = publisher
-        
-        return self._buildJSONResult(offer.__dict__)
+        return self._buildJSONResult(asdict(offer))
 
     def submitAnswer(self, data):
         answer = P2PAnswer.fromDict(data)
-        publisher = self.session.p2pPublishers.get(answer.sessionId)
-        if publisher is None:
+        publication = self.session.p2pPublications.get(answer.sessionId)
+        if publication is None:
             return self._buildNotFoundResult('P2P offer was not created')
-            
-        publisher.acceptAnswer(answer)
-        
+
+        publication.accept(answer)
+
         return self._buildJSONResult({'accepted': True})
 
 
@@ -90,7 +95,8 @@ class P2PView(BaseView):
 
     def handleOffer(self, args, *, controller):
         result = controller.createOffer(
-            self.server.server_port, self.server.server_address[0], server=self.server
+            self.server.server_port, self.server.server_address[0], self.server.directTLSIdentity,
+            server=self.server,
         )
         
         self.sendHTTPResult(result or controller._buildNotFoundResult())

@@ -18,9 +18,12 @@
 # limitations under the License.
 
 import base64
+import datetime
 import hashlib
 import os
 
+from cryptography import x509
+from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives.asymmetric import ec, padding as asymPadding
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -37,6 +40,10 @@ logger = getLogger(__name__)
 
 class CryptographyBackend(CryptoBackend):
     """Cryptography library backend implementation"""
+
+    canIssueCertificates = True
+    CERTIFICATE_CLOCK_SKEW = datetime.timedelta(minutes=5)
+    CERTIFICATE_VALIDITY = datetime.timedelta(days=365)
 
     def __init__(self):
         self.ec = ec
@@ -306,3 +313,27 @@ class CryptographyBackend(CryptoBackend):
             encryption_algorithm=self.serialization.NoEncryption()
         )
         return pemBytes.decode('utf-8')
+
+    def generateSelfSignedCertificate(self, commonName):
+        """Issue a self-signed ECDSA P-256 certificate, returns (certificatePEM, privateKeyPEM)"""
+        privateKey = self.ec.generate_private_key(self.ec.SECP256R1())
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, commonName)])
+        now = datetime.datetime.now(datetime.timezone.utc)
+        certificate = (
+            x509.CertificateBuilder()
+            .subject_name(name)
+            .issuer_name(name)
+            .public_key(privateKey.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - self.CERTIFICATE_CLOCK_SKEW)
+            .not_valid_after(now + self.CERTIFICATE_VALIDITY)
+            .sign(privateKey, self.hashes.SHA256())
+        )
+
+        certificatePEM = certificate.public_bytes(self.serialization.Encoding.PEM).decode('ascii')
+        privateKeyPEM = privateKey.private_bytes(
+            encoding=self.serialization.Encoding.PEM,
+            format=self.serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=self.serialization.NoEncryption()
+        ).decode('ascii')
+        return certificatePEM, privateKeyPEM

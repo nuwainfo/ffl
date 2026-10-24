@@ -27,6 +27,12 @@ logger = getLogger(__name__)
 class CryptoBackend(ABC):
     """Abstract base class for cryptographic backends"""
 
+    canIssueCertificates = False # Backends that implement generateSelfSignedCertificate() set this
+
+    def generateSelfSignedCertificate(self, commonName):
+        """Issue a self-signed X.509 certificate, returns (certificatePEM, privateKeyPEM)"""
+        raise NotImplementedError(f'{self.getName()} cannot issue certificates')
+
     @abstractmethod
     def getName(self):
         """Get backend name"""

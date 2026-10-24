@@ -410,7 +410,7 @@ def editELF(inputFile, outputFile):
     section.type = lief.ELF.Section.TYPE.PROGBITS
     section.alignment = 1
 
-    binary.add(section)
+    binary.add(section, loaded=False)
 
     section2 = lief.ELF.Section('Version')
     section2.content = list(formattedVersion.encode('utf-8'))
@@ -419,7 +419,7 @@ def editELF(inputFile, outputFile):
     section2.type = lief.ELF.Section.TYPE.PROGBITS
     section2.alignment = 1
 
-    binary.add(section2)
+    binary.add(section2, loaded=False)
     binary.write(outputFile)
 
 

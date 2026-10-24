@@ -38,7 +38,9 @@ import requests
 
 from bases.Checksum import DEFAULT_CHECKSUM_ALGORITHM
 from bases.Kernel import getLogger
-from bases.Utils import flushPrint, formatSize, getEnv, sendException, StallResilientAdapter, NetworkEndpoint
+from bases.Utils import (
+    flushPrint, formatSize, getEnv, sendException, PinnedHTTPAdapter, StallResilientAdapter, NetworkEndpoint
+)
 from bases.Progress import Progress
 from bases.Settings import SettingsGetter, TRANSFER_CHUNK_SIZE, TransferTransport
 from bases.E2EE import E2EEClient
@@ -141,6 +143,30 @@ class Downloader(ABC):
         # download is gone and polls its now-defunct /status URL forever,
         # every 0.5s, for the life of the process. See Refs #4297.
         self._activeStatusStopEvents = set()
+        # origin ('https://host:port') -> SHA-256 fingerprint of the one certificate it may present
+        self._pinnedCertificates = {}
+
+    def pinCertificate(self, origin, sha256Fingerprint):
+        """Trust exactly this certificate for `origin` from now on, instead of CA/hostname checks."""
+        self._pinnedCertificates[origin] = sha256Fingerprint
+
+    def _openHTTPSession(self, createAdapter=None):
+        """A requests.Session for this downloader: `createAdapter(**kwargs)`
+        (default: requests' own adapter) serves every origin, and pinned
+        origins get the same adapter restricted to their pinned certificate."""
+        session = requests.Session()
+        if createAdapter is not None:
+            session.mount('https://', createAdapter())
+            session.mount('http://', createAdapter())
+
+        for origin, sha256Fingerprint in self._pinnedCertificates.items():
+            session.mount(origin, (createAdapter or PinnedHTTPAdapter)(pinnedFingerprint=sha256Fingerprint))
+
+        return session
+
+    def _requestHTTP(self, method, url, **kwargs):
+        with self._openHTTPSession() as session:
+            return session.request(method, url, **kwargs)
 
     def cancel(self):
         """Interrupt a transfer while preserving its partial output file for resume."""
@@ -507,13 +533,13 @@ class Downloader(ABC):
 
         try:
             if method == "GET":
-                response = requests.get(url, headers=requestHeaders, timeout=timeout)
+                response = self._requestHTTP("GET", url, headers=requestHeaders, timeout=timeout)
             elif method == "POST":
                 requestHeaders["Content-Type"] = "application/json"
-                response = requests.post(url, json=data, headers=requestHeaders, timeout=timeout)
+                response = self._requestHTTP("POST", url, json=data, headers=requestHeaders, timeout=timeout)
             else:
                 # Generic method support
-                response = requests.request(
+                response = self._requestHTTP(
                     method, url, json=data if data else None, headers=requestHeaders, timeout=timeout
                 )
 
@@ -548,7 +574,7 @@ class Downloader(ABC):
         A FastFileLink P2P server's HEAD is authoritative (Content-Length: 0 there means an
         unknown size, e.g. stdin), and a GET would start its one-shot stream.
         """
-        response = requests.head(url, headers=headers or {}, timeout=10)
+        response = self._requestHTTP("HEAD", url, headers=headers or {}, timeout=10, allow_redirects=False)
         response.raise_for_status()
         head = response.headers
 
@@ -556,7 +582,9 @@ class Downloader(ABC):
         if head.get('Content-Length', '') == '0' and not self._isFastFileLinkServer(head):
             logger.debug("HEAD returned Content-Length: 0, retrying with GET")
             # Behave like the HEAD it replaces: no redirects, and a rejection (e.g. wrong pickup code) raises
-            response = requests.get(url, headers=headers or {}, timeout=10, stream=True, allow_redirects=False)
+            response = self._requestHTTP(
+                "GET", url, headers=headers or {}, timeout=10, stream=True, allow_redirects=False
+            )
             response.close() # Close immediately after getting headers
             response.raise_for_status()
             head = response.headers
@@ -1114,13 +1142,13 @@ class HTTPDownloader(Downloader):
         # Start download without extra logging if using shared progress
 
         # Create session with StallResilientAdapter for Python 3.12 workarounds and better stall handling
-        session = requests.Session()
-        adapter = StallResilientAdapter(
-            chunkSize=TRANSFER_CHUNK_SIZE,
-            allowedMethods={'GET'} # Download method only
+        session = self._openHTTPSession(
+            lambda **kwargs: StallResilientAdapter(
+                chunkSize=TRANSFER_CHUNK_SIZE,
+                allowedMethods={'GET'}, # Download method only
+                **kwargs,
+            )
         )
-        session.mount("https://", adapter)
-        session.mount("http://", adapter)
 
         activeResponse = {'response': None}
 
@@ -1223,6 +1251,11 @@ class HTTPDownloader(Downloader):
                                 f.write(processedData)
                                 totalDownloaded += len(processedData)
                                 progress.update(totalDownloaded, extraText=progressText)
+
+                            # cancel() closes the response, which ends iter_content
+                            # cleanly instead of raising, so check for a pause here
+                            # or the truncated file is treated as a finished download.
+                            self._raiseIfCancelled()
 
                             # The iter_content loop can end "cleanly" (no read
                             # exception) even though the server aborted the

@@ -790,37 +790,7 @@ class FastFileLinkTestBase(unittest.TestCase):
             
         return 2
 
-    def _downloadWithCore(
-        self,
-        shareLink,
-        outputPath=None,
-        extraArgs=None,
-        extraEnvVars=None,
-        captureOutputIn=None,
-        stdoutMode=False,
-        timeout=120,
-    ):
-        """
-        Download file using FFL.py directly
-
-        Args:
-            shareLink (str): The share link to download from
-            outputPath (str, optional): Output path for downloaded file
-            extraArgs (list, optional): Additional command line arguments
-            extraEnvVars (dict, optional): Additional environment variables
-            captureOutputIn (dict, optional): Dictionary to capture process output
-            stdoutMode (bool): If True, pass `--stdout` and return file bytes plus
-                stderr text instead of saving to a file.
-            timeout (int): Maximum seconds to wait for the download process.
-
-        Returns:
-            str: Path to the downloaded file when stdoutMode=False
-            tuple[bytes, str]: Raw stdout bytes and decoded stderr text when stdoutMode=True
-        """
-        print(f"[Test] Downloading file using FFL.py from: {shareLink}")
-        if stdoutMode and outputPath:
-            raise AssertionError("outputPath cannot be used with stdoutMode=True")
-
+    def _buildDownloadArgs(self, shareLink, extraArgs, outputPath, stdoutMode):
         # Build download args: --cli [globalArgs] <shareLink> [downloadSpecificArgs] [-o outputPath]
         downloadArgs = ["--cli"]
 
@@ -853,6 +823,62 @@ class FastFileLinkTestBase(unittest.TestCase):
         elif stdoutMode:
             downloadArgs.append("--stdout")
 
+        return downloadArgs
+
+    def _startStdoutDownloadProcess(self, downloadArgs, extraEnvVars, stderr=subprocess.PIPE):
+        return subprocess.Popen(
+            self._buildCoreCommand(downloadArgs),
+            cwd=self._projectRootDir(),
+            env=self._buildCoreEnv(extraEnvVars=extraEnvVars),
+            stdout=subprocess.PIPE,
+            stderr=stderr
+        )
+
+    def _startStdoutDownload(self, shareLink, stderr, extraArgs=None, extraEnvVars=None):
+        """Start an FFL.py `--stdout` download without consuming its output.
+
+        The caller owns the returned subprocess.Popen and decides when to read
+        its stdout (the file bytes), so a test can hold a receiver back
+        mid-transfer simply by not reading yet. Its stderr (the progress/log
+        text) goes to `stderr`, an open file, so it never blocks the receiver.
+        """
+        print(f"[Test] Starting stdout download using FFL.py from: {shareLink}")
+        downloadArgs = self._buildDownloadArgs(shareLink, extraArgs, None, True)
+        return self._startStdoutDownloadProcess(downloadArgs, extraEnvVars, stderr=stderr)
+
+    def _downloadWithCore(
+        self,
+        shareLink,
+        outputPath=None,
+        extraArgs=None,
+        extraEnvVars=None,
+        captureOutputIn=None,
+        stdoutMode=False,
+        timeout=120,
+    ):
+        """
+        Download file using FFL.py directly
+
+        Args:
+            shareLink (str): The share link to download from
+            outputPath (str, optional): Output path for downloaded file
+            extraArgs (list, optional): Additional command line arguments
+            extraEnvVars (dict, optional): Additional environment variables
+            captureOutputIn (dict, optional): Dictionary to capture process output
+            stdoutMode (bool): If True, pass `--stdout` and return file bytes plus
+                stderr text instead of saving to a file.
+            timeout (int): Maximum seconds to wait for the download process.
+
+        Returns:
+            str: Path to the downloaded file when stdoutMode=False
+            tuple[bytes, str]: Raw stdout bytes and decoded stderr text when stdoutMode=True
+        """
+        print(f"[Test] Downloading file using FFL.py from: {shareLink}")
+        if stdoutMode and outputPath:
+            raise AssertionError("outputPath cannot be used with stdoutMode=True")
+
+        downloadArgs = self._buildDownloadArgs(shareLink, extraArgs, outputPath, stdoutMode)
+
         logPath = None
         if captureOutputIn is not None:
             logPath = os.path.join(self.tempDir, "download_log.txt")
@@ -874,15 +900,7 @@ class FastFileLinkTestBase(unittest.TestCase):
 
             try:
                 if stdoutMode:
-                    command = self._buildCoreCommand(downloadArgs)
-                    downloadEnv = self._buildCoreEnv(extraEnvVars=extraEnvVars)
-                    downloadProcess = subprocess.Popen(
-                        command,
-                        cwd=self._projectRootDir(),
-                        env=downloadEnv,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE
-                    )
+                    downloadProcess = self._startStdoutDownloadProcess(downloadArgs, extraEnvVars)
                     try:
                         rawBytes, stderrOutput = downloadProcess.communicate(timeout=timeout)
                     except subprocess.TimeoutExpired:

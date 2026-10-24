@@ -27,13 +27,16 @@ ffl-p2p.
 
 import contextlib
 import datetime
+import hashlib
 import logging
 import os
 import sys
+import threading
 import time
-import uuid
 
 from dataclasses import dataclass, replace
+from enum import IntEnum
+from urllib.parse import urlsplit
 
 from bases.Checksum import DEFAULT_CHECKSUM_ALGORITHM
 from bases.E2EE import CryptoHelper
@@ -48,15 +51,29 @@ logger = getLogger(__name__)
 try:
     from ffl_p2p import (
         ICEConfiguration, ICEServer, P2PAnswer, P2PConnectivityTimeout,
-        P2PConnector, P2PPublisher, QUICFileClient, QUICFileServer,
+        P2PConnector, P2PPublisher, QUICFileClient, QUICFileServer, TCPPublisher,
     )
 except ImportError:
     ICEConfiguration = ICEServer = P2PAnswer = P2PConnectivityTimeout = None
-    P2PConnector = P2PPublisher = QUICFileClient = QUICFileServer = None
+    P2PConnector = P2PPublisher = QUICFileClient = QUICFileServer = TCPPublisher = None
 
 
 def isP2PAvailable():
     return P2PConnector is not None and not getEnv('DISABLE_P2P', False)
+
+
+class P2PTransferIdentity:
+    """Names one direct QUIC transfer on the HTTPS control plane (progress,
+    events and the /complete ACK).
+
+    Every publisher pins its own QUIC certificate and serves at most one QUIC
+    download, so both peers derive the same id from that certificate without
+    any extra signaling, and concurrent recipients of one share never collide.
+    """
+
+    @staticmethod
+    def fromQUICCertificate(certificate):
+        return hashlib.sha256(certificate.encode('utf-8')).hexdigest()
 
 
 class P2PConfiguration:
@@ -84,8 +101,12 @@ class QUICFileSender:
     @dataclass
     class _TransferState:
         downloadId: str
-        startedAt: float
+        startedAt: float | None = None # set once the downloader requests the file
         progress: Progress | None = None
+
+        @property
+        def started(self):
+            return self.startedAt is not None
 
     def __init__(self, session, server=None, timeout=600):
         self.session = session
@@ -196,7 +217,7 @@ class QUICFileSender:
                 if not checksumSession.isClosed:
                     checksumSession.abort()
 
-    def _waitForClientComplete(self):
+    def _waitForClientComplete(self, transferState):
         """Block briefly for the client's POST /complete ACK before the caller
         tears the session down.
 
@@ -206,40 +227,47 @@ class QUICFileSender:
         stream finishes -- leaving the client with a 503/404 on that
         follow-up request instead of a completed, verified download. Mirrors
         bases.Server.DownloadHandler._waitForHTTPDownloadComplete, keyed by
-        the share's own uid since a P2P/QUIC transfer is always exactly one
-        logical download (no concurrent Range segments to disambiguate).
+        the P2PTransferIdentity both peers share.
         """
-        completed = self.session.httpDownloadCompletionStore.wait(self.session.uid, timeout=5)
+        completed = self.session.httpDownloadCompletionStore.wait(transferState.downloadId, timeout=5)
         if not completed:
-            logger.debug(f'QUIC download complete ACK not received for {self.session.uid[:8]}, proceeding')
+            logger.debug(f'QUIC download complete ACK not received for {transferState.downloadId[:8]}, proceeding')
 
-    def __call__(self, udpTransport):
+    def _startTransfer(self, offset, transferState):
         name, size, _reader = self._fileInfo()
-        transferState = self._TransferState(str(uuid.uuid4()), time.time())
-        completed = False
+        transferState.startedAt = time.time()
+        transferState.progress = self._createProgress(size, offset)
 
         self.session.downloadProgressStore.register(transferState.downloadId, size)
-        self.session.httpDownloadCompletionStore.register(self.session.uid)
+        self.session.httpDownloadCompletionStore.register(transferState.downloadId)
+
+        FFLEvent.p2pTransferStarted.trigger(
+            timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            shareId=self.session.uid,
+            downloadId=transferState.downloadId,
+            connectionType=TransferTransport.P2P_QUIC.value,
+            clientInfo={'transport': 'ice-udp/quic'},
+            resumeOffset=offset,
+            fileSize=size,
+            fileName=name,
+        )
+
+        yield from self._iterWireChunks(offset, transferState)
+
+    def __call__(self, udpTransport):
+        _name, size, _reader = self._fileInfo()
+        transferState = self._TransferState(
+            P2PTransferIdentity.fromQUICCertificate(udpTransport.quicCredentials.certificate)
+        )
+        completed = False
         quicServer = QUICFileServer(udpTransport)
 
         try:
-            def chunks(offset):
-                transferState.progress = self._createProgress(size, offset)
-                
-                FFLEvent.p2pTransferStarted.trigger(
-                    timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                    shareId=self.session.uid,
-                    downloadId=transferState.downloadId,
-                    connectionType=TransferTransport.P2P_QUIC.value,
-                    clientInfo={'transport': 'ice-udp/quic'},
-                    resumeOffset=offset,
-                    fileSize=size,
-                    fileName=name,
-                )
-                
-                yield from self._iterWireChunks(offset, transferState)
-
-            result = quicServer.serve(chunks, timeout=self.timeout, closeTimeout=15)
+            result = quicServer.serve(
+                lambda offset: self._startTransfer(offset, transferState),
+                timeout=self.timeout,
+                closeTimeout=15,
+            )
             offset = result['offset']
             duration = time.time() - transferState.startedAt
             bytesTransferred = max(0, (size - offset)) if size is not None else 0
@@ -267,7 +295,7 @@ class QUICFileSender:
                 clientInfo={'transport': 'ice-udp/quic'},
             )
 
-            self._waitForClientComplete()
+            self._waitForClientComplete(transferState)
 
             if self.server is not None:
                 self.server.doAfterDownload(self.session.uid)
@@ -285,6 +313,12 @@ class QUICFileSender:
                 
             return result
         except Exception as error:
+            if not transferState.started:
+                # The downloader answered the offer but took another path (it
+                # tries TCP after answering), so this QUIC session was never used.
+                logger.debug(f'Unused QUIC session for {self.session.uid[:8]} closed: {error}')
+                return None
+
             FFLEvent.p2pTransferFailed.trigger(
                 shareId=self.session.uid,
                 downloadId=transferState.downloadId,
@@ -301,7 +335,154 @@ class QUICFileSender:
             quicServer.close()
 
             self.session.downloadProgressStore.unregister(transferState.downloadId)
-            self.session.httpDownloadCompletionStore.unregister(self.session.uid)
+            self.session.httpDownloadCompletionStore.unregister(transferState.downloadId)
+
+
+class P2PPublication:
+    """One downloader's direct-P2P offer and the publisher behind it (ICE
+    agent, UDP socket and port mapping, QUIC credentials).
+
+    A publisher serves at most one UDP/QUIC transfer, so it is closed as soon
+    as it cannot be used any more: when its offer goes unanswered for
+    OFFER_TTL_SECONDS, or once its UDP side has resolved, whether by a
+    transfer or by the downloader taking another path.
+    """
+
+    OFFER_TTL_SECONDS = getEnv('P2P_OFFER_TTL_SECONDS', 30)
+
+    class State(IntEnum):
+        OFFERED = 1
+        ANSWERED = 2
+        CLOSED = 3
+
+    def __init__(self, publisher, udpHandler, onClose):
+        self.publisher = publisher
+        self._udpHandler = udpHandler
+        self._onClose = onClose
+        self._lock = threading.Lock()
+        self._state = self.State.OFFERED
+        self._expiry = threading.Timer(self.OFFER_TTL_SECONDS, self._closeFrom, args=({self.State.OFFERED},))
+        self._expiry.daemon = True
+        self._expiry.start()
+
+    @property
+    def sessionId(self):
+        return self.publisher.sessionId
+
+    def _closeFrom(self, states):
+        with self._lock:
+            if self._state not in states:
+                return
+
+            self._state = self.State.CLOSED
+
+        self._expiry.cancel()
+        self.publisher.close()
+        self._onClose(self)
+
+    def close(self):
+        self._closeFrom({self.State.OFFERED, self.State.ANSWERED})
+
+    def _serveUDP(self):
+        try:
+            transport = self.publisher.waitForUDP()
+            if transport is None:
+                logger.debug(f'P2P offer {self.sessionId[:8]} was answered but UDP never connected')
+                return
+
+            try:
+                self._udpHandler(transport)
+            finally:
+                transport.close()
+        except Exception as error:
+            # The handler has already reported the failed transfer itself.
+            logger.warning(f'P2P UDP transfer for offer {self.sessionId[:8]} failed: {error}')
+        finally:
+            self.close()
+
+    def accept(self, answer):
+        with self._lock:
+            if self._state != self.State.OFFERED:
+                raise ValueError(f'P2P offer {self.sessionId[:8]} is no longer open')
+
+            self.publisher.acceptAnswer(answer)
+            self._state = self.State.ANSWERED
+
+        self._expiry.cancel()
+        threading.Thread(target=self._serveUDP, name=f'ffl-p2p-udp-{self.sessionId[:8]}', daemon=True).start()
+
+
+class P2PDirectTCPEndpoints:
+    """The share's direct-TCP endpoints and their port mapping.
+
+    They expose the share's own HTTP server rather than a per-downloader
+    resource, so the share keeps them for its whole lifetime; short-lived
+    publishers advertise them instead of mapping the same port again, and
+    closing a publisher never removes a mapping a TCP download still uses.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._publisher = None
+        self._endpoints = None
+
+    def resolve(self, port, localHosts, path, usePortMapping, useTLS):
+        with self._lock:
+            if self._endpoints is None:
+                self._publisher = TCPPublisher(
+                    port, usePortMapping=usePortMapping, localHosts=localHosts, path=path, useTLS=useTLS
+                )
+                self._endpoints = self._publisher.endpoints()
+
+            return self._endpoints
+
+    def close(self):
+        with self._lock:
+            if self._publisher is not None:
+                self._publisher.close()
+
+            self._publisher = None
+            self._endpoints = None
+
+
+class P2PPublications:
+    """Everything a share publishes for direct P2P: its TCP endpoints and the
+    outstanding per-downloader publications, keyed by signaling sessionId."""
+
+    def __init__(self):
+        self.tcpEndpoints = P2PDirectTCPEndpoints()
+        self._lock = threading.Lock()
+        self._publications = {}
+
+    def _remove(self, publication):
+        with self._lock:
+            self._publications.pop(publication.sessionId, None)
+
+    def open(self, publisher, udpHandler):
+        """Register `publisher` and return its offer; `udpHandler(transport)`
+        serves the transfer if its downloader connects over UDP."""
+        publication = P2PPublication(publisher, udpHandler, onClose=self._remove)
+        with self._lock:
+            self._publications[publication.sessionId] = publication
+
+        try:
+            return publisher.createOffer()
+        except Exception:
+            publication.close()
+            raise
+
+    def get(self, sessionId):
+        with self._lock:
+            return self._publications.get(sessionId)
+
+    def close(self):
+        with self._lock:
+            publications = list(self._publications.values())
+
+        for publication in publications:
+            publication.close()
+
+        self.tcpEndpoints.close()
 
 
 class P2PQUICFallbackError(RuntimeError):
@@ -325,6 +506,7 @@ class P2PDownloadMixin:
         self.debugSimulateQUICPreflightFailure = getEnv('P2P_CLI_SIMULATE_QUIC_PREFLIGHT_FAILURE', False)
         self.debugQUICFailureAfterBytes = getEnv('P2P_CLI_QUIC_FAILURE_AFTER_BYTES', 50000)
         self.debugQUICFailureDelaySeconds = getEnv('P2P_CLI_QUIC_FAILURE_DELAY_SECONDS', 0)
+        self.debugSimulateTLSPinMismatch = getEnv('P2P_CLI_SIMULATE_TLS_PIN_MISMATCH', False)
 
         if self.p2pTransportPreference not in {'auto', 'tcp', 'udp'}:
             raise ValueError("P2P_TRANSPORT_PREFERENCE must be 'auto', 'tcp', or 'udp'")
@@ -350,6 +532,28 @@ class P2PDownloadMixin:
         before any QUIC byte could be received."""
         if self.debugSimulateQUICPreflightFailure:
             raise RuntimeError('Debug: Simulated QUIC pre-flight failure')
+
+    def _maybeSimulateTLSPinMismatch(self, sha256Fingerprint):
+        """Test hook: pin a fingerprint the share's certificate cannot match,
+        as if the direct endpoint were impersonated by someone else."""
+        return '00' * 32 if self.debugSimulateTLSPinMismatch else sha256Fingerprint
+
+    def _secureDirectTCP(self, transport):
+        """Pin the download to the certificate `transport` was authenticated
+        with and return its status text.
+
+        ffl-p2p already verified the pin from the share's offer before sending
+        anything to the direct endpoint, and never probes a plaintext one when
+        the share link is HTTPS; the download's own requests keep that pin.
+        """
+        if not transport.secure:
+            return 'Using P2P TCP download...'
+
+        self.pinCertificate(
+            f'https://{urlsplit(transport.baseURL).netloc}/',
+            self._maybeSimulateTLSPinMismatch(transport.certificateFingerprint),
+        )
+        return 'Using P2P TCP/TLS download...'
 
     def _downloadViaQUIC(
         self,
@@ -474,9 +678,13 @@ class P2PDownloadMixin:
             # download's own post-processing (E2EE tag flush above, checksum
             # verification just above) is actually done -- not merely once the
             # raw QUIC byte stream reported clean close. Reuses the same
-            # /complete ACK as the HTTP path, keyed by the share uid since a
-            # QUIC transfer is always exactly one logical download.
-            self._notifyHTTPDownloadComplete(urlInfo.baseURL, urlInfo.uid, credentials, finalSize)
+            # /complete ACK as the HTTP path.
+            self._notifyHTTPDownloadComplete(
+                urlInfo.baseURL,
+                P2PTransferIdentity.fromQUICCertificate(connection.transport.quicCertificate),
+                credentials,
+                finalSize,
+            )
 
             logger.debug(f'P2P QUIC download completed: {finalOutputPath}')
             return finalOutputPath
@@ -552,14 +760,13 @@ class P2PDownloadMixin:
                     logger.warning(f'P2P direct connection unavailable, falling back: {error}')
                 else:
                     if connection and connection.transportName == 'tcp':
-                        directURL = connection.transport.baseURL
-                        directURLInfo = replace(urlInfo, baseURL=directURL)
-
-                        self.loggerCallback('Using P2P TCP download...')
                         try:
+                            directURL = connection.transport.baseURL
+                            self.loggerCallback(self._secureDirectTCP(connection.transport))
+                            
                             return self._downloadViaHTTP(
                                 directURL, outputPath, credentials, None, resume,
-                                e2eeContext=ctx['e2eeContext'], urlInfo=directURLInfo,
+                                e2eeContext=ctx['e2eeContext'], urlInfo=replace(urlInfo, baseURL=directURL),
                                 pickupCode=pickupCode, proof=ctx['proof'],
                                 checksumAlgorithm=ctx['checksumAlgorithm'],
                                 progressLabel=_('P2P TCP'),

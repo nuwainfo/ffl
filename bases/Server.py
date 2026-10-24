@@ -106,6 +106,7 @@ from bases.Session import (
 )
 from bases.Share import ShareSession, ShareStatus
 from bases.Session import ServerSession
+from bases.TLS import DirectTLSIdentity
 
 from bases.views import ViewsMixin
 from bases.views.Auth import RecipientAuthView
@@ -1468,8 +1469,44 @@ class MultiShareServer(ThreadingHTTPServer):
         self._doneEvent = threading.Event()
         self._startTime = time.time()
         self._autoShutdown = autoShutdown
+        self.directTLSIdentity = DirectTLSIdentity.create()
 
         super().__init__(serverAddress, requestHandlerClass)
+
+    def finish_request(self, request, client_address):
+        """Serve one connection as plain HTTP, or as TLS when it opens with a TLS handshake.
+
+        The share port speaks both on purpose. Only P2P direct TCP downloads
+        (ffl-p2p, via the pinned https:// endpoints in the offer) start a TLS
+        handshake; everything else -- the tunnel/relay, browsers, WebRTC
+        signaling, LAN http:// links -- keeps sending plain HTTP and is served
+        exactly as before.
+        """
+        # The crypto backend cannot issue certificates: no direct TLS, plain HTTP only.
+        if self.directTLSIdentity is None:
+            super().finish_request(request, client_address)
+            return
+
+        # accept() peeks (without consuming) at the first byte the client sends,
+        # which costs one extra recv per connection, not a wait: a normal client
+        # sends its request right away. The probe deadline only bites a client
+        # that connects and stays silent, which would otherwise hold this
+        # worker thread forever.
+        try:
+            servedRequest = self.directTLSIdentity.accept(request)
+        except TimeoutError:
+            logger.debug(f'Dropped {client_address}: no request or TLS handshake within the probe deadline')
+            return
+
+        # Not a TLS handshake (the usual case): accept() returned the very same
+        # socket, untouched, so the request is handled exactly as without TLS.
+        if servedRequest is request:
+            super().finish_request(request, client_address)
+            return
+
+        # A P2P direct TCP download: serve it inside the TLS session accept() set up.
+        with servedRequest as tlsRequest:
+            super().finish_request(tlsRequest, client_address)
 
     def addSession(self, session):
         """Initialize per-session stores, WebRTC, and E2EE; register in routing table."""

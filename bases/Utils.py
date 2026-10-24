@@ -41,7 +41,6 @@ import chardet
 
 from itertools import zip_longest
 
-from urllib3 import PoolManager
 from urllib3.connection import HTTPConnection
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
@@ -912,7 +911,35 @@ DEFAULT_STALL_SPEED_THRESHOLD_MBPS = getEnv('HTTP_DEFAULT_STALL_SPEED_THRESHOLD_
 ENABLE_PY312_WORKAROUND = getEnv('HTTP_ENABLE_PY312_WORKAROUND', True)
 
 
-class StallResilientAdapter(HTTPAdapter):
+class CertificatePinningMixin:
+    """Lets an HTTPAdapter trust exactly one certificate, identified by its
+    SHA-256 fingerprint, in place of CA-chain and hostname verification --
+    for a peer whose self-signed certificate was learned over another trusted
+    channel. Without pinnedFingerprint the adapter verifies as usual."""
+
+    def __init__(self, *args, pinnedFingerprint=None, **kwargs):
+        self.pinnedFingerprint = pinnedFingerprint # set first: HTTPAdapter.__init__ builds the pool manager
+        super().__init__(*args, **kwargs)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **kwargs):
+        if self.pinnedFingerprint:
+            sslContext = kwargs.get('ssl_context') or ssl.create_default_context()
+            sslContext.check_hostname = False
+            sslContext.verify_mode = ssl.CERT_NONE
+            kwargs['ssl_context'] = sslContext
+            kwargs['assert_fingerprint'] = self.pinnedFingerprint
+
+        super().init_poolmanager(connections, maxsize, block=block, **kwargs)
+
+    def cert_verify(self, conn, url, verify, cert):
+        super().cert_verify(conn, url, verify and not self.pinnedFingerprint, cert)
+
+
+class PinnedHTTPAdapter(CertificatePinningMixin, HTTPAdapter):
+    pass
+
+
+class StallResilientAdapter(CertificatePinningMixin, HTTPAdapter):
     """
     HTTP adapter that provides stall resistance through TCP socket options and Python 3.12 workarounds.
 
@@ -1038,7 +1065,7 @@ class StallResilientAdapter(HTTPAdapter):
             sslContext.maximum_version = ssl.TLSVersion.TLSv1_2
             kwargs["ssl_context"] = sslContext
 
-        self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, **kwargs)
+        super().init_poolmanager(connections, maxsize, block=block, **kwargs)
 
 
 try:

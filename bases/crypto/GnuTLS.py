@@ -32,6 +32,8 @@ _RSAPrivateKey = RSAPrivateKey
 class GnuTLSBackend(CryptoBackend):
     """FastFileLink crypto backend backed by ffl_gnutls."""
 
+    canIssueCertificates = True
+
     @staticmethod
     def _extractKeyMaterial(keyOrCipher):
         if isinstance(keyOrCipher, bytes):
@@ -61,6 +63,10 @@ class GnuTLSBackend(CryptoBackend):
 
     def getName(self):
         return "ffl-gnutls"
+
+    def generateSelfSignedCertificate(self, commonName):
+        """Issue a self-signed ECDSA P-256 certificate, returns (certificatePEM, privateKeyPEM)."""
+        return self.crypto.generateSelfSignedCertificate(commonName)
 
     def generateKeyPair(self):
         privateKeyDER, publicKeyDER = self.crypto.generateP384KeyPair()

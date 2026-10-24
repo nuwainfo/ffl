@@ -17,17 +17,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
+import json
 import logging
 import os
+import socket
+import ssl
 import sys
+import time
 import unittest
 
 from types import SimpleNamespace
 from unittest import mock
+from urllib.parse import urlsplit
+
+import psutil
+import requests
 
 from bases.Download import FFLDownloader
+from bases.Kernel import FFLEvent
 from bases.P2P import P2PConfiguration, isP2PAvailable
+from bases.TLS import DirectTLSIdentity
 from tests.CoreTestBase import FastFileLinkTestBase
+
+if isP2PAvailable():
+    from ffl_p2p import HTTPSignalingClient, ICEConfiguration, P2PAnswer, UDPConnector
 
 
 @unittest.skipUnless(isP2PAvailable(), 'ffl-p2p extension is not available')
@@ -91,8 +105,8 @@ class P2PTest(FastFileLinkTestBase):
         self._verifyDownloadedFile(downloadedPath)
         outputText = self._updateCapturedOutput(downloadOutput)
         self.assertIn(
-            'Using P2P TCP download...', outputText,
-            f'Download did not use the direct P2P TCP path:\n{outputText}',
+            'Using P2P TCP/TLS download...', outputText,
+            f'Download did not use the direct P2P TCP path over TLS:\n{outputText}',
         )
         self.assertIn(
             'P2P TCP', outputText,
@@ -495,6 +509,345 @@ class P2PQUICMaxDownloadsRaceTest(FastFileLinkTestBase):
             'Using P2P UDP/QUIC download...', outputText,
             f'Download did not use the direct P2P UDP/QUIC path:\n{outputText}',
         )
+
+
+@unittest.skipUnless(isP2PAvailable(), 'ffl-p2p extension is not available')
+class P2PConcurrentQUICDownloadsTest(FastFileLinkTestBase):
+    """Every recipient gets its own publisher, so several QUIC downloads of one
+    share run at once. Each sender must hold the share until *its own*
+    recipient acknowledges completion, never another recipient's."""
+
+    QUIC_ONLY_ENV = {
+        'DISABLE_WEBRTC': 'True',
+        'DISABLE_HTTP_FALLBACK': 'True',
+        'P2P_TRANSPORT_PREFERENCE': 'udp',
+    }
+
+    def __init__(self, methodName='runTest'):
+        # Big enough that an unread stdout pipe stalls the held-back receiver
+        # mid-stream instead of letting it buffer the whole file.
+        super().__init__(methodName, fileSizeBytes=32 * 1024 * 1024)
+
+    def testOverlappingQUICDownloadsEachKeepTheShareUntilTheirOwnCompletion(self):
+        shareLink = self._startFastFileLink(
+            p2p=True,
+            timeout=60,
+            extraArgs=['--e2ee', '--max-downloads', '2'],
+        )
+
+        # The held-back receiver starts first and stalls, so the second QUIC
+        # download begins and completes entirely inside its transfer.
+        heldBackLogPath = os.path.join(self.tempDir, 'quic-held-back-download.log')
+        with open(heldBackLogPath, 'wb') as heldBackLog:
+            heldBack = self._startStdoutDownload(
+                shareLink, heldBackLog, extraEnvVars={**self.QUIC_ONLY_ENV, 'FFL_LOGGING_LEVEL': 'DEBUG'}
+            )
+            try:
+                self._waitForText(self.procLogPath, 'P2P QUIC', timeout=60, process=self.coreProcess)
+
+                outputPath = os.path.join(self.tempDir, 'quic-overlapping-download.bin')
+                self._verifyDownloadedFile(
+                    self._downloadWithCore(shareLink, outputPath=outputPath, extraEnvVars=self.QUIC_ONLY_ENV)
+                )
+
+                rawBytes, _unusedStderr = heldBack.communicate(timeout=180)
+            finally:
+                if heldBack.poll() is None:
+                    heldBack.kill()
+                    heldBack.communicate()
+
+        with open(heldBackLogPath, 'r', encoding='utf-8', errors='replace') as f:
+            stderrText = f.read()
+        self.assertEqual(0, heldBack.returncode, f'The held-back QUIC download failed:\n{stderrText[-4000:]}')
+        # The share is only gone this early if the held-back sender stopped
+        # waiting when the *other* recipient acknowledged its completion.
+        self.assertFalse(
+            'skip strict checksum verification' in stderrText,
+            f'The held-back recipient lost the share before verifying its checksum:\n{stderrText[-4000:]}',
+        )
+
+        heldBackPath = os.path.join(self.tempDir, 'quic-held-back-download.bin')
+        with open(heldBackPath, 'wb') as f:
+            f.write(rawBytes)
+        self._verifyDownloadedFile(heldBackPath)
+
+
+@unittest.skipUnless(isP2PAvailable(), 'ffl-p2p extension is not available')
+class P2PPublisherLifecycleTest(FastFileLinkTestBase):
+    """A share creates one publisher (ICE agent, UDP socket, port mappings) per
+    download attempt; each must be released once it can no longer be used,
+    not kept until the share stops.
+
+    Shares run on the LAN tunnel: its direct-only network policy uses no STUN
+    and no port mapping, so the share process's UDP sockets are exactly its
+    publishers' (libplum's mapping client would otherwise stay for the whole
+    process, by design).
+    """
+
+    RELEASE_TIMEOUT_SECONDS = 45
+    # Longer than the QUIC handshake a publisher waits for (ffl-p2p caps it at 10 s).
+    QUIC_HANDSHAKE_WAIT_SECONDS = 12
+    BROWSER_USER_AGENT = (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+        '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    )
+
+    def _startLANShare(self, **kwargs):
+        return self._startFastFileLink(p2p=True, timeout=60, preferredTunnel='default:lan', **kwargs)
+
+    def _countShareUDPSockets(self):
+        return len(psutil.Process(self.coreProcess.pid).net_connections(kind='udp'))
+
+    def _waitForShareUDPSockets(self, maxCount):
+        deadline = time.monotonic() + self.RELEASE_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            count = self._countShareUDPSockets()
+            if count <= maxCount:
+                return count
+
+            time.sleep(0.5)
+
+        return self._countShareUDPSockets()
+
+    def _createSignalingClient(self, shareLink):
+        return HTTPSignalingClient(
+            urlsplit(shareLink)._replace(fragment='').geturl(),
+            headers={'User-Agent': self.BROWSER_USER_AGENT},
+        )
+
+    def _readHookEvents(self, hookPath):
+        with open(hookPath, 'r', encoding='utf-8') as f:
+            return [json.loads(line)['event'] for line in f if line.strip()]
+
+    def testReleasesPublisherAfterEachDirectDownload(self):
+        shareLink = self._startLANShare()
+        baseline = self._countShareUDPSockets()
+
+        for transport in ('tcp', 'udp'):
+            outputPath = os.path.join(self.tempDir, f'p2p-{transport}-lifecycle.bin')
+            self._verifyDownloadedFile(self._downloadWithCore(
+                shareLink,
+                outputPath=outputPath,
+                extraEnvVars={
+                    'DISABLE_WEBRTC': 'True',
+                    'DISABLE_HTTP_FALLBACK': 'True',
+                    'P2P_TRANSPORT_PREFERENCE': transport,
+                },
+            ))
+
+        self.assertLessEqual(
+            self._waitForShareUDPSockets(baseline), baseline,
+            'Finished direct downloads must release their publisher sockets',
+        )
+
+    def testReleasesUnansweredOffer(self):
+        shareLink = self._startLANShare(extraEnvVars={'P2P_OFFER_TTL_SECONDS': '3'})
+        baseline = self._countShareUDPSockets()
+
+        self._createSignalingClient(shareLink).getOffer()
+
+        self.assertGreater(
+            self._countShareUDPSockets(), baseline,
+            'An outstanding offer should hold its publisher socket',
+        )
+        self.assertLessEqual(
+            self._waitForShareUDPSockets(baseline), baseline,
+            'An offer nobody answered must release its publisher socket',
+        )
+
+    def testReleasesPublisherWhoseDownloaderNeverConnects(self):
+        """A downloader that answers and then disappears (crashed, went
+        offline) never completes ICE; its publisher must still be released."""
+        shareLink = self._startLANShare()
+        baseline = self._countShareUDPSockets()
+
+        signaling = self._createSignalingClient(shareLink)
+        offer = signaling.getOffer()
+
+        downloaderUDP = UDPConnector(ICEConfiguration(), usePortMapping=False)
+        downloaderUDP.setRemoteDescription(offer.udpDescription)
+        answer = P2PAnswer(offer.sessionId, downloaderUDP.gather())
+        downloaderUDP.close()
+        signaling.sendAnswer(answer)
+
+        self.assertLessEqual(
+            self._waitForShareUDPSockets(baseline), baseline,
+            'A publisher whose downloader never connected must release its socket',
+        )
+
+    def testTCPDownloadReportsNoQUICTransferFailure(self):
+        """The downloader answers the offer before it tries TCP, so the
+        publisher's UDP side may still connect; a QUIC session the downloader
+        never uses is not a failed transfer."""
+        hookPath = os.path.join(self.tempDir, 'p2p-tcp-events.jsonl')
+        shareLink = self._startLANShare(extraArgs=['--hook', hookPath])
+        baseline = self._countShareUDPSockets()
+
+        outputPath = os.path.join(self.tempDir, 'p2p-tcp-no-quic-failure.bin')
+        downloadOutput = {}
+        self._verifyDownloadedFile(self._downloadWithCore(
+            shareLink,
+            outputPath=outputPath,
+            extraEnvVars={'DISABLE_WEBRTC': 'True', 'DISABLE_HTTP_FALLBACK': 'True'},
+            captureOutputIn=downloadOutput,
+        ))
+        self.assertIn('Using P2P TCP/TLS download...', self._updateCapturedOutput(downloadOutput))
+
+        # Once the publisher is released its UDP side has resolved one way or the other.
+        self._waitForShareUDPSockets(baseline)
+        time.sleep(self.QUIC_HANDSHAKE_WAIT_SECONDS)
+
+        events = self._readHookEvents(hookPath)
+        self.assertNotIn(
+            FFLEvent.p2pTransferFailed.key, events,
+            f'A TCP download must not report a failed QUIC transfer: {events}',
+        )
+
+
+@unittest.skipUnless(isP2PAvailable(), 'ffl-p2p extension is not available')
+class P2PDirectTLSTest(FastFileLinkTestBase):
+    """Direct TCP reuses the share's HTTP port, so without TLS every byte on
+    it -- Basic auth, pickup code, proof, metadata, content -- crosses the
+    network in plaintext. The share must serve TLS there, pinned by a
+    fingerprint the downloader obtains over the trusted HTTPS control plane."""
+
+    TCP_ONLY_ENV = {
+        'DISABLE_WEBRTC': 'True',
+        'DISABLE_HTTP_FALLBACK': 'True',
+        'P2P_TRANSPORT_PREFERENCE': 'tcp',
+    }
+    BROWSER_USER_AGENT = P2PPublisherLifecycleTest.BROWSER_USER_AGENT
+    PROBE_TIMEOUT_SECONDS = 2
+    PROBE_TIMEOUT_ENV = {'DIRECT_TLS_PROBE_TIMEOUT_SECONDS': str(PROBE_TIMEOUT_SECONDS)}
+    CLIENT_WAIT_SECONDS = 15
+
+    @staticmethod
+    def _createUnverifiedTLSContext():
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        return context
+
+    @classmethod
+    def _fetchPresentedFingerprint(cls, host, port):
+        with socket.create_connection((host, port), timeout=10) as rawSocket:
+            with cls._createUnverifiedTLSContext().wrap_socket(rawSocket) as tlsSocket:
+                return hashlib.sha256(tlsSocket.getpeercert(binary_form=True)).hexdigest()
+
+    def _buildControlURL(self, shareLink):
+        return urlsplit(shareLink)._replace(fragment='').geturl().rstrip('/')
+
+    def _fetchOffer(self, shareLink):
+        signaling = HTTPSignalingClient(
+            self._buildControlURL(shareLink), headers={'User-Agent': self.BROWSER_USER_AGENT}
+        )
+        return signaling.getOffer()
+
+    def _resolveDirectEndpoint(self, shareLink):
+        return urlsplit(self._fetchOffer(shareLink).tcpEndpoints[0])
+
+    def _assertDirectPortStillServes(self, endpoint):
+        # Tunnels connect to the same port and keep speaking plain HTTP.
+        plainPing = requests.get(
+            f"{endpoint._replace(scheme='http').geturl()}/p2p/ping",
+            headers={'User-Agent': self.BROWSER_USER_AGENT}, timeout=10,
+        )
+        self.assertEqual(200, plainPing.status_code)
+
+    def _assertDirectPortDropsStalledProbe(self, openingBytes):
+        shareLink = self._startFastFileLink(p2p=True, timeout=60, extraEnvVars=self.PROBE_TIMEOUT_ENV)
+        endpoint = self._resolveDirectEndpoint(shareLink)
+
+        with socket.create_connection((endpoint.hostname, endpoint.port), timeout=self.CLIENT_WAIT_SECONDS) as rawSocket:
+            rawSocket.sendall(openingBytes)
+            try:
+                received = rawSocket.recv(1)
+            except TimeoutError:
+                self.fail(
+                    f'The direct port still holds a connection that sent {openingBytes!r} '
+                    f'after {self.CLIENT_WAIT_SECONDS}s; the probe has no deadline'
+                )
+
+        self.assertEqual(b'', received, 'The server must close the stalled connection without a response')
+        self._assertDirectPortStillServes(endpoint)
+
+    def testE2EEDirectTCPDownloadUsesPinnedTLS(self):
+        shareLink = self._startFastFileLink(p2p=True, timeout=60, extraArgs=['--e2ee'])
+        self.assertTrue(shareLink.startswith('https://'), f'The control plane must be HTTPS: {shareLink}')
+
+        outputPath = os.path.join(self.tempDir, 'p2p-tcp-tls-download.bin')
+        downloadOutput = {}
+        self._verifyDownloadedFile(self._downloadWithCore(
+            shareLink, outputPath=outputPath, extraEnvVars=self.TCP_ONLY_ENV, captureOutputIn=downloadOutput,
+        ))
+
+        outputText = self._updateCapturedOutput(downloadOutput)
+        self.assertIn(
+            'Using P2P TCP/TLS download...', outputText,
+            f'The direct TCP download did not run over pinned TLS:\n{outputText}',
+        )
+
+    def testOfferPinsTheCertificateTheDirectPortPresents(self):
+        shareLink = self._startFastFileLink(p2p=True, timeout=60)
+        offer = self._fetchOffer(shareLink)
+
+        # ffl-p2p probes each endpoint with the downloader's auth headers, so a
+        # plaintext endpoint would expose them before any download starts.
+        self.assertTrue(offer.tcpEndpoints)
+        self.assertTrue(
+            all(endpoint.startswith('https://') for endpoint in offer.tcpEndpoints),
+            f'Every direct endpoint must be TLS: {offer.tcpEndpoints}',
+        )
+
+        endpoint = urlsplit(offer.tcpEndpoints[0])
+        self.assertEqual(
+            offer.tcpCertificateFingerprint, self._fetchPresentedFingerprint(endpoint.hostname, endpoint.port)
+        )
+        self._assertDirectPortStillServes(endpoint)
+
+    def testDirectTCPRefusesACertificateThatDoesNotMatchThePin(self):
+        shareLink = self._startFastFileLink(p2p=True, timeout=60)
+
+        outputPath = os.path.join(self.tempDir, 'p2p-tcp-tls-pin-mismatch.bin')
+        downloadOutput = {}
+        self._verifyDownloadedFile(self._downloadWithCore(
+            shareLink,
+            outputPath=outputPath,
+            extraEnvVars={
+                'DISABLE_WEBRTC': 'True',
+                'P2P_TRANSPORT_PREFERENCE': 'tcp',
+                'P2P_CLI_SIMULATE_TLS_PIN_MISMATCH': 'True',
+            },
+            captureOutputIn=downloadOutput,
+        ))
+
+        outputText = self._updateCapturedOutput(downloadOutput)
+        self.assertIn(
+            'P2P direct TCP download unavailable', outputText,
+            f'A direct endpoint presenting an unpinned certificate must be refused:\n{outputText}',
+        )
+
+    def testDirectPortDropsAClientThatNeverSendsAByte(self):
+        self._assertDirectPortDropsStalledProbe(b'')
+
+    def testDirectPortDropsAClientThatStallsTheTLSHandshake(self):
+        self._assertDirectPortDropsStalledProbe(DirectTLSIdentity.TLS_HANDSHAKE_RECORD)
+
+    def testDirectTLSConnectionHasNoDeadlineAfterTheHandshake(self):
+        shareLink = self._startFastFileLink(p2p=True, timeout=60, extraEnvVars=self.PROBE_TIMEOUT_ENV)
+        endpoint = self._resolveDirectEndpoint(shareLink)
+
+        with socket.create_connection((endpoint.hostname, endpoint.port), timeout=self.CLIENT_WAIT_SECONDS) as rawSocket:
+            with self._createUnverifiedTLSContext().wrap_socket(rawSocket) as tlsSocket:
+                # A downloader may pause past the probe deadline once TLS is up (e.g. between requests).
+                time.sleep(self.PROBE_TIMEOUT_SECONDS * 2)
+                tlsSocket.sendall((
+                    f'GET /p2p/ping HTTP/1.1\r\nHost: {endpoint.netloc}\r\n'
+                    f'User-Agent: {self.BROWSER_USER_AGENT}\r\nConnection: close\r\n\r\n'
+                ).encode('ascii'))
+                statusLine = tlsSocket.makefile('rb').readline()
+
+        self.assertEqual(b'200', statusLine.split()[1], f'Unexpected response: {statusLine!r}')
 
 
 if __name__ == '__main__':
