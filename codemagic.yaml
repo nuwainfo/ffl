@@ -802,7 +802,7 @@ workflows:
           echo "=== Verify application architecture ==="
           file "$APP/Contents/MacOS/FastFileLink"
           lipo -info "$APP/Contents/MacOS/FastFileLink"
-          lipo -verify_arch arm64 "$APP/Contents/MacOS/FastFileLink"
+          lipo "$APP/Contents/MacOS/FastFileLink" -verify_arch arm64
 
           echo "=== Verify App Store bundle metadata ==="
           BUNDLE_ID_ACTUAL="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")"
