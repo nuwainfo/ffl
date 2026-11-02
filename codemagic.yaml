@@ -642,7 +642,13 @@ workflows:
             --type MAC_INSTALLER_DISTRIBUTION \
             --save
 
-          keychain add-certificates
+          # Keep original Release.sh productbuild --sign flow.
+          # Codemagic allows codesign/productsign by default, but productbuild
+          # also needs non-interactive access to the Installer private key.
+          keychain add-certificates \
+            --allow-app codesign \
+            --allow-app productsign \
+            --allow-app productbuild
 
           CERTS_TEXT="$(keychain list-certificates)"
 
