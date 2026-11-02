@@ -653,8 +653,15 @@ workflows:
           # Restore the Codemagic import defaults that worked for code signing.
           # In addition, grant Apple-signed tools permission to use the imported
           # keys without an interactive prompt (including productbuild).
-          keychain add-certificates --path "$KEYCHAIN_PATH"
+          # Unlike the Codemagic defaults (codesign + productsign), our
+          # original Release.sh signs the installer with productbuild directly.
+          # Explicitly allow all three tools on initial private-key import.
+          keychain add-certificates --path "$KEYCHAIN_PATH" \
+            --allow-app codesign \
+            --allow-app productsign \
+            --allow-app productbuild
 
+          # Also grant noninteractive Apple signing-tool key partitions.
           security set-key-partition-list \
             -S apple-tool:,apple:,codesign: \
             -s -k "" "$KEYCHAIN_PATH"
