@@ -650,6 +650,17 @@ workflows:
             --allow-app productsign \
             --allow-app productbuild
 
+          # Explicitly grant Apple-signed signing tools noninteractive access
+          # to keys in the currently active Codemagic temporary keychain.
+          KEYCHAIN_PATH="$(security default-keychain -d user | tr -d '"')"
+          if [ -z "$KEYCHAIN_PATH" ] || [ ! -f "$KEYCHAIN_PATH" ]; then
+            echo "ERROR: Temporary keychain path not found."
+            exit 1
+          fi
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "" "$KEYCHAIN_PATH"
+
           CERTS_TEXT="$(keychain list-certificates)"
 
           if ! printf '%s\n' "$CERTS_TEXT" | grep -Fq \
@@ -663,6 +674,46 @@ workflows:
             echo "ERROR: Mac Installer Distribution certificate not found."
             exit 1
           fi
+
+          # Catch both private-key permission failures before an expensive GUI build.
+          # This creates only disposable local test files and never uploads them.
+          echo "=== Preflight: codesign and productbuild ==="
+          CHECK_DIR="$(mktemp -d /tmp/ffl-signing-preflight.XXXXXX)"
+          trap 'rm -rf "$CHECK_DIR"' EXIT
+          CHECK_APP="$CHECK_DIR/FFLSigningCheck.app"
+          mkdir -p "$CHECK_APP/Contents/MacOS"
+
+          cat > "$CHECK_DIR/check.c" <<'CHECKC'
+          int main(void) { return 0; }
+          CHECKC
+          xcrun clang -arch arm64 "$CHECK_DIR/check.c" \
+            -o "$CHECK_APP/Contents/MacOS/FFLSigningCheck"
+
+          python3 - "$CHECK_APP/Contents/Info.plist" <<'CHECKPLIST'
+          import plistlib
+          import sys
+          info = {
+              "CFBundleExecutable": "FFLSigningCheck",
+              "CFBundleIdentifier": "com.nuwainfo.ffl.signingcheck",
+              "CFBundleName": "FFLSigningCheck",
+              "CFBundlePackageType": "APPL",
+              "CFBundleShortVersionString": "1.0",
+              "CFBundleVersion": "1",
+          }
+          with open(sys.argv[1], "wb") as f:
+              plistlib.dump(info, f)
+          CHECKPLIST
+
+          codesign --force --options runtime --timestamp \
+            --sign "Apple Distribution: Nuwa Information Ltd. (F7YCS8BBQT)" \
+            "$CHECK_APP"
+
+          productbuild \
+            --component "$CHECK_APP" /Applications \
+            --sign "3rd Party Mac Developer Installer: Nuwa Information Ltd. (F7YCS8BBQT)" \
+            "$CHECK_DIR/FFLSigningCheck.pkg"
+          pkgutil --check-signature "$CHECK_DIR/FFLSigningCheck.pkg"
+          echo "=== Preflight passed: codesign + productbuild ==="
 
           PROFILE_DIR="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
           PROFILE=""
