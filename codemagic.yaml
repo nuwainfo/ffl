@@ -294,3 +294,204 @@ workflows:
     artifacts:
       - $HOME/FFL/FileShare/dist/mac/ffl_aarch64
       - $HOME/FFL/FileShare/dist/mac/ffl_x86_64
+
+
+  ffl-macos-signing-check:
+    name: FFL macOS signing check
+    instance_type: mac_mini_m2
+    max_build_duration: 15
+
+    integrations:
+      app_store_connect: Codemagic FFL
+
+    environment:
+      xcode: 16.4
+      groups:
+        - ffl_signing
+      vars:
+        BUNDLE_ID: "com.nuwainfo.ffl"
+
+    scripts:
+      - name: Verify signing environment
+        script: |
+          set -euo pipefail
+
+          echo "=== macOS ==="
+          sw_vers
+
+          echo "=== Native architecture ==="
+          uname -m
+
+          echo "=== Xcode ==="
+          xcodebuild -version
+
+          echo "=== Check CERTIFICATE_PRIVATE_KEY ==="
+          if [ -z "${CERTIFICATE_PRIVATE_KEY:-}" ]; then
+            echo "ERROR: CERTIFICATE_PRIVATE_KEY is not available from ffl_signing"
+            exit 1
+          fi
+
+          echo "CERTIFICATE_PRIVATE_KEY is available."
+
+      - name: Initialize temporary keychain
+        script: |
+          set -euo pipefail
+
+          echo "=== Initialize temporary Codemagic keychain ==="
+          keychain initialize
+
+      - name: Fetch Mac App Distribution certificate and App Store profile
+        script: |
+          set -euo pipefail
+
+          echo "=== Fetch/create Mac App Distribution + Mac App Store profile ==="
+
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --platform MAC_OS \
+            --type MAC_APP_STORE \
+            --create
+
+      - name: Fetch Mac Installer Distribution certificate
+        script: |
+          set -euo pipefail
+
+          echo "=== Fetch/create Mac Installer Distribution certificate ==="
+
+          app-store-connect certificates list \
+            --type MAC_INSTALLER_DISTRIBUTION \
+            --save || \
+          app-store-connect certificates create \
+            --type MAC_INSTALLER_DISTRIBUTION \
+            --save
+
+      - name: Import certificates into temporary keychain
+        script: |
+          set -euo pipefail
+
+          echo "=== Import certificates ==="
+          keychain add-certificates
+
+      - name: Verify signing materials
+        script: |
+          set -euo pipefail
+
+          echo
+          echo "============================================================"
+          echo "CODE SIGNING IDENTITIES"
+          echo "============================================================"
+
+          security find-identity -v -p codesigning
+
+          echo
+          echo "============================================================"
+          echo "CERTIFICATES SAVED BY CODEMAGIC"
+          echo "============================================================"
+
+          keychain list-certificates || true
+
+          echo
+          echo "============================================================"
+          echo "PROVISIONING PROFILE"
+          echo "============================================================"
+
+          PROFILE_DIR="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+
+          if [ ! -d "$PROFILE_DIR" ]; then
+            echo "ERROR: Provisioning profile directory does not exist:"
+            echo "$PROFILE_DIR"
+            exit 1
+          fi
+
+          PROFILE=""
+          PROFILE_PLIST="/tmp/ffl-profile.plist"
+
+          while IFS= read -r candidate; do
+            rm -f "$PROFILE_PLIST"
+
+            if ! security cms -D -i "$candidate" > "$PROFILE_PLIST" 2>/dev/null; then
+              continue
+            fi
+
+            APP_ID="$(
+              /usr/libexec/PlistBuddy \
+                -c 'Print :Entitlements:com.apple.application-identifier' \
+                "$PROFILE_PLIST" 2>/dev/null || true
+            )"
+
+            if [ -z "$APP_ID" ]; then
+              APP_ID="$(
+                /usr/libexec/PlistBuddy \
+                  -c 'Print :Entitlements:application-identifier' \
+                  "$PROFILE_PLIST" 2>/dev/null || true
+              )"
+            fi
+
+            case "$APP_ID" in
+              *."$BUNDLE_ID")
+                PROFILE="$candidate"
+                break
+                ;;
+            esac
+          done < <(
+            find "$PROFILE_DIR" -type f \
+              \( -name '*.provisionprofile' -o -name '*.mobileprovision' \)
+          )
+
+          if [ -z "$PROFILE" ]; then
+            echo "ERROR: No provisioning profile matching $BUNDLE_ID was found."
+            exit 1
+          fi
+
+          echo "Matching profile:"
+          echo "$PROFILE"
+
+          security cms -D -i "$PROFILE" > "$PROFILE_PLIST"
+
+          echo
+          echo "=== Profile details ==="
+
+          echo -n "Name: "
+          /usr/libexec/PlistBuddy \
+            -c 'Print :Name' \
+            "$PROFILE_PLIST"
+
+          echo -n "UUID: "
+          /usr/libexec/PlistBuddy \
+            -c 'Print :UUID' \
+            "$PROFILE_PLIST"
+
+          echo -n "Expiration: "
+          /usr/libexec/PlistBuddy \
+            -c 'Print :ExpirationDate' \
+            "$PROFILE_PLIST"
+
+          APP_ID="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :Entitlements:com.apple.application-identifier' \
+              "$PROFILE_PLIST" 2>/dev/null || true
+          )"
+
+          if [ -z "$APP_ID" ]; then
+            APP_ID="$(
+              /usr/libexec/PlistBuddy \
+                -c 'Print :Entitlements:application-identifier' \
+                "$PROFILE_PLIST"
+            )"
+          fi
+
+          echo "Application identifier: $APP_ID"
+
+          case "$APP_ID" in
+            *."$BUNDLE_ID")
+              echo "OK: provisioning profile matches $BUNDLE_ID"
+              ;;
+            *)
+              echo "ERROR: provisioning profile does not match $BUNDLE_ID"
+              exit 1
+              ;;
+          esac
+
+          echo
+          echo "============================================================"
+          echo "✅ FFL MACOS SIGNING CHECK PASSED"
+          echo "============================================================"
