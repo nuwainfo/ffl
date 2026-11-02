@@ -295,7 +295,6 @@ workflows:
       - $HOME/FFL/FileShare/dist/mac/ffl_aarch64
       - $HOME/FFL/FileShare/dist/mac/ffl_x86_64
 
-
   ffl-macos-signing-check:
     name: FFL macOS signing check
     instance_type: mac_mini_m2
@@ -351,15 +350,12 @@ workflows:
             --type MAC_APP_STORE \
             --create
 
-      - name: Fetch Mac Installer Distribution certificate
+      - name: Create Mac Installer Distribution certificate
         script: |
           set -euo pipefail
 
-          echo "=== Fetch/create Mac Installer Distribution certificate ==="
+          echo "=== Create Mac Installer Distribution certificate ==="
 
-          app-store-connect certificates list \
-            --type MAC_INSTALLER_DISTRIBUTION \
-            --save || \
           app-store-connect certificates create \
             --type MAC_INSTALLER_DISTRIBUTION \
             --save
@@ -380,15 +376,53 @@ workflows:
           echo "CODE SIGNING IDENTITIES"
           echo "============================================================"
 
-          echo "=== ALL valid identities ==="
-          security find-identity -v
+          security find-identity -v -p codesigning
 
           echo
           echo "============================================================"
-          echo "CERTIFICATES SAVED BY CODEMAGIC"
+          echo "ALL CERTIFICATES SAVED BY CODEMAGIC"
           echo "============================================================"
 
-          keychain list-certificates || true
+          CERTIFICATES_JSON="$(keychain list-certificates)"
+          echo "$CERTIFICATES_JSON"
+
+          echo
+          echo "============================================================"
+          echo "VERIFY APP DISTRIBUTION CERTIFICATE"
+          echo "============================================================"
+
+          APP_CERT_NAME="$(
+            printf '%s\n' "$CERTIFICATES_JSON" \
+              | jq -r '.[] | select(.common_name | contains("Apple Distribution")) | .common_name' \
+              | head -n 1
+          )"
+
+          if [ -z "$APP_CERT_NAME" ]; then
+            echo "ERROR: Apple Distribution certificate was not imported."
+            exit 1
+          fi
+
+          echo "App Distribution certificate:"
+          echo "$APP_CERT_NAME"
+
+          echo
+          echo "============================================================"
+          echo "VERIFY MAC INSTALLER DISTRIBUTION CERTIFICATE"
+          echo "============================================================"
+
+          INSTALLER_CERT_NAME="$(
+            printf '%s\n' "$CERTIFICATES_JSON" \
+              | jq -r '.[] | select(.common_name | contains("Mac Developer Installer")) | .common_name' \
+              | head -n 1
+          )"
+
+          if [ -z "$INSTALLER_CERT_NAME" ]; then
+            echo "ERROR: Mac Installer Distribution certificate was not imported."
+            exit 1
+          fi
+
+          echo "Mac Installer Distribution certificate:"
+          echo "$INSTALLER_CERT_NAME"
 
           echo
           echo "============================================================"
