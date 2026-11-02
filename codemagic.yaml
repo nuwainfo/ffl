@@ -356,7 +356,7 @@ workflows:
 
           echo "=== Create Mac Installer Distribution certificate ==="
 
-          app-store-connect certificates create \
+          app-store-connect certificates list \
             --type MAC_INSTALLER_DISTRIBUTION \
             --save
 
@@ -530,3 +530,228 @@ workflows:
           echo "============================================================"
           echo "✅ FFL MACOS SIGNING CHECK PASSED"
           echo "============================================================"
+
+
+  ffl-gui-appstore:
+    name: FFL GUI ARM64 → App Store Connect (existing Release.sh)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+
+    integrations:
+      app_store_connect: Codemagic FFL
+
+    environment:
+      xcode: 16.4
+      groups:
+        - SVN
+        - ffl_signing
+      vars:
+        BUNDLE_ID: "com.nuwainfo.ffl"
+
+    scripts:
+      - name: Verify macOS ARM64 and signing secret
+        script: |
+          set -euo pipefail
+          sw_vers
+          xcodebuild -version
+          test "$(uname -m)" = "arm64"
+          test -n "${CERTIFICATE_PRIVATE_KEY:-}"
+
+      - name: Install ARM64 Miniconda and SVN
+        script: |
+          set -euo pipefail
+
+          if ! command -v svn >/dev/null 2>&1; then
+            brew install subversion
+          fi
+
+          if [ ! -x "$HOME/miniconda3/bin/conda" ]; then
+            curl -fsSL \
+              -o /tmp/Miniconda3.sh \
+              https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-arm64.sh
+
+            bash /tmp/Miniconda3.sh -b -p "$HOME/miniconda3"
+          fi
+
+          source "$HOME/miniconda3/etc/profile.d/conda.sh"
+          conda --version
+
+          if ! conda env list | awk '{print $1}' | grep -qx fileshare; then
+            conda create -y -n fileshare python=3.12
+          fi
+
+          conda activate fileshare
+          python --version
+          python -c 'import platform; assert platform.machine() == "arm64"'
+
+      - name: Checkout original SVN source
+        script: |
+          set -euo pipefail
+          FFL_DIR="$HOME/FFL"
+
+          rm -rf "$FFL_DIR"
+          mkdir -p "$FFL_DIR"
+
+          svn checkout \
+            "$SVN_FILESHARE_SERVER_URL" \
+            "$FFL_DIR/FileShareServer" \
+            --username "$SVN_USERNAME" \
+            --password "$SVN_PASSWORD" \
+            --non-interactive \
+            --no-auth-cache
+
+          svn checkout \
+            "$SVN_FILESHARE_URL" \
+            "$FFL_DIR/FileShare" \
+            --username "$SVN_USERNAME" \
+            --password "$SVN_PASSWORD" \
+            --non-interactive \
+            --no-auth-cache
+
+          test -f "$FFL_DIR/FileShare/scripts/MacOSBuild.sh"
+          test -f "$FFL_DIR/FileShare/dist/mac/Release.sh"
+          test -f "$FFL_DIR/FileShare/dist/Darwin.spec"
+
+          if ! grep -q 'FFL_APP_STORE_PROFILE' "$FFL_DIR/FileShare/dist/mac/Release.sh"; then
+            echo "ERROR: SVN dist/mac/Release.sh has not been updated."
+            exit 1
+          fi
+
+          if ! grep -q 'FFL_SKIP_SVN_UPDATE' "$FFL_DIR/FileShare/scripts/MacOSBuild.sh"; then
+            echo "ERROR: SVN scripts/MacOSBuild.sh has not been updated."
+            exit 1
+          fi
+
+          echo "=== FFL SVN revision ==="
+          svn info "$FFL_DIR/FileShare" | grep -E '^(URL|Revision):'
+
+      - name: Prepare temporary App Store signing materials
+        script: |
+          set -euo pipefail
+
+          keychain initialize
+
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --platform MAC_OS \
+            --type MAC_APP_STORE \
+            --create
+
+          # The Installer Distribution certificate has already been created.
+          # Fetch it on each build; do NOT create duplicate certificates.
+          app-store-connect certificates list \
+            --type MAC_INSTALLER_DISTRIBUTION \
+            --save
+
+          keychain add-certificates
+
+          CERTS_TEXT="$(keychain list-certificates)"
+
+          if ! printf '%s\n' "$CERTS_TEXT" | grep -Fq \
+            '"common_name": "Apple Distribution: Nuwa Information Ltd. (F7YCS8BBQT)"'; then
+            echo "ERROR: Apple Distribution certificate not found."
+            exit 1
+          fi
+
+          if ! printf '%s\n' "$CERTS_TEXT" | grep -Fq \
+            '"common_name": "3rd Party Mac Developer Installer: Nuwa Information Ltd. (F7YCS8BBQT)"'; then
+            echo "ERROR: Mac Installer Distribution certificate not found."
+            exit 1
+          fi
+
+          PROFILE_DIR="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+          PROFILE=""
+          PROFILE_PLIST="/tmp/ffl-codemagic-profile.plist"
+
+          test -d "$PROFILE_DIR"
+
+          while IFS= read -r candidate; do
+            if ! security cms -D -i "$candidate" > "$PROFILE_PLIST" 2>/dev/null; then
+              continue
+            fi
+
+            APP_ID="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.application-identifier' "$PROFILE_PLIST" 2>/dev/null || true)"
+
+            if [ -z "$APP_ID" ]; then
+              APP_ID="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$PROFILE_PLIST" 2>/dev/null || true)"
+            fi
+
+            if [ "$APP_ID" = "F7YCS8BBQT.$BUNDLE_ID" ]; then
+              PROFILE="$candidate"
+              break
+            fi
+          done < <(
+            find "$PROFILE_DIR" -type f \
+              \( -name '*.provisionprofile' -o -name '*.mobileprovision' \)
+          )
+
+          if [ -z "$PROFILE" ]; then
+            echo "ERROR: No Mac App Store profile matching F7YCS8BBQT.$BUNDLE_ID"
+            exit 1
+          fi
+
+          echo "=== New profile selected ==="
+          echo "$PROFILE"
+
+          # Keep SVN's old profile untouched. Release.sh reads this fresh file.
+          printf 'FFL_APP_STORE_PROFILE=%s\n' "$PROFILE" >> "$CM_ENV"
+          printf 'FFL_CI_APPSTORE=1\n' >> "$CM_ENV"
+
+      - name: Build and sign GUI using original MacOSBuild.sh store
+        script: |
+          set -euo pipefail
+
+          source "$HOME/miniconda3/etc/profile.d/conda.sh"
+          conda activate fileshare
+
+          # MacOSBuild.sh may optionally run its old altool upload if this is set.
+          # Codemagic publishing owns the upload in this workflow.
+          unset APP_STORE_PASSWORD
+          export FFL_SKIP_SVN_UPDATE=1
+
+          BUILD_SCRIPT="$HOME/FFL/FileShare/scripts/MacOSBuild.sh"
+          chmod +x "$BUILD_SCRIPT"
+
+          echo "=== Run original GUI App Store build chain ==="
+          echo "MacOSBuild.sh store -> Build.sh -> Release.sh AppleStore -> productbuild"
+          "$BUILD_SCRIPT" store
+
+      - name: Validate existing .app and signed .pkg
+        script: |
+          set -euo pipefail
+
+          APP="$HOME/FFL/FileShare/dist/dist/FastFileLink.app"
+          PKG="$HOME/FFL/FileShare/dist/mac/FastFileLink.pkg"
+
+          test -d "$APP"
+          test -f "$PKG"
+
+          echo "=== Verify application architecture ==="
+          file "$APP/Contents/MacOS/FastFileLink"
+          lipo -info "$APP/Contents/MacOS/FastFileLink"
+          lipo -verify_arch arm64 "$APP/Contents/MacOS/FastFileLink"
+
+          echo "=== Verify App Store bundle metadata ==="
+          BUNDLE_ID_ACTUAL="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")"
+          test "$BUNDLE_ID_ACTUAL" = "$BUNDLE_ID"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist"
+
+          echo "=== Verify freshly embedded profile ==="
+          cmp -s "$FFL_APP_STORE_PROFILE" "$APP/Contents/embedded.provisionprofile"
+
+          echo "=== Verify signed app and package ==="
+          codesign --verify --deep --strict --verbose=4 "$APP"
+          pkgutil --check-signature "$PKG"
+
+          mkdir -p "$CM_BUILD_DIR/artifacts"
+          cp -f "$PKG" "$CM_BUILD_DIR/artifacts/FastFileLink.pkg"
+          shasum -a 256 "$CM_BUILD_DIR/artifacts/FastFileLink.pkg"
+
+          echo "=== FFL ARM64 App Store pkg is ready ==="
+
+    artifacts:
+      - artifacts/FastFileLink.pkg
+
+    publishing:
+      app_store_connect:
+        auth: integration
