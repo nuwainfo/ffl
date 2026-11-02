@@ -629,7 +629,15 @@ workflows:
         script: |
           set -euo pipefail
 
-          keychain initialize
+          # Give Codemagic's temporary keychain a known, explicit path.
+          # Do not infer it from security default-keychain -d user.
+          KEYCHAIN_PATH="$HOME/Library/codemagic-cli-tools/keychains/ffl-appstore.keychain-db"
+          mkdir -p "$(dirname "$KEYCHAIN_PATH")"
+          keychain initialize --path "$KEYCHAIN_PATH"
+          test -f "$KEYCHAIN_PATH" || {
+            echo "ERROR: Codemagic temporary keychain was not created."
+            exit 1
+          }
 
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --platform MAC_OS \
@@ -642,26 +650,32 @@ workflows:
             --type MAC_INSTALLER_DISTRIBUTION \
             --save
 
-          # Keep original Release.sh productbuild --sign flow.
-          # Codemagic allows codesign/productsign by default, but productbuild
-          # also needs non-interactive access to the Installer private key.
-          keychain add-certificates \
-            --allow-app codesign \
-            --allow-app productsign \
-            --allow-app productbuild
+          # Restore the Codemagic import defaults that worked for code signing.
+          # In addition, grant Apple-signed tools permission to use the imported
+          # keys without an interactive prompt (including productbuild).
+          keychain add-certificates --path "$KEYCHAIN_PATH"
 
-          # Explicitly grant Apple-signed signing tools noninteractive access
-          # to keys in the currently active Codemagic temporary keychain.
-          KEYCHAIN_PATH="$(security default-keychain -d user | tr -d '"')"
-          if [ -z "$KEYCHAIN_PATH" ] || [ ! -f "$KEYCHAIN_PATH" ]; then
-            echo "ERROR: Temporary keychain path not found."
-            exit 1
-          fi
           security set-key-partition-list \
             -S apple-tool:,apple:,codesign: \
             -s -k "" "$KEYCHAIN_PATH"
 
-          CERTS_TEXT="$(keychain list-certificates)"
+          # Certificate entries alone are insufficient: both signing identities
+          # must have a usable matching private key in this keychain.
+          echo "=== Valid signing identities in temporary keychain ==="
+          IDENTITIES="$(security find-identity -v "$KEYCHAIN_PATH")"
+          printf '%s\n' "$IDENTITIES"
+          if ! printf '%s\n' "$IDENTITIES" | grep -Fq \
+            '"Apple Distribution: Nuwa Information Ltd. (F7YCS8BBQT)"'; then
+            echo "ERROR: App Distribution certificate/private-key identity is missing."
+            exit 1
+          fi
+          if ! printf '%s\n' "$IDENTITIES" | grep -Fq \
+            '"3rd Party Mac Developer Installer: Nuwa Information Ltd. (F7YCS8BBQT)"'; then
+            echo "ERROR: Mac Installer certificate/private-key identity is missing."
+            exit 1
+          fi
+
+          CERTS_TEXT="$(keychain list-certificates --path "$KEYCHAIN_PATH")"
 
           if ! printf '%s\n' "$CERTS_TEXT" | grep -Fq \
             '"common_name": "Apple Distribution: Nuwa Information Ltd. (F7YCS8BBQT)"'; then
