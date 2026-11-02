@@ -380,7 +380,8 @@ workflows:
           echo "CODE SIGNING IDENTITIES"
           echo "============================================================"
 
-          security find-identity -v -p codesigning
+          echo "=== ALL valid identities ==="
+          security find-identity -v
 
           echo
           echo "============================================================"
