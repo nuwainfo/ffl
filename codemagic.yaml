@@ -650,16 +650,12 @@ workflows:
             --type MAC_INSTALLER_DISTRIBUTION \
             --save
 
-          # Restore the Codemagic import defaults that worked for code signing.
-          # In addition, grant Apple-signed tools permission to use the imported
-          # keys without an interactive prompt (including productbuild).
-          # Unlike the Codemagic defaults (codesign + productsign), our
-          # original Release.sh signs the installer with productbuild directly.
-          # Explicitly allow all three tools on initial private-key import.
+          # Original Release.sh invokes both codesign and productbuild.
+          # This is an isolated temporary CI keychain, NOT the user's login keychain.
+          # Grant noninteractive key use to the signing tools without GUI prompts.
+          # Tradeoff: all applications in this CI job can access these temporary keys.
           keychain add-certificates --path "$KEYCHAIN_PATH" \
-            --allow-app codesign \
-            --allow-app productsign \
-            --allow-app productbuild
+            --allow-all-applications
 
           # Also grant noninteractive Apple signing-tool key partitions.
           security set-key-partition-list \
